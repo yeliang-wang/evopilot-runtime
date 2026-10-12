@@ -1,6 +1,8 @@
 # Runtime CLI
 
-The owned `evopilot-next-runtime` bin targets `src/cli.mjs`. In a source checkout use `node src/cli.mjs`. No install, network, credentials, environment-based configuration, current-directory workspace selection or `.local` runtime dependency is required. The implementation adapts the independently verified CLI reference into Runtime-owned source.
+The `evopilot-next-runtime` bin targets `src/cli.mjs`. In a source checkout use `node src/cli.mjs`; no dependency installation is needed. Use Node 24.14.0 on a platform with OS uid support. The CLI needs no network or credentials and does not select a workspace from the current directory or environment.
+
+Start with `node src/cli.mjs help` or `node src/cli.mjs capabilities`; these do not create state. For project and goal operations, choose an explicit owned workspace outside source/Git trees. For native quality or business validation, use the separately distributed parent EvoPilot Preview product entry: it supplies published Ontology/Harness resolvers and execution/receipt inspection. The standalone CLI supplies none of those providers. No arbitrary coding agent, new LLM or credential adapter is configured in Preview.
 
 ```text
 evopilot-next-runtime help
@@ -25,7 +27,15 @@ Write envelope (first request in a new workspace):
 {"operation":"project.create","scope":{"visibility":"public","projectId":"alpha"},"input":{"name":"Alpha"},"requestId":"create-project","expectedRevision":0}
 ```
 
-Submit that JSON on stdin to `evopilot-next-runtime request --workspace /absolute/private/workspace --workspace-id example`. The path is illustrative; choose an explicit owned workspace with an existing parent. After revision 1, create a goal:
+Submit that JSON on stdin using the installed bin or, in this checkout:
+
+```sh
+node src/cli.mjs request --workspace /absolute/owned/workspace --workspace-id example <<'JSON'
+{"operation":"project.create","scope":{"visibility":"public","projectId":"alpha"},"input":{"name":"Alpha"},"requestId":"create-project","expectedRevision":0}
+JSON
+```
+
+Replace the illustrative path with a canonical owned workspace whose parent exists. This command explicitly initializes storage. If the workspace already exists, inspect its revision before a new write. After this fresh workspace reaches revision 1, create a goal by submitting:
 
 ```json
 {"operation":"goal.create","scope":{"visibility":"public","projectId":"alpha"},"input":{"id":"goal","description":"Evaluate a synthetic instance"},"requestId":"create-goal","expectedRevision":1}
@@ -58,8 +68,10 @@ Async dispatch uses the same closed envelope:
 
 Use `run.reconcile` with its own explicit request ID and observed revision to inspect an existing claim. The CLI maps these two operations to the existing async service methods with exactly `{scope,id,requestId,expectedRevision}`; all other operations use `execute(request)`. It never automatically prepares, approves, cancels, retries, refreshes revisions or redispatches an uncertain response. Preserve exact requests and receipts. An identical scoped request ID/input returns the retained receipt; altered input conflicts; stale new writes fail CAS. Consult `receipt.inspect` and `run.inspect` before choosing an explicit next request. Service-owned async completion behavior remains unchanged.
 
-The standalone CLI configures no resolvers, executor or receipt inspector. A valid prepare needing material resolution returns `MISSING_RESOLVER`; dispatch needing an executor returns `MISSING_EXECUTOR`. Earlier state/scope/CAS failures still apply. Reconciliation never invokes an executor; an unresolved existing claim without a receipt provider remains unknown under the service contract. There is no old global fallback, provider flag or request-configurable callback. External provider wiring remains pending parent M3 composition.
+The standalone CLI configures no resolvers, executor or receipt inspector. A valid prepare needing material resolution returns `MISSING_RESOLVER`; dispatch needing an executor returns `MISSING_EXECUTOR`. Earlier state/scope/CAS failures still apply. Reconciliation never invokes an executor; an unresolved existing claim without a receipt provider remains unknown under the service contract. There is no global fallback, provider flag or request-configurable callback. Parent Preview composition supplies its own trusted providers; it does not inject them into this standalone bin. The CLI's static `pending` capability labels describe its standalone integration limits, not the current parent technical verification status.
 
 Every response is one JSON line on stdout. Success is `{ok:true,product:"runtime",version:"0.1.0",result,authority:false}`. Errors are `{ok:false,error:{code,message},authority:false}` with a fixed safe code allowlist and generic text; original exception messages, paths and request excerpts are never echoed in errors. Successful service data follows its existing contract. Exit status is 0 for success, 2 for argument/input failure, 1 for service failure. Node may emit its experimental SQLite warning on stderr.
 
-Validation, schema correctness, provider registration and successful commands establish no approval, acceptance, release authority, production readiness or Host pass. Public APIs, state schemas, reference pins and human-decision requirements remain unchanged. Run `npm run check`, `npm run build` and `npm test` in an operator filesystem environment; the bounded source-edit sandbox can run read-only checks and focused boundary tests but cannot create service workspaces.
+Validation, schema correctness, provider registration and successful commands establish no approval, acceptance, release authority, production readiness or Host PASS. Final Desktop E01–E19 acceptance remains separate in the candidate-bound report. See the [service verification scope](service.md) for the operator-reported technical baseline. Source developers can run `npm run check`, `npm run build` and `npm test`; full tests create isolated service workspaces. These development commands are unavailable in installed tarballs, which omit scripts and tests.
+
+Return to the [product entry](../README.md) or read the [approved roadmap](roadmap.md).

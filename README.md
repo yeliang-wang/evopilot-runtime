@@ -1,14 +1,27 @@
 # EvoPilot Runtime 0.1.0
 
-Runtime implements the M2 owned durable service for projects, immutable goals, pinned run preparation, human decisions, one durable execution claim, UNKNOWN recovery and receipt-only reconciliation. The `./service` subpath exposes `createRuntimeService({workspaceRoot,workspaceId}, trustedProviders)`. See the [service API and composition envelope](docs/service.md). Construction is pure; SQLite persistence starts only at explicit initialization.
+Runtime manages scoped projects, immutable goals, reviewed plans with exact Ontology/Harness pins, human decisions and durable execution receipts. One durable claim binds each run; uncertain execution is inspected and reconciled without redispatch. Execution status and business or quality evaluation remain distinct.
 
-The pure root API exposes `inspectPinnedInputs({ ontology, harness, observedOntology, observedHarness })`, which verifies exact immutable Ontology and Harness references through its own pinned compatibility module. It never selects a latest version or executes work. See the [owned reference implementation](src/index.mjs), [vendor contract](vendor/compatibility/v1/reference.mjs), [pin manifest](vendor/compatibility/v1/manifest.json) and boundary tests (`tests/e2e/reference.test.mjs` in a source checkout).
+Choose the entry that matches your task:
 
-The root also exposes `PRODUCT`, `VERSION` and immutable, I/O-free `capabilities()`. Its `M2_OWNED_SERVICE` stage, `businessOperationsReady: true`, `persistentBusinessOperationsReady: true` and `serviceApi: './service'` describe implemented owned-service support only. Callable providers alone do not prove configuration or business readiness. `hostIntegrationReady`, `acceptance`, `authority` and `softwareRelease` remain false. Shared transport, actual product composition adapters, MCP and unified Expert/Codex delivery remain M3 work. Node SQLite is experimental; this service assumes one trusted OS uid. This source is not stable 1.0 or production-ready and does not establish full acceptance.
+- Use the [standalone CLI guide](docs/cli.md) to create and inspect projects, goals and receipts in an explicit workspace. This CLI supplies no external providers.
+- Use the [service API guide](docs/service.md) to embed the durable service and inject trusted material resolvers, execution and receipt inspection callbacks.
+- Use the parent EvoPilot Preview product entry for the composed experience. Preview provides actual native published Ontology/Harness resolvers and `execute`/`inspectReceipt` for representative quality and business validation. Shared-service and installed two-MCP-adapter integration have passing technical evidence. No arbitrary coding agent, new LLM or credential adapter is configured. The parent entry is distributed separately from this standalone package.
 
-The owned `evopilot-next-runtime` CLI exposes pure help/version/capabilities and one bounded JSON request against an explicit workspace and revision. Run `node src/cli.mjs help` from this checkout; see the [complete CLI contract](docs/cli.md). External providers remain pending parent M3 wiring. CLI results infer no authorization or acceptance.
+Use Node 24.14.0 on a platform with OS uid support. Node SQLite is experimental. Storage and adapters assume a non-malicious single OS uid; they do not provide isolation from hostile code running as that uid. Choose a canonical, explicitly owned workspace outside source/Git trees, with an existing parent. Imports and service construction perform no filesystem operations; initialization is explicit.
 
-Use Node 24.14.0. This source checkout has no dependencies and needs no install. Run:
+The package root exposes the pure `inspectPinnedInputs({ ontology, harness, observedOntology, observedHarness })` reference checker, `PRODUCT`, `VERSION` and immutable, I/O-free `capabilities()` metadata. It checks exact references through the [pinned compatibility contract](vendor/compatibility/v1/reference.mjs), never selects a latest version or executes work. See the [root API](src/index.mjs) and [pin manifest](vendor/compatibility/v1/manifest.json). The durable API is the separate `@evopilot-next/runtime/service` export.
+
+Capability fields `M2_OWNED_SERVICE`, `businessOperationsReady: true` and `persistentBusinessOperationsReady: true` describe implemented generic service support. They do not prove that providers are configured. `hostIntegrationReady`, `acceptance`, `authority` and `softwareRelease` remain false. Parent Preview integration does not change those standalone API declarations.
+
+From a source checkout, inspect the CLI without creating a workspace:
+
+```sh
+node src/cli.mjs help
+node src/cli.mjs capabilities
+```
+
+Source development needs no dependency installation:
 
 ```sh
 npm run check
@@ -16,6 +29,8 @@ npm run build
 npm test
 ```
 
-Build verifies owned ESM sources and pinned vendor bytes; it needs no parent generator or sibling source. Only the parent canonical build regenerates vendor bytes. The same commands work in an unrelated standalone source copy. Installed tarballs omit development scripts/tests; these commands apply to source checkouts. Earlier specification guides describing a parent-first build refer to vendor regeneration, not a prerequisite for validating an existing pinned copy.
+Check and build run the same owned ESM and pinned-vendor verifier. An existing source copy needs no parent generator; vendor regeneration belongs to the parent canonical build. Installed tarballs omit development scripts and tests. Full tests create isolated workspaces and exercise persistence and recovery.
 
-Read the [current roadmap](docs/roadmap.md). Final remote URL metadata and GitHub execution remain pending authorization. Local artifact rehearsal is technical evidence only. Licenses and provenance retain their existing ownership.
+The operator-reported baseline is 29 Runtime tests passing plus check/build, and 394 parent tests passing with zero skipped. Actual three-product composition and installed two-MCP-adapter shared-service, lost-response, restart and uninstall-preservation checks also passed as technical evidence. See the [verification scope](docs/service.md). These are retained results, not tests newly run for this documentation update.
+
+Current Desktop E01–E19 acceptance status comes from a separate exact-candidate-bound acceptance report; without that report, no Host acceptance claim may be made. Consult the separate candidate-bound acceptance report for that status. This package claims neither old 6.3 feature parity, production readiness, Host PASS nor release authority. Read the [approved 0.1.x roadmap](docs/roadmap.md) for remaining work.

@@ -1,16 +1,16 @@
-# runtime local roadmap
+# Runtime roadmap
 
-Version 0.1.0 is currently at M2 owned-service implementation within the approved local v0.1 scope. This document records implementation status; it does not alter the parent governance roadmap or approve additional work.
+Runtime 0.1.0 implements the generic durable service and standalone CLI within the approved local 0.1.x scope. This roadmap describes current implementation and remaining validation; it creates no new capability scope or release authorization.
 
-Implemented: immutable exact Ontology and Harness reference inspection using the owned pinned compatibility contract; M2 Runtime-owned SQLite WAL/FULL state, scoped CAS receipts/audit, immutable project goals and reviewed run plans, code-injected durable dispatch, UNKNOWN recovery and receipt-only reconciliation. See the [service API](service.md). Storage patterns were adapted from the verified new-product reference into owned code with packaged provenance.
+Implemented Runtime functions include scoped projects, immutable goals, exact published Ontology/Harness pins, immutable reviewed plans, scoped human decisions, SQLite WAL/FULL persistence, global revision CAS, idempotent receipts and atomic audit. Dispatch commits one durable claim before invoking trusted code. UNKNOWN recovery uses receipt inspection without redispatch. See the [service API](service.md).
 
-The owned standalone CLI now validates closed JSON requests before initialization and routes explicit dispatch/reconcile to the durable service. Help, version, capabilities and imports are read-only. Resolvers and executors are absent in the standalone CLI; external provider wiring remains parent M3 work. See the [CLI contract](cli.md). This adds no production or Host pass.
+The [standalone CLI](cli.md) validates closed JSON requests before explicit workspace initialization and routes dispatch/reconcile to the service. Discovery and imports are read-only. The standalone CLI supplies no resolvers, executor or receipt inspector.
 
-Independent source check/build commands validate this product without a parent generator. Tests and local packed-artifact rehearsal are technical checks, not product acceptance. Retained legacy libraries do not imply completed operational migration.
+Parent EvoPilot Preview provides actual native published Ontology/Harness resolvers and execution/receipt inspection for representative quality and business validation. Actual three-product composition and installed two-MCP-adapter shared-service, lost-response, restart and uninstall-preservation checks have passed as technical evidence. No arbitrary coding agent, new LLM or credential adapter is configured. The separately distributed parent Preview product entry documents that composed experience.
 
-Retained R37 verification reports all 29 owned tests plus check/build passing, including CLI and service filesystem contracts; see the [verification scope](service.md). The earlier three-owning-service protocol test passed. Parent composition adapter R41 repair remains ongoing and unaccepted.
+The operator-reported technical baseline is 29 Runtime tests passing plus check/build, and 394 full parent tests passing with zero skipped. The [verification scope](service.md) distinguishes these retained results from final acceptance. The root capability stage remains `M2_OWNED_SERVICE`; it describes this package's implemented API, not the parent's integration status.
 
-Pending M3: shared service/HTTP broker, actual owning-product composition adapter integration and real E2E repair, MCP transport, unified Expert/Codex experience and Host validation. Operational migration and applicable E01–E19 evidence remain pending. GitHub publication is a later separately authorized stage. Stable 1.0, production readiness and full acceptance are not claimed.
+Next work remains within approved 0.1.x: gather real-project feedback on the current functions and address reproducible issues within that scope. Current Desktop E01–E19 acceptance status comes from a separate exact-candidate-bound acceptance report; without that report, no Host acceptance claim may be made; its status belongs in the separate candidate-bound acceptance report. Technical tests do not establish Host PASS, old 6.3 feature parity, operational migration completeness, production readiness or release authority. Publication remains a separately authorized action.
 
-See the [product entry and API links](../README.md).
+Return to the [product entry](../README.md).
 
