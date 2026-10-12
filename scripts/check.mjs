@@ -54,6 +54,10 @@ export async function checkSource() {
   for (const [key, value] of Object.entries(expected)) assert.deepEqual(key === 'dependencies' ? pkg[key] ?? {} : pkg[key], value, key);
   for (const key of ['devDependencies', 'peerDependencies', 'optionalDependencies']) assert.deepEqual(pkg[key] ?? {}, {});
   assert.deepEqual(pkg.bin, { 'evopilot-next-runtime': 'src/cli.mjs' });
+  const cliPath = resolve(ROOT, pkg.bin['evopilot-next-runtime']);
+  assert((await readFile(cliPath, 'utf8')).startsWith('#!/usr/bin/env node\n'), 'CLI must start with its Node shebang');
+  const cliStat = await lstat(cliPath);
+  assert(cliStat.isFile() && (cliStat.mode & 0o111) === 0o111, 'CLI must be an executable regular file');
   const lock = JSON.parse(await readFile(resolve(ROOT, 'package-lock.json'), 'utf8'));
   assert.deepEqual(lock, { name: pkg.name, version: pkg.version, lockfileVersion: 3, requires: true, packages: { '': { name: pkg.name, version: pkg.version, license: pkg.license, bin: pkg.bin, engines: pkg.engines } } });
   const adoption = JSON.parse(await readFile(resolve(ROOT, 'provenance/state-adoption.json'), 'utf8'));
@@ -96,7 +100,14 @@ export async function checkSource() {
     'assert.equal(api.PRODUCT, ' + JSON.stringify(PRODUCT) + ');',
     "assert.equal(api.VERSION, '0.1.0');",
     'assert.equal(api.capabilities().authority, false);',
-    'assert.equal(api.capabilities().businessOperationsReady, false);',
+    "assert.equal(api.capabilities().implementationStage, \"M2_OWNED_SERVICE\");",
+    "assert.equal(api.capabilities().businessOperationsReady, true);",
+    "assert.equal(api.capabilities().persistentBusinessOperationsReady, true);",
+    "assert.equal(api.capabilities().serviceApi, \"./service\");",
+    "assert.equal(api.capabilities().hostIntegrationReady, false);",
+    "assert.equal(api.capabilities().acceptance, false);",
+    "assert.equal(api.capabilities().authority, false);",
+    "assert.equal(api.capabilities().softwareRelease, false);",
     'const serviceModule = await import(' + JSON.stringify(pathToFileURL(resolve(ROOT, 'src/service.mjs')).href) + ');',
     "const service = serviceModule.createRuntimeService({workspaceRoot:'/nonexistent-runtime-smoke',workspaceId:'smoke'});",
     'assert.equal(service.capabilities().authority, false);',
