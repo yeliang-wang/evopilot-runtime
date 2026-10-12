@@ -4,7 +4,7 @@ This repository owns only the runtime product and its packaged assets, tests and
 
 Approved local v0.1 work remains within the retained M0–M4 roadmap and local implementation decision. These instructions create no new capability scope, approval or acceptance. Services, workspace operations, CLI, MCP, unified Expert/plugin integration and operational migration remain under construction. No automatic releases, GitHub actions, repository publication or data imports are authorized.
 
-Use Node 24.14.0. After an operator installs this product's exact locked dependencies, run `npm run check`, `npm run build` and `npm test` here. Build verifies owned ESM sources and the existing pinned vendor; only the parent canonical generator may regenerate vendor bytes. Validation must also work in an unrelated standalone source checkout. Imports run with read-only Node permissions. Tarballs omit source-development scripts and tests.
+Use Node 24.14.0; no dependency installation is needed. Run `npm run check`, `npm run build` and `npm test` here unless the bounded task reserves filesystem tests for the operator. Build verifies owned ESM sources and the existing pinned vendor; only the parent canonical generator may regenerate vendor bytes. Validation must also work in an unrelated standalone source checkout. Imports and service construction run with read-only Node permissions. Tarballs omit source-development scripts and tests. The M2 service is documented in `docs/service.md`; M3 transport and E01–E19 remain pending.
 
 Preserve business APIs, v1 fixtures, canonical bytes, licenses, provenance and approval/acceptance data. Read [current implementation and pending work](docs/roadmap.md). Test success provides technical evidence only.
 

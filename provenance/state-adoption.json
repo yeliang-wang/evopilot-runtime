@@ -1,0 +1,10 @@
+{
+  "schema": "runtime-state-adoption/v1",
+  "sourceCommit": "1a6c069eb8d19195687d20b19086c087e58927d6",
+  "sourceProduct": "new-ontology",
+  "patterns": ["src/state.mjs", "src/service.mjs", "tests/e2e/service.test.mjs", "tests/fixtures/service-worker.mjs"],
+  "adaptations": ["Shared exact workspace identity", "Runtime-owned SQLite WAL FULL store", "Scoped CAS receipts and atomic audit", "Synthetic restart worker"],
+  "runtimeImports": false,
+  "sourceManifestIsFileDigest": false,
+  "authority": false
+}

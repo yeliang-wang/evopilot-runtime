@@ -23,13 +23,14 @@ const expected = {
     "README.md",
     "docs",
     "LICENSE",
-    "NOTICE"
+    "NOTICE",
+    "provenance"
   ],
-  "exports": "./src/index.mjs",
+  "exports": { ".": "./src/index.mjs", "./service": "./src/service.mjs" },
   "scripts": {
     "build": "node scripts/check.mjs",
     "check": "node scripts/check.mjs",
-    "test": "node --test tests/e2e/reference.test.mjs"
+    "test": "node --test tests/e2e/*.test.mjs"
   },
   "license": "Apache-2.0",
   "dependencies": {}
@@ -53,6 +54,15 @@ export async function checkSource() {
   for (const [key, value] of Object.entries(expected)) assert.deepEqual(key === 'dependencies' ? pkg[key] ?? {} : pkg[key], value, key);
   for (const key of ['devDependencies', 'peerDependencies', 'optionalDependencies']) assert.deepEqual(pkg[key] ?? {}, {});
   assert.equal(pkg.bin, undefined);
+  const adoption = JSON.parse(await readFile(resolve(ROOT, 'provenance/state-adoption.json'), 'utf8'));
+  assert.deepEqual(adoption, {
+    schema: 'runtime-state-adoption/v1',
+    sourceCommit: '1a6c069eb8d19195687d20b19086c087e58927d6',
+    sourceProduct: 'new-ontology',
+    patterns: ['src/state.mjs', 'src/service.mjs', 'tests/e2e/service.test.mjs', 'tests/fixtures/service-worker.mjs'],
+    adaptations: ['Shared exact workspace identity', 'Runtime-owned SQLite WAL FULL store', 'Scoped CAS receipts and atomic audit', 'Synthetic restart worker'],
+    runtimeImports: false, sourceManifestIsFileDigest: false, authority: false,
+  });
   const vendor = resolve(ROOT, 'vendor/compatibility/v1');
   const manifest = JSON.parse(await readFile(resolve(vendor, 'manifest.json'), 'utf8'));
   assert.deepEqual(manifest, {
@@ -85,6 +95,10 @@ export async function checkSource() {
     "assert.equal(api.VERSION, '0.1.0');",
     'assert.equal(api.capabilities().authority, false);',
     'assert.equal(api.capabilities().businessOperationsReady, false);',
+    'const serviceModule = await import(' + JSON.stringify(pathToFileURL(resolve(ROOT, 'src/service.mjs')).href) + ');',
+    "const service = serviceModule.createRuntimeService({workspaceRoot:'/nonexistent-runtime-smoke',workspaceId:'smoke'});",
+    'assert.equal(service.capabilities().authority, false);',
+    'service.close();',
   ].join('\n');
   const result = spawnSync(process.execPath, ['--permission', '--allow-fs-read=' + ROOT, '--input-type=module', '-e', code], {
     cwd: ROOT, encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '', OPENSSL_CONF: '/dev/null' },

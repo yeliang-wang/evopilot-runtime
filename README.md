@@ -2,7 +2,9 @@
 
 Runtime currently exposes `inspectPinnedInputs({ ontology, harness, observedOntology, observedHarness })`, which verifies exact immutable Ontology and Harness references through its own pinned compatibility module. It never selects a latest version or executes work. See the [owned reference implementation](src/index.mjs), [vendor contract](vendor/compatibility/v1/reference.mjs), [pin manifest](vendor/compatibility/v1/manifest.json) and boundary tests (`tests/e2e/reference.test.mjs` in a source checkout).
 
-All root APIs also expose `PRODUCT`, `VERSION` and `capabilities()`. Readiness remains false and reports convey no acceptance, execution or publication authority. Persistent lifecycle/services, workspace integration, CLI/MCP and unified Expert/plugin delivery remain under construction. This source is not stable 1.0 or production-ready, and does not establish M1 or full acceptance.
+The `./service` subpath now exposes `createRuntimeService({workspaceRoot,workspaceId}, trustedProviders)` for the M2 durable project/goal/run boundary. It supports explicit initialization, pinned preparation, human decisions, one durable execution claim, and receipt reconciliation. See the [service API and composition envelope](docs/service.md). Construction is pure; SQLite persistence starts only at initialization.
+
+All root APIs also expose `PRODUCT`, `VERSION` and `capabilities()`. The original pure API remains unchanged. Readiness remains false and reports convey no acceptance or publication authority. Shared transport, actual product composition adapters, CLI/MCP and unified Expert/Codex delivery remain M3 work. Node SQLite is experimental; this service assumes one trusted OS user. This source is not stable 1.0 or production-ready and does not establish full acceptance.
 
 Use Node 24.14.0. This source checkout has no dependencies and needs no install. Run:
 
