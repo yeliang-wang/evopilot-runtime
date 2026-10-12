@@ -1,3 +1,4 @@
+import { isPromise } from 'node:util/types';
 import { exactFields, frozenClone, sha256, stableSerialize, textField, validateReference } from '../vendor/compatibility/v1/reference.mjs';
 import { inspectPinnedInputs } from './index.mjs';
 import { bounded, fail, slug, scopeCheck } from './state.mjs';
@@ -16,7 +17,7 @@ export function resolveMaterials(providers, plan) {
     const fn = providers[product === 'ontology' ? 'resolveOntology' : 'resolveHarness'];
     if (typeof fn !== 'function') fail('MISSING_RESOLVER','Trusted resolver required');
     const value = fn(frozenClone({ reference: plan.pins[product], scope: plan.scope, workspace: plan.workspace }));
-    if (value && typeof value.then === 'function') { Promise.resolve(value).catch(() => {}); fail('ASYNC_RESOLVER','Resolver must be synchronous'); }
+    if (isPromise(value)) { Promise.prototype.then.call(value, undefined, () => {}); fail('ASYNC_RESOLVER','Resolver must be synchronous'); }
     bounded(value); exactFields(value, ['reference','workspace','scope','published','materialDigest','descriptor']);
     scopeCheck(value.scope); exactFields(value.descriptor, ['kind','digest']);
     if (value.published !== true || !same(value.workspace,plan.workspace) || value.scope.visibility !== value.reference.visibility || (value.scope.visibility === 'public' && ![plan.scope.projectId,'shared'].includes(value.scope.projectId)) || (value.scope.visibility === 'private' && !same(value.scope,plan.scope)) || (plan.scope.visibility === 'public' && value.scope.visibility === 'private')) fail('MATERIAL_SCOPE','Published workspace material required');

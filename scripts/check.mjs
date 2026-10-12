@@ -53,7 +53,9 @@ export async function checkSource() {
   const pkg = JSON.parse(await readFile(resolve(ROOT, 'package.json'), 'utf8'));
   for (const [key, value] of Object.entries(expected)) assert.deepEqual(key === 'dependencies' ? pkg[key] ?? {} : pkg[key], value, key);
   for (const key of ['devDependencies', 'peerDependencies', 'optionalDependencies']) assert.deepEqual(pkg[key] ?? {}, {});
-  assert.equal(pkg.bin, undefined);
+  assert.deepEqual(pkg.bin, { 'evopilot-next-runtime': 'src/cli.mjs' });
+  const lock = JSON.parse(await readFile(resolve(ROOT, 'package-lock.json'), 'utf8'));
+  assert.deepEqual(lock, { name: pkg.name, version: pkg.version, lockfileVersion: 3, requires: true, packages: { '': { name: pkg.name, version: pkg.version, license: pkg.license, bin: pkg.bin, engines: pkg.engines } } });
   const adoption = JSON.parse(await readFile(resolve(ROOT, 'provenance/state-adoption.json'), 'utf8'));
   assert.deepEqual(adoption, {
     schema: 'runtime-state-adoption/v1',
@@ -99,6 +101,14 @@ export async function checkSource() {
     "const service = serviceModule.createRuntimeService({workspaceRoot:'/nonexistent-runtime-smoke',workspaceId:'smoke'});",
     'assert.equal(service.capabilities().authority, false);',
     'service.close();',
+    'const cli = await import(' + JSON.stringify(pathToFileURL(resolve(ROOT, 'src/cli.mjs')).href) + ');',
+    'assert.equal(typeof cli.main, "function");',
+    'for (const command of ["help", "version", "capabilities"]) {',
+    '  let output = "";',
+    '  assert.equal(await cli.main([command], { stdout: { write: value => { output += value; } } }), 0);',
+    '  assert.equal(JSON.parse(output).authority, false);',
+    '}',
+
   ].join('\n');
   const result = spawnSync(process.execPath, ['--permission', '--allow-fs-read=' + ROOT, '--input-type=module', '-e', code], {
     cwd: ROOT, encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '', OPENSSL_CONF: '/dev/null' },

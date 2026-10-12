@@ -24,5 +24,8 @@
     "check": "node scripts/check.mjs",
     "test": "node --test tests/e2e/*.test.mjs"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "bin": {
+    "evopilot-next-runtime": "src/cli.mjs"
+  }
 }

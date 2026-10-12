@@ -4,7 +4,9 @@ Runtime currently exposes `inspectPinnedInputs({ ontology, harness, observedOnto
 
 The `./service` subpath now exposes `createRuntimeService({workspaceRoot,workspaceId}, trustedProviders)` for the M2 durable project/goal/run boundary. It supports explicit initialization, pinned preparation, human decisions, one durable execution claim, and receipt reconciliation. See the [service API and composition envelope](docs/service.md). Construction is pure; SQLite persistence starts only at initialization.
 
-All root APIs also expose `PRODUCT`, `VERSION` and `capabilities()`. The original pure API remains unchanged. Readiness remains false and reports convey no acceptance or publication authority. Shared transport, actual product composition adapters, CLI/MCP and unified Expert/Codex delivery remain M3 work. Node SQLite is experimental; this service assumes one trusted OS user. This source is not stable 1.0 or production-ready and does not establish full acceptance.
+All root APIs also expose `PRODUCT`, `VERSION` and `capabilities()`. The original pure API remains unchanged. Readiness remains false and reports convey no acceptance or publication authority. Shared transport, actual product composition adapters, MCP and unified Expert/Codex delivery remain M3 work. Node SQLite is experimental; this service assumes one trusted OS user. This source is not stable 1.0 or production-ready and does not establish full acceptance.
+
+The owned `evopilot-next-runtime` CLI exposes pure help/version/capabilities and one bounded JSON request against an explicit workspace and revision. Run `node src/cli.mjs help` from this checkout; see the [complete CLI contract](docs/cli.md). External providers remain pending parent M3 wiring. CLI results infer no authorization or acceptance.
 
 Use Node 24.14.0. This source checkout has no dependencies and needs no install. Run:
 

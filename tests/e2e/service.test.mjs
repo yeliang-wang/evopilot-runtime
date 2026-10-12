@@ -4,6 +4,22 @@ import { mkdtempSync, realpathSync, rmSync, existsSync, readFileSync, writeFileS
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRuntimeService } from '../../src/service.mjs';
+import { resolveMaterials } from '../../src/operations.mjs';
+
+test('boundary: resolver descriptors precede field access and rejected promises are consumed',async()=>{
+  const plan={pins:{ontology:{}},scope:{visibility:'public',projectId:'alpha'},workspace:{}};
+  let calls=0;
+  for(const key of ['then','reference','scope','descriptor']) {
+    const value=Object.defineProperty({},key,{enumerable:true,get(){calls++;throw Error('secret getter');}});
+    assert.throws(()=>resolveMaterials({resolveOntology:()=>value},plan));
+  }
+  assert.equal(calls,0);
+  const rejected=Promise.reject(Error('private rejection'));
+  Object.defineProperty(rejected,'then',{get(){calls++;throw Error('must bypass own then');}});
+  assert.throws(()=>resolveMaterials({resolveOntology:()=>rejected},plan),{code:'ASYNC_RESOLVER'});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(calls,0);
+});
 
 const scope={visibility:'private',projectId:'alpha'};
 test('boundary: provider construction rejects unknown keys, getters and non-callbacks without effects',()=>{
