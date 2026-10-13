@@ -5,6 +5,7 @@ import { same, resolveMaterials } from './operations.js';
 
 export function claimRun(store: StoreIdentity,state: State,run: Run,providers: Providers) {
   if (run.claim || run.stage === 'CANCELLED') return false;
+  if (!same(run.plan.workspace, store.identity)) fail('RELOCATION_REVIEW_REQUIRED', 'Historical unclaimed Run requires new preparation and review');
   if (typeof providers.execute !== 'function') fail('MISSING_EXECUTOR','Trusted execution adapter required');
   if (run.stage !== 'APPROVED' || run.decision?.decision !== 'APPROVE' || run.decision.reviewDigest !== run.reviewDigest) fail('APPROVAL_REQUIRED','Exact human approval required');
   const goal=state.goals.find(g=>same(g.scope,run.scope)&&g.id===run.plan.goal.id);

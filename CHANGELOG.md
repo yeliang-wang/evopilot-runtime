@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0 Preview
+
+- Private Workspace initialization and explicit existing-workspace attachment through the unified Expert.
+- Separate editable project files and protected service state; same-host migration preserves immutable history and receipts.
+- Versioned asset compatibility, recovery coverage and expanded Expert E2E documentation.
+- Historical specifications/v1 and earlier acceptance records remain unchanged.
+
 ## 0.1.1 — Preview repair
 
 - Move owned Runtime core to strict TypeScript and distribute compiled ESM JavaScript and declarations while preserving public API behavior.

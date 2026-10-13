@@ -4,7 +4,7 @@
 
 Runtime is the durable execution layer of [EvoPilot](https://github.com/yeliang-wang/evopilot). It owns scoped projects, immutable goals, reviewed plans, human decisions, execution claims, receipts and audit. [Harness](https://github.com/yeliang-wang/evopilot-harness) owns quality assets and evaluation; [Ontology](https://github.com/yeliang-wang/evopilot-ontology) owns semantic models and validation.
 
-**[v0.1.1 Preview](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.1.1)** provides strict TypeScript source, compiled JavaScript and declarations, and refined packaging and documentation. [v0.1.0](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.1.0) is the historical baseline. See the [changelog](CHANGELOG.md) and [roadmap](docs/roadmap.md).
+**[v0.2.0 Preview](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.2.0)** provides strict TypeScript source, compiled JavaScript and declarations, and refined packaging and documentation. [v0.1.0](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.1.0) is the historical baseline. See the [changelog](CHANGELOG.md) and [roadmap](docs/roadmap.md).
 
 ## Capabilities
 
@@ -39,12 +39,12 @@ Build cleans only generated `dist`, emits JavaScript and declarations, then make
 
 ### Install a release tarball
 
-For v0.1.1 Preview, download `evopilot-next-runtime-0.1.1.tgz`, `source-revision.txt` and `SHA256SUMS` from the [Runtime release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.1.1). In that download directory, verify the checksums and inspect the revision before installing into your consumer project:
+For v0.2.0 Preview, download `evopilot-next-runtime-0.2.0.tgz`, `source-revision.txt` and `SHA256SUMS` from the [Runtime release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.2.0). In that download directory, verify the checksums and inspect the revision before installing into your consumer project:
 
 ```sh
 shasum -a 256 -c SHA256SUMS
 cat source-revision.txt
-npm install --ignore-scripts /absolute/downloads/evopilot-next-runtime-0.1.1.tgz
+npm install --ignore-scripts /absolute/downloads/evopilot-next-runtime-0.2.0.tgz
 npx --no-install evopilot-next-runtime help
 ```
 

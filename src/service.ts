@@ -27,7 +27,7 @@ export function createRuntimeService(options: ServiceOptions,trustedProviders: P
   const timeoutMs=providers.timeoutMs??30000;
   let store: Store|null=null,closed=false;
   const controllers=new Set<AbortController>();
-  const capabilities=()=>frozenClone({product:'runtime',version:'0.1.1',stage:'M2_DURABLE_SERVICE',operations,asyncOperations:['dispatch','reconcile'],authority:false,softwareRelease:false,limits:LIMITS});
+  const capabilities=()=>frozenClone({product:'runtime',version:'0.2.0',stage:'M2_DURABLE_SERVICE',operations,asyncOperations:['dispatch','reconcile'],authority:false,softwareRelease:false,limits:LIMITS});
   function initialize() { if(closed) fail('CLOSED','Service closed'); if(!store) store=openState(options.workspaceRoot,options.workspaceId); return frozenClone({workspaceId:options.workspaceId,initialized:true,authority:false}); }
   function transact<K extends Operation>(request: Request<K>, internal?: (state: State, request: Request)=>unknown, completion=false): Response<K> {
     bounded(request); const r=frozenClone(request) as Request,write=validateRequest(r);
@@ -39,7 +39,7 @@ export function createRuntimeService(options: ServiceOptions,trustedProviders: P
       const row=db.prepare('SELECT revision,data FROM state WHERE singleton=1').get();
       if(!row||typeof row.revision !== 'number' || typeof row.data !== 'string' || !Number.isSafeInteger(row.revision)||Buffer.byteLength(row.data)>LIMITS.stateBytes) fail('CORRUPT_STATE','Invalid state');
       const state=validateState(JSON.parse(row.data));
-      for(const run of state.runs) if(stableSerialize(run.plan.workspace)!==stableSerialize(store.identity)) fail('CORRUPT_STATE','Stored workspace binding differs');
+      for(const run of state.runs) if(!store.acceptsWorkspace(run.plan.workspace, run.reviewDigest)) fail('CORRUPT_STATE','Stored workspace binding differs');
       // Validate every retained receipt, not just the requested row.
       const retained=db.prepare('SELECT scope,request_id,digest,receipt FROM receipts').all();
       if(retained.length>LIMITS.receipts || retained.reduce((n,r)=>n+Buffer.byteLength(sqlText(r.receipt)),0)>LIMITS.receiptBytes) fail('CORRUPT_STATE','Receipt storage bound');

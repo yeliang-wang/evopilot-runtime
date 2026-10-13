@@ -16,7 +16,7 @@ export interface ProviderReceipt { claimId: string; inputDigest: string; pins: P
 export interface Outcome { status: 'UNKNOWN'|'SUCCEEDED'|'FAILED'; receipt: ProviderReceipt|null; reason: string|null }
 export interface Run { scope: Scope; id: string; plan: Plan; reviewDigest: string; stage: 'PREPARED'|'APPROVED'|'REJECTED'|'RUNNING'|'UNKNOWN'|'SUCCEEDED'|'FAILED'|'CANCELLED'; decision: Decision|null; claim: Claim|null; attemptCount: number; outcome: Outcome|null; cancellation: {uid:number;at:string;reviewDigest:string;humanEvidenceRef:string;externalUnresolved:boolean}|null }
 export interface State { projects: Project[]; goals: Goal[]; runs: Run[] }
-export interface Store { db: DatabaseSync; uid: number; identity: Workspace; guard(): void }
+export interface Store { db: DatabaseSync; uid: number; identity: Workspace; guard(): void; acceptsWorkspace(value: unknown, digest: string): boolean }
 export type StoreIdentity = Pick<Store,'uid'|'identity'>;
 export interface ResolveRequest {reference: Reference; scope: Scope; workspace: Workspace}
 export type Executor = (claim: Readonly<Claim & {signal: AbortSignal}>) => unknown;

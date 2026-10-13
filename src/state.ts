@@ -1,3 +1,4 @@
+import { readRelocations, acceptsWorkspace as acceptRelocatedWorkspace } from './location-lineage.js';
 import type { State, Scope, Workspace, Project, Goal, Run } from './types.js';
 import { DatabaseSync } from 'node:sqlite';
 import { constants, lstatSync, mkdirSync, readdirSync, readFileSync, openSync, closeSync, writeFileSync, fsyncSync } from 'node:fs';
@@ -127,7 +128,7 @@ export function openState(root: string, id: string) {
   if (!stat(marker)) createFile(marker, stableSerialize(identity));
   for (const d of dirs) if (!stat(d)) { mkdirSync(d, { mode: 0o700 }); syncDir(dirname(d)); }
   if (!existed) createFile(dbPath, '');
-  let db;
+  let db: DatabaseSync | undefined;
   function guard() {
     ancestors(root); checked(root, uid, true); checked(marker, uid, false);
     if (stat(marker)!.size > 4096) fail('IDENTITY_MISMATCH','Oversized workspace identity');
@@ -136,6 +137,7 @@ export function openState(root: string, id: string) {
     for (const d of dirs) checked(d, uid, true);
     for (const p of [dbPath, dbPath + '-wal', dbPath + '-shm', dbPath + '-journal']) checked(p, uid, false, true);
     checked(dbPath, uid, false);
+    if (db) readRelocations(db, identity, 'runtime');
   }
   try {
     db = new DatabaseSync(dbPath, { timeout: 1000, allowExtension: false });
@@ -150,9 +152,10 @@ export function openState(root: string, id: string) {
     }
     db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
     if (!existed) db.exec("BEGIN IMMEDIATE; CREATE TABLE state (singleton INTEGER PRIMARY KEY CHECK(singleton=1), revision INTEGER NOT NULL, data TEXT NOT NULL); INSERT INTO state VALUES(1,0,'{\"projects\":[],\"goals\":[],\"runs\":[]}'); CREATE TABLE receipts (scope TEXT NOT NULL, request_id TEXT NOT NULL, digest TEXT NOT NULL, receipt TEXT NOT NULL, PRIMARY KEY(scope,request_id)); CREATE TABLE audit (revision INTEGER PRIMARY KEY, uid INTEGER NOT NULL, operation TEXT NOT NULL, request_digest TEXT NOT NULL, result_digest TEXT NOT NULL); PRAGMA user_version=1; COMMIT;");
+    readRelocations(db, identity, 'runtime');
     guard();
-  } catch (e) { if (db) db.close(); fail('CORRUPT_STATE', 'Cannot open verified Runtime state: ' + (errorCode(e) || 'invalid database')); }
-  return {db,uid,identity,guard};
+  } catch (e) { if (db) db.close(); if (['INVALID_LINEAGE','MISSING_RELOCATION_KEY'].includes(errorCode(e) ?? '')) throw e; fail('CORRUPT_STATE', 'Cannot open verified Runtime state: ' + (errorCode(e) || 'invalid database')); }
+  return {db,uid,identity,guard,acceptsWorkspace: (value: unknown, digest: string) => acceptRelocatedWorkspace(db, identity, 'runtime', value, digest)};
 }
 
 export function errorCode(error: unknown): string | undefined { return error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : undefined; }
