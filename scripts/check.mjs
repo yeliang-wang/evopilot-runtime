@@ -11,14 +11,15 @@ const PRODUCT = 'runtime';
 const PIN = 'df4f7246ae35ef9114e2b93663d520e7ff4f44f14f886ac8ba43e9fc080ddc9a';
 const expected = {
   "name": "@evopilot-next/runtime",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "engines": {
     "node": ">=24.14.0"
   },
   "files": [
-    "src",
+    "dist",
+    "src/**/*.ts",
     "vendor",
     "README.md",
     "docs",
@@ -26,16 +27,32 @@ const expected = {
     "NOTICE",
     "provenance"
   ],
-  "exports": { ".": "./src/index.mjs", "./service": "./src/service.mjs" },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./service": {
+      "types": "./dist/service.d.ts",
+      "import": "./dist/service.js"
+    }
+  },
   "scripts": {
-    "build": "node scripts/check.mjs",
+    "build": "node scripts/build.mjs",
     "check": "node scripts/check.mjs",
     "test": "node --test tests/e2e/*.test.mjs"
   },
   "license": "Apache-2.0",
+  "bin": {
+    "evopilot-next-runtime": "dist/cli.js"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/node": "24.19.2"
+  },
   "dependencies": {}
 };
-const specifiers = source => [...source.matchAll(/^[\t ]*(?:import\s+(?:(?:[\w$]+(?:\s*,\s*)?)?(?:\{[^}]*\}|\*\s+as\s+[\w$]+)?\s*from\s*)?|export\s+(?:\{[^}]*\}|\*(?:\s+as\s+[\w$]+)?)\s+from\s*)['"]([^'"]+)['"]/gm)].map(match => match[1]);
+const specifiers = source => [...source.matchAll(/^[\t ]*(?:import\s+(?:type\s+)?(?:(?:[\w$]+(?:\s*,\s*)?)?(?:\{[^}]*\}|\*\s+as\s+[\w$]+)?\s*from\s*)?|export\s+(?:type\s+)?(?:\{[^}]*\}|\*(?:\s+as\s+[\w$]+)?)\s+from\s*)['"]([^'"]+)['"]/gm)].map(match => match[1]);
 
 async function files(directory) {
   assert((await lstat(directory)).isDirectory(), 'Owned tree must be a regular directory');
@@ -50,16 +67,23 @@ async function files(directory) {
 }
 
 export async function checkSource() {
+  for (const args of [['--noEmit'], ['--noEmit','--strict','--target','ES2023','--module','NodeNext','tests/types/contracts.ts']]) {
+    const checked = spawnSync(process.execPath, [resolve(ROOT, 'node_modules/typescript/bin/tsc'), ...args], {cwd: ROOT, encoding: 'utf8'});
+    assert.ifError(checked.error); assert.equal(checked.status, 0, checked.stdout + checked.stderr);
+  }
   const pkg = JSON.parse(await readFile(resolve(ROOT, 'package.json'), 'utf8'));
   for (const [key, value] of Object.entries(expected)) assert.deepEqual(key === 'dependencies' ? pkg[key] ?? {} : pkg[key], value, key);
-  for (const key of ['devDependencies', 'peerDependencies', 'optionalDependencies']) assert.deepEqual(pkg[key] ?? {}, {});
-  assert.deepEqual(pkg.bin, { 'evopilot-next-runtime': 'src/cli.mjs' });
+  for (const key of ['peerDependencies', 'optionalDependencies']) assert.deepEqual(pkg[key] ?? {}, {});
+  assert.deepEqual(pkg.bin, { 'evopilot-next-runtime': 'dist/cli.js' });
   const cliPath = resolve(ROOT, pkg.bin['evopilot-next-runtime']);
   assert((await readFile(cliPath, 'utf8')).startsWith('#!/usr/bin/env node\n'), 'CLI must start with its Node shebang');
   const cliStat = await lstat(cliPath);
   assert(cliStat.isFile() && (cliStat.mode & 0o111) === 0o111, 'CLI must be an executable regular file');
   const lock = JSON.parse(await readFile(resolve(ROOT, 'package-lock.json'), 'utf8'));
-  assert.deepEqual(lock, { name: pkg.name, version: pkg.version, lockfileVersion: 3, requires: true, packages: { '': { name: pkg.name, version: pkg.version, license: pkg.license, bin: pkg.bin, engines: pkg.engines } } });
+  assert.equal(lock.name, pkg.name); assert.equal(lock.version, pkg.version);
+  assert.equal(lock.lockfileVersion, 3); assert.equal(lock.requires, true);
+  assert.deepEqual(lock.packages[''], { name: pkg.name, version: pkg.version, license: pkg.license, bin: pkg.bin, engines: pkg.engines, devDependencies: pkg.devDependencies });
+  for (const [name, version] of Object.entries(pkg.devDependencies)) assert.equal(lock.packages['node_modules/' + name].version, version);
   const adoption = JSON.parse(await readFile(resolve(ROOT, 'provenance/state-adoption.json'), 'utf8'));
   assert.deepEqual(adoption, {
     schema: 'runtime-state-adoption/v1',
@@ -79,26 +103,29 @@ export async function checkSource() {
   assert.equal(createHash('sha256').update(bytes).digest('hex'), PIN);
   const sources = [...await files(resolve(ROOT, 'src')), ...await files(resolve(ROOT, 'vendor'))];
   for (const path of sources) {
-    if (!path.endsWith('.mjs')) continue;
+    if (!path.endsWith('.mjs') && !path.endsWith('.ts') && !path.endsWith('.mts')) continue;
     const source = await readFile(path, 'utf8');
+    if (path.endsWith('.mjs')) {
     const syntax = spawnSync(process.execPath, ['--check', path], { encoding: 'utf8' });
     assert.ifError(syntax.error); assert.equal(syntax.status, 0, syntax.stderr);
+    }
     assert.doesNotMatch(source, /\bimport\s*\(|\brequire\s*\(|\beval\s*\(|\/Users\/|\/home\/|EVOPILOT_HARNESS_HOME|defaultHarnessHome|\.evopilot-harness|\bprocess\s*(?:\.\s*(?:env|cwd|chdir)|\[)|\bglobalThis\s*(?:\.|\[)|\bm0\//);
     for (const specifier of specifiers(source)) {
       if (isBuiltin(specifier)) continue;
       if (specifier === 'yaml' && (path.endsWith('/src/asset-sources.mjs') || PRODUCT === 'ontology' && path.includes('/src/compat/'))) continue;
       if (PRODUCT === 'ontology' && path.includes('/src/compat/') && specifier === 'ajv/dist/2020.js') continue;
       assert(specifier.startsWith('.'), 'Undeclared import: ' + specifier);
-      const target = resolve(dirname(path), specifier);
+      const resolved = resolve(dirname(path), specifier);
+      const target = path.endsWith('.ts') && resolved.endsWith('.js') ? resolved.slice(0, -3) + '.ts' : resolved;
       assert(target.startsWith(resolve(ROOT, 'src') + sep) || target === resolve(vendor, 'reference.mjs'), 'Foreign source import');
       assert((await lstat(target)).isFile(), 'Import must be an owned regular file');
     }
   }
   const code = [
     "import assert from 'node:assert/strict';",
-    'const api = await import(' + JSON.stringify(pathToFileURL(resolve(ROOT, 'src/index.mjs')).href) + ');',
+    'const api = await import(' + JSON.stringify(pathToFileURL(resolve(ROOT, 'dist/index.js')).href) + ');',
     'assert.equal(api.PRODUCT, ' + JSON.stringify(PRODUCT) + ');',
-    "assert.equal(api.VERSION, '0.1.0');",
+    "assert.equal(api.VERSION, '0.1.1');",
     'assert.equal(api.capabilities().authority, false);',
     "assert.equal(api.capabilities().implementationStage, \"M2_OWNED_SERVICE\");",
     "assert.equal(api.capabilities().businessOperationsReady, true);",
@@ -108,11 +135,11 @@ export async function checkSource() {
     "assert.equal(api.capabilities().acceptance, false);",
     "assert.equal(api.capabilities().authority, false);",
     "assert.equal(api.capabilities().softwareRelease, false);",
-    'const serviceModule = await import(' + JSON.stringify(pathToFileURL(resolve(ROOT, 'src/service.mjs')).href) + ');',
+    'const serviceModule = await import(' + JSON.stringify(pathToFileURL(resolve(ROOT, 'dist/service.js')).href) + ');',
     "const service = serviceModule.createRuntimeService({workspaceRoot:'/nonexistent-runtime-smoke',workspaceId:'smoke'});",
     'assert.equal(service.capabilities().authority, false);',
     'service.close();',
-    'const cli = await import(' + JSON.stringify(pathToFileURL(resolve(ROOT, 'src/cli.mjs')).href) + ');',
+    'const cli = await import(' + JSON.stringify(pathToFileURL(resolve(ROOT, 'dist/cli.js')).href) + ');',
     'assert.equal(typeof cli.main, "function");',
     'for (const command of ["help", "version", "capabilities"]) {',
     '  let output = "";',

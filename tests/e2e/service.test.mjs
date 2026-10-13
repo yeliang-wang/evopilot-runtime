@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, realpathSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync, symlinkSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createRuntimeService } from '../../src/service.mjs';
-import { resolveMaterials } from '../../src/operations.mjs';
+import { createRuntimeService } from '../../dist/service.js';
+import { resolveMaterials } from '../../dist/operations.js';
 
 test('boundary: resolver descriptors precede field access and rejected promises are consumed',async()=>{
   const plan={pins:{ontology:{}},scope:{visibility:'public',projectId:'alpha'},workspace:{}};

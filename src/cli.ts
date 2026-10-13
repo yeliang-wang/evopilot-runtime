@@ -3,12 +3,14 @@ import { constants, realpathSync } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PRODUCT, VERSION } from './index.mjs';
-import { createRuntimeService } from './service.mjs';
-import { operations, validateRequest } from './operations.mjs';
-import { bounded, fail, LIMITS, slug } from './state.mjs';
+import { PRODUCT, VERSION } from './index.js';
+import { createRuntimeService } from './service.js';
+import { operations, validateRequest } from './operations.js';
+import { errorCode, bounded, fail, LIMITS, slug } from './state.js';
 import { exactFields, textField, validateReference } from '../vendor/compatibility/v1/reference.mjs';
 
+import type { Request, Composition, ExternalRequest } from './types.js';
+type InputStream = AsyncIterable<string | Uint8Array>;
 const serviceCodes = new Set(('CLOSED NOT_INITIALIZED REQUEST_CONFLICT CORRUPT_STATE REVISION_CONFLICT NOT_FOUND LIMIT INVALID_ENCODING INVALID_REQUEST INVALID_INPUT INVALID_OPERATION INVALID_SCOPE EXISTS MISSING_RESOLVER ASYNC_RESOLVER MATERIAL_SCOPE INVALID_MATERIAL MISSING_EXECUTOR APPROVAL_REQUIRED PIN_DRIFT REVIEW_MISMATCH TERMINAL DECISION_CONFLICT NO_CLAIM CLAIM_MISMATCH UNSAFE_WORKSPACE UNSUPPORTED_PLATFORM UNKNOWN_WORKSPACE IDENTITY_MISMATCH STATE_ERROR').split(' '));
 const asyncOperations = ['run.dispatch', 'run.reconcile'];
 const help = {
@@ -17,7 +19,7 @@ const help = {
   exitCodes: { success: 0, serviceFailure: 1, invalidInput: 2 },
 };
 // CLI-only preflight; public service validation and scope rules remain unchanged.
-function validateCLIRequest(request) {
+function validateCLIRequest(request: Request) {
   bounded(request);
   if (!request || ![...operations, ...asyncOperations].includes(request.operation)) fail('INVALID_OPERATION', 'Unsupported operation');
   validateRequest(request);
@@ -32,13 +34,13 @@ function validateCLIRequest(request) {
     'run.inspect': ['id'], 'run.list': [], 'run.dispatch': ['id'], 'run.reconcile': ['id'],
   };
   exactFields(i, shapes[op]);
-  if (Object.hasOwn(i, 'id')) slug(i.id);
+  if (Object.hasOwn(i, 'id')) slug(('id' in i) ? i.id : undefined);
   if (op === 'receipt.inspect') slug(i.requestId);
   if (op === 'project.create') textField(i.name);
   if (op === 'goal.create') textField(i.description);
   if (op === 'run.prepare') {
     slug(i.goalId);
-    for (const product of ['ontology','harness']) validateReference(i[product], { product, visibility: scope.visibility });
+    for (const product of (['ontology','harness'] as const)) validateReference(i[product], { product, visibility: scope.visibility });
     composition(i.input);
   }
   if (op === 'run.decide' || op === 'run.cancel') {
@@ -48,25 +50,25 @@ function validateCLIRequest(request) {
   }
 }
 
-function object(value) {
+function object(value: unknown): asserts value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail('INVALID_INPUT','Expected JSON object');
 }
-function evidence(value) {
+function evidence(value: unknown) {
   exactFields(value,['id','version','source','values']);
   textField(value.id); textField(value.version);
-  exactFields(value.source,['locator','revision','digest']);
-  for (const key of ['locator','revision','digest']) textField(value.source[key]);
+  exactFields(value.source,(['locator','revision','digest'] as const));
+  for (const key of (['locator','revision','digest'] as const)) textField(value.source[key]);
   object(value.values);
 }
-function composition(input) {
+function composition(input: unknown): asserts input is Composition {
   bounded(input);
   exactFields(input,['schema','ontologyInstance','harness']);
   if (input.schema !== 'runtime-composition/v1') fail('INVALID_INPUT','Unsupported composition');
-  exactFields(input.ontologyInstance,['entities','relations']);
-  for (const key of ['entities','relations']) {
+  exactFields(input.ontologyInstance,(['entities','relations'] as const));
+  for (const key of (['entities','relations'] as const)) {
     if (!Array.isArray(input.ontologyInstance[key]) || input.ontologyInstance[key].length > 1000) fail('INVALID_INPUT','Expected bounded entity/relation arrays');
   }
-  for (const entity of input.ontologyInstance.entities) {
+  for (const entity of input.ontologyInstance.entities as unknown[]) {
     exactFields(entity,['id','conceptRef','properties']);
     textField(entity.id); textField(entity.conceptRef); object(entity.properties);
     for (const [key,values] of Object.entries(entity.properties)) {
@@ -74,9 +76,9 @@ function composition(input) {
       if (!Array.isArray(values) || values.some(v => v !== null && !['string','boolean','number'].includes(typeof v))) fail('INVALID_INPUT','Expected JSON primitive property values');
     }
   }
-  for (const relation of input.ontologyInstance.relations) {
-    exactFields(relation,['id','relationRef','from','to']);
-    for (const key of ['id','relationRef','from','to']) textField(relation[key]);
+  for (const relation of input.ontologyInstance.relations as unknown[]) {
+    exactFields(relation,(['id','relationRef','from','to'] as const));
+    for (const key of (['id','relationRef','from','to'] as const)) textField(relation[key]);
   }
   exactFields(input.harness,['mode','evidence','configuration']);
   object(input.harness.configuration);
@@ -89,16 +91,16 @@ function composition(input) {
   // All strings (including source locators) remain inert JSON descriptors.
 }
 
-function parseArgs(args) {
+function parseArgs(args: string[]) {
   if (!Array.isArray(args) || args.some(a => typeof a !== 'string')) fail('USAGE', 'Invalid arguments');
   const [raw, ...rest] = args;
   const command = raw === '--help' ? 'help' : raw === '--version' ? 'version' : raw;
   if (['capabilities', 'help', 'version'].includes(command)) {
     if (rest.length) fail('USAGE', 'Unexpected arguments');
-    return { command };
+    return { command: command as 'capabilities'|'help'|'version' };
   }
   if (command !== 'request') fail('USAGE', 'Expected a supported command');
-  const flags = {};
+  const flags: Record<string,string> = {};
   for (let i = 0; i < rest.length; i += 2) {
     const key = rest[i], value = rest[i + 1];
     if (!['--workspace', '--workspace-id', '--request-file'].includes(key) || Object.hasOwn(flags, key) || !value || value.startsWith('--')) fail('USAGE', 'Invalid request flags');
@@ -111,9 +113,9 @@ function parseArgs(args) {
   if (file && !isAbsolute(file)) fail('USAGE', 'Absolute request file required');
   return { command, root, id: flags['--workspace-id'], file };
 }
-async function readInput(file, stdin) {
-  const chunks = []; let size = 0;
-  const add = chunk => {
+async function readInput(file: string | undefined, stdin: InputStream): Promise<Request> {
+  const chunks: Buffer[] = []; let size = 0;
+  const add = (chunk: string | Uint8Array) => {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += bytes.length;
     if (size > LIMITS.requestBytes) fail('LIMIT', 'Request byte limit');
@@ -136,7 +138,7 @@ async function readInput(file, stdin) {
         add(buffer.subarray(0, bytesRead));
       }
     } catch (error) {
-      if (error.code === 'LIMIT') throw error;
+      if (errorCode(error) === 'LIMIT') throw error;
       fail('INPUT_FILE', 'Cannot read regular request file');
     } finally { await handle?.close(); }
   } else {
@@ -144,14 +146,14 @@ async function readInput(file, stdin) {
   }
   const bytes = Buffer.concat(chunks), text = bytes.toString('utf8');
   if (!Buffer.from(text, 'utf8').equals(bytes)) fail('INVALID_ENCODING', 'Invalid UTF-8');
-  let request;
+  let request: Request;
   try { request = JSON.parse(text); } catch { fail('INVALID_REQUEST', 'Expected one JSON request'); }
   validateCLIRequest(request);
   return request;
 }
 
 // Injected streams are trusted test/host code, never request-configurable providers.
-export async function main(args, { stdin = process.stdin, stdout = process.stdout } = {}) {
+export async function main(args: string[], { stdin = process.stdin, stdout = process.stdout }: {stdin?: InputStream; stdout?: {write(value: string): unknown}} = {}) {
   let response, exitCode = 0, executing = false;
   try {
     const parsed = parseArgs(args);
@@ -166,11 +168,11 @@ export async function main(args, { stdin = process.stdin, stdout = process.stdou
     };
     else {
       const request = await readInput(parsed.file, stdin);
-      const service = createRuntimeService({ workspaceRoot: parsed.root, workspaceId: parsed.id });
+      const service = createRuntimeService({ workspaceRoot: parsed.root!, workspaceId: parsed.id! });
       try {
         executing = true;
         service.initialize();
-        if (asyncOperations.includes(request.operation)) {
+        if (request.operation === 'run.dispatch' || request.operation === 'run.reconcile') {
           const { scope, input: { id }, requestId, expectedRevision } = request;
           const args = { scope, id, requestId, expectedRevision };
           result = await (request.operation === 'run.dispatch' ? service.dispatch(args) : service.reconcile(args));
@@ -179,7 +181,7 @@ export async function main(args, { stdin = process.stdin, stdout = process.stdou
     }
     response = { ok: true, product: PRODUCT, version: VERSION, result, authority: false };
   } catch (error) {
-    const code = ['USAGE', 'INPUT_FILE'].includes(error?.code) || serviceCodes.has(error?.code) ? error.code : executing ? 'STATE_ERROR' : 'INVALID_REQUEST';
+    const code = ['USAGE', 'INPUT_FILE'].includes(errorCode(error)!) || serviceCodes.has(errorCode(error)!) ? errorCode(error)! : executing ? 'STATE_ERROR' : 'INVALID_REQUEST';
     // Never echo exception messages, paths, parser excerpts or caller-controlled fields.
     const message = code === 'USAGE' ? 'Invalid command arguments; use help.'
       : code === 'INPUT_FILE' ? 'Cannot read a bounded regular request file.'

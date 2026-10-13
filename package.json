@@ -1,13 +1,14 @@
 {
   "name": "@evopilot-next/runtime",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "engines": {
     "node": ">=24.14.0"
   },
   "files": [
-    "src",
+    "dist",
+    "src/**/*.ts",
     "vendor",
     "README.md",
     "docs",
@@ -16,16 +17,26 @@
     "provenance"
   ],
   "exports": {
-    ".": "./src/index.mjs",
-    "./service": "./src/service.mjs"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./service": {
+      "types": "./dist/service.d.ts",
+      "import": "./dist/service.js"
+    }
   },
   "scripts": {
-    "build": "node scripts/check.mjs",
+    "build": "node scripts/build.mjs",
     "check": "node scripts/check.mjs",
     "test": "node --test tests/e2e/*.test.mjs"
   },
   "license": "Apache-2.0",
   "bin": {
-    "evopilot-next-runtime": "src/cli.mjs"
+    "evopilot-next-runtime": "dist/cli.js"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/node": "24.19.2"
   }
 }

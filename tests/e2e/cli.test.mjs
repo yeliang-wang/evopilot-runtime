@@ -5,17 +5,17 @@ import { existsSync, mkdtempSync, realpathSync, readFileSync, writeFileSync, sym
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { operations } from '../../src/operations.mjs';
-import { LIMITS } from '../../src/state.mjs';
-import { createRuntimeService } from '../../src/service.mjs';
-import { main } from '../../src/cli.mjs';
+import { operations } from '../../dist/operations.js';
+import { LIMITS } from '../../dist/state.js';
+import { createRuntimeService } from '../../dist/service.js';
+import { main } from '../../dist/cli.js';
 
 const digest = 'sha256:' + 'a'.repeat(64);
 const reference = product => ({ product, id: product, version: '0.1.0', specVersion: 'v1', visibility: 'public', digest });
 const composition = { schema: 'runtime-composition/v1', ontologyInstance: { entities: [], relations: [] }, harness: { mode: 'composed', evidence: {}, configuration: {} } };
 const prepareInput = { id: 'run', goalId: 'goal', ontology: reference('ontology'), harness: reference('harness'), input: composition };
 
-const cli = fileURLToPath(new URL('../../src/cli.mjs', import.meta.url));
+const cli = fileURLToPath(new URL('../../dist/cli.js', import.meta.url));
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const scope = { visibility: 'public', projectId: 'alpha' };
 const read = (operation, input = {}, selected = scope) => ({ operation, scope: selected, input });
@@ -32,7 +32,7 @@ function invoke(args, input = '', status = 0, flags = []) {
   assert.equal(envelope.ok, status === 0);
   assert.equal(envelope.authority, false);
   assert.deepEqual(Object.keys(envelope).sort(), (status === 0 ? ['ok', 'product', 'version', 'result', 'authority'] : ['ok', 'error', 'authority']).sort());
-  if (status === 0) { assert.equal(envelope.product, 'runtime'); assert.equal(envelope.version, '0.1.0'); }
+  if (status === 0) { assert.equal(envelope.product, 'runtime'); assert.equal(envelope.version, '0.1.1'); }
   return status === 0 ? envelope.result : envelope.error;
 }
 function setup(t) {

@@ -1,51 +1,52 @@
+import type { State, Request, Providers, Plan, Materials, Material, Run, StoreIdentity, Composition } from './types.js';
 import { isPromise } from 'node:util/types';
 import { exactFields, frozenClone, sha256, stableSerialize, textField, validateReference } from '../vendor/compatibility/v1/reference.mjs';
-import { inspectPinnedInputs } from './index.mjs';
-import { bounded, fail, slug, scopeCheck } from './state.mjs';
+import { inspectPinnedInputs } from './index.js';
+import { bounded, fail, slug, scopeCheck } from './state.js';
 
 export const operations = ['workspace.inspect','receipt.inspect','project.create','project.inspect','project.list','goal.create','goal.inspect','goal.list','run.prepare','run.decide','run.cancel','run.inspect','run.list'];
-export const same = (a,b) => stableSerialize(a) === stableSerialize(b);
-export function validateRequest(r) {
+export const same = (a: unknown,b: unknown) => stableSerialize(a) === stableSerialize(b);
+export function validateRequest(r: Request) {
   const write = ['project.create','goal.create','run.prepare','run.decide','run.cancel','run.dispatch','run.reconcile'].includes(r.operation);
   exactFields(r, ['operation','scope','input', ...(write ? ['requestId','expectedRevision'] : [])]); scopeCheck(r.scope);
-  if (write) { slug(r.requestId); if (!Number.isSafeInteger(r.expectedRevision) || r.expectedRevision < 0) fail('INVALID_REQUEST','Invalid revision'); }
+  if (write) { slug(r.requestId); if (!Number.isSafeInteger(r.expectedRevision) || r.expectedRevision! < 0) fail('INVALID_REQUEST','Invalid revision'); }
   return write;
 }
-export function resolveMaterials(providers, plan) {
-  const materials = {};
-  for (const product of ['ontology','harness']) {
+export function resolveMaterials(providers: Providers, plan: Pick<Plan, 'pins'|'scope'|'workspace'>): Materials {
+  const materials: Partial<Materials> = {};
+  for (const product of (['ontology','harness'] as const)) {
     const fn = providers[product === 'ontology' ? 'resolveOntology' : 'resolveHarness'];
     if (typeof fn !== 'function') fail('MISSING_RESOLVER','Trusted resolver required');
     const value = fn(frozenClone({ reference: plan.pins[product], scope: plan.scope, workspace: plan.workspace }));
     if (isPromise(value)) { Promise.prototype.then.call(value, undefined, () => {}); fail('ASYNC_RESOLVER','Resolver must be synchronous'); }
     bounded(value); exactFields(value, ['reference','workspace','scope','published','materialDigest','descriptor']);
     scopeCheck(value.scope); exactFields(value.descriptor, ['kind','digest']);
-    if (value.published !== true || !same(value.workspace,plan.workspace) || value.scope.visibility !== value.reference.visibility || (value.scope.visibility === 'public' && ![plan.scope.projectId,'shared'].includes(value.scope.projectId)) || (value.scope.visibility === 'private' && !same(value.scope,plan.scope)) || (plan.scope.visibility === 'public' && value.scope.visibility === 'private')) fail('MATERIAL_SCOPE','Published workspace material required');
-    if (!/^sha256:[a-f0-9]{64}$/.test(value.materialDigest) || value.descriptor.digest !== value.materialDigest || value.descriptor.kind !== product + '-composition/v1') fail('INVALID_MATERIAL','Invalid immutable material descriptor');
-    materials[product] = frozenClone(value);
+    if (value.published !== true || !same(value.workspace,plan.workspace) || value.scope.visibility !== (value.reference as Material['reference']).visibility || (value.scope.visibility === 'public' && ![plan.scope.projectId,'shared'].includes(value.scope.projectId)) || (value.scope.visibility === 'private' && !same(value.scope,plan.scope)) || (plan.scope.visibility === 'public' && value.scope.visibility === 'private')) fail('MATERIAL_SCOPE','Published workspace material required');
+    if (!/^sha256:[a-f0-9]{64}$/.test(value.materialDigest as string) || value.descriptor.digest !== value.materialDigest || value.descriptor.kind !== product + '-composition/v1') fail('INVALID_MATERIAL','Invalid immutable material descriptor');
+    materials[product] = frozenClone(value) as Material;
   }
-  inspectPinnedInputs({ ...plan.pins, observedOntology: materials.ontology.reference, observedHarness: materials.harness.reference });
-  return materials;
+  inspectPinnedInputs({ ...plan.pins, observedOntology: materials.ontology!.reference, observedHarness: materials.harness!.reference });
+  return materials as Materials;
 }
-function object(value) {
+function object(value: unknown): asserts value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail('INVALID_INPUT','Expected JSON object');
 }
-function evidence(value) {
+function evidence(value: unknown) {
   exactFields(value,['id','version','source','values']);
   textField(value.id); textField(value.version);
-  exactFields(value.source,['locator','revision','digest']);
-  for (const key of ['locator','revision','digest']) textField(value.source[key]);
+  exactFields(value.source,(['locator','revision','digest'] as const));
+  for (const key of (['locator','revision','digest'] as const)) textField(value.source[key]);
   object(value.values);
 }
-function composition(input) {
+function composition(input: unknown): asserts input is Composition {
   bounded(input);
   exactFields(input,['schema','ontologyInstance','harness']);
   if (input.schema !== 'runtime-composition/v1') fail('INVALID_INPUT','Unsupported composition');
-  exactFields(input.ontologyInstance,['entities','relations']);
-  for (const key of ['entities','relations']) {
+  exactFields(input.ontologyInstance,(['entities','relations'] as const));
+  for (const key of (['entities','relations'] as const)) {
     if (!Array.isArray(input.ontologyInstance[key]) || input.ontologyInstance[key].length > 1000) fail('INVALID_INPUT','Expected bounded entity/relation arrays');
   }
-  for (const entity of input.ontologyInstance.entities) {
+  for (const entity of input.ontologyInstance.entities as unknown[]) {
     exactFields(entity,['id','conceptRef','properties']);
     textField(entity.id); textField(entity.conceptRef); object(entity.properties);
     for (const [key,values] of Object.entries(entity.properties)) {
@@ -53,9 +54,9 @@ function composition(input) {
       if (!Array.isArray(values) || values.some(v => v !== null && !['string','boolean','number'].includes(typeof v))) fail('INVALID_INPUT','Expected JSON primitive property values');
     }
   }
-  for (const relation of input.ontologyInstance.relations) {
-    exactFields(relation,['id','relationRef','from','to']);
-    for (const key of ['id','relationRef','from','to']) textField(relation[key]);
+  for (const relation of input.ontologyInstance.relations as unknown[]) {
+    exactFields(relation,(['id','relationRef','from','to'] as const));
+    for (const key of (['id','relationRef','from','to'] as const)) textField(relation[key]);
   }
   exactFields(input.harness,['mode','evidence','configuration']);
   object(input.harness.configuration);
@@ -67,8 +68,8 @@ function composition(input) {
   // Product adapters own reference resolution, model semantics and evidence rules.
   // All strings (including source locators) remain inert JSON descriptors.
 }
-export function findRun(state,r) { const run = state.runs.find(x => same(x.scope,r.scope) && x.id === r.input.id); if (!run) fail('NOT_FOUND','Run not found'); return run; }
-export function operate(store,state,r,providers,revision) {
+export function findRun(state: State,r: {scope: Request['scope']; input: object}) { const run = state.runs.find(x => same(x.scope,r.scope) && x.id === (r.input as {id?: unknown}).id); if (!run) fail('NOT_FOUND','Run not found'); return run; }
+export function operate(store: StoreIdentity,state: State,r: Request,providers: Providers,revision: number) {
   const { operation: op, input: i, scope } = r;
   const projects = state.projects.filter(x => same(x.scope,scope));
   if (op === 'project.create') { exactFields(i,['name']); textField(i.name); if (projects.length) fail('EXISTS','Project exists'); const p = {scope,name:i.name}; state.projects.push(p); return p; }
@@ -81,10 +82,10 @@ export function operate(store,state,r,providers,revision) {
     exactFields(i,['id','goalId','ontology','harness','input']); slug(i.id); slug(i.goalId); composition(i.input);
     if (state.runs.some(x=>same(x.scope,scope)&&x.id===i.id)) fail('EXISTS','Run immutable');
     const goal=state.goals.find(x=>same(x.scope,scope)&&x.id===i.goalId); if (!goal) fail('NOT_FOUND','Goal required');
-    for (const product of ['ontology','harness']) validateReference(i[product],{product,visibility:scope.visibility});
-    const plan={workspace:store.identity,scope,goal,pins:{ontology:i.ontology,harness:i.harness},input:i.input};
-    plan.materials=resolveMaterials(providers,plan);
-    const run={scope,id:i.id,plan,reviewDigest:sha256(plan),stage:'PREPARED',decision:null,claim:null,attemptCount:0,outcome:null,cancellation:null}; state.runs.push(run); return run;
+    for (const product of (['ontology','harness'] as const)) validateReference(i[product],{product,visibility:scope.visibility});
+    const basePlan={workspace:store.identity,scope,goal,pins:{ontology:i.ontology,harness:i.harness},input:i.input};
+    const plan: Plan={...basePlan, materials:resolveMaterials(providers,basePlan)};
+    const run: Run={scope,id:i.id,plan,reviewDigest:sha256(plan),stage:'PREPARED',decision:null,claim:null,attemptCount:0,outcome:null,cancellation:null}; state.runs.push(run); return run;
   }
   const run=findRun(state,r);
   if (op === 'run.inspect') { exactFields(i,['id']); return run; }

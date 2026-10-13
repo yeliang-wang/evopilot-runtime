@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
-import { createRuntimeService } from '../../src/service.mjs';
-import { operate, resolveMaterials } from '../../src/operations.mjs';
-import { claimRun, invoke, receiptOutcome } from '../../src/execution.mjs';
-import { validateState, LIMITS } from '../../src/state.mjs';
+import { createRuntimeService } from '../../dist/service.js';
+import { operate, resolveMaterials } from '../../dist/operations.js';
+import { claimRun, invoke, receiptOutcome } from '../../dist/execution.js';
+import { validateState, LIMITS } from '../../dist/state.js';
 import { sha256, frozenClone } from '../../vendor/compatibility/v1/reference.mjs';
 
 const digest='sha256:'+'a'.repeat(64),scope={visibility:'private',projectId:'alpha'};

@@ -1,4 +1,4 @@
-import { createRuntimeService } from '../../src/service.mjs';
+import { createRuntimeService } from '../../dist/service.js';
 const digest='sha256:'+'a'.repeat(64);
 const resolver=({reference,workspace})=>({reference,workspace,scope:{visibility:'public',projectId:'shared'},published:true,materialDigest:digest,descriptor:{kind:reference.product+'-composition/v1',digest}});
 process.on('message',async ({options,request})=>{
