@@ -8,9 +8,12 @@
   },
   "files": [
     "dist",
-    "src/**/*.ts",
+    "src",
     "vendor",
     "README.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "CHANGELOG.md",
     "docs",
     "LICENSE",
     "NOTICE",

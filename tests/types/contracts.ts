@@ -1,5 +1,5 @@
-import { createRuntimeService, type Scope, type Run, type Project } from '../../src/service.js';
-import { inspectPinnedInputs, type Reference } from '../../src/index.js';
+import { createRuntimeService, type Scope, type Run, type Project } from '@evopilot-next/runtime/service';
+import { inspectPinnedInputs, type Reference } from '@evopilot-next/runtime';
 
 const scope: Scope = { visibility: 'private', projectId: 'alpha' };
 const service = createRuntimeService({workspaceRoot: '/inert/workspace', workspaceId: 'test'}, {

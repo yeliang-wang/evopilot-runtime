@@ -19,9 +19,12 @@ const expected = {
   },
   "files": [
     "dist",
-    "src/**/*.ts",
+    "src",
     "vendor",
     "README.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "CHANGELOG.md",
     "docs",
     "LICENSE",
     "NOTICE",
@@ -160,4 +163,3 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     console.log(PRODUCT + ': owned ESM sources and pinned vendor verified; no acceptance inferred');
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
-
