@@ -2,6 +2,8 @@
 
 Runtime 0.1.0 implements the generic durable service and standalone CLI within the approved local 0.1.x scope. This roadmap describes current implementation and remaining validation; it creates no new capability scope or release authorization.
 
+The original M0–M4 baseline is retained. A subsequent explicit M5 user decision authorizes source, CI and public release preparation for `yeliang-wang/evopilot`, `yeliang-wang/evopilot-runtime`, `yeliang-wang/evopilot-harness` and `yeliang-wang/evopilot-ontology`, superseding the earlier local-only GitHub restriction within that scope. This bounded Runtime task adds no feature implementation or acceptance claim and performs no actual Release, tag, remote operation or daily install. Preparation defaults to `publish=false`; publication remains subject to external M5 target validation and a separate explicit user decision.
+
 Implemented Runtime functions include scoped projects, immutable goals, exact published Ontology/Harness pins, immutable reviewed plans, scoped human decisions, SQLite WAL/FULL persistence, global revision CAS, idempotent receipts and atomic audit. Dispatch commits one durable claim before invoking trusted code. UNKNOWN recovery uses receipt inspection without redispatch. See the [service API](service.md).
 
 The [standalone CLI](cli.md) validates closed JSON requests before explicit workspace initialization and routes dispatch/reconcile to the service. Discovery and imports are read-only. The standalone CLI supplies no resolvers, executor or receipt inspector.

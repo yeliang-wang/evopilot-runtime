@@ -34,3 +34,9 @@ Check and build run the same owned ESM and pinned-vendor verifier. An existing s
 The operator-reported baseline is 29 Runtime tests passing plus check/build, and 394 parent tests passing with zero skipped. Actual three-product composition and installed two-MCP-adapter shared-service, lost-response, restart and uninstall-preservation checks also passed as technical evidence. See the [verification scope](docs/service.md). These are retained results, not tests newly run for this documentation update.
 
 Current Desktop E01–E19 acceptance status comes from a separate exact-candidate-bound acceptance report; without that report, no Host acceptance claim may be made. Consult the separate candidate-bound acceptance report for that status. This package claims neither old 6.3 feature parity, production readiness, Host PASS nor release authority. Read the [approved 0.1.x roadmap](docs/roadmap.md) for remaining work.
+
+## Source and preview-release distribution
+
+Source: [yeliang-wang/evopilot-runtime](https://github.com/yeliang-wang/evopilot-runtime). The [v0.1.0 preview release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.1.0) is pending until published. See the parent [common release mechanics](https://github.com/yeliang-wang/evopilot/blob/main/docs/github-release.md) and [Codex plugin composition](https://github.com/yeliang-wang/evopilot).
+
+CI and release preparation use Node 24.14.0. For this repository, `expected_digest` is the component tarball SHA256 from parent verified CI. Preparation defaults to `publish=false`, so publication is disabled by default. Publication requires external M5 target validation and an explicit user decision. Code, scripts, tests and CI provide technical evidence only; they do not establish Host acceptance or release authority, and existing feature metadata remains unchanged.
