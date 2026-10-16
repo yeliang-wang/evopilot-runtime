@@ -85,3 +85,15 @@ The parent must quiesce services and make a complete private copy. Relocation ch
 The Runtime tests exercise its public API using synthetic owner receipts and real isolated child processes. They verify native parsing, immutable decisions, raw integrity, fixed completion requirements, crash/restart and relocation. Historical fixture tests are explicitly labeled and do not prove current native behavior. Full product acceptance additionally requires real Ontology/Harness validators, parent integration, independently frozen acceptance instances and the exact Desktop candidate. Passing this repository's tests does not establish the complete 65-criterion release acceptance or release authority.
 
 See [CLI usage](cli.md), [the approved roadmap](roadmap.md) and the [product entry](../README.md).
+
+### Same-machine hostname changes
+
+On macOS, relocation records bind the configured `LocalHostName.local` when the
+system supplies a valid local name. Readback recognizes that configured name or
+the current OS hostname, so a network-assigned hostname does not invalidate the
+same machine's signed records. Other platforms retain exact current-hostname
+binding. Home directory, uid, private local key, HMAC, source/destination chain,
+and historical receipt digests must still verify. A foreign configured/current
+name or missing key is rejected; caller-provided host overrides are unsupported.
+Existing signed records and business data are never rewritten. This does not
+provide cross-machine restore.
