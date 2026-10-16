@@ -94,6 +94,35 @@ test('native owner readback mismatch becomes UNKNOWN and cannot be silently redi
   assert.equal((await f.write('run.dispatch',{id:r.plan.id})).result.stage,'UNKNOWN');f.restart();await f.write('run.dispatch',{id:r.plan.id});assert.equal(f.counts().runCalls,1);
   assert.equal((await f.write('run.reconcile',{id:r.plan.id})).result.stage,'SUCCEEDED');assert.equal(f.counts().runCalls,1);
 });
+for(const [id,mutate] of [
+ ['C05.02',r=>{r.ownerReceipts.harness.context.scope.projectId='another-project';}],
+ ['C05.03',r=>{r.projectCandidateDigest=hash('previous-round');}],
+ ['C05.05',r=>{r.ownerReceipts.harness.reference.digest=hash('different-package');}],
+ ['C05.06',r=>{r.ownerReceipts.harness.context.workspaceId='another-workspace';}],
+ ['C05.07',r=>{r.ownerReceipts.harness.context.projectCandidateDigest=hash('another-candidate');}],
+ ['C05.08',r=>{r.ownerReceipts.harness.context.claimId=hash('another-claim');}],
+ ['C05.09',r=>{r.ownerReceipts.harness.context.inputDigest=hash('another-input');}],
+ ['C05.10',r=>{r.ownerReceipts.harness.reference.standardDigest=hash('another-standard');}],
+ ['C05.11',r=>{r.producer={product:'unknown',version:'0.3.0'};}]
+])test(id+': mismatched owner binding remains UNKNOWN without redispatch',async t=>{
+ const f=fixture(t),original=f.provider.executeNative;
+ f.provider.executeNative=({claim})=>{const receipt=structuredClone(original({claim}));mutate(receipt);
+  // Even a matching protected readback cannot make a different context valid.
+  f.stored.set(receipt.ownerReceipts.harness.requestId,receipt.ownerReceipts.harness);return receipt;};
+ f.restart();const {input}=await f.setup(),r=await f.prepare(input);
+ await f.write('run.decide',{id:r.plan.id,reviewDigest:r.reviewDigest,decision:'APPROVE',humanEvidenceRef:'synthetic:receipt-mismatch'});
+ const rejected=(await f.write('run.dispatch',{id:r.plan.id})).result;
+ assert.equal(rejected.stage,'UNKNOWN');assert.equal(rejected.reason,'INVALID_PROVIDER_RECEIPT');assert.equal(rejected.receipt,null);
+ await assert.rejects(()=>f.write('project.validate',{id:'project-r1',runId:r.plan.id}));
+ f.restart();await f.write('run.dispatch',{id:r.plan.id});assert.equal(f.counts().runCalls,1);
+});
+test('C05.04: reported PASS without protected owner receipt remains UNKNOWN',async t=>{
+ const f=fixture(t);f.provider.readOwnerReceipt=()=>undefined;f.restart();const {input}=await f.setup(),r=await f.prepare(input);
+ await f.write('run.decide',{id:r.plan.id,reviewDigest:r.reviewDigest,decision:'APPROVE',humanEvidenceRef:'synthetic:missing-receipt'});
+ const rejected=(await f.write('run.dispatch',{id:r.plan.id})).result;assert.equal(rejected.stage,'UNKNOWN');assert.equal(rejected.receipt,null);
+ await assert.rejects(()=>f.write('project.validate',{id:'project-r1',runId:r.plan.id}));
+ await f.write('run.dispatch',{id:r.plan.id});assert.equal(f.counts().runCalls,1);
+});
 test('native fixed denominator cannot be narrowed by caller',async t=>{
   const f=fixture(t),reduced=f.requirements.slice(0,1),sourceScope={...f.sourceScope,requirementsDigest:hash(reduced)};
   f.provider.inspectSource=()=>sourceScope;f.restart();
