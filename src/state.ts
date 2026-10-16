@@ -6,6 +6,7 @@ import { resolve, dirname, join, isAbsolute, parse, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { assertJSON, stableSerialize, exactFields, textField, sha256, validateReference } from '../vendor/compatibility/v1/reference.mjs';
+import { NATIVE_CONTRACT_DIGEST } from '../vendor/compatibility/v1/native.mjs';
 
 export function fail(code: string, message: string): never { throw Object.assign(new Error(message), { code }); }
 export const LIMITS = Object.freeze({ requestBytes: 524288, nodes: 20000, depth: 48, projects: 1000, goals: 1000, runs: 1000, receipts: 10000, stateBytes: 8388608, receiptBytes: 33554432 });
@@ -144,7 +145,9 @@ export function openState(root: string, id: string) {
     db.enableDefensive(true);
     if (existed) {
       if (db.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok') fail('CORRUPT_STATE', 'SQLite integrity check failed');
-      if (db.prepare('PRAGMA user_version').get()?.user_version !== 1) fail('CORRUPT_STATE', 'Unknown state schema');
+      const version=db.prepare('PRAGMA user_version').get()?.user_version;
+      if (version !== 1 && version !== 2) fail('CORRUPT_STATE', 'Unknown state schema');
+      if(version===2){const identity=db.prepare('SELECT contract_digest,producer FROM native_runtime_identity WHERE singleton=1').get();if(identity?.contract_digest!==NATIVE_CONTRACT_DIGEST||identity?.producer!=='runtime@0.3.0')fail('CORRUPT_STATE','Unknown corrected native state identity');}
       const row = db.prepare('SELECT revision, data FROM state WHERE singleton = 1').get();
       if (!row || typeof row.revision !== 'number' || typeof row.data !== 'string' || !Number.isSafeInteger(row.revision) || row.revision < 0 || Buffer.byteLength(row.data)>LIMITS.stateBytes || !validateState(JSON.parse(row.data))) fail('CORRUPT_STATE', 'Invalid state');
       db.prepare('SELECT scope, request_id, digest, receipt FROM receipts LIMIT 1').all();

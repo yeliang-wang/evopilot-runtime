@@ -116,7 +116,7 @@ export function acceptsWorkspace(db: DatabaseSync, identity: WorkspaceIdentity, 
   return readRelocations(db, identity, product).some(record => record.bindings.some(binding => stableSerialize(binding.workspace) === stableSerialize(historical) && binding.digest === digest));
 }
 export function inspectRecords(db: DatabaseSync, validateState: (value: unknown) => unknown): SnapshotRecords {
-  if (db.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok' || db.prepare('PRAGMA user_version').get()?.user_version !== 1) migrationFail('CORRUPT_STATE', 'Invalid owner database');
+  if (db.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok' || ![1,2].includes(Number(db.prepare('PRAGMA user_version').get()?.user_version))) migrationFail('CORRUPT_STATE', 'Invalid owner database');
   const row = db.prepare('SELECT revision,data FROM state WHERE singleton=1').get();
   if (!row || typeof row.revision !== 'number' || !Number.isSafeInteger(row.revision) || row.revision < 0 || typeof row.data !== 'string' || Buffer.byteLength(row.data) > 8388608) migrationFail('CORRUPT_STATE', 'Invalid owner state');
   const state = validateState(JSON.parse(row.data));
@@ -142,6 +142,7 @@ export function collectBindings(state: unknown): HistoricalBinding[] {
     const binding = { workspace: workspace as WorkspaceIdentity, digest }; bindings.set(stableSerialize(binding), binding);
   };
   for (const run of (value.runs ?? []) as { plan: { workspace: unknown }; reviewDigest: string }[]) add(run.plan.workspace, run.reviewDigest);
+  for (const collection of (value.collections ?? []) as { workspace: unknown; reviewDigest: string }[]) add(collection.workspace, collection.reviewDigest);
   for (const asset of (value.assets ?? []) as { review?: { workspace: unknown; reviewDigest: string } | null }[]) if (asset.review) add(asset.review.workspace, asset.review.reviewDigest);
   for (const key of ['producerPlans', 'catalogPlans']) for (const plan of (value[key] ?? []) as { workspace: unknown; reviewDigest: string }[]) add(plan.workspace, plan.reviewDigest);
   for (const revision of (value.catalogRevisions ?? []) as { workspace: unknown; pointer: { workspace: unknown; pointerDigest: string } }[]) { add(revision.workspace, revision.pointer.pointerDigest); add(revision.pointer.workspace, revision.pointer.pointerDigest); }

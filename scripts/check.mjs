@@ -8,10 +8,11 @@ import { spawnSync } from 'node:child_process';
 
 export const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const PRODUCT = 'runtime';
-const PIN = 'df4f7246ae35ef9114e2b93663d520e7ff4f44f14f886ac8ba43e9fc080ddc9a';
+const PIN = 'c613b972cee9aa5638797880fab6a48839e74ee79545fdfb74ebe9b2b23c9a11';
+const LEGACY_PIN = 'df4f7246ae35ef9114e2b93663d520e7ff4f44f14f886ac8ba43e9fc080ddc9a';
 const expected = {
   "name": "@evopilot-next/runtime",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -100,11 +101,16 @@ export async function checkSource() {
   const vendor = resolve(ROOT, 'vendor/compatibility/v1');
   const manifest = JSON.parse(await readFile(resolve(vendor, 'manifest.json'), 'utf8'));
   assert.deepEqual(manifest, {
-    contractRevision: '1.0.0', module: 'reference.mjs', sha256: PIN,
+    contractRevision: '1.1.0', module: 'native.mjs', sha256: PIN,
+    sourceSha256: '2e8d69e167f017d9ad54c747f94381f3310903d6b1248f5f1d1777490b46db66',
+    legacyModule: 'reference.mjs', legacySha256: LEGACY_PIN,
+    files: {'reference.d.mts':'c83de0e77269bff05faade1471cc337cedcdee009b52bc084f48a1987846f765','native.d.mts':'94e8e3a40c0fcc68a66a21f92e617452d9399e84f249b3188ae6b54a79a42454'},
     children: ['projects/evopilot-runtime', 'projects/evopilot-harness', 'projects/evopilot-ontology'],
   });
   const bytes = await readFile(resolve(vendor, manifest.module));
   assert.equal(createHash('sha256').update(bytes).digest('hex'), PIN);
+  assert.equal(createHash('sha256').update(await readFile(resolve(vendor,'reference.mjs'))).digest('hex'),LEGACY_PIN);
+  for(const [name,digest] of Object.entries(manifest.files)) assert.equal(createHash('sha256').update(await readFile(resolve(vendor,name))).digest('hex'),digest);
   const sources = [...await files(resolve(ROOT, 'src')), ...await files(resolve(ROOT, 'vendor'))];
   for (const path of sources) {
     if (!path.endsWith('.mjs') && !path.endsWith('.ts') && !path.endsWith('.mts')) continue;
@@ -121,7 +127,7 @@ export async function checkSource() {
       assert(specifier.startsWith('.'), 'Undeclared import: ' + specifier);
       const resolved = resolve(dirname(path), specifier);
       const target = path.endsWith('.ts') && resolved.endsWith('.js') ? resolved.slice(0, -3) + '.ts' : resolved;
-      assert(target.startsWith(resolve(ROOT, 'src') + sep) || target === resolve(vendor, 'reference.mjs'), 'Foreign source import');
+      assert(target.startsWith(resolve(ROOT, 'src') + sep) || [resolve(vendor, 'reference.mjs'),resolve(vendor,'native.mjs')].includes(target), 'Foreign source import');
       assert((await lstat(target)).isFile(), 'Import must be an owned regular file');
     }
   }
@@ -129,9 +135,9 @@ export async function checkSource() {
     "import assert from 'node:assert/strict';",
     'const api = await import(' + JSON.stringify(pathToFileURL(resolve(ROOT, 'dist/index.js')).href) + ');',
     'assert.equal(api.PRODUCT, ' + JSON.stringify(PRODUCT) + ');',
-    "assert.equal(api.VERSION, '0.2.0');",
+    "assert.equal(api.VERSION, '0.3.0');",
     'assert.equal(api.capabilities().authority, false);',
-    "assert.equal(api.capabilities().implementationStage, \"M2_OWNED_SERVICE\");",
+    "assert.equal(api.capabilities().implementationStage, \"NATIVE_STANDARDS\");",
     "assert.equal(api.capabilities().businessOperationsReady, true);",
     "assert.equal(api.capabilities().persistentBusinessOperationsReady, true);",
     "assert.equal(api.capabilities().serviceApi, \"./service\");",

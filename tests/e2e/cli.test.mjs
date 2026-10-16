@@ -32,7 +32,7 @@ function invoke(args, input = '', status = 0, flags = []) {
   assert.equal(envelope.ok, status === 0);
   assert.equal(envelope.authority, false);
   assert.deepEqual(Object.keys(envelope).sort(), (status === 0 ? ['ok', 'product', 'version', 'result', 'authority'] : ['ok', 'error', 'authority']).sort());
-  if (status === 0) { assert.equal(envelope.product, 'runtime'); assert.equal(envelope.version, '0.2.0'); }
+  if (status === 0) { assert.equal(envelope.product, 'runtime'); assert.equal(envelope.version, '0.3.0'); }
   return status === 0 ? envelope.result : envelope.error;
 }
 function setup(t) {
@@ -46,10 +46,10 @@ function setup(t) {
 test('CLI discovery/help/version run without write permission or workspace', () => {
   const flags = ['--permission', '--allow-fs-read=' + root];
   const capabilities = invoke(['capabilities'], '', 0, flags);
-  assert.deepEqual(capabilities.operations, operations);
-  assert.deepEqual(capabilities.asyncOperations, ['run.dispatch', 'run.reconcile']);
+  assert.deepEqual(capabilities.operations, operations.filter(op => !['run.prepare', 'run.decide'].includes(op)));
+  assert.deepEqual(capabilities.asyncOperations, ['run.reconcile']);
   assert.deepEqual(capabilities.providers, { resolveOntology: false, resolveHarness: false, execute: false, inspectReceipt: false });
-  assert(capabilities.pending.includes('M3 parent provider wiring'));
+  assert(capabilities.historicalRunsReadOnly);
   for (const command of ['help', '--help', 'version', '--version']) invoke([command], '', 0, flags);
   for (const args of [[], ['unknown'], ['help', 'extra'], ['capabilities', '--workspace', '/unused'], ['request'], ['request', '--workspace', 'relative', '--workspace-id', 'test']]) {
     assert.equal(invoke(args, '', 2, flags).code, 'USAGE');
@@ -90,7 +90,7 @@ test('CLI stdin persists project/goal/receipts across processes with exact CAS a
   assert.deepEqual(request(read('run.list')), []);
   assert.equal(request(read('receipt.inspect', { requestId: 'first' }, { ...scope, projectId: 'other' }), 1).code, 'NOT_FOUND');
   for (const operation of ['run.dispatch', 'run.reconcile']) {
-    assert.equal(request({ ...read(operation, { id: 'missing' }), requestId: 'explicit', expectedRevision: 2 }, 1).code, 'NOT_FOUND');
+    assert.equal(request({ ...read(operation, { id: 'missing' }), requestId: 'explicit', expectedRevision: 2 }, 1).code, operation==='run.dispatch'?'HISTORICAL_READ_ONLY':'NOT_FOUND');
   }
   assert.equal(request(read('workspace.inspect')).revision, 2);
 });
@@ -138,31 +138,11 @@ test('CLI rejects unknown exception codes without exposing messages, paths or in
   assert(!output.includes('caller-secret')); assert(!output.includes('/private/'));
 });
 
-test('CLI leaves providers absent and never authorizes or dispatches implicitly', t => {
-  const { request, workspace } = setup(t);
+test('CLI does not enable retired validator writes or implicit execution', t => {
+  const { request } = setup(t);
   request(put);
-  request({ ...read('goal.create', { id: 'goal', description: 'Synthetic' }), requestId: 'goal', expectedRevision: 1 });
-  const prepare = { ...read('run.prepare', prepareInput), requestId: 'prepare', expectedRevision: 2 };
-  assert.equal(request(prepare, 1).code, 'MISSING_RESOLVER');
-  assert.equal(request(read('workspace.inspect')).revision, 2);
-  let calls = 0;
-  const resolver = ({ reference, workspace }) => ({ reference, workspace, scope, published: true, materialDigest: digest, descriptor: { kind: reference.product + '-composition/v1', digest } });
-  const service = createRuntimeService({ workspaceRoot: workspace, workspaceId: 'cli-test' }, { resolveOntology: resolver, resolveHarness: resolver, execute: () => { calls++; throw Error('unexpected execution'); } });
-  try {
-    service.initialize();
-    const prepared = service.execute(prepare).result;
-    assert.equal(request(read('run.inspect', { id: 'run' })).stage, 'PREPARED');
-    for (const revision of [3, 4]) {
-      if (revision === 4) service.execute({ ...read('run.decide', { id: 'run', reviewDigest: prepared.reviewDigest, decision: 'APPROVE', humanEvidenceRef: 'human:synthetic' }), requestId: 'decision', expectedRevision: 3 });
-      const dispatch = { ...read('run.dispatch', { id: 'run' }), requestId: 'dispatch', expectedRevision: revision };
-      assert.equal(request(dispatch, 1).code, 'MISSING_EXECUTOR');
-      assert.equal(request(dispatch, 1).code, 'MISSING_EXECUTOR');
-      const run = request(read('run.inspect', { id: 'run' }));
-      assert.equal(run.claim, null); assert.equal(run.attemptCount, 0);
-      assert.equal(request(read('workspace.inspect')).revision, revision);
-    }
-    assert.equal(request({ ...read('run.reconcile', { id: 'run' }), requestId: 'reconcile', expectedRevision: 4 }, 1).code, 'NO_CLAIM');
-    assert.equal(calls, 0);
-  } finally { service.close(); }
+  request({ ...read('goal.create', {id:'goal',description:'Synthetic'}),requestId:'goal',expectedRevision:1 });
+  assert.equal(request({...read('run.prepare',prepareInput),requestId:'prepare',expectedRevision:2},1).code,'HISTORICAL_READ_ONLY');
+  assert.equal(request({...read('run.dispatch',{id:'run'}),requestId:'dispatch',expectedRevision:2},1).code,'HISTORICAL_READ_ONLY');
+  assert.equal(request(read('workspace.inspect')).revision,2);
 });
-

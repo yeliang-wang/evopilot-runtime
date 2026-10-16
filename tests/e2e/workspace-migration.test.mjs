@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { inspectWorkspaceSnapshot, relocateWorkspaceSnapshot } from '@evopilot-next/runtime/workspace-migration';
 import { keyDirectory } from '../../dist/location-lineage.js';
 import { createRuntimeService } from '../../dist/service.js';
+import { createRuntimeService as createHistoricalFixture } from '../fixtures/historical-runtime-v020.mjs';
 import { sha256 } from '../../vendor/compatibility/v1/reference.mjs';
 const product = 'runtime', createService = createRuntimeService;
 const scope = { visibility: 'public', projectId: 'synthetic' };
@@ -33,7 +34,7 @@ async function populate(options) {
   const provider = ({ reference, workspace }) => ({ reference, workspace, scope, published: true, materialDigest: digest, descriptor: { kind: reference.product + '-composition/v1', digest } });
   const result = claim => ({ claimId: claim.claimId, inputDigest: claim.inputDigest, pins: claim.pins, providerReceiptId: 'synthetic-original', status: 'SUCCEEDED', result: { evaluation: 'PASS', evidenceDigest: digest } });
   const providers = product === 'runtime' ? { resolveOntology: provider, resolveHarness: provider, execute: claim => { executions++; return claim.id === 'unknown' ? undefined : result(claim); }, inspectReceipt: result } : {};
-  const service = createService(options, providers); service.initialize();
+  const service = createHistoricalFixture(options, providers); service.initialize();
   if (product === 'runtime') {
     write(service, 'project.create', { name: 'Synthetic migration' }); write(service, 'goal.create', { id: 'goal', description: 'Owner migration E2E' });
     for (const id of ['completed', 'unknown', 'prepared']) {
@@ -73,9 +74,8 @@ test('same-host relocation preserves owner records, blobs, pins, receipts and su
     const reconciled = await service.reconcile({ scope, id: 'unknown', requestId: 'reconcile-original', expectedRevision: read(service, 'workspace.inspect').revision });
     assert.equal(reconciled.result.stage, 'SUCCEEDED'); assert.equal(reconciled.result.claim.claimId, unknown.claim.claimId); assert.equal(reconciled.result.attemptCount, 1);
     assert.deepEqual(read(service, 'receipt.inspect', { requestId: 'dispatch-unknown' }), original);
-    await assert.rejects(service.dispatch({ scope, id: 'prepared', requestId: 'unsafe-replay', expectedRevision: read(service, 'workspace.inspect').revision }), { code: 'RELOCATION_REVIEW_REQUIRED' });
-    const fresh = write(service, 'run.prepare', { id: 'fresh', goalId: 'goal', ...completed.plan.pins, input: completed.plan.input }).result;
-    assert.equal(fresh.plan.workspace.canonicalRoot, destinationRoot);
+    await assert.rejects(service.dispatch({ scope, id: 'prepared', requestId: 'unsafe-replay', expectedRevision: read(service, 'workspace.inspect').revision }), { code: 'HISTORICAL_READ_ONLY' });
+    assert.throws(() => write(service, 'run.prepare', { id: 'fresh', goalId: 'goal', ...completed.plan.pins, input: completed.plan.input }), {code:'HISTORICAL_READ_ONLY'});
   } else {
     const asset = read(service, 'asset.list')[0], retained = read(service, 'asset.inspect', { id: asset.id, version: asset.version });
     assert(retained.delivery); assert.equal(retained.review.workspace.canonicalRoot, sourceRoot);

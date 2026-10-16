@@ -10,11 +10,15 @@ import { errorCode, bounded, fail, LIMITS, slug } from './state.js';
 import { exactFields, textField, validateReference } from '../vendor/compatibility/v1/reference.mjs';
 
 import type { Request, Composition, ExternalRequest } from './types.js';
+import type { NativeRequest } from './native-types.js';
+import { NATIVE_RUNTIME_OPERATIONS, NATIVE_RUNTIME_LIMITS } from './native.js';
+import { nativeAssertJSON, nativeExact } from '../vendor/compatibility/v1/native.mjs';
 type InputStream = AsyncIterable<string | Uint8Array>;
 const serviceCodes = new Set(('CLOSED NOT_INITIALIZED REQUEST_CONFLICT CORRUPT_STATE REVISION_CONFLICT NOT_FOUND LIMIT INVALID_ENCODING INVALID_REQUEST INVALID_INPUT INVALID_OPERATION INVALID_SCOPE EXISTS MISSING_RESOLVER ASYNC_RESOLVER MATERIAL_SCOPE INVALID_MATERIAL MISSING_EXECUTOR APPROVAL_REQUIRED PIN_DRIFT REVIEW_MISMATCH TERMINAL DECISION_CONFLICT NO_CLAIM CLAIM_MISMATCH UNSAFE_WORKSPACE UNSUPPORTED_PLATFORM UNKNOWN_WORKSPACE IDENTITY_MISMATCH STATE_ERROR').split(' '));
+for(const code of ['HISTORICAL_READ_ONLY','STANDARD_MISMATCH','REQUIREMENTS_MISMATCH','MISSING_REQUIREMENTS_READER','MISSING_SOURCE_READER','MISSING_COLLECTOR','MISSING_RECEIPT_READER','MISSING_EVIDENCE','EVIDENCE_DRIFT','REVIEW_REQUIRED','INCOMPLETE','CONTRACT_MISMATCH','INVALID_RECEIPT','INVALID_PROVIDER_RECEIPT'])serviceCodes.add(code);
 const asyncOperations = ['run.dispatch', 'run.reconcile'];
 const help = {
-  usage: ['evopilot-next-runtime capabilities', 'evopilot-next-runtime help', 'evopilot-next-runtime version', 'evopilot-next-runtime request --workspace <canonicalAbsoluteRoot> --workspace-id <slug> [--request-file <absoluteJSONpath>]'],
+  usage: ['evopilot-next-runtime capabilities', 'evopilot-next-runtime help', 'evopilot-next-runtime version', 'evopilot-next-runtime request --workspace <canonicalAbsoluteRoot> --workspace-id <slug> [--request-file <absoluteJSONpath>]', 'evopilot-next-runtime native-request --workspace <canonicalAbsoluteRoot> --workspace-id <slug> [--request-file <absoluteJSONpath>]'],
   input: 'One bounded JSON request from stdin or the exact explicit regular file.',
   exitCodes: { success: 0, serviceFailure: 1, invalidInput: 2 },
 };
@@ -99,7 +103,7 @@ function parseArgs(args: string[]) {
     if (rest.length) fail('USAGE', 'Unexpected arguments');
     return { command: command as 'capabilities'|'help'|'version' };
   }
-  if (command !== 'request') fail('USAGE', 'Expected a supported command');
+  if (command !== 'request' && command !== 'native-request') fail('USAGE', 'Expected a supported command');
   const flags: Record<string,string> = {};
   for (let i = 0; i < rest.length; i += 2) {
     const key = rest[i], value = rest[i + 1];
@@ -113,7 +117,7 @@ function parseArgs(args: string[]) {
   if (file && !isAbsolute(file)) fail('USAGE', 'Absolute request file required');
   return { command, root, id: flags['--workspace-id'], file };
 }
-async function readInput(file: string | undefined, stdin: InputStream): Promise<Request> {
+async function readInput(file: string | undefined, stdin: InputStream, native = false): Promise<Request | NativeRequest> {
   const chunks: Buffer[] = []; let size = 0;
   const add = (chunk: string | Uint8Array) => {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -148,7 +152,8 @@ async function readInput(file: string | undefined, stdin: InputStream): Promise<
   if (!Buffer.from(text, 'utf8').equals(bytes)) fail('INVALID_ENCODING', 'Invalid UTF-8');
   let request: Request;
   try { request = JSON.parse(text); } catch { fail('INVALID_REQUEST', 'Expected one JSON request'); }
-  validateCLIRequest(request);
+  if(native){nativeAssertJSON(request);nativeExact(request,['operation','scope','input'],['requestId','expectedRevision']);if(!NATIVE_RUNTIME_OPERATIONS.includes(request.operation as NativeRequest['operation']))fail('INVALID_OPERATION','Unknown native operation');}
+  else validateCLIRequest(request);
   return request;
 }
 
@@ -161,22 +166,24 @@ export async function main(args: string[], { stdin = process.stdin, stdout = pro
     if (parsed.command === 'help') result = help;
     else if (parsed.command === 'version') result = { product: PRODUCT, version: VERSION };
     else if (parsed.command === 'capabilities') result = {
-      product: PRODUCT, version: VERSION, stage: 'M2_STANDALONE_CLI', operations, asyncOperations,
+      product: PRODUCT, version: VERSION, stage: 'NATIVE_STANDARDS_CLI', operations: operations.filter(op => !['run.prepare', 'run.decide'].includes(op)), asyncOperations: ['run.reconcile'], historicalRunsReadOnly: true,
+      nativeOperations:NATIVE_RUNTIME_OPERATIONS,nativeLimits:NATIVE_RUNTIME_LIMITS,
       limits: LIMITS, authority: false, softwareRelease: false,
-      pending: ['M3 parent provider wiring', 'plugin/MCP', 'Expert', 'Host acceptance'],
+      pending: ['exact-candidate acceptance'],
       providers: { resolveOntology: false, resolveHarness: false, execute: false, inspectReceipt: false },
     };
     else {
-      const request = await readInput(parsed.file, stdin);
+      const request = await readInput(parsed.file, stdin, parsed.command==='native-request');
       const service = createRuntimeService({ workspaceRoot: parsed.root!, workspaceId: parsed.id! });
       try {
         executing = true;
         service.initialize();
-        if (request.operation === 'run.dispatch' || request.operation === 'run.reconcile') {
+        if(parsed.command==='native-request')result=await service.native(request as NativeRequest);
+        else if (request.operation === 'run.dispatch' || request.operation === 'run.reconcile') {
           const { scope, input: { id }, requestId, expectedRevision } = request;
           const args = { scope, id, requestId, expectedRevision };
-          result = await (request.operation === 'run.dispatch' ? service.dispatch(args) : service.reconcile(args));
-        } else result = service.execute(request);
+          result = await (request.operation === 'run.dispatch' ? service.dispatch(args as ExternalRequest) : service.reconcile(args as ExternalRequest));
+        } else result = service.execute(request as Request<Exclude<Request['operation'],'run.dispatch'|'run.reconcile'>>);
       } finally { service.close(); }
     }
     response = { ok: true, product: PRODUCT, version: VERSION, result, authority: false };
