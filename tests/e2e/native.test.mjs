@@ -216,3 +216,34 @@ test('raw selectors preserve camelCase observation keys and reject prototype key
   const f=fixture(t);f.recipe.selectors=[{id:'evidenceDigest',output:'stdout.json',kind:'json-pointer',pointer:'/count'}];const c=await collectionOnly(f);assert.equal(c.receipt.observations.evidenceDigest,3);
   const bad={...f.recipe,selectors:[{id:'constructor',output:'stdout.json',kind:'json-pointer',pointer:'/count'}]};await assert.rejects(()=>f.write('collection.prepare',{id:'unsafe-key',projectId:'project-r1',recipe:bad}),{code:'INVALID_INPUT'});
 });
+
+for(const [id,owner,missing] of [
+ ['M02.06','ontology',false],['M02.07','harness',false],
+ ['M02.08','ontology',true],['M02.09','harness',true]
+])test(id+': project preparation rejects missing or obsolete owner standard pins',async t=>{
+ const f=fixture(t),standardPins=structuredClone(pins);
+ if(missing)delete standardPins[owner].standardDigest;
+ else standardPins[owner].standardDigest=hash('synthetic-obsolete-v1');
+ await assert.rejects(()=>f.write('project.prepare',{id:'invalid',goalId:'goal',sourceScope:f.sourceScope,standardPins,requirements:f.requirements}));
+ assert.deepEqual(await f.read('project.list'),[]);
+ assert.deepEqual(f.counts(),{collectionCalls:0,runCalls:0});
+});
+
+test('M02.10: an unknown asset producer is rejected before provider execution',async t=>{
+ const f=fixture(t),{input}=await f.setup(),ontology=reference('ontology');
+ ontology.producer.product='foreign';
+ await assert.rejects(()=>f.write('run.prepare',{id:'invalid',projectId:'project-r1',goalId:'goal',ontology,harness:reference('harness'),input}));
+ assert.equal(f.counts().runCalls,0);
+ await assert.rejects(()=>f.read('run.inspect',{id:'invalid'}),{code:'NOT_FOUND'});
+});
+
+for(const [id,change] of [
+ ['M05.03 private scope',m=>{m.scope.projectId='another-private-project';}],
+ ['workspace identity',m=>{m.workspace.id='another-workspace';}],
+ ['published material digest',m=>{m.materialDigest=hash('different-published-bytes');}]
+])test(id+': provider material from a different binding is rejected before execution',async t=>{
+ const f=fixture(t),original=f.provider.resolveNative;
+ f.provider.resolveNative=args=>{const m=structuredClone(original(args));change(m);return m;};f.restart();
+ const {input}=await f.setup();await assert.rejects(()=>f.prepare(input),{code:'MATERIAL_SCOPE'});
+ assert.equal(f.counts().runCalls,0);
+});
