@@ -1,84 +1,99 @@
-# Runtime durable service
+# Runtime service and native evidence
 
-The current source targets the v0.1.1 repair under acceptance. The SDK behavior is unchanged; compiled JavaScript and declaration files are exposed through package exports. Source maintainers first run `npm ci --ignore-scripts` and `npm run build` with Node 24.14.0 and the locked TypeScript 5.9.3 compiler. Import `createRuntimeService` from `@evopilot-next/runtime/service`. Construction and `capabilities()` perform no filesystem operations. Call `initialize()` explicitly with `{workspaceRoot, workspaceId}` supplied at construction. The canonical absolute root must be outside source/Git trees, owned by the current OS uid, and empty or carry the exact shared `evopilot-workspace/v1` identity `{schema,id,canonicalRoot,ownerUid}`. Runtime owns `state/runtime/runtime.db`, SQLite WAL with FULL synchronization. Directories are 0700, files 0600; linked, foreign, unknown nonempty and mismatched identities are rejected.
+Runtime coordinates exact project candidates, collection recipes, decisions, claims, receipts and completion. Ontology owns RDF/SHACL meaning and Harness owns Rego policy evaluation. The corrected `specifications/v1` flow uses the current shared native contract revision **1.1.0**, its content digest and each owner's exact standard/lock digests. A directory named `v1` is not sufficient identity.
 
-This boundary assumes a non-malicious single OS uid and trusted code-injected adapters. It does not isolate state from hostile code running as that uid. Use Node 24.14.0 on a platform with OS uid support; SQLite is experimental. This is not a multi-user security boundary or a production-readiness statement.
+Import `createRuntimeService` from `@evopilot-next/runtime/service`. Construction and `capabilities()` do not initialize a Workspace. Call `initialize()` explicitly before operations, and `close()` when done. Node 24.14.0 or later is required. Source maintainers run `npm ci --ignore-scripts`, `npm run build`, `npm run check`, then `npm test`. Package exports include strict TypeScript declarations; installed distributions contain compiled code and omit development tests/scripts.
 
-To embed the service, supply an explicit workspace, construct the service, call `initialize()`, then create a scoped project and goal. With trusted providers configured, prepare a pinned plan, inspect its `reviewDigest`, record the human decision on that exact review, and dispatch only an approved run. Inspect retained receipts and run state after an uncertain response; reconcile the original claim rather than dispatching again. Close the service when finished. The [CLI guide](cli.md) provides concrete project/goal request envelopes.
+## Workspace and trust
 
-[Parent EvoPilot Preview](https://github.com/yeliang-wang/evopilot) supplies actual native published Ontology/Harness resolvers and `execute`/`inspectReceipt` for representative quality and business validation. Its shared service and installed two-MCP-adapter integration have passing technical evidence. The parent Preview product entry is distributed separately. No arbitrary coding agent, new LLM or credential adapter is configured. Embedding this package yourself requires supplying the trusted callbacks below; standalone CLI requests do not configure them.
+Construction takes `{workspaceRoot, workspaceId}`. The canonical absolute root must be outside source/Git trees, owned by the current uid and empty or contain the exact shared `evopilot-workspace/v1` identity. Private directories are 0700 and files 0600; symlinks, hard-linked files, foreign ownership and unexpected identities fail closed. Runtime owns SQLite WAL/FULL storage in `state/runtime/runtime.db` and protected collection files in `state/runtime-native/<claim-digest>/`.
 
-`execute({operation,scope,input,requestId,expectedRevision})` is synchronous. Every scope is exactly `{visibility:'public'|'private',projectId}`. Reads omit requestId and expectedRevision. `workspace.inspect` with `{}` returns the global Runtime revision. Writes use that revision for CAS. A request id is immutable within its exact scope; retries return its retained receipt before checking CAS. `receipt.inspect` takes `{requestId}`. Receipts carry the actual uid, timestamp, digest and revision. Run receipts include claim and immutable pin correlation. There is no logging of input or provider error text.
+Adapters are trusted code injected at construction, not request-supplied functions, executables selected by the model, or dynamically loaded URLs. This is a single OS-user trust boundary; it is not an OS sandbox against malicious code running as that user. The parent EvoPilot adapter owns shell-free subprocess launch, executable/toolchain integrity, process cancellation and declared network enforcement. A recipe's declaration alone does not prove network isolation.
 
-Operations:
+## Current public API
 
-- `project.create {name}`, `project.inspect {}`, `project.list {}`: exact scope only.
-- `goal.create {id,description}`, `goal.inspect {id}`, `goal.list {}`: immutable goals in an existing project.
-- `run.prepare {id,goalId,ontology,harness,input}`: exact six-field frozen reference contract, published material resolution and immutable PREPARED review; no execution.
-- `run.decide {id,reviewDigest,decision:'APPROVE'|'REJECT',humanEvidenceRef}`: immutable local-uid decision on that exact review.
-- `run.cancel {id,reviewDigest,humanEvidenceRef}`: records cancellation, retains the claim and unresolved external-work information; it does not assert external execution stopped.
-- `run.inspect {id}`, `run.list {}`: exact scoped stage, plan, pins, review, decision, claim and outcome.
+Use `await service.native(request)` for new native work. Every request has `{operation, scope, input}`, where scope is exactly `{visibility:'public'|'private', projectId}`. Writes additionally require `requestId` and `expectedRevision`; reads cannot contain them. Native `workspace.inspect` supplies the native revision, separate from the preserved historical revision. Same-scope request replay returns the exact retained receipt; changed input under the same ID conflicts. New stale writes fail CAS. Write results are `{requestId,operation,scope,requestDigest,revision,result,timestamp}`.
 
-Each immutable reference has exactly `product`, `id`, `version`, `specVersion`, `digest` and `visibility`. Product is `ontology` or `harness` as appropriate, version is strict SemVer core, specVersion is `v1`, digest is `sha256:` plus 64 lowercase hex digits, and visibility is `public` or `private`. Obtain actual references from published material; do not substitute a latest-version selector or illustrative digest.
+| Operation | Input | Effect |
+| --- | --- | --- |
+| `workspace.inspect` | `{}` | Current native identity and revision |
+| `receipt.inspect` | `{requestId}` | Retained native operation receipt |
+| `project.prepare` | `{id,goalId,sourceScope,standardPins,requirements}` | Freeze project candidate and independently resolved denominator |
+| `project.inspect`, `project.list` | `{id}` / `{}` | Scoped candidates |
+| `collection.prepare` | `{id,projectId,recipe}` | Freeze prospective collection recipe; no future output digest is invented |
+| `collection.decide` | `{id,reviewDigest,decision,humanEvidenceRef}` | Exact APPROVE/REJECT decision |
+| `collection.execute` | `{id}` | Persist one claim, then call collector |
+| `collection.reconcile` | `{id}` | Inspect original claim only |
+| `collection.inspect`, `collection.list` | `{id}` / `{}` | Collection state; inspect verifies retained raw bytes |
+| `run.prepare` | `{id,projectId,goalId,ontology,harness,input}` | Bind published native references, actual collection receipts and fixed configuration |
+| `run.decide` | `{id,reviewDigest,decision,humanEvidenceRef}` | Exact Run decision |
+| `run.dispatch`, `run.reconcile` | `{id}` | Execute once / inspect original claim |
+| `run.inspect`, `run.list` | `{id}` / `{}` | Scoped immutable plans and outcomes |
+| `project.validate` | `{id,runId}` | Recheck full evidence closure and return exact final review digest |
+| `project.complete` | `{id,runId,reviewDigest,humanEvidenceRef}` | Record the decision on that exact validated candidate |
 
-New composition input has exactly these fields:
+`project.validate` is a write because its result is retained as evidence. A successful validation returns `authority:false`; it does not authorize completion or software release. Human evidence references must identify the actual existing authorization, not a fabricated approval.
 
-```json
-{
-  "schema": "runtime-composition/v1",
-  "ontologyInstance": {
-    "entities": [{"id":"Asset:1","conceptRef":"domain/Asset@1","properties":{"quality.score":[0.75],"Lifecycle":["READY"]}}],
-    "relations": [{"id":"Relation:1","relationRef":"domain/related@1","from":"Asset:1","to":"Asset:1"}]
-  },
-  "harness": {
-    "mode": "component",
-    "evidence": {
-      "id": "evidence:1",
-      "version": "1.0.0",
-      "source": {"locator":"urn:evidence:1","revision":"revision:1","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-      "values": {"score":0.75}
-    },
-    "configuration": {"threshold":0.5}
-  }
-}
-```
+## Source, references and fixed requirements
 
-Runtime checks exact outer, entity, relation, evidence and source fields, bounded plain JSON, and entity/relation arrays of at most 1000 entries each. Entity properties map property identifiers to arrays of JSON primitives (strings, finite numbers including fractions, booleans, null); concept/property identifiers are not restricted to slugs. The owning Ontology adapter checks actual concepts, property types, enum membership and relation semantics against the pinned model.
+`NativeSourceScope` is `{direction,locator,revision,treeDigest,inventoryDigest,requirementsDigest}`; direction is `forward` or `reverse`. A trusted independent reader verifies it. `resolveRequirements` returns the frozen requirements independently of the submission: each has `{criterionId,variantIds,origin}`, with nonempty criteria/variants and unique `(criterionId, variantId)` identities. A case ID may serve different criteria; the same pair cannot occur twice. Origins are `execution-result`, `source-declaration` or `design-declaration`. The caller cannot shrink the denominator to match available results. Source-only and design-only evidence cannot satisfy an execution-result requirement.
 
-Harness `mode` is required and exactly `component` or `composed`. Component evidence is one exact `{id,version,source:{locator,revision,digest},values:{}}` envelope. Composed evidence is an object keyed by exact component references, each containing that envelope. Component configuration is a plain JSON object of actual Harness parameters; composed configuration is the parameter dictionary keyed by exact component references. Reference keys, required leaf formats and evidence/configuration semantics belong to the trusted Harness adapter and pinned product API. The example parameter names illustrate a matching model, not built-in Runtime parameters. Runtime does not implement the core evaluator or infer missing evidence as PASS.
+Native references contain the six historical identity fields plus `standardDigest`, `standardLockDigest`, `producer` and `contractDigest`. Only current, published, exact material is accepted; no latest selector or silent fallback exists. Private material belongs to the exact project. Public material must belong to the project or explicit `shared` scope. Runtime checks references and owner material readback; it does not publish Ontology or Harness packages.
 
-All strings, including source locators, remain inert descriptors; Runtime never opens paths, fetches URLs or executes commands from them. Unknown envelope fields such as `command` or `providerUrl`, functions and non-JSON values are refused. Existing persisted synthetic `facts` input remains readable and immutable under the existing state validator; it cannot be newly prepared under this changed pre-stable contract. No historical records are rewritten or claimed as migrated.
+Native composition is exactly `{schema:'runtime-composition/v1',contractDigest,projectCandidateDigest,standardPins,sourceScope,requirements,effectiveConfig,nativeInputs:{ontology,harness},collectionReceipts}`. Collection references are `{id,digest}`. The current execution-result path uses **one** explicitly normalized collection receipt. Harness input must include an `evopilot-observation/v1` whose source identity, receipt ID/digest/claim, source-scope digest and values equal Runtime's protected raw-derived observations. Arbitrary JSON labeled `execution-result` is insufficient.
 
-Pass trusted callbacks as the second construction argument. This code-injection boundary accepts only a plain or null-prototype object with the optional keys `resolveOntology`, `resolveHarness`, `execute`, `inspectReceipt`, `timeoutMs`. Present callbacks must be functions, and timeout must be an integer from 1 to 30000. Unknown keys, symbols, accessors, non-enumerable fields and proxies are rejected; descriptors are checked without calling getters (Node's proxy detection precedes reflection). Construction and capabilities do not invoke callbacks or initialize storage.
+## Controlled collection
 
-`resolveOntology` and `resolveHarness` synchronously receive frozen `{reference,scope,workspace}` and return exactly `{reference,scope,workspace,published:true,materialDigest,descriptor:{kind,digest}}`. Kind is `ontology-composition/v1` or `harness-composition/v1`; descriptor digest equals materialDigest. The callback attests verified immutable published material; caller flags cannot do so. Reference equality is checked by the preserved `inspectPinnedInputs` API. Workspace identity must match exactly. Public material must belong to the consuming project or the explicit `shared` project; private material must match the exact private project scope. Public runs cannot consume private material. Ambiguous resolution remains the explicit provider's responsibility. Promise resolvers are refused and late rejection consumed. No automatic latest resolution occurs. Scope and pin failures precede any claim and roll back revision/receipt changes.
+`CollectionRecipe` freezes the source scope, absolute executable and digest, argv array, canonical cwd, environment allowlist, toolchain lock digest, timeout, output byte bound, exact relative output allowlist, network declaration and selectors. Every selector has `{id,output,kind,pointer}`. Runtime's bounds are 600000 ms per recipe, 32 MiB total output, 256 output paths and 256 arguments. The public types are authoritative for exact fields.
 
-`await service.dispatch({scope,id,requestId,expectedRevision})` requires approval and code-injected `execute`. It rechecks providers, materials and goal before committing one durable RUNNING claim with attemptCount 1. The transaction ends before invocation. The adapter receives a frozen argument object containing the deeply frozen claim data and a native `AbortSignal` in `signal`. The signal retains its native behavior; it is not cloned or recursively frozen. Code-only `timeoutMs` is an integer from 1 to 30000 milliseconds, default 30000, and applies to execution and receipt inspection. Timeout or close aborts local waiting; adapters must cooperate with the signal, and abort does not prove external work stopped. No caller-supplied closure or result enters this API.
+| Selector | Fixed semantics |
+| --- | --- |
+| `json-pointer` | RFC 6901 pointer into one UTF-8 JSON document; missing paths fail |
+| `exit-code` | Actual collector exit code, with empty pointer |
+| `junit-total` | Count actual JUnit testcase elements |
+| `junit-failures`, `junit-errors`, `junit-skipped` | Count corresponding testcase outcomes |
+| `json-lines-count` | Count nonempty UTF-8 JSON-object log records |
 
-The adapter returns exactly `{claimId,inputDigest,pins,providerReceiptId,status,result:{evaluation,evidenceDigest}}`. Status is explicit SUCCEEDED or FAILED; evaluation is the closed enum PASS, FAIL, ERROR, INDETERMINATE, N/A, NOT_CHECKED or NOT_EVALUATED, preserved independently of execution status. Outcome SUCCEEDED means adapter execution completed, never business acceptance: FAIL and INDETERMINATE remain those outcomes. Missing evidence never defaults to PASS. Result has exactly two fields, with no optional additions; providerReceiptId, exact pins, claimId, inputDigest and the SHA256 evidenceDigest bind external retained evidence. No released flag or action execution is provided. Empty, malformed or mismatched results, exceptions, interrupted calls and timeouts become UNKNOWN. State, completion receipt and audit are committed together. The initial request receipt records the durable claim; inspect the run for its latest outcome. Duplicate dispatch never invokes again, including after restart. Retained RUNNING is unresolved, never automatically replayed.
+All selectors except JSON Pointer require an empty pointer. JUnit supports a `testsuites` or `testsuite` root containing `testsuite`, `testcase`, properties, failure/error/skipped, system-out and system-err; suite totals, when declared, must agree with actual cases. Nested `testsuite` is supported. XML is bounded to 64 levels and 250000 tokens. DTD, external entities, arbitrary processing instructions, XPath, ambiguous testcase outcomes, malformed XML and unknown dialects fail closed. JSON Lines is bounded to 100000 records. Original XML/JSONL remains in the receipt's raw-file inventory; no external author supplies replacement counters.
 
-`await service.reconcile({scope,id,requestId,expectedRevision})` calls only trusted `inspectReceipt` with the original claim and signal. It accepts the same exact receipt shape. Unavailability leaves UNKNOWN. It creates no claim or attempt. Late original responses cannot overwrite a reconciled/terminal state. `close()` aborts local waiting and rejects further access; open an independent service to inspect durable state after restart. A close during execution retains unresolved RUNNING.
+The collector receives `{claim,artifactRoot,signal}` after durable claim persistence. It writes private files under that root and returns only claim/recipe/source identity, start/end times, exit code, signal, timeout/interruption/error and `{path,mediaType,sha256}` raw references. Runtime reads, hashes and parses the bytes itself, then stores the receipt. Parse errors, nonzero exit, missing outputs and timeouts preserve available raw evidence with a FAILED outcome. Malformed receipts or unavailable adapters remain UNKNOWN.
 
-All JSON, state collections and receipts are bounded. Material stays in immutable bounded database JSON; Runtime does not load producer files or external blobs. Provenance records the read-only verified storage patterns adapted into owned code, with no runtime reference imports.
+`collect` invokes external work; `inspectCollection` only reads its previously retained receipt. The same claim has `attemptCount:1`. Duplicate execution, restart and reconciliation never silently launch a second process. An adapter must honor the recipe timeout; Runtime also bounds its wait to the recipe timeout plus 2000 ms. Aborting a wait is not proof external work stopped. The adapter must retain its receipt independently so an interrupted Runtime can reconcile it.
 
-The standalone [CLI](cli.md) implements closed JSON validation, explicit workspace/revision requests and dispatch/reconcile routing. It supplies no external providers. Root capability metadata describes implemented generic service support and does not establish configured business readiness. Execution `status`, business validation and quality evaluation must be read independently: Runtime retains the closed aggregate `evaluation` and evidence binding, while detailed product results belong to the provider's retained evidence.
+## Trusted owner providers and completion
 
-## Verification scope
+`NativeRuntimeProviders` exports the exact callback types: `nativeStandards`, `inspectSource`, `resolveRequirements`, `collect`, `inspectCollection`, `resolveNative`, `executeNative`, `inspectNative`, `readOwnerReceipt`. Providers are fixed at construction. The native owner executor receives `{claim,signal}`; its claim includes exact source/configuration/requirements digests and immutable owner references. Runtime waits at most 60000 ms for an owner execution or inspection response.
 
-Source checks cover strict TypeScript, consumer declarations resolved through the package root and service exports, package metadata, owned imports and pinned vendor bytes. Runtime tests cover discovery, workspace identity, exact scopes, revisions, immutable pins and decisions, CLI validation, absent providers, durable claims and reconciliation. These checks provide technical evidence independently of acceptance. Historical test counts do not establish the status of the current repair candidate.
+The provider receipt binds the native contract, Runtime producer, claim, input, project candidate, owner references and standards. Both owner receipts carry the exact `NativeValidationContext`, execution and quality statuses, report digest and individual criterion/variant results. Runtime reads each receipt back through `readOwnerReceipt` and requires exact equality. Returned text saying PASS is not sufficient.
 
-For source development, run `npm ci --ignore-scripts`, `npm run build`, `npm run check`, then `npm test`. Build cleans generated dist and emits JavaScript/declarations; check verifies them. Full tests create isolated workspaces. The focused release check is `node --test tests/e2e/release-gate.test.mjs`. Installed tarballs contain compiled dist and declarations but omit development scripts/tests; package.json scripts are for source maintainers.
+Completion requires fresh source, untampered raw files, current standard pins, both owners' execution SUCCEEDED and quality PASS, and every frozen criterion/variant appearing exactly once with PASS. Missing, duplicate, skipped, failed, unknown, unsupported and extra variants block completion. Successful subprocess or owner execution alone is not business acceptance.
 
-Current Desktop E01–E19 acceptance status comes from a separate exact-candidate-bound acceptance report; without that report, no Host acceptance claim may be made. Consult the separate candidate-bound acceptance report; technical composition and transport results do not establish Host PASS, old 6.3 feature parity, production readiness or release authority. Remaining work stays within the [approved 0.1.x roadmap](roadmap.md). Return to the [product entry](../README.md).
+## Historical compatibility
 
-## Same-host Workspace snapshots and relocation
+The original revision-1.0.0 `reference.mjs` bytes remain unchanged for historical reads. Existing legacy JSON state and receipt rows are not rewritten into native evidence. `execute()` still exposes historical inspection and existing project/goal administration; new legacy `run.prepare`, `run.decide` and `dispatch()` reject with `HISTORICAL_READ_ONLY`. Original legacy claims may be inspected/reconciled; existing cancellation records do not prove external work stopped.
 
-Version 0.2.0 exposes `@evopilot-next/runtime/workspace-migration` for the parent Workspace maintenance coordinator. It exports synchronous `inspectWorkspaceSnapshot({workspaceRoot, workspaceId})` and `relocateWorkspaceSnapshot({sourceRoot, destinationRoot, workspaceId, expectedSnapshotDigest})`. Inspection requires existing owner state and never initializes an absent database. The parent must quiesce all services and obtain a consistent, complete copy before relocation; this owner API does not copy files or switch a Codex connection.
+First explicit native use adds separate native tables and marks SQLite `user_version=2`. Unknown native contract/producer markers are rejected. Older version-1-only readers reject this newer database rather than writing through it. Do not downgrade an active native Workspace; restore only a verified pre-upgrade backup at its original location, with services stopped and later writes preserved separately.
 
-The snapshot identifies the canonical Workspace, owner revision, exact state/receipt/audit digests, content-addressed blob inventory, unresolved work, and required local key IDs. Relocation verifies both the still-present source and the copied destination against that snapshot, then adds an owner-controlled location record. It never rewrites existing business records, decisions, immutable deliveries, receipts, or audit rows. Exact retries are idempotent while the copied destination has not acquired new business writes.
+## Workspace snapshots and relocation
 
-Location records are versioned and attested using an OS-user-owned key in `~/.local/share/evopilot/relocation-keys/`. The key remains outside copied Workspace data, templates, and Git. Retain those keys on this machine: `requiredKeyIds` identifies prerequisites without exposing key bytes. Missing keys, altered history, forged attestations, a different user, unsafe paths, and modified copies fail closed. These attestations protect accidental or untrusted Workspace modification within the same local-user trust boundary; they cannot defend against an attacker who controls that OS user and its key store. Cross-machine/key-import recovery is not supported.
+`@evopilot-next/runtime/workspace-migration` exports `inspectWorkspaceSnapshot` and `relocateWorkspaceSnapshot`. Snapshot reads existing state without initialization. It covers legacy and native state/receipt/audit digests, all protected native collection files, unresolved work and same-host relocation key identities. Missing or changed native raw evidence fails inspection.
 
-Restore a backup only to its original canonical location with the original same-host keys and services stopped. Verify it through each owner's snapshot API before use. A subsequent move to a new location uses the explicit relocation operation. Never restore an old snapshot over active state or discard writes made after a cutover.
+The parent must quiesce services and make a complete private copy. Relocation checks both the source and copied destination against the supplied snapshot, then adds signed same-host location lineage. It never rewrites business records, candidates, decisions, original claims or receipts. Existing original-location bindings remain readable only through that lineage. Pending old-location work requires new preparation and review; original claims may only reconcile. Retain local keys in `~/.local/share/evopilot/relocation-keys/`; cross-machine key import is not supported.
 
-Historical bindings remain readable only when their exact immutable review/pointer digests occur in verified location lineage. New records use the current canonical identity. Pending old-location plans require fresh preparation and review. Claimed Runtime work retains the original claim and receipt IDs; an uncertain outcome is reconciled or cancelled, never dispatched again as part of migration. Inspection and migration evidence do not authorize asset publication, external execution, or a software release.
+## Evidence and acceptance
+
+The Runtime tests exercise its public API using synthetic owner receipts and real isolated child processes. They verify native parsing, immutable decisions, raw integrity, fixed completion requirements, crash/restart and relocation. Historical fixture tests are explicitly labeled and do not prove current native behavior. Full product acceptance additionally requires real Ontology/Harness validators, parent integration, independently frozen acceptance instances and the exact Desktop candidate. Passing this repository's tests does not establish the complete 65-criterion release acceptance or release authority.
+
+See [CLI usage](cli.md), [the approved roadmap](roadmap.md) and the [product entry](../README.md).
+
+### Same-machine hostname changes
+
+On macOS, relocation records bind the configured `LocalHostName.local` when the
+system supplies a valid local name. Readback recognizes that configured name or
+the current OS hostname, so a network-assigned hostname does not invalidate the
+same machine's signed records. Other platforms retain exact current-hostname
+binding. Home directory, uid, private local key, HMAC, source/destination chain,
+and historical receipt digests must still verify. A foreign configured/current
+name or missing key is rejected; caller-provided host overrides are unsupported.
+Existing signed records and business data are never rewritten. This does not
+provide cross-machine restore.

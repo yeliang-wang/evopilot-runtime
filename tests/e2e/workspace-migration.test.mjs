@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { inspectWorkspaceSnapshot, relocateWorkspaceSnapshot } from '@evopilot-next/runtime/workspace-migration';
 import { keyDirectory } from '../../dist/location-lineage.js';
 import { createRuntimeService } from '../../dist/service.js';
+import { createRuntimeService as createHistoricalFixture } from '../fixtures/historical-runtime-v020.mjs';
 import { sha256 } from '../../vendor/compatibility/v1/reference.mjs';
 const product = 'runtime', createService = createRuntimeService;
 const scope = { visibility: 'public', projectId: 'synthetic' };
@@ -33,7 +34,7 @@ async function populate(options) {
   const provider = ({ reference, workspace }) => ({ reference, workspace, scope, published: true, materialDigest: digest, descriptor: { kind: reference.product + '-composition/v1', digest } });
   const result = claim => ({ claimId: claim.claimId, inputDigest: claim.inputDigest, pins: claim.pins, providerReceiptId: 'synthetic-original', status: 'SUCCEEDED', result: { evaluation: 'PASS', evidenceDigest: digest } });
   const providers = product === 'runtime' ? { resolveOntology: provider, resolveHarness: provider, execute: claim => { executions++; return claim.id === 'unknown' ? undefined : result(claim); }, inspectReceipt: result } : {};
-  const service = createService(options, providers); service.initialize();
+  const service = createHistoricalFixture(options, providers); service.initialize();
   if (product === 'runtime') {
     write(service, 'project.create', { name: 'Synthetic migration' }); write(service, 'goal.create', { id: 'goal', description: 'Owner migration E2E' });
     for (const id of ['completed', 'unknown', 'prepared']) {
@@ -73,9 +74,8 @@ test('same-host relocation preserves owner records, blobs, pins, receipts and su
     const reconciled = await service.reconcile({ scope, id: 'unknown', requestId: 'reconcile-original', expectedRevision: read(service, 'workspace.inspect').revision });
     assert.equal(reconciled.result.stage, 'SUCCEEDED'); assert.equal(reconciled.result.claim.claimId, unknown.claim.claimId); assert.equal(reconciled.result.attemptCount, 1);
     assert.deepEqual(read(service, 'receipt.inspect', { requestId: 'dispatch-unknown' }), original);
-    await assert.rejects(service.dispatch({ scope, id: 'prepared', requestId: 'unsafe-replay', expectedRevision: read(service, 'workspace.inspect').revision }), { code: 'RELOCATION_REVIEW_REQUIRED' });
-    const fresh = write(service, 'run.prepare', { id: 'fresh', goalId: 'goal', ...completed.plan.pins, input: completed.plan.input }).result;
-    assert.equal(fresh.plan.workspace.canonicalRoot, destinationRoot);
+    await assert.rejects(service.dispatch({ scope, id: 'prepared', requestId: 'unsafe-replay', expectedRevision: read(service, 'workspace.inspect').revision }), { code: 'HISTORICAL_READ_ONLY' });
+    assert.throws(() => write(service, 'run.prepare', { id: 'fresh', goalId: 'goal', ...completed.plan.pins, input: completed.plan.input }), {code:'HISTORICAL_READ_ONLY'});
   } else {
     const asset = read(service, 'asset.list')[0], retained = read(service, 'asset.inspect', { id: asset.id, version: asset.version });
     assert(retained.delivery); assert.equal(retained.review.workspace.canonicalRoot, sourceRoot);
@@ -219,4 +219,42 @@ test('foreign marker staging is rejected verbatim and never cleaned as an owned 
   rmSync(pending);
   const resumed = relocateWorkspaceSnapshot(request); cleanKeys(t, resumed);
   assert.equal(resumed.snapshot.recordsDigest, snapshot.recordsDigest);
+});
+
+
+test('same-machine macOS hostname changes preserve signed history while a foreign host stays rejected', async t => {
+  const osModule = await import('node:os'), cpModule = await import('node:child_process');
+  const { syncBuiltinESMExports } = await import('node:module');
+  const originalExec = cpModule.default.execFileSync;
+  t.mock.method(osModule.default, 'hostname', () => 'synthetic-local-host.local');
+  t.mock.method(cpModule.default, 'execFileSync', (file, args, options) => {
+    if (file === '/usr/sbin/scutil') return 'synthetic-local-host\n';
+    return originalExec(file, args, options);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const { options, sourceRoot, destinationRoot, workspaceId } = setup(t);
+  await populate(options);
+  const snapshot = inspectWorkspaceSnapshot(options); privateCopy(sourceRoot, destinationRoot);
+  const report = relocateWorkspaceSnapshot({sourceRoot,destinationRoot,workspaceId,expectedSnapshotDigest:snapshot.snapshotDigest});
+  cleanKeys(t, report);
+  const before = businessTables(destinationRoot);
+  const database = join(destinationRoot, 'state', product, product + '.db');
+  const lineageBytes = () => { const db = new DatabaseSync(database,{readOnly:true}); try{return db.prepare('SELECT record FROM workspace_relocations ORDER BY sequence').all();} finally{db.close();} };
+  const signed = lineageBytes();
+  t.mock.method(osModule.default, 'hostname', () => 'synthetic-network-alias'); syncBuiltinESMExports();
+  const destination = {workspaceRoot:destinationRoot,workspaceId};
+  if (process.platform === 'darwin') {
+    assert.equal(inspectWorkspaceSnapshot(destination).recordsDigest, snapshot.recordsDigest);
+    assert.deepEqual(lineageBytes(), signed); assert.deepEqual(businessTables(destinationRoot), before);
+  } else {
+    assert.throws(() => inspectWorkspaceSnapshot(destination), {code:'INVALID_LINEAGE'});
+  }
+  t.mock.method(cpModule.default, 'execFileSync', (file, args, options) => {
+    if (file === '/usr/sbin/scutil') return 'foreign-configured-host\n';
+    return originalExec(file, args, options);
+  });
+  syncBuiltinESMExports();
+  assert.throws(() => inspectWorkspaceSnapshot(destination), {code:'INVALID_LINEAGE'});
+  assert.deepEqual(lineageBytes(), signed); assert.deepEqual(businessTables(destinationRoot), before);
 });

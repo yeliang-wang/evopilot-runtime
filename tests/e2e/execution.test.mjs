@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
-import { createRuntimeService } from '../../dist/service.js';
+// Historical semantics fixture; current native execution is tested in native.test.mjs.
+import { createRuntimeService } from '../fixtures/historical-runtime-v020.mjs';
 import { operate, resolveMaterials } from '../../dist/operations.js';
 import { claimRun, invoke, receiptOutcome } from '../../dist/execution.js';
 import { validateState, LIMITS } from '../../dist/state.js';
@@ -25,7 +26,7 @@ function boundary(runScope=scope) {
   const approve=run=>operate(store,state,{operation:'run.decide',scope:runScope,input:{id:'run',reviewDigest:run.reviewDigest,decision:'APPROVE',humanEvidenceRef:'human:fixture'}},providers,2);
   return {store,state,providers,prepare,approve};
 }
-test('boundary: public project scope and exact workspace/pins precede claim',()=>{
+test('historical v0.2: boundary: public project scope and exact workspace/pins precede claim',()=>{
   for (const visibility of ['public','private']) for (const projectId of ['alpha','shared','unrelated']) {
     const f=boundary({visibility,projectId:'alpha'});
     f.providers.resolveHarness=r=>({...resolver(r),scope:{visibility:'public',projectId}});
@@ -43,7 +44,7 @@ test('boundary: public project scope and exact workspace/pins precede claim',()=
     else assert.throws(()=>resolveMaterials(f.providers,plan),{code:'MATERIAL_SCOPE'});
   }
 });
-test('boundary: native component/composed payload is unchanged and frozen at provider',async()=>{
+test('historical v0.2: boundary: native component/composed payload is unchanged and frozen at provider',async()=>{
   for (const mode of ['component','composed']) {
     const value=structuredClone(input);
     if(mode==='composed') value.harness={mode,evidence:{'harness:Component@1.0.0':value.harness.evidence},configuration:{'harness:Component@1.0.0':{threshold:0.5}}};
@@ -53,11 +54,11 @@ test('boundary: native component/composed payload is unchanged and frozen at pro
     run.stage=outcome.status;run.outcome=outcome;assert.deepEqual(validateState(JSON.parse(JSON.stringify(f.state))),f.state);
   }
 });
-test('boundary: malformed native envelopes and synthetic new inputs are refused',()=>{
+test('historical v0.2: boundary: malformed native envelopes and synthetic new inputs are refused',()=>{
   const changes=[v=>{v.command='echo unsafe';},v=>{v.providerUrl='https://inert.invalid';},v=>{v.ontologyInstance.facts=[];},v=>{v.ontologyInstance.entities={};},v=>{v.ontologyInstance.entities[0].properties.score=[{}];},v=>{v.ontologyInstance.relations[0].command='x';},v=>{v.harness.config={mode:'evaluate'};},v=>{delete v.harness.mode;},v=>{v.harness.mode='other';},v=>{v.harness.configuration=[];},v=>{v.harness.evidence.source.command='x';},v=>{v.harness.evidence.values=[];},v=>{v.harness.evidence={};},v=>{v.harness.configuration.callback=()=>{};},v=>{v.harness.configuration.huge='x'.repeat(LIMITS.requestBytes);},v=>{v.ontologyInstance={facts:[{id:'fact',value:true}]};v.harness={evidence:[],config:{mode:'evaluate'}};}];
   for (const change of changes) { const f=boundary(),value=structuredClone(input);change(value);assert.throws(()=>f.prepare(value));assert.equal(f.state.runs.length,0); }
 });
-test('boundary: existing synthetic stored input remains readable without migration',()=>{
+test('historical v0.2: boundary: existing synthetic stored input remains readable without migration',()=>{
   const f=boundary(),run=f.prepare();
   run.plan.input={schema:'runtime-composition/v1',ontologyInstance:{facts:[{id:'fact',value:true}]},harness:{evidence:[],config:{mode:'evaluate'}}};
   run.reviewDigest=sha256(run.plan);
@@ -65,7 +66,7 @@ test('boundary: existing synthetic stored input remains readable without migrati
   assert.deepEqual(operate(f.store,f.state,{operation:'run.inspect',scope,input:{id:'run'}},f.providers,2).plan.input,before.runs[0].plan.input);
   assert.deepEqual(f.state,before);
 });
-test('boundary: closed aggregate results retain business status and exact receipt binding',()=>{
+test('historical v0.2: boundary: closed aggregate results retain business status and exact receipt binding',()=>{
   const f=boundary(),run=f.prepare();f.approve(run);claimRun(f.store,f.state,run,f.providers);
   for (const evaluation of ['PASS','FAIL','ERROR','INDETERMINATE','N/A','NOT_CHECKED','NOT_EVALUATED']) {
     const value={...receipt(run.claim),result:{evaluation,evidenceDigest:digest}};
@@ -90,7 +91,7 @@ function fixture(t,extra={}) {
   const approve=()=>{const run=prepare();write('run.decide',{id:'run',reviewDigest:run.reviewDigest,decision:'APPROVE',humanEvidenceRef:'human:synthetic-review'});return run;};
   return {service,options,providers,read,args,write,prepare,approve,calls:()=>calls,last:()=>last};
 }
-test('forward plan requires exact approval; dispatch pins and failed evaluation remain distinct',async t=>{
+test('historical v0.2: forward plan requires exact approval; dispatch pins and failed evaluation remain distinct',async t=>{
   const f=fixture(t);const run=f.prepare();assert.equal(run.stage,'PREPARED');assert.equal(f.calls(),0);
   await assert.rejects(f.service.dispatch(f.args()),{code:'APPROVAL_REQUIRED'});
   assert.throws(()=>f.write('run.decide',{id:'run',reviewDigest:digest,decision:'APPROVE',humanEvidenceRef:'human:test'}),{code:'REVIEW_MISMATCH'});
@@ -100,7 +101,7 @@ test('forward plan requires exact approval; dispatch pins and failed evaluation 
   assert.deepEqual(f.last().input,input);assert(Object.isFrozen(f.last().input.ontologyInstance.entities[0].properties['quality.score']));
   await f.service.dispatch(request);await f.service.dispatch(f.args());assert.equal(f.calls(),1);
 });
-test('pending duplicate across instances invokes once; timeout reconciles original claim; late completion cannot overwrite',async t=>{
+test('historical v0.2: pending duplicate across instances invokes once; timeout reconciles original claim; late completion cannot overwrite',async t=>{
   let finish,claim,calls=0;
   const f=fixture(t,{timeoutMs:20,execute:c=>{calls++;claim=c;return new Promise(r=>{finish=r;});},inspectReceipt:c=>receipt(c)});f.approve();
   const request=f.args(),pending=f.service.dispatch(request);
@@ -111,20 +112,20 @@ test('pending duplicate across instances invokes once; timeout reconciles origin
   const reconciled=await f.service.reconcile(f.args());assert.equal(reconciled.result.stage,'SUCCEEDED');assert.equal(calls,1);assert.equal(reconciled.result.claim.claimId,claim.claimId);
   finish({...receipt(claim),status:'FAILED'});await new Promise(r=>setImmediate(r));assert.equal(f.read('run.inspect','run').stage,'SUCCEEDED');
 });
-test('wrong receipts, thrown responses, absent executor and material drift never fake success',async t=>{
+test('historical v0.2: wrong receipts, thrown responses, absent executor and material drift never fake success',async t=>{
   for(const execute of [()=>({}),c=>({...receipt(c),claimId:digest}),()=>{throw Error('dropped');}]) {
     const f=fixture(t,{execute});f.approve();assert.equal((await f.service.dispatch(f.args())).result.stage,'UNKNOWN');assert.equal(f.read('run.inspect','run').attemptCount,1);
   }
   const missing=fixture(t,{execute:undefined});missing.approve();await assert.rejects(missing.service.dispatch(missing.args()),{code:'MISSING_EXECUTOR'});assert.equal(missing.read('run.inspect','run').claim,null);
   let drift=false;const f=fixture(t,{resolveHarness:r=>({...resolver(r),reference:{...r.reference,version:drift?'9.0.0':'0.1.0'}})});f.approve();drift=true;await assert.rejects(f.service.dispatch(f.args()));assert.equal(f.calls(),0);assert.equal(f.read('run.inspect','run').claim,null);
 });
-test('closed composition and trusted material privacy; async resolver rejection consumed',async t=>{
+test('historical v0.2: closed composition and trusted material privacy; async resolver rejection consumed',async t=>{
   const f=fixture(t);assert.throws(()=>f.write('run.prepare',{id:'run',goalId:'goal',ontology:ref('ontology'),harness:ref('harness'),input:{...input,command:'echo unsafe'}}));
   const absent=fixture(t,{resolveOntology:undefined});assert.throws(absent.prepare,{code:'MISSING_RESOLVER'});
   const asyncResolver=fixture(t,{resolveOntology:()=>Promise.reject(Error('late'))});assert.throws(asyncResolver.prepare,{code:'ASYNC_RESOLVER'});await new Promise(r=>setImmediate(r));
   const privateMaterial=fixture(t,{resolveOntology:r=>({...resolver(r),scope:{visibility:'private',projectId:'other'},reference:{...r.reference,visibility:'private'}})});assert.throws(privateMaterial.prepare,{code:'MATERIAL_SCOPE'});
 });
-test('process exit after durable claim: restart retains RUNNING and reconciles without execution',async t=>{
+test('historical v0.2: process exit after durable claim: restart retains RUNNING and reconciles without execution',async t=>{
   const f=fixture(t);f.approve();const request=f.args();f.service.close();
   const child=fork(new URL('../fixtures/service-worker.mjs',import.meta.url),[],{stdio:['ignore','ignore','pipe','ipc']});
   t.after(()=>child.kill());const exited=once(child,'exit');child.send({options:f.options,request});const [code]=await exited;assert.equal(code,0);
@@ -134,7 +135,7 @@ test('process exit after durable claim: restart retains RUNNING and reconciles w
   const revision=service.execute({operation:'workspace.inspect',scope,input:{}}).revision;
   const done=await service.reconcile({scope,id:'run',requestId:'reconcile',expectedRevision:revision});assert.equal(done.result.stage,'SUCCEEDED');assert.equal(done.result.attemptCount,1);assert.equal(calls,0);
 });
-test('scope rejection leaves revision, receipts and approved claim unchanged',async t=>{
+test('historical v0.2: scope rejection leaves revision, receipts and approved claim unchanged',async t=>{
   let unrelated=false;
   const f=fixture(t,{resolveHarness:r=>({...resolver(r),scope:{visibility:'public',projectId:unrelated?'unrelated':'alpha'}})});
   f.approve();const before=f.read('run.inspect','run'),request=f.args();unrelated=true;
@@ -145,13 +146,13 @@ test('scope rejection leaves revision, receipts and approved claim unchanged',as
   const revision=bad.read('workspace.inspect').revision;assert.throws(bad.prepare,{code:'MATERIAL_SCOPE'});assert.equal(bad.read('workspace.inspect').revision,revision);assert.deepEqual(bad.read('run.list'),[]);
   assert.throws(()=>bad.service.execute({operation:'receipt.inspect',scope,input:{requestId:'req-3'}}),{code:'NOT_FOUND'});
 });
-test('INDETERMINATE survives durable completion and restart',async t=>{
+test('historical v0.2: INDETERMINATE survives durable completion and restart',async t=>{
   const f=fixture(t,{execute:c=>({...receipt(c),result:{evaluation:'INDETERMINATE',evidenceDigest:digest}})});f.approve();
   const done=await f.service.dispatch(f.args());assert.equal(done.result.stage,'SUCCEEDED');assert.equal(done.result.outcome.receipt.result.evaluation,'INDETERMINATE');f.service.close();
   const service=createRuntimeService(f.options);service.initialize();t.after(()=>service.close());
   assert.deepEqual(service.execute({operation:'run.inspect',scope,input:{id:'run'}}),done.result);
 });
-test('cancel preserves external claim; close and late rejection cannot reopen it',async t=>{
+test('historical v0.2: cancel preserves external claim; close and late rejection cannot reopen it',async t=>{
   let reject,started;
   const f=fixture(t,{execute:c=>{started=c;return new Promise((_,r)=>{reject=r;});}});const prepared=f.approve();
   const pending=f.service.dispatch(f.args());await Promise.resolve();

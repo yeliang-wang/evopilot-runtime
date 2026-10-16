@@ -5,17 +5,21 @@ import { openState, bounded, fail, LIMITS, validateState } from './state.js';
 import { operations, validateRequest, operate, findRun } from './operations.js';
 import { claimRun, invoke } from './execution.js';
 import { types } from 'node:util';
+import { createNativeRuntime, NATIVE_RUNTIME_OPERATIONS } from './native.js';
+import type { NativeRequest } from './native-types.js';
+export type * from './native-types.js';
 
 function providerOptions(value: unknown): Readonly<Providers> {
   if (!value || typeof value !== 'object' || types.isProxy(value) || ![Object.prototype,null].includes(Object.getPrototypeOf(value))) fail('INVALID_PROVIDER','Expected plain provider object');
   const descriptors=Object.getOwnPropertyDescriptors(value), providers: Record<string,unknown>=Object.create(null);
   for (const key of Reflect.ownKeys(descriptors)) {
-    if (typeof key !== 'string' || !['resolveOntology','resolveHarness','execute','inspectReceipt','timeoutMs'].includes(key)) fail('INVALID_PROVIDER','Unknown provider option');
+    if (typeof key !== 'string' || !['resolveOntology','resolveHarness','execute','inspectReceipt','timeoutMs','nativeStandards','collect','inspectCollection','resolveNative','executeNative','inspectNative','readOwnerReceipt','inspectSource','resolveRequirements','verifyProject'].includes(key)) fail('INVALID_PROVIDER','Unknown provider option');
     const d=descriptors[key];
     if (!Object.hasOwn(d,'value') || !d.enumerable) fail('INVALID_PROVIDER','Provider data descriptors required');
     if (key === 'timeoutMs') {
       if (!Number.isInteger(d.value) || d.value<1 || d.value>30000) fail('INVALID_PROVIDER','Timeout must be 1..30000ms');
-    } else if (typeof d.value !== 'function') fail('INVALID_PROVIDER','Provider callback must be a function');
+    } else if (key==='nativeStandards') { bounded(d.value); providers[key]=frozenClone(d.value);continue; }
+    else if (typeof d.value !== 'function') fail('INVALID_PROVIDER','Provider callback must be a function');
     providers[key]=d.value;
   }
   return Object.freeze(providers) as Readonly<Providers>;
@@ -26,8 +30,9 @@ export function createRuntimeService(options: ServiceOptions,trustedProviders: P
   const providers=providerOptions(trustedProviders);
   const timeoutMs=providers.timeoutMs??30000;
   let store: Store|null=null,closed=false;
+  let nativeRuntime: ReturnType<typeof createNativeRuntime>|null=null;
   const controllers=new Set<AbortController>();
-  const capabilities=()=>frozenClone({product:'runtime',version:'0.2.0',stage:'M2_DURABLE_SERVICE',operations,asyncOperations:['dispatch','reconcile'],authority:false,softwareRelease:false,limits:LIMITS});
+  const capabilities=()=>frozenClone({product:'runtime',version:'0.3.0',stage:'NATIVE_STANDARDS',operations:operations.filter(op=>!['run.prepare','run.decide'].includes(op)),historicalRunsReadOnly:true,nativeOperations:NATIVE_RUNTIME_OPERATIONS,asyncOperations:['reconcile','native'],authority:false,softwareRelease:false,limits:LIMITS});
   function initialize() { if(closed) fail('CLOSED','Service closed'); if(!store) store=openState(options.workspaceRoot,options.workspaceId); return frozenClone({workspaceId:options.workspaceId,initialized:true,authority:false}); }
   function transact<K extends Operation>(request: Request<K>, internal?: (state: State, request: Request)=>unknown, completion=false): Response<K> {
     bounded(request); const r=frozenClone(request) as Request,write=validateRequest(r);
@@ -74,8 +79,9 @@ export function createRuntimeService(options: ServiceOptions,trustedProviders: P
       db.exec('COMMIT'); active=false; return frozenClone(result) as Response<K>;
     } finally { if(active) db.exec('ROLLBACK'); }
   }
-  function execute<K extends SyncOperation>(request: Request<K>): Response<K> { bounded(request); if(!operations.includes(request.operation)) fail('INVALID_OPERATION','Use explicit async dispatch/reconcile'); return transact(request); }
+  function execute<K extends SyncOperation>(request: Request<K>): Response<K> { bounded(request); if(!operations.includes(request.operation)) fail('INVALID_OPERATION','Use explicit async dispatch/reconcile'); if(['run.prepare','run.decide'].includes(request.operation))fail('HISTORICAL_READ_ONLY','Retired JSON validation accepts no new work; use native API');return transact(request); }
   async function external(args: ExternalRequest,reconcile: boolean): Promise<Receipt<Run>> {
+    if(!reconcile)fail('HISTORICAL_READ_ONLY','Retired JSON dispatch disabled; inspect/reconcile original claim only');
     bounded(args); exactFields(args,['scope','id','requestId','expectedRevision']);
     const operation=reconcile?'run.reconcile':'run.dispatch';
     let invokeNeeded=false;
@@ -100,8 +106,9 @@ export function createRuntimeService(options: ServiceOptions,trustedProviders: P
       return run;
     },true);
   }
-  function close() { for(const c of controllers)c.abort(); if(store){store.db.close();store=null;} closed=true; }
-  return Object.freeze({capabilities,initialize,execute,dispatch:(args: ExternalRequest)=>external(args,false),reconcile:(args: ExternalRequest)=>external(args,true),close});
+  async function native(request: NativeRequest):Promise<unknown> {if(closed)fail('CLOSED','Service closed');if(!store)fail('NOT_INITIALIZED','Explicit initialize required');if(!nativeRuntime)nativeRuntime=createNativeRuntime(store,providers);return nativeRuntime.native(request);}
+  function close() { nativeRuntime?.close();for(const c of controllers)c.abort(); if(store){store.db.close();store=null;} closed=true; }
+  return Object.freeze({capabilities,initialize,execute,native,dispatch:(args: ExternalRequest)=>external(args,false),reconcile:(args: ExternalRequest)=>external(args,true),close});
 }
 
 function sqlText(value: unknown): string { if (typeof value !== 'string') fail('CORRUPT_STATE','Invalid stored text'); return value; }

@@ -1,8 +1,9 @@
 /** Owner-controlled, same-host location lineage. Business records are never rewritten. */
 import { DatabaseSync } from 'node:sqlite';
+import { execFileSync } from 'node:child_process';
 import { constants, lstatSync, mkdirSync, rmdirSync, readdirSync, readFileSync, openSync, closeSync, writeFileSync, fsyncSync, renameSync, unlinkSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse, resolve } from 'node:path';
-import { homedir, hostname } from 'node:os';
+import { homedir, hostname, platform } from 'node:os';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { stableSerialize } from '../vendor/compatibility/v1/reference.mjs';
 
@@ -81,7 +82,22 @@ function newKey(): string {
   for (const path of missing) { mkdirSync(path, { mode: 0o700 }); syncDirectory(dirname(path)); }
   privatePath(directory, true); const id = randomBytes(32).toString('hex'); createPrivateFile(join(directory, id + '.key'), randomBytes(32)); return id;
 }
-const hostDigest = () => hash({ hostname: hostname(), home: homedir(), uid: process.getuid?.() });
+// macOS may change gethostname() with the network while LocalHostName remains
+// the configured machine name. Keep signed history and every key/scope check;
+// recognize only the current system names, never a name supplied by a caller.
+function hostDigests(): string[] {
+  const names = [hostname()];
+  if (platform() === 'darwin') {
+    try {
+      const local = execFileSync('/usr/sbin/scutil', ['--get', 'LocalHostName'], {
+        encoding: 'utf8', timeout: 1000, maxBuffer: 1024, stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      if (/^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/.test(local)) names.unshift(local + '.local');
+    } catch { /* Without a verified system name, retain the exact current-host rule. */ }
+  }
+  return [...new Set(names)].map(name => hash({ hostname: name, home: homedir(), uid: process.getuid?.() }));
+}
+const hostDigest = (): string => hostDigests()[0]!;
 function hasLineage(db: DatabaseSync): boolean { return !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='workspace_relocations'").get(); }
 function prefix(db: DatabaseSync, revision: number) {
   const receipts = db.prepare('SELECT scope,request_id,digest,receipt FROM receipts WHERE CAST(json_extract(receipt,\'$.revision\') AS INTEGER)<=? ORDER BY scope,request_id').all(revision);
@@ -97,7 +113,7 @@ export function readRelocations(db: DatabaseSync, identity: WorkspaceIdentity, p
     if (row.sequence !== index + 1 || typeof row.record !== 'string' || Buffer.byteLength(row.record) > 8388608) migrationFail('INVALID_LINEAGE', 'Invalid relocation row');
     const record = JSON.parse(row.record) as RelocationRecord;
     const { recordDigest, signature, ...subject } = record;
-    if (record.schema !== 'evopilot-workspace-relocation/v1' || record.product !== product || recordDigest !== hash(subject) || record.hostDigest !== hostDigest() || !Number.isSafeInteger(record.historyRevision) || record.historyRevision < 0 || !Array.isArray(record.bindings) || record.bindings.length > 20000 || !/^[a-f0-9]{64}$/.test(signature)) migrationFail('INVALID_LINEAGE', 'Relocation metadata differs');
+    if (record.schema !== 'evopilot-workspace-relocation/v1' || record.product !== product || recordDigest !== hash(subject) || !hostDigests().includes(record.hostDigest) || !Number.isSafeInteger(record.historyRevision) || record.historyRevision < 0 || !Array.isArray(record.bindings) || record.bindings.length > 20000 || !/^[a-f0-9]{64}$/.test(signature)) migrationFail('INVALID_LINEAGE', 'Relocation metadata differs');
     const expected = createHmac('sha256', readKey(record.keyId)).update(stableSerialize(subject)).digest();
     if (!timingSafeEqual(expected, Buffer.from(signature, 'hex'))) migrationFail('INVALID_LINEAGE', 'Relocation attestation differs');
     for (const location of [record.from, record.to]) if (location.schema !== identity.schema || location.id !== identity.id || location.ownerUid !== identity.ownerUid || !isAbsolute(location.canonicalRoot) || resolve(location.canonicalRoot) !== location.canonicalRoot) migrationFail('INVALID_LINEAGE', 'Relocation scope differs');
@@ -116,7 +132,7 @@ export function acceptsWorkspace(db: DatabaseSync, identity: WorkspaceIdentity, 
   return readRelocations(db, identity, product).some(record => record.bindings.some(binding => stableSerialize(binding.workspace) === stableSerialize(historical) && binding.digest === digest));
 }
 export function inspectRecords(db: DatabaseSync, validateState: (value: unknown) => unknown): SnapshotRecords {
-  if (db.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok' || db.prepare('PRAGMA user_version').get()?.user_version !== 1) migrationFail('CORRUPT_STATE', 'Invalid owner database');
+  if (db.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok' || ![1,2].includes(Number(db.prepare('PRAGMA user_version').get()?.user_version))) migrationFail('CORRUPT_STATE', 'Invalid owner database');
   const row = db.prepare('SELECT revision,data FROM state WHERE singleton=1').get();
   if (!row || typeof row.revision !== 'number' || !Number.isSafeInteger(row.revision) || row.revision < 0 || typeof row.data !== 'string' || Buffer.byteLength(row.data) > 8388608) migrationFail('CORRUPT_STATE', 'Invalid owner state');
   const state = validateState(JSON.parse(row.data));
@@ -142,6 +158,7 @@ export function collectBindings(state: unknown): HistoricalBinding[] {
     const binding = { workspace: workspace as WorkspaceIdentity, digest }; bindings.set(stableSerialize(binding), binding);
   };
   for (const run of (value.runs ?? []) as { plan: { workspace: unknown }; reviewDigest: string }[]) add(run.plan.workspace, run.reviewDigest);
+  for (const collection of (value.collections ?? []) as { workspace: unknown; reviewDigest: string }[]) add(collection.workspace, collection.reviewDigest);
   for (const asset of (value.assets ?? []) as { review?: { workspace: unknown; reviewDigest: string } | null }[]) if (asset.review) add(asset.review.workspace, asset.review.reviewDigest);
   for (const key of ['producerPlans', 'catalogPlans']) for (const plan of (value[key] ?? []) as { workspace: unknown; reviewDigest: string }[]) add(plan.workspace, plan.reviewDigest);
   for (const revision of (value.catalogRevisions ?? []) as { workspace: unknown; pointer: { workspace: unknown; pointerDigest: string } }[]) { add(revision.workspace, revision.pointer.pointerDigest); add(revision.pointer.workspace, revision.pointer.pointerDigest); }

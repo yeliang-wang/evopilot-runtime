@@ -21,3 +21,13 @@ service.execute({operation:'run.inspect',scope,input:{id:'run',command:'execute'
 // @ts-expect-error Async dispatch requires an explicit revision.
 service.dispatch({scope,id:'run',requestId:'dispatch'});
 void [project,run,pending,invalidScope];
+
+service.native({operation:'workspace.inspect',scope,input:{}});
+service.native({operation:'collection.execute',scope,input:{id:'collection'},requestId:'collect',expectedRevision:0});
+// @ts-expect-error Native writes require explicit request identity and revision.
+service.native({operation:'collection.execute',scope,input:{id:'collection'}});
+// @ts-expect-error Native reads cannot carry a write identity.
+service.native({operation:'workspace.inspect',scope,input:{},requestId:'read'});
+// @ts-expect-error Native selectors have closed fixed semantics, not arbitrary XPath.
+const invalidSelector: import('@evopilot-next/runtime/service').CollectionSelector = {id:'tests',output:'junit.xml',kind:'xpath',pointer:'//testcase'};
+void invalidSelector;

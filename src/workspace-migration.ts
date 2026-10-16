@@ -2,6 +2,8 @@
 import { DatabaseSync } from 'node:sqlite';
 import { join, sep } from 'node:path';
 import { stableSerialize } from '../vendor/compatibility/v1/reference.mjs';
+import { inspectNativeSnapshot } from './native-snapshot.js';
+import type { NativeSnapshot } from './native-snapshot.js';
 import { openState, validateState } from './state.js';
 import { hash, migrationFail, pathStat, privatePath, readIdentity, safeAncestors, readRelocations, inspectRecords, inspectBlobs, collectBindings, appendRelocation, writeRelocatedIdentity } from './location-lineage.js';
 import type { WorkspaceIdentity, BlobInventory, SnapshotRecords } from './location-lineage.js';
@@ -12,7 +14,7 @@ export interface UnresolvedItem { kind: string; id: string; status: string; next
 export interface WorkspaceSnapshot {
   schema: 'evopilot-owner-workspace-snapshot/v1'; product: typeof product; identity: WorkspaceIdentity;
   revision: number; stateDigest: string; receiptsDigest: string; auditDigest: string; recordsDigest: string;
-  receiptCount: number; blobs: BlobInventory[]; blobsDigest: string; lineageDigest: string;
+  receiptCount: number; native?: NativeSnapshot; blobs: BlobInventory[]; blobsDigest: string; lineageDigest: string;
   requiredKeyIds: string[]; unresolved: UnresolvedItem[]; snapshotDigest: string;
 }
 export interface RelocationOptions { sourceRoot: string; destinationRoot: string; workspaceId: string; expectedSnapshotDigest: string }
@@ -32,8 +34,12 @@ function databasePath(root: string): string {
 function unresolved(state: unknown): UnresolvedItem[] {
   const value = state as Record<string, unknown>, output: UnresolvedItem[] = [];
   for (const raw of (value.runs ?? []) as Record<string, unknown>[]) {
-    if (['RUNNING', 'UNKNOWN'].includes(raw.stage as string)) output.push({ kind: 'runtime-run', id: String(raw.id), status: String(raw.stage), nextAction: 'RECONCILE_OR_CANCEL' });
-    else if (['PREPARED', 'APPROVED'].includes(raw.stage as string)) output.push({ kind: 'runtime-run', id: String(raw.id), status: String(raw.stage), nextAction: 'REPREPARE_AND_REVIEW' });
+    if (['RUNNING', 'UNKNOWN'].includes(raw.stage as string)) output.push({ kind: 'runtime-run', id: String(raw.id ?? (raw.plan as Record<string,unknown> | undefined)?.id), status: String(raw.stage), nextAction: 'RECONCILE_OR_CANCEL' });
+    else if (['PREPARED', 'APPROVED'].includes(raw.stage as string)) output.push({ kind: 'runtime-run', id: String(raw.id ?? (raw.plan as Record<string,unknown> | undefined)?.id), status: String(raw.stage), nextAction: 'REPREPARE_AND_REVIEW' });
+  }
+  for (const raw of (value.collections ?? []) as Record<string, unknown>[]) {
+    if (['RUNNING','UNKNOWN'].includes(raw.stage as string)) output.push({kind:'native-collection',id:String(raw.id),status:String(raw.stage),nextAction:'RECONCILE_OR_CANCEL'});
+    else if (['PREPARED','APPROVED'].includes(raw.stage as string)) output.push({kind:'native-collection',id:String(raw.id),status:String(raw.stage),nextAction:'REPREPARE_AND_REVIEW'});
   }
   for (const raw of (value.classificationSessions ?? []) as Record<string, unknown>[]) if (['PENDING', 'UNKNOWN'].includes(raw.status as string)) output.push({ kind: 'classification', id: String(raw.id), status: String(raw.status), nextAction: 'RECONCILE_OR_CANCEL' });
   for (const key of ['producerPlans', 'catalogPlans']) for (const raw of (value[key] ?? []) as Record<string, unknown>[]) if (raw.status === 'PREPARED') output.push({ kind: key, id: String(raw.planId), status: 'PREPARED', nextAction: 'REPREPARE_AND_REVIEW' });
@@ -63,12 +69,14 @@ function verifyOwnerMaterials(state: unknown, blobs: BlobInventory[]): void {
 }
 function snapshot(db: DatabaseSync, identity: WorkspaceIdentity, root: string): { manifest: WorkspaceSnapshot; records: SnapshotRecords } {
   const records = inspectRecords(db, value => validateState(value as Parameters<typeof validateState>[0]));
-  const lineage = readRelocations(db, identity, product), blobs = inspectBlobs(root, product);
+  const native = inspectNativeSnapshot(db, root);
+  if (native) records.state = {...records.state as Record<string, unknown>, runs: [...((records.state as {runs?:unknown[]}).runs ?? []), ...native.state.runs], collections:native.state.collections};
+  const lineage = readRelocations(db, identity, product), blobs = [...inspectBlobs(root, product), ...(native?.blobs ?? [])].sort((a,b)=>a.path.localeCompare(b.path));
   for (const binding of collectBindings(records.state)) {
     if (stableSerialize(binding.workspace) !== stableSerialize(identity) && !lineage.some(record => record.bindings.some(retained => stableSerialize(retained) === stableSerialize(binding)))) migrationFail('CORRUPT_STATE', 'Unattested historical owner identity');
   }
   verifyOwnerMaterials(records.state, blobs);
-  const subject = { schema: 'evopilot-owner-workspace-snapshot/v1' as const, product, identity, revision: records.revision, stateDigest: records.stateDigest, receiptsDigest: records.receiptsDigest, auditDigest: records.auditDigest, recordsDigest: records.recordsDigest, receiptCount: records.receiptCount, blobs, blobsDigest: hash(blobs), lineageDigest: hash(lineage), requiredKeyIds: [...new Set(lineage.map(record => record.keyId))].sort(), unresolved: unresolved(records.state) };
+  const subject = { schema: 'evopilot-owner-workspace-snapshot/v1' as const, product, identity, revision: records.revision, stateDigest: records.stateDigest, receiptsDigest: records.receiptsDigest, auditDigest: records.auditDigest, recordsDigest: records.recordsDigest, receiptCount: records.receiptCount, ...(native ? {native:native.snapshot} : {}), blobs, blobsDigest: hash(blobs), lineageDigest: hash(lineage), requiredKeyIds: [...new Set(lineage.map(record => record.keyId))].sort(), unresolved: unresolved(records.state) };
   return { manifest: { ...subject, snapshotDigest: hash(subject) }, records };
 }
 export function inspectWorkspaceSnapshot(value: SnapshotOptions): WorkspaceSnapshot {
@@ -97,7 +105,7 @@ export function relocateWorkspaceSnapshot(value: RelocationOptions): WorkspaceRe
     const completed = previous.at(-1);
     if (completed?.sourceSnapshotDigest === value.expectedSnapshotDigest && stableSerialize(completed.from) === stableSerialize(from) && stableSerialize(completed.to) === stableSerialize(to)) {
       const restored = snapshot(target, to, destinationRoot).manifest;
-      if (restored.recordsDigest !== original.manifest.recordsDigest || restored.blobsDigest !== original.manifest.blobsDigest) migrationFail('SNAPSHOT_DRIFT', 'Relocated state changed; do not retry against stale source');
+      if (restored.recordsDigest !== original.manifest.recordsDigest || restored.blobsDigest !== original.manifest.blobsDigest || stableSerialize(restored.native ?? null) !== stableSerialize(original.manifest.native ?? null)) migrationFail('SNAPSHOT_DRIFT', 'Relocated state changed; do not retry against stale source');
       target.exec('COMMIT'); targetTransaction = false; writeRelocatedIdentity(destinationRoot, to); source.db.exec('COMMIT'); sourceTransaction = false;
       return { schema: 'evopilot-owner-workspace-relocation-result/v1', product, from, to, sourceSnapshotDigest: value.expectedSnapshotDigest, relocationDigest: completed.recordDigest, requiredKeyIds: restored.requiredKeyIds, snapshot: restored, authority: false };
     }
