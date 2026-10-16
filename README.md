@@ -81,3 +81,5 @@ Capability metadata describes generic service support, not configured providers.
 ## Contributing and attribution
 
 See [Contributing](CONTRIBUTING.md) for source checks and the parent gitlink workflow. Runtime is Apache-2.0 licensed; retained attributions are in [NOTICE](NOTICE) and [provenance](provenance/). Documentation layout draws inspiration from OpenHands with independently written content.
+
+Native approvals bind readable, digest-pinned evidence to the exact review, Workspace and operation. See [decision evidence](docs/native-decisions.md) for the format, historical readback and trusted-operator boundary.

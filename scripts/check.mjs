@@ -103,8 +103,9 @@ export async function checkSource() {
   assert.deepEqual(manifest, {
     contractRevision: '1.1.0', module: 'native.mjs', sha256: PIN,
     sourceSha256: '2e8d69e167f017d9ad54c747f94381f3310903d6b1248f5f1d1777490b46db66',
+    decisionEvidenceSourceSha256: '561035d699e5606ee465500f09eccbaf57d4c8e463c70cc5fa37ff2ee9845e7b',
     legacyModule: 'reference.mjs', legacySha256: LEGACY_PIN,
-    files: {'reference.d.mts':'c83de0e77269bff05faade1471cc337cedcdee009b52bc084f48a1987846f765','native.d.mts':'94e8e3a40c0fcc68a66a21f92e617452d9399e84f249b3188ae6b54a79a42454'},
+    files: {'reference.d.mts':'c83de0e77269bff05faade1471cc337cedcdee009b52bc084f48a1987846f765','native.d.mts':'94e8e3a40c0fcc68a66a21f92e617452d9399e84f249b3188ae6b54a79a42454','decision-evidence.mjs':'6b8bb7a48215b586faa82198b34b7c479f5ab828db1965196c09249997eb9b51','decision-evidence.d.mts':'d6edf07733b577f6abd34b1952f5bf1579d1e6d3625dbed1867d0e6fc6f8ba63'},
     children: ['projects/evopilot-runtime', 'projects/evopilot-harness', 'projects/evopilot-ontology'],
   });
   const bytes = await readFile(resolve(vendor, manifest.module));
@@ -127,7 +128,7 @@ export async function checkSource() {
       assert(specifier.startsWith('.'), 'Undeclared import: ' + specifier);
       const resolved = resolve(dirname(path), specifier);
       const target = path.endsWith('.ts') && resolved.endsWith('.js') ? resolved.slice(0, -3) + '.ts' : resolved;
-      assert(target.startsWith(resolve(ROOT, 'src') + sep) || [resolve(vendor, 'reference.mjs'),resolve(vendor,'native.mjs')].includes(target), 'Foreign source import');
+      assert(target.startsWith(resolve(ROOT, 'src') + sep) || [resolve(vendor, 'reference.mjs'),resolve(vendor,'native.mjs'),resolve(vendor,'decision-evidence.mjs')].includes(target), 'Foreign source import');
       assert((await lstat(target)).isFile(), 'Import must be an owned regular file');
     }
   }

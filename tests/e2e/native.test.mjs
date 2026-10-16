@@ -1,3 +1,4 @@
+import { syntheticDecisionEvidence } from '../fixtures/native/decision-evidence.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync, readFileSync, chmodSync, cpSync, readdirSync, lstatSync } from 'node:fs';
@@ -26,12 +27,23 @@ function fixture(t,overrides={}) {
     inspectNative:({claim})=>stored.get('run:'+claim.claimId)??null,readOwnerReceipt:({requestId})=>stored.get(requestId),...overrides};
   const options={workspaceRoot:join(root,'state-root'),workspaceId:'native-fixture'};let service=createRuntimeService(options,provider);service.initialize();let serial=0;
   const read=(operation,input={})=>service.native({operation,scope,input});
-  const write=async(operation,input)=>service.native({operation,scope,input,requestId:'native-'+ ++serial,expectedRevision:(await read('workspace.inspect')).revision});
+  const write=async(operation,input)=>{if(input.humanEvidenceRef?.startsWith('synthetic'))input={...input,humanEvidenceRef:syntheticDecisionEvidence(root,{owner:'runtime',operation,workspaceId:options.workspaceId,scope,reviewDigest:input.reviewDigest,decision:input.decision??'APPROVE'})};return service.native({operation,scope,input,requestId:'native-'+ ++serial,expectedRevision:(await read('workspace.inspect')).revision});};
   async function setup(){const p=(await write('project.prepare',{id:'project-r1',goalId:'goal',sourceScope,standardPins:pins,requirements})).result;const c=(await write('collection.prepare',{id:'collect',projectId:p.id,recipe})).result;await write('collection.decide',{id:c.id,reviewDigest:c.reviewDigest,decision:'APPROVE',humanEvidenceRef:'synthetic:unit-fixture-only'});const collected=(await write('collection.execute',{id:c.id})).result;assert.equal(collected.stage,'SUCCEEDED');const input={schema:'runtime-composition/v1',contractDigest:NATIVE_CONTRACT_DIGEST,projectCandidateDigest:p.candidateDigest,standardPins:pins,sourceScope,requirements,effectiveConfig:{synthetic:true},nativeInputs:{ontology:{synthetic:true},harness:{observation:{schema:'evopilot-observation/v1',origin:'execution-result',source:{revision:sourceScope.revision,digest:sourceScope.treeDigest},values:collected.receipt.observations,sourceScopeDigest:hash(sourceScope),collectionReceiptRef:{id:c.id,digest:collected.receipt.digest,claimId:collected.claim.claimId}}}},collectionReceipts:[{id:c.id,digest:collected.receipt.digest}]};return{p,c:collected,input};}
   async function prepare(input){return(await write('run.prepare',{id:'run',projectId:'project-r1',goalId:'goal',ontology:reference('ontology'),harness:reference('harness'),input})).result;}
   const restart=()=>{service.close();service=createRuntimeService(options,provider);service.initialize();};t.after(()=>service.close());
   return{root,options,provider,source,recipe,requirements,sourceScope,read,write,setup,prepare,restart,stored,close:()=>service.close(),counts:()=>({collectionCalls,runCalls}),service:()=>service};
 }
+test('C04: missing human evidence and changed approval source cannot start collection',async t=>{
+  const f=fixture(t);
+  const p=(await f.write('project.prepare',{id:'project-r1',goalId:'goal',sourceScope:f.sourceScope,standardPins:pins,requirements:f.requirements})).result;
+  const c=(await f.write('collection.prepare',{id:'guarded',projectId:p.id,recipe:f.recipe})).result;
+  await assert.rejects(f.service().native({operation:'collection.decide',scope,input:{id:c.id,reviewDigest:c.reviewDigest,decision:'APPROVE',humanEvidenceRef:'forged-without-evidence'},requestId:'forged',expectedRevision:(await f.read('workspace.inspect')).revision}),{code:'HUMAN_EVIDENCE_REQUIRED'});
+  const accepted=(await f.write('collection.decide',{id:c.id,reviewDigest:c.reviewDigest,decision:'APPROVE',humanEvidenceRef:'synthetic:test-attestation'})).result;
+  const evidence=JSON.parse(readFileSync(new URL(accepted.decision.humanEvidenceRef),'utf8'));
+  const source=new URL(evidence.source.reference),before=readFileSync(source);writeFileSync(source,'changed approval source');
+  await assert.rejects(f.write('collection.execute',{id:c.id}),{code:'HUMAN_EVIDENCE_REQUIRED'});assert.equal(f.counts().collectionCalls,0);
+  writeFileSync(source,before);assert.equal((await f.write('collection.execute',{id:c.id})).result.stage,'SUCCEEDED');assert.equal(f.counts().collectionCalls,1);
+});
 test('native public API: actual collection, owner readback, exact completion, restart and no redispatch',async t=>{
   const f=fixture(t),{p,c,input}=await f.setup();assert.equal(c.receipt.observations.count,3);assert.equal(c.receipt.observations.exit,0);
   const r=await f.prepare(input);await f.write('run.decide',{id:'run',reviewDigest:r.reviewDigest,decision:'APPROVE',humanEvidenceRef:'synthetic:review-only'});
@@ -137,7 +149,7 @@ test('native snapshot covers raw evidence and records, relocation retains origin
   const service=createRuntimeService({workspaceRoot:destination,workspaceId:f.options.workspaceId},f.provider);service.initialize();t.after(()=>service.close());
   assert.deepEqual(await service.native({operation:'collection.inspect',scope,input:{id:c.id}}),c);
   const read=()=>service.native({operation:'workspace.inspect',scope,input:{}});
-  await service.native({operation:'run.decide',scope,input:{id:r.plan.id,reviewDigest:r.reviewDigest,decision:'APPROVE',humanEvidenceRef:'synthetic:fixture'},requestId:'after-move-decision',expectedRevision:(await read()).revision});
+  await service.native({operation:'run.decide',scope,input:{id:r.plan.id,reviewDigest:r.reviewDigest,decision:'APPROVE',humanEvidenceRef:syntheticDecisionEvidence(f.root,{owner:'runtime',operation:'run.decide',workspaceId:f.options.workspaceId,scope,reviewDigest:r.reviewDigest,decision:'APPROVE'})},requestId:'after-move-decision',expectedRevision:(await read()).revision});
   await assert.rejects(()=>read().then(({revision})=>service.native({operation:'run.dispatch',scope,input:{id:r.plan.id},requestId:'after-move-run',expectedRevision:revision})),{code:'RELOCATION_REVIEW_REQUIRED'});
   service.close();writeFileSync(join(destination,'state/runtime-native',c.claim.claimId.slice(7),'stdout.json'),'changed');
   assert.throws(()=>inspectWorkspaceSnapshot({workspaceRoot:destination,workspaceId:f.options.workspaceId}),{code:'CORRUPT_BLOB'});
