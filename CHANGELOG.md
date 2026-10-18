@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0 Preview
+
+- Consume trusted Harness findings through the public online API and retain ordered repair-candidate history.
+- Reconcile duplicate delivery and incident recovery without creating a Target, choosing a software version or releasing automatically.
+- Compose with the parent’s independently supervised worker; Harness retains ownership of measurement, policy evaluation and incidents.
+- Retain corrected native v0.3 standards and historical records; online owner writes use database marker 4.
+- Acceptance and publication require the fixed candidate-bound v0.5 checks; this changelog is not an acceptance record.
+
+
 ## 0.4.0 Preview
 
 - Add explicitly configured registered-Run feedback, durable delivery and retained owner receipt recovery.

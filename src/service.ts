@@ -9,6 +9,8 @@ import { createNativeRuntime, NATIVE_RUNTIME_OPERATIONS } from './native.js';
 import type { NativeRequest } from './native-types.js';
 import type { FeedbackEnvelope } from './feedback.js';
 import { RUNTIME_FEEDBACK_OPERATIONS } from './feedback.js';
+import {createOnlineRuntime,ONLINE_RUNTIME_OPERATIONS} from './online.js';
+import type {OnlineEnvelope} from './online.js';
 export type * from './feedback.js';
 export type * from './native-types.js';
 
@@ -16,7 +18,7 @@ function providerOptions(value: unknown): Readonly<Providers> {
   if (!value || typeof value !== 'object' || types.isProxy(value) || ![Object.prototype,null].includes(Object.getPrototypeOf(value))) fail('INVALID_PROVIDER','Expected plain provider object');
   const descriptors=Object.getOwnPropertyDescriptors(value), providers: Record<string,unknown>=Object.create(null);
   for (const key of Reflect.ownKeys(descriptors)) {
-    if (typeof key !== 'string' || !['resolveOntology','resolveHarness','execute','inspectReceipt','timeoutMs','nativeStandards','collect','inspectCollection','resolveNative','executeNative','inspectNative','readOwnerReceipt','inspectSource','resolveRequirements','verifyProject','deliverFeedback','readFeedbackInbox'].includes(key)) fail('INVALID_PROVIDER','Unknown provider option');
+    if (typeof key !== 'string' || !['resolveOntology','resolveHarness','execute','inspectReceipt','timeoutMs','nativeStandards','collect','inspectCollection','resolveNative','executeNative','inspectNative','readOwnerReceipt','inspectSource','resolveRequirements','verifyProject','deliverFeedback','readFeedbackInbox','readOnlineFinding'].includes(key)) fail('INVALID_PROVIDER','Unknown provider option');
     const d=descriptors[key];
     if (!Object.hasOwn(d,'value') || !d.enumerable) fail('INVALID_PROVIDER','Provider data descriptors required');
     if (key === 'timeoutMs') {
@@ -34,8 +36,9 @@ export function createRuntimeService(options: ServiceOptions,trustedProviders: P
   const timeoutMs=providers.timeoutMs??30000;
   let store: Store|null=null,closed=false;
   let nativeRuntime: ReturnType<typeof createNativeRuntime>|null=null;
+  let onlineRuntime:ReturnType<typeof createOnlineRuntime>|null=null,activeOnline=0;
   const controllers=new Set<AbortController>();
-  const capabilities=()=>frozenClone({product:'runtime',version:'0.4.0',stage:'NATIVE_STANDARDS',operations:operations.filter(op=>!['run.prepare','run.decide'].includes(op)),historicalRunsReadOnly:true,nativeOperations:NATIVE_RUNTIME_OPERATIONS,feedbackOperations:RUNTIME_FEEDBACK_OPERATIONS,asyncOperations:['reconcile','native'],authority:false,softwareRelease:false,limits:LIMITS});
+  const capabilities=()=>frozenClone({product:'runtime',version:'0.5.0',stage:'NATIVE_STANDARDS',operations:operations.filter(op=>!['run.prepare','run.decide'].includes(op)),historicalRunsReadOnly:true,nativeOperations:NATIVE_RUNTIME_OPERATIONS,feedbackOperations:RUNTIME_FEEDBACK_OPERATIONS,onlineOperations:ONLINE_RUNTIME_OPERATIONS,asyncOperations:['reconcile','native'],authority:false,softwareRelease:false,limits:LIMITS});
   function initialize() { if(closed) fail('CLOSED','Service closed'); if(!store) store=openState(options.workspaceRoot,options.workspaceId); return frozenClone({workspaceId:options.workspaceId,initialized:true,authority:false}); }
   function transact<K extends Operation>(request: Request<K>, internal?: (state: State, request: Request)=>unknown, completion=false): Response<K> {
     bounded(request); const r=frozenClone(request) as Request,write=validateRequest(r);
@@ -111,8 +114,9 @@ export function createRuntimeService(options: ServiceOptions,trustedProviders: P
   }
   async function native(request: NativeRequest):Promise<unknown> {if(closed)fail('CLOSED','Service closed');if(!store)fail('NOT_INITIALIZED','Explicit initialize required');if(!nativeRuntime)nativeRuntime=createNativeRuntime(store,providers);return nativeRuntime.native(request);}
   async function feedback(request:FeedbackEnvelope):Promise<unknown>{if(closed)fail('CLOSED','Service closed');if(!store)fail('NOT_INITIALIZED','Explicit initialize required');if(!nativeRuntime)nativeRuntime=createNativeRuntime(store,providers);return nativeRuntime.feedback(request);}
-  function close() { nativeRuntime?.close();for(const c of controllers)c.abort(); if(store){store.db.close();store=null;} closed=true; }
-  return Object.freeze({capabilities,initialize,execute,native,feedback,dispatch:(args: ExternalRequest)=>external(args,false),reconcile:(args: ExternalRequest)=>external(args,true),close});
+  async function online(request:OnlineEnvelope):Promise<unknown>{if(closed)fail('CLOSED','Service closed');if(!store)fail('NOT_INITIALIZED','Explicit initialize required');if(!nativeRuntime)nativeRuntime=createNativeRuntime(store,providers);if(!onlineRuntime)onlineRuntime=createOnlineRuntime(store,providers);activeOnline++;try{return await onlineRuntime.online(request);}finally{activeOnline--;}}
+  function close() { if(activeOnline)fail('BUSY','Online operation is in progress'); nativeRuntime?.close();for(const c of controllers)c.abort(); if(store){store.db.close();store=null;} closed=true; }
+  return Object.freeze({capabilities,initialize,execute,native,feedback,online,dispatch:(args: ExternalRequest)=>external(args,false),reconcile:(args: ExternalRequest)=>external(args,true),close});
 }
 
 function sqlText(value: unknown): string { if (typeof value !== 'string') fail('CORRUPT_STATE','Invalid stored text'); return value; }

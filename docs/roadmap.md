@@ -22,7 +22,7 @@ Unresolved execution is inspected and reconciled without redispatch. Recovery mu
 
 ## v0.3.0 Preview: corrected v1 contracts and project conformance
 
-**Status: IMPLEMENTING.** The user-approved parent `governance/standards-v03.json` Target supplies bounded implementation authority. The native candidate is under verification; this Roadmap does not certify acceptance, installed cutover or publication.
+Published in the v0.3.0 Preview under the approved parent `governance/standards-v03.json` Target. This section retains that bounded standards-correction scope. Publication does not imply daily installation cutover, business-project acceptance or v1.0 readiness.
 
 - Correct the shared contracts consumed with the owners' corrected `specifications/v1`. Do not create an asset `specifications/v2` merely to preserve the earlier incomplete standard. Preserve historical bytes and receipts; distinguish corrected material through explicit contract identity and the actual standard digest, not the `v1` string alone. The parent remains the canonical shared-contract producer.
 - Bind prepared work, decisions, claims and results to exact source revisions, project scope, asset delivery references, applicable standard digests, effective configuration, tool identity and acceptance requirements. Drift invalidates reuse; old approval and old reports do not become evidence for a different candidate.
@@ -68,4 +68,23 @@ Return to the [documentation index](README.md) or [product entry](../README.md).
 
 ## Approved v0.4 execution feedback
 
-Status: implementing the parent [36-variant Target](https://github.com/yeliang-wang/evopilot/blob/main/governance/feedback-v04.json). Add this owner's capture/delivery or impact-review responsibilities through public APIs, preserve native v0.3 standards and historical records, and verify real Host, restart, upgrade, source CI and release readback. v0.5 online Harness work remains a separate target; neither authorizes v1.0.
+Published in the v0.4 Preview under the parent [36-variant Target](https://github.com/yeliang-wang/evopilot/blob/main/governance/feedback-v04.json). This owner participates in registered execution feedback through its public APIs while preserving native v0.3 standards and historical records. Candidate-specific Host, recovery and release evidence remain private. v0.5 online Harness has the separate scope below; neither version authorizes v1.0.
+
+## Approved v0.5: online Harness
+
+The fixed [36-variant parent Target](https://github.com/yeliang-wang/evopilot/blob/main/governance/online-harness-v05.json) follows the published v0.4 Preview. This checkout implements that scope; exact candidate acceptance and release receipts remain external.
+
+Harness owns immutable service/environment/deployment/SLO/policy bindings, actual Prometheus measurements, authenticated Alertmanager findings, native Rego evaluation, retained incidents and reviewable regression comparisons. Runtime receives trusted repair candidates; it does not infer a software version or dispatch an autonomous repair. Ontology standards and reviewed semantic evolution remain unchanged. The parent provides the explicitly enabled independent local worker and Expert journeys, with actual installed Codex acceptance.
+
+The delivered scope is a bounded OpenSLO v1 RatioTimeslices profile and macOS arm64/launchd supervision. It does not establish full OpenSLO/Sloth compatibility, production business-SLO acceptance or v1.0 readiness. No second real project, WorkBuddy or original project mutation is included.
+
+### Deferred online follow-ups
+
+| Target candidate | Trigger | Required future evidence / boundary |
+|---|---|---|
+| Online retention and scale | Real projects reach bounded history/backlog limits | Reviewed retention/export semantics, immutable historical evidence, restart/load tests and explicit no-loss acceptance; no silent pruning |
+| Additional supervisors/providers | A concrete project requires another platform or telemetry source | Pinned supported subset, real provider/Host E2E, credentials/network isolation and owned stop/recovery; no blanket compatibility claim |
+| Reviewed repair execution linkage | Real users need repair candidates connected to a concrete approved Target | Explicit candidate/Target/source/version mapping, reviewed authority, real executor receipts, failure/recovery tests; never automatic patch release from Warning |
+| Additional SLO semantics | Several projects need calendar/composite/other budgeting methods | Versioned profile compatibility, upstream field/calculation comparisons, negative cases and preserved earlier approvals |
+
+These candidates are not uncompleted v0.5 criteria and have no assigned release date. They require their own reviewed Target. Existing v1.0 readiness conditions remain unchanged.
