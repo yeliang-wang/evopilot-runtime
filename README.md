@@ -4,7 +4,7 @@
 
 Runtime is the durable execution layer of [EvoPilot](https://github.com/yeliang-wang/evopilot). It owns scoped projects, immutable goals, reviewed plans, human decisions, execution claims, receipts and audit. [Harness](https://github.com/yeliang-wang/evopilot-harness) owns quality assets and evaluation; [Ontology](https://github.com/yeliang-wang/evopilot-ontology) owns semantic models and validation.
 
-**v0.4.0 Preview** adds durable registered execution feedback and reviewed final-asset completion. Choose published bytes from [Releases](https://github.com/yeliang-wang/evopilot-runtime/releases); see the [changelog](CHANGELOG.md) and [roadmap](docs/roadmap.md).
+**v0.5.0 Preview** adds trusted online findings as reviewable repair candidates, retaining durable registered execution feedback and reviewed final-asset completion. Choose published bytes from [Releases](https://github.com/yeliang-wang/evopilot-runtime/releases); see the [changelog](CHANGELOG.md) and [roadmap](docs/roadmap.md).
 
 ## Capabilities
 
@@ -87,3 +87,7 @@ Native approvals bind readable, digest-pinned evidence to the exact review, Work
 ## Execution feedback (v0.4)
 
 v0.4 adds private, source-bound feedback through the public service API. Runtime owns capture and retained delivery; final completion requires exact reviewed owner dispositions. See [feedback](docs/feedback.md). Native v0.3 standard and contract bytes remain unchanged. Publication and exact installed acceptance are recorded separately.
+
+## Online findings
+
+`service.online()` reads trusted Harness findings into scoped, durable `REVIEW_REQUIRED` repair candidates. It preserves failure and recovery history, leaves the requested software version empty, and neither dispatches a repair nor mutates Ontology. See [online repair API](docs/online-repair.md) and the [parent online guide](https://github.com/yeliang-wang/evopilot/blob/main/docs/online-harness.md).
