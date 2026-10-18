@@ -70,7 +70,7 @@ service.close();
 
 This example only inspects metadata. Construction and imports perform no filesystem operations. To persist projects and goals, choose an explicitly owned canonical workspace outside source/Git trees with an existing parent, then call `initialize()`. The [service API reference](docs/service.md) explains requests, revisions, trusted callbacks and recovery; the [CLI guide](docs/cli.md) includes complete project/goal examples.
 
-The root also exports `PRODUCT`, `inspectPinnedInputs` and the `Reference` type. The service subpath exports `createRuntimeService` and request/result types. Public API behavior and the frozen asset v1 contract are preserved by this repair.
+The root also exports `PRODUCT`, `inspectPinnedInputs` and the `Reference` type. The service subpath exports `createRuntimeService` and request/result types. The corrected native v1 standards and earlier immutable records remain preserved by the v0.5 release; see [registered feedback](docs/feedback.md) and [online repair candidates](docs/online-repair.md) for the current additive APIs.
 
 ## Trust and Preview scope
 
