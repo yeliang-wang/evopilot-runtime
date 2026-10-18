@@ -1,5 +1,6 @@
 import type { NativeReference, StandardPins, NativeScope, NativeJSON, NativeValidationContext, NativeCriterionResult } from '../vendor/compatibility/v1/native.mjs';
 import type { Workspace } from './types.js';
+import type { RuntimeFeedbackProviders, FeedbackCompletion } from './feedback.js';
 export type { NativeReference, StandardPins, NativeScope, NativeJSON, NativeValidationContext, NativeCriterionResult } from '../vendor/compatibility/v1/native.mjs';
 
 export interface NativeSourceScope { direction: 'forward' | 'reverse'; locator: string; revision: string; treeDigest: string; inventoryDigest: string; requirementsDigest: string }
@@ -77,9 +78,9 @@ export interface NativeProjectCheckReceipt {
 export interface NativeProject {
   id: string; goalId: string; scope: NativeScope; sourceScope: NativeSourceScope;
   standardPins: {ontology:StandardPins;harness:StandardPins}; requirements: NativeRequirement[];
-  candidateDigest: string; complete: {runId:string;runDigest:string;projectCheck:NativeProjectCheckReceipt|null;decision:NativeDecision;at:string}|null;
+  candidateDigest: string; complete: {runId:string;runDigest:string;projectCheck:NativeProjectCheckReceipt|null;decision:NativeDecision;at:string;feedback?:FeedbackCompletion}|null;
 }
-export interface NativeRuntimeProviders {
+export interface NativeRuntimeProviders extends RuntimeFeedbackProviders {
   verifyProject?: (request:{project:Readonly<NativeProject>;run:Readonly<NativeRun>}) => Promise<NativeProjectCheckReceipt> | NativeProjectCheckReceipt;
   nativeStandards?: {ontology:StandardPins;harness:StandardPins};
   collect?: (context: CollectionContext) => Promise<CollectionProviderResult> | CollectionProviderResult;

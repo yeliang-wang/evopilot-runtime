@@ -1,3 +1,5 @@
+import {inspectFeedbackSnapshot} from '../vendor/compatibility/feedback/v1/feedback.mjs';
+import type {FeedbackSnapshot} from '../vendor/compatibility/feedback/v1/feedback.mjs';
 /** Owner-controlled, same-host location lineage. Business records are never rewritten. */
 import { DatabaseSync } from 'node:sqlite';
 import { execFileSync } from 'node:child_process';
@@ -15,7 +17,7 @@ export interface RelocationRecord {
   bindings: HistoricalBinding[]; previousDigest: string | null; hostDigest: string; keyId: string; at: string;
   recordDigest: string; signature: string;
 }
-export interface SnapshotRecords { revision: number; state: unknown; stateDigest: string; receiptsDigest: string; auditDigest: string; recordsDigest: string; receiptCount: number }
+export interface SnapshotRecords { feedback?:FeedbackSnapshot; revision: number; state: unknown; stateDigest: string; receiptsDigest: string; auditDigest: string; recordsDigest: string; receiptCount: number }
 export const hash = (value: unknown): string => 'sha256:' + createHash('sha256').update(stableSerialize(value)).digest('hex');
 export function migrationFail(code: string, message: string): never { throw Object.assign(new Error(message), { code }); }
 export function pathStat(path: string) { try { return lstatSync(path); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; } }
@@ -132,7 +134,7 @@ export function acceptsWorkspace(db: DatabaseSync, identity: WorkspaceIdentity, 
   return readRelocations(db, identity, product).some(record => record.bindings.some(binding => stableSerialize(binding.workspace) === stableSerialize(historical) && binding.digest === digest));
 }
 export function inspectRecords(db: DatabaseSync, validateState: (value: unknown) => unknown): SnapshotRecords {
-  if (db.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok' || ![1,2].includes(Number(db.prepare('PRAGMA user_version').get()?.user_version))) migrationFail('CORRUPT_STATE', 'Invalid owner database');
+  if (db.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok' || ![1,2,3].includes(Number(db.prepare('PRAGMA user_version').get()?.user_version))) migrationFail('CORRUPT_STATE', 'Invalid owner database');
   const row = db.prepare('SELECT revision,data FROM state WHERE singleton=1').get();
   if (!row || typeof row.revision !== 'number' || !Number.isSafeInteger(row.revision) || row.revision < 0 || typeof row.data !== 'string' || Buffer.byteLength(row.data) > 8388608) migrationFail('CORRUPT_STATE', 'Invalid owner state');
   const state = validateState(JSON.parse(row.data));
@@ -148,8 +150,9 @@ export function inspectRecords(db: DatabaseSync, validateState: (value: unknown)
     const entry = audit[receipt.revision - 1];
     if (!entry || entry.revision !== receipt.revision || saved.scope !== stableSerialize(receipt.scope) || saved.request_id !== receipt.requestId || saved.digest !== receipt.requestDigest || entry.uid !== receipt.uid || entry.operation !== receipt.operation || entry.request_digest !== receipt.requestDigest || entry.result_digest !== hash(receipt.result)) migrationFail('CORRUPT_STATE', 'Receipt audit binding differs');
   }
+  const feedback=inspectFeedbackSnapshot(db);
   const stateDigest = hash({ revision: row.revision, data: row.data }), receiptsDigest = hash(receipts), auditDigest = hash(audit);
-  return { revision: row.revision, state, stateDigest, receiptsDigest, auditDigest, recordsDigest: hash({ stateDigest, receiptsDigest, auditDigest }), receiptCount: receipts.length };
+  return { ...(feedback?{feedback}:{}),revision: row.revision, state, stateDigest, receiptsDigest, auditDigest, recordsDigest: hash({...(feedback?{feedback}:{}), stateDigest, receiptsDigest, auditDigest }), receiptCount: receipts.length };
 }
 export function collectBindings(state: unknown): HistoricalBinding[] {
   const value = state as Record<string, unknown>, bindings = new Map<string, HistoricalBinding>();

@@ -65,3 +65,7 @@ Runtime is not a production SRE platform, a general CI replacement, a mechanism 
 Build, test, distribution and candidate-bound acceptance evidence is retained separately from this roadmap. Preview does not claim production readiness, GA, old 6.3 feature parity or arbitrary coding-agent support. Capability metadata carries no acceptance or release authority.
 
 Return to the [documentation index](README.md) or [product entry](../README.md).
+
+## Approved v0.4 execution feedback
+
+Status: implementing the parent [36-variant Target](https://github.com/yeliang-wang/evopilot/blob/main/governance/feedback-v04.json). Add this owner's capture/delivery or impact-review responsibilities through public APIs, preserve native v0.3 standards and historical records, and verify real Host, restart, upgrade, source CI and release readback. v0.5 online Harness work remains a separate target; neither authorizes v1.0.
