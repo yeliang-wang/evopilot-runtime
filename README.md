@@ -4,7 +4,7 @@
 
 Runtime is the durable execution layer of [EvoPilot](https://github.com/yeliang-wang/evopilot). It owns scoped projects, immutable goals, reviewed plans, human decisions, execution claims, receipts and audit. [Harness](https://github.com/yeliang-wang/evopilot-harness) owns quality assets and evaluation; [Ontology](https://github.com/yeliang-wang/evopilot-ontology) owns semantic models and validation.
 
-**[v0.2.0 Preview](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.2.0)** provides strict TypeScript source, compiled JavaScript and declarations, and refined packaging and documentation. [v0.1.0](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.1.0) is the historical baseline. See the [changelog](CHANGELOG.md) and [roadmap](docs/roadmap.md).
+**v0.4.0 Preview** adds durable registered execution feedback and reviewed final-asset completion. Choose published bytes from [Releases](https://github.com/yeliang-wang/evopilot-runtime/releases); see the [changelog](CHANGELOG.md) and [roadmap](docs/roadmap.md).
 
 ## Capabilities
 
@@ -83,3 +83,7 @@ Capability metadata describes generic service support, not configured providers.
 See [Contributing](CONTRIBUTING.md) for source checks and the parent gitlink workflow. Runtime is Apache-2.0 licensed; retained attributions are in [NOTICE](NOTICE) and [provenance](provenance/). Documentation layout draws inspiration from OpenHands with independently written content.
 
 Native approvals bind readable, digest-pinned evidence to the exact review, Workspace and operation. See [decision evidence](docs/native-decisions.md) for the format, historical readback and trusted-operator boundary.
+
+## Execution feedback (v0.4)
+
+v0.4 adds private, source-bound feedback through the public service API. Runtime owns capture and retained delivery; final completion requires exact reviewed owner dispositions. See [feedback](docs/feedback.md). Native v0.3 standard and contract bytes remain unchanged. Publication and exact installed acceptance are recorded separately.
