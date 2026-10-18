@@ -22,7 +22,7 @@ Unresolved execution is inspected and reconciled without redispatch. Recovery mu
 
 ## v0.3.0 Preview: corrected v1 contracts and project conformance
 
-**Status: IMPLEMENTING.** The user-approved parent `governance/standards-v03.json` Target supplies bounded implementation authority. The native candidate is under verification; this Roadmap does not certify acceptance, installed cutover or publication.
+Published in the v0.3.0 Preview under the approved parent `governance/standards-v03.json` Target. This section retains that bounded standards-correction scope. Publication does not imply daily installation cutover, business-project acceptance or v1.0 readiness.
 
 - Correct the shared contracts consumed with the owners' corrected `specifications/v1`. Do not create an asset `specifications/v2` merely to preserve the earlier incomplete standard. Preserve historical bytes and receipts; distinguish corrected material through explicit contract identity and the actual standard digest, not the `v1` string alone. The parent remains the canonical shared-contract producer.
 - Bind prepared work, decisions, claims and results to exact source revisions, project scope, asset delivery references, applicable standard digests, effective configuration, tool identity and acceptance requirements. Drift invalidates reuse; old approval and old reports do not become evidence for a different candidate.
@@ -68,11 +68,11 @@ Return to the [documentation index](README.md) or [product entry](../README.md).
 
 ## Approved v0.4 execution feedback
 
-Status: implementing the parent [36-variant Target](https://github.com/yeliang-wang/evopilot/blob/main/governance/feedback-v04.json). Add this owner's capture/delivery or impact-review responsibilities through public APIs, preserve native v0.3 standards and historical records, and verify real Host, restart, upgrade, source CI and release readback. v0.5 online Harness work remains a separate target; neither authorizes v1.0.
+Published in the v0.4 Preview under the parent [36-variant Target](https://github.com/yeliang-wang/evopilot/blob/main/governance/feedback-v04.json). This owner participates in registered execution feedback through its public APIs while preserving native v0.3 standards and historical records. Candidate-specific Host, recovery and release evidence remain private. v0.5 online Harness has the separate scope below; neither version authorizes v1.0.
 
 ## Approved v0.5: online Harness
 
-The fixed [36-variant parent Target](https://github.com/yeliang-wang/evopilot/blob/main/governance/online-harness-v05.json) follows the published v0.4 Preview. This checkout is implementing that scope; exact candidate acceptance and release receipts remain external.
+The fixed [36-variant parent Target](https://github.com/yeliang-wang/evopilot/blob/main/governance/online-harness-v05.json) follows the published v0.4 Preview. This checkout implements that scope; exact candidate acceptance and release receipts remain external.
 
 Harness owns immutable service/environment/deployment/SLO/policy bindings, actual Prometheus measurements, authenticated Alertmanager findings, native Rego evaluation, retained incidents and reviewable regression comparisons. Runtime receives trusted repair candidates; it does not infer a software version or dispatch an autonomous repair. Ontology standards and reviewed semantic evolution remain unchanged. The parent provides the explicitly enabled independent local worker and Expert journeys, with actual installed Codex acceptance.
 
