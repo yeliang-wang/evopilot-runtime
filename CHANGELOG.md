@@ -1,8 +1,11 @@
 # Changelog
 
-## 0.6.0 Preview — candidate, not published
+## 0.6.0 Preview
 
 - Add reviewed response plans around actual isolated collection, independent verification, durable recovery and exact owner feedback.
+- Retain original execution claims through duplicate calls, response loss, timeout, cancellation and restart; require a worker receipt before confirming interruption.
+- Require independent post-action collection, exact same-binding recovery and reviewed Harness/Ontology dispositions before response closure. New asset references require a new matching validation Run.
+- Persist response state with database marker 5; previous readers reject newer state and rollback requires a matching stopped-state backup.
 - Keep new core and contracts in strict TypeScript with compiled runtime/declarations.
 - Preserve native v1 specifications and immutable historical evidence.
 
@@ -24,9 +27,9 @@
 - Preserve native v0.3 contracts and historical records; add feedback-state backup/restore and old-reader rejection.
 - Preview publication remains conditional on the fixed v0.4 acceptance, actual Codex journeys and exact source CI.
 
-## 0.3.0 Preview — unreleased candidate
+## 0.3.0 Preview
 
-Correct current v1 native contracts and bind standard content digests. New work uses native RDF/Turtle and SHACL or Rego/OPA/Conftest, protected collection/run receipts, and fixed project completion requirements. Historical JSON records retain their original identity; retired mutation paths cannot create new work. This v0.x correction is incompatible with historical writers. Keep a consistent pre-upgrade snapshot; do not point v0.2 at state written by this candidate. Implementation and tests do not establish acceptance or release.
+Correct current v1 native contracts and bind standard content digests. New work uses native RDF/Turtle and SHACL or Rego/OPA/Conftest, protected collection/run receipts, and fixed project completion requirements. Historical JSON records retain their original identity; retired mutation paths cannot create new work. This v0.x correction is incompatible with historical writers. Keep a consistent pre-upgrade snapshot; do not point v0.2 at state written by this version. Implementation and tests do not establish acceptance or release.
 
 ## 0.2.0 Preview
 

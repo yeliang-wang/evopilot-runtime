@@ -1,4 +1,4 @@
-# Runtime service and native evidence
+# Runtime service and native evidence — v0.6.0 Preview
 
 Runtime coordinates exact project candidates, collection recipes, decisions, claims, receipts and completion. Ontology owns RDF/SHACL meaning and Harness owns Rego policy evaluation. The corrected `specifications/v1` flow uses the current shared native contract revision **1.1.0**, its content digest and each owner's exact standard/lock digests. A directory named `v1` is not sufficient identity.
 
@@ -82,7 +82,7 @@ The parent must quiesce services and make a complete private copy. Relocation ch
 
 ## Evidence and acceptance
 
-The Runtime tests exercise its public API using synthetic owner receipts and real isolated child processes. They verify native parsing, immutable decisions, raw integrity, fixed completion requirements, crash/restart and relocation. Historical fixture tests are explicitly labeled and do not prove current native behavior. Full product acceptance additionally requires real Ontology/Harness validators, parent integration, independently frozen acceptance instances and the exact Desktop candidate. Passing this repository's tests does not establish the complete 65-criterion release acceptance or release authority.
+The Runtime tests exercise its public API using synthetic owner receipts and real isolated child processes. They verify native parsing, immutable decisions, raw integrity, fixed completion requirements, crash/restart and relocation. Historical fixture tests are explicitly labeled and do not prove current native behavior. Full product acceptance additionally requires real Ontology/Harness validators, parent integration, independently frozen acceptance instances and the exact Desktop candidate. Passing this repository's tests does not establish complete product acceptance or release authority. The parent [v0.6 response Target](https://github.com/yeliang-wang/evopilot/blob/main/governance/response-v06.json) defines 36 fixed variants for the current response, transport and language scope; the historical v0.3 standards-correction denominator remains separate.
 
 See [CLI usage](cli.md), [the approved roadmap](roadmap.md) and the [product entry](../README.md).
 
@@ -98,6 +98,8 @@ name or missing key is rejected; caller-provided host overrides are unsupported.
 Existing signed records and business data are never rewritten. This does not
 provide cross-machine restore.
 
-## Registered execution feedback
+## Additive v0.4–v0.6 APIs
 
-The public `feedback(envelope)` API has its own revision from `feedback.inspect`; do not use the native workspace revision for feedback mutations. See [feedback contract and workflow](feedback.md). Trusted providers are configured by the parent composition, never through caller payloads.
+The public `feedback(envelope)`, `online(envelope)` and `response(envelope)` APIs each have their own revision, read through `feedback.inspect`, `online.inspect` or `response.inspect`. Do not reuse the native workspace revision for these mutations. See [feedback contract and workflow](feedback.md), [online repair candidates](online-repair.md) and [reviewed response execution](response.md). Trusted providers are configured by the parent composition, never through caller payloads.
+
+Response writes advance the owner database marker to 5. Native, feedback and online historical records retain their original identities. Use supported stopped-state backup/restore and matching readers; a prior-version installation must not write newer response state.

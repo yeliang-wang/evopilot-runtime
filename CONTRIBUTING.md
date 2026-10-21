@@ -1,6 +1,6 @@
 # Contributing to Runtime
 
-Keep changes within Runtime ownership and the agreed file scope. The v0.1.1 repair preserves business APIs, durable-state behavior, asset v1 contracts and historical material; unrelated features need a separate scope.
+Keep changes within Runtime ownership and the agreed file scope. The v0.6.0 response scope preserves native v1 contracts and historical material while adding reviewed isolated execution and verification linkage; unrelated features need a separate reviewed scope.
 
 ## Source checks
 
