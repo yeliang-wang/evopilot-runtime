@@ -6,6 +6,8 @@ Runtime is the durable execution layer of [EvoPilot](https://github.com/yeliang-
 
 **v0.5.0 Preview** adds trusted online findings as reviewable repair candidates, retaining durable registered execution feedback and reviewed final-asset completion. Choose published bytes from [Releases](https://github.com/yeliang-wang/evopilot-runtime/releases); see the [changelog](CHANGELOG.md) and [roadmap](docs/roadmap.md).
 
+This **v0.6.0 candidate** adds reviewed response plans around actual isolated collection, independent verification, durable recovery and exact owner feedback. Read [the implementation guide](docs/response.md). Acceptance and installation require exact-candidate evidence; the v0.5 downloads below remain the previously published release. Core implementation uses strict TypeScript; generated JavaScript is the installed runtime format.
+
 ## Capabilities
 
 | Capability | Standalone behavior |

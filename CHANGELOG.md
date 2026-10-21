@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0 Preview — candidate, not published
+
+- Add reviewed response plans around actual isolated collection, independent verification, durable recovery and exact owner feedback.
+- Keep new core and contracts in strict TypeScript with compiled runtime/declarations.
+- Preserve native v1 specifications and immutable historical evidence.
+
+
 ## 0.5.0 Preview
 
 - Consume trusted Harness findings through the public online API and retain ordered repair-candidate history.

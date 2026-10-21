@@ -18,3 +18,7 @@ For the composed product and Codex installation, use the [parent EvoPilot instru
 ## v0.5 online integration
 
 [Repair candidate API](online-repair.md) retains trusted Harness findings and review boundaries.
+
+## v0.6 candidate
+
+Read [reviewed response plans around actual isolated collection, independent verification, durable recovery and exact owner feedback](response.md). The optional/additive response work preserves native v1 specifications. Current source implementation is distinct from accepted installation or a published release.

@@ -1,6 +1,7 @@
 import type {OnlineRuntimeProviders} from '../vendor/compatibility/online/v1/online.mjs';
 import type { DatabaseSync } from 'node:sqlite';
 import type { NativeRuntimeProviders } from './native-types.js';
+import type { ResponseRuntimeProviders } from './response.js';
 import type { Reference, JSONValue } from '../vendor/compatibility/v1/reference.mjs';
 export type { Reference, JSONValue } from '../vendor/compatibility/v1/reference.mjs';
 export interface Scope { visibility: 'public' | 'private'; projectId: string }
@@ -22,7 +23,7 @@ export interface Store { db: DatabaseSync; uid: number; identity: Workspace; gua
 export type StoreIdentity = Pick<Store,'uid'|'identity'>;
 export interface ResolveRequest {reference: Reference; scope: Scope; workspace: Workspace}
 export type Executor = (claim: Readonly<Claim & {signal: AbortSignal}>) => unknown;
-export interface Providers extends NativeRuntimeProviders, OnlineRuntimeProviders {resolveOntology?: (request: ResolveRequest)=>unknown; resolveHarness?: (request: ResolveRequest)=>unknown; execute?: Executor; inspectReceipt?: Executor; timeoutMs?: number}
+export interface Providers extends NativeRuntimeProviders, OnlineRuntimeProviders, ResponseRuntimeProviders {resolveOntology?: (request: ResolveRequest)=>unknown; resolveHarness?: (request: ResolveRequest)=>unknown; execute?: Executor; inspectReceipt?: Executor; timeoutMs?: number}
 export interface ServiceOptions {workspaceRoot: string; workspaceId: string}
 export interface ExternalRequest {scope:Scope;id:string;requestId:string;expectedRevision:number}
 export interface Evidence {id:string;version:string;source:{locator:string;revision:string;digest:string};values:Record<string,JSONValue>}
