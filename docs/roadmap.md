@@ -16,7 +16,7 @@ The [v0.1.1 Preview](https://github.com/yeliang-wang/evopilot-runtime/releases/t
 
 ## v0.2.0 Workspace identity and recovery
 
-The current source includes owner-scoped Workspace snapshot and same-host relocation APIs, described in [the service reference](service.md#same-host-workspace-snapshots-and-relocation). The parent coordinates quiescence, consistent copying and connection changes. Runtime verifies exact identity and snapshot digests and appends location lineage without rewriting historical business records, decisions, claims, receipts or audit.
+The current source includes owner-scoped Workspace snapshot and same-host relocation APIs, described in [the service reference](service.md#workspace-snapshots-and-relocation). The parent coordinates quiescence, consistent copying and connection changes. Runtime verifies exact identity and snapshot digests and appends location lineage without rewriting historical business records, decisions, claims, receipts or audit.
 
 Unresolved execution is inspected and reconciled without redispatch. Recovery must retain same-host key prerequisites and work written after cutover. Cross-machine recovery is outside this scope. This section records scope and source behavior, not a new claim that an installation, migration or release has passed acceptance.
 
@@ -33,9 +33,9 @@ Published in the v0.3.0 Preview under the approved parent `governance/standards-
 
 The fixed acceptance must exercise stale source and configuration, changed standard digests, forged/imported observations, missing requirement IDs, partial output, timeout, cancellation, restart and uncertain results. Exact candidate evidence is required for both successful and correctly rejected cases. These baseline controls belong in v0.3.0 and are not deferred to the future targets below.
 
-## Deferred targets
+## Evolution targets
 
-These are product-direction records, not scheduled versions. `CANDIDATE` records a follow-up direction; `CONDITIONAL_RESEARCH` first requires a concrete need and feasibility review. No v0.4 date or automatic v1.0 requirement is assigned. Each entry needs a demonstrated use case, bounded Target, compatibility review and concrete acceptance before implementation. They do not alter the parent's existing v1.0 readiness criteria.
+RUN-F01–F03 remain deferred product directions. `CANDIDATE` records a follow-up direction; `CONDITIONAL_RESEARCH` first requires a concrete need and feasibility review. Their versions and dates are not assigned. RUN-F04 has the bounded v0.6 implementation described below. Future extensions still require a demonstrated use case, bounded Target, compatibility review and concrete acceptance; these entries do not alter the parent's v1.0 readiness criteria.
 
 ### RUN-F01: external executor adapters
 
@@ -57,6 +57,16 @@ These are product-direction records, not scheduled versions. `CANDIDATE` records
 - **Trigger:** A user needs opt-in notifications or periodic/on-demand checks because project sources change outside an EvoPilot-guided session.
 - **Scope and boundary:** Inspect the selected source scope against its bound revision and report changes with affected assets and recommended review or revalidation. Selection must identify scope, cadence if any, delivery destination and stop behavior. Do not promise real-time background synchronization; do not automatically rewrite assets, approve changes or publish software.
 - **Acceptance:** With no selection, perform no scheduled checks or notifications. With explicit selection, detect covered source changes, report unresolved impact honestly, avoid repeated unchanged notifications, and support cancellation. Verify that changed files produce suggestions while asset deliveries, approval state and release state remain unchanged until their normal workflows run. Exclude secrets and unrelated private paths from notifications.
+
+### RUN-F04: reviewed repair and runbook execution linkage
+
+- **Status:** implemented for **v0.6.0 Preview** under the [parent response Target](https://github.com/yeliang-wang/evopilot/blob/main/governance/response-v06.json). This is Runtime's part of [EVO-F04](https://github.com/yeliang-wang/evopilot/blob/main/docs/roadmap.md#evo-f04--incident-response-and-asset-learning). Exact published commits and assets are recorded on the [Release page](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.6.0); this entry adds no v1.0 requirement.
+- **Trigger:** a real project needs an online repair candidate connected to an approved action and verifiable outcome, beyond the v0.5 review-only ingestion flow.
+- **Scope:** resolve the immutable Harness finding and selected guidance through public owner APIs; bind Workspace/project, incident/candidate, private Target/Loop ledger, existing Goal/Run, source revision, runbook revision/digest, environment, parameters, prerequisites, allowed operations and decision evidence. Target/Loop remain governance records unless a separately reviewed contract explicitly changes that model. Preserve the distinction between guidance, an executable plan and authority to dispatch it.
+- **Execution:** retain claims and actual executor receipts, including failures, cancellations and partial actions. Read uncertain outcomes before any dispatch decision. Rollback/compensation requires a defined, authorized plan and its own receipts. Reuse the bounded provider boundary; adopt RUN-F01 only if the project demonstrates an additional executor need. No alert, runbook annotation or model recommendation authorizes an automatic patch release or production mutation.
+- **Closure and feedback:** reference Harness recovery/regression evidence independently of command exit status. Link postmortem-derived proposals to the original observation and Run; reuse existing feedback delivery and exact owner REUSE/DELIVER decisions. Changed asset pins require re-evaluation; telemetry recovery alone cannot close the repair or establish root-cause removal.
+- **Fixed acceptance:** own execution/linkage assertions for EVO-F04-E01–E05 and E08–E10; participate in E06–E07 scope and disposition checks. Test changed source/runbook/environment/parameters, forged or cross-project owner references, missing permission, timeout, cancellation, response loss, duplicate delivery, restart and retained historical readback. Prove no duplicate dispatch after uncertainty and no success inferred from a caller-supplied report. The owning cases live under `tests/e2e`; parent integration and actual Codex journeys independently verify the complete chain. Actual evidence remains private and exact-candidate-bound.
+- **Compatibility:** v0.6 adds the response contract and database marker 5 while preserving native v1 specifications and immutable earlier records. Old readers reject newer state; supported backup/restore preserves response claims and cross-owner references. The supported action remains a pinned Node collector in an isolated copied directory. Java/Maven, remote executors and production remediation remain outside this scope.
 
 ## Product limits
 
@@ -84,7 +94,10 @@ The delivered scope is a bounded OpenSLO v1 RatioTimeslices profile and macOS ar
 |---|---|---|
 | Online retention and scale | Real projects reach bounded history/backlog limits | Reviewed retention/export semantics, immutable historical evidence, restart/load tests and explicit no-loss acceptance; no silent pruning |
 | Additional supervisors/providers | A concrete project requires another platform or telemetry source | Pinned supported subset, real provider/Host E2E, credentials/network isolation and owned stop/recovery; no blanket compatibility claim |
-| Reviewed repair execution linkage | Real users need repair candidates connected to a concrete approved Target | Explicit candidate/Target/source/version mapping, reviewed authority, real executor receipts, failure/recovery tests; never automatic patch release from Warning |
 | Additional SLO semantics | Several projects need calendar/composite/other budgeting methods | Versioned profile compatibility, upstream field/calculation comparisons, negative cases and preserved earlier approvals |
 
-These candidates are not uncompleted v0.5 criteria and have no assigned release date. They require their own reviewed Target. Existing v1.0 readiness conditions remain unchanged.
+These remaining candidates are not uncompleted v0.5 or v0.6 criteria and have no assigned release date. They require their own reviewed Target. Reviewed response linkage moved into RUN-F04 for v0.6; existing v1.0 readiness conditions remain unchanged.
+
+## Current v0.6.0 implementation
+
+RUN-F04 implements the approved parent [v0.6 response Target](https://github.com/yeliang-wang/evopilot/blob/main/governance/response-v06.json), including its execution and recovery portion of the 36 fixed variants. See [response execution](response.md) for the supported profile and API. Technical evidence and published artifacts are distinct; use the [Release page](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.6.0) to identify an actual distribution. Maintained core source uses strict TypeScript; native standards and historical records stay intact.

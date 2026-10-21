@@ -4,7 +4,9 @@
 
 Runtime is the durable execution layer of [EvoPilot](https://github.com/yeliang-wang/evopilot). It owns scoped projects, immutable goals, reviewed plans, human decisions, execution claims, receipts and audit. [Harness](https://github.com/yeliang-wang/evopilot-harness) owns quality assets and evaluation; [Ontology](https://github.com/yeliang-wang/evopilot-ontology) owns semantic models and validation.
 
-**v0.5.0 Preview** adds trusted online findings as reviewable repair candidates, retaining durable registered execution feedback and reviewed final-asset completion. Choose published bytes from [Releases](https://github.com/yeliang-wang/evopilot-runtime/releases); see the [changelog](CHANGELOG.md) and [roadmap](docs/roadmap.md).
+**v0.6.0 Preview** adds reviewed response plans around actual isolated collection, independent verification, durable recovery and exact owner feedback. It retains trusted online repair candidates and registered execution feedback from earlier versions. Read [response execution](docs/response.md), the [changelog](CHANGELOG.md) and [roadmap](docs/roadmap.md). Published assets and their exact source are recorded on the [v0.6.0 Release page](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.6.0).
+
+Maintained product source uses strict TypeScript; installed processes execute compiled JavaScript with public type declarations. JavaScript build, packaging and test drivers remain separate from product behavior. The [parent language policy](https://github.com/yeliang-wang/evopilot/blob/main/docs/language-policy.md) defines the cross-product boundaries.
 
 ## Capabilities
 
@@ -14,6 +16,7 @@ Runtime is the durable execution layer of [EvoPilot](https://github.com/yeliang-
 | Reference inspection | Compare exact Ontology/Harness pins through the pure root API; no latest-version selection. |
 | Reviewed run plans | Preparing a pinned plan requires trusted material resolvers. Decisions bind its exact review digest. |
 | Durable execution | A configured trusted executor receives one committed claim; uncertain outcomes are inspected and reconciled without redispatch. |
+| Reviewed response linkage | Bind a scoped problem and published runbook to exact Goal/Target/Loop, collection and source references; require independent verification and both owners' reviewed feedback before closure. |
 | Receipts and audit | SQLite persistence, revision checks and scoped idempotency retain evidence independently of evaluation or acceptance. |
 | SDK and CLI | Strict TypeScript source, compiled ESM JavaScript and declarations; no runtime dependencies. |
 
@@ -39,12 +42,12 @@ Build cleans only generated `dist`, emits JavaScript and declarations, then make
 
 ### Install a release tarball
 
-For v0.5.0 Preview, download `evopilot-next-runtime-0.5.0.tgz`, `source-revision.txt` and `SHA256SUMS` from the [Runtime release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.5.0). In that download directory, verify the checksums and inspect the revision before installing into your consumer project:
+For v0.6.0 Preview, download `evopilot-next-runtime-0.6.0.tgz`, `source-revision.txt` and `SHA256SUMS` from the [Runtime release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.6.0). In that download directory, verify the checksums and inspect the revision before installing into your consumer project:
 
 ```sh
 shasum -a 256 -c SHA256SUMS
 cat source-revision.txt
-npm install --ignore-scripts /absolute/downloads/evopilot-next-runtime-0.5.0.tgz
+npm install --ignore-scripts /absolute/downloads/evopilot-next-runtime-0.6.0.tgz
 npx --no-install evopilot-next-runtime help
 ```
 
@@ -70,13 +73,13 @@ service.close();
 
 This example only inspects metadata. Construction and imports perform no filesystem operations. To persist projects and goals, choose an explicitly owned canonical workspace outside source/Git trees with an existing parent, then call `initialize()`. The [service API reference](docs/service.md) explains requests, revisions, trusted callbacks and recovery; the [CLI guide](docs/cli.md) includes complete project/goal examples.
 
-The root also exports `PRODUCT`, `inspectPinnedInputs` and the `Reference` type. The service subpath exports `createRuntimeService` and request/result types. The corrected native v1 standards and earlier immutable records remain preserved by the v0.5 release; see [registered feedback](docs/feedback.md) and [online repair candidates](docs/online-repair.md) for the current additive APIs.
+The root also exports `PRODUCT`, `inspectPinnedInputs` and the `Reference` type. The service subpath exports `createRuntimeService` and request/result types. v0.6 preserves corrected native v1 standards and earlier immutable records. See [registered feedback](docs/feedback.md), [online repair candidates](docs/online-repair.md) and [response execution](docs/response.md) for the additive APIs. The composed response executor supports the pinned Node collector in an isolated copied directory; Java/Maven, remote execution and production remediation are outside this release.
 
 ## Trust and Preview scope
 
 Runtime assumes a non-malicious single OS uid and trusted code-injected adapters. It does not isolate hostile code running as that uid. Keep exact requests and receipts; an uncertain response is not permission to dispatch again. Read the [security policy](SECURITY.md).
 
-Capability metadata describes generic service support, not configured providers. `hostIntegrationReady`, `acceptance`, `authority` and `softwareRelease` remain false. Source checks and CI are technical evidence independent of candidate-bound acceptance and release authority. Preview does not claim production readiness, GA, old 6.3 feature parity or arbitrary coding-agent support.
+Capability metadata describes generic service support, not configured providers. `hostIntegrationReady`, `acceptance`, `authority` and `softwareRelease` remain false. Source checks and CI are technical evidence independent of exact-version acceptance and release authority. Preview does not claim production readiness, GA, old 6.3 feature parity or arbitrary coding-agent support.
 
 ## Contributing and attribution
 

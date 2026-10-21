@@ -6,7 +6,7 @@ import { inspectReference } from '../vendor/compatibility/v1/reference.mjs';
 // implemented service support, not configured providers or Host acceptance.
 // This pure API never initializes persistent state.
 
-export const VERSION = '0.5.0';
+export const VERSION = '0.6.0';
 export const PRODUCT = 'runtime';
 
 export function capabilities() {
