@@ -1,4 +1,4 @@
-# Runtime service and native evidence — v0.6.0 Preview
+# Runtime service and native evidence — v0.7.0 candidate
 
 Runtime coordinates exact project candidates, collection recipes, decisions, claims, receipts and completion. Ontology owns RDF/SHACL meaning and Harness owns Rego policy evaluation. The corrected `specifications/v1` flow uses the current shared native contract revision **1.1.0**, its content digest and each owner's exact standard/lock digests. A directory named `v1` is not sufficient identity.
 

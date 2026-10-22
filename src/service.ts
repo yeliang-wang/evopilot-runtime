@@ -1,3 +1,10 @@
+import type {ReadRequest} from '../vendor/readability/v1/readability.mjs';
+import {createReadableAPI,READABLE_OPERATIONS} from '../vendor/readability/v1/readability.mjs';
+import {runtimeReadSnapshot} from './readable.js';
+export type {ReadSnapshot,ReadRow,ReadQuery,ReadRequest,ReadScope} from '../vendor/readability/v1/readability.mjs';
+import { createPlanningRuntime, PLANNING_OPERATIONS } from './planning.js';
+import type { PlanningEnvelope } from './planning.js';
+export type * from './planning.js';
 import type { Providers, ServiceOptions, Store, State, Request, Operation, SyncOperation, Response, ExternalRequest, Outcome, Receipt, Run } from './types.js';
 export type * from './types.js';
 import { exactFields, frozenClone, sha256, stableSerialize } from '../vendor/compatibility/v1/reference.mjs';
@@ -40,9 +47,10 @@ export function createRuntimeService(options: ServiceOptions,trustedProviders: P
   let store: Store|null=null,closed=false;
   let nativeRuntime: ReturnType<typeof createNativeRuntime>|null=null;
   let onlineRuntime:ReturnType<typeof createOnlineRuntime>|null=null,activeOnline=0;
+  let planningRuntime: ReturnType<typeof createPlanningRuntime> | null = null;
   let responseRuntime: ReturnType<typeof createResponseRuntime> | null = null;
   const controllers=new Set<AbortController>();
-  const capabilities=()=>frozenClone({product:'runtime',version:'0.6.0',stage:'NATIVE_STANDARDS',operations:operations.filter(op=>!['run.prepare','run.decide'].includes(op)),historicalRunsReadOnly:true,nativeOperations:NATIVE_RUNTIME_OPERATIONS,feedbackOperations:RUNTIME_FEEDBACK_OPERATIONS,onlineOperations:ONLINE_RUNTIME_OPERATIONS,responseOperations:RESPONSE_RUNTIME_OPERATIONS,asyncOperations:['reconcile','native','response'],authority:false,softwareRelease:false,limits:LIMITS});
+  const capabilities=()=>frozenClone({product:'runtime',version:'0.7.0',stage:'NATIVE_STANDARDS',operations:operations.filter(op=>!['run.prepare','run.decide'].includes(op)),historicalRunsReadOnly:true,nativeOperations:NATIVE_RUNTIME_OPERATIONS,feedbackOperations:RUNTIME_FEEDBACK_OPERATIONS,onlineOperations:ONLINE_RUNTIME_OPERATIONS,responseOperations:RESPONSE_RUNTIME_OPERATIONS,readableOperations:READABLE_OPERATIONS,planningOperations:PLANNING_OPERATIONS,asyncOperations:['reconcile','native','response'],authority:false,softwareRelease:false,limits:LIMITS});
   function initialize() { if(closed) fail('CLOSED','Service closed'); if(!store) store=openState(options.workspaceRoot,options.workspaceId); return frozenClone({workspaceId:options.workspaceId,initialized:true,authority:false}); }
   function transact<K extends Operation>(request: Request<K>, internal?: (state: State, request: Request)=>unknown, completion=false): Response<K> {
     bounded(request); const r=frozenClone(request) as Request,write=validateRequest(r);
@@ -120,8 +128,17 @@ export function createRuntimeService(options: ServiceOptions,trustedProviders: P
   async function feedback(request:FeedbackEnvelope):Promise<unknown>{if(closed)fail('CLOSED','Service closed');if(!store)fail('NOT_INITIALIZED','Explicit initialize required');if(!nativeRuntime)nativeRuntime=createNativeRuntime(store,providers);return nativeRuntime.feedback(request);}
   async function online(request:OnlineEnvelope):Promise<unknown>{if(closed)fail('CLOSED','Service closed');if(!store)fail('NOT_INITIALIZED','Explicit initialize required');if(!nativeRuntime)nativeRuntime=createNativeRuntime(store,providers);if(!onlineRuntime)onlineRuntime=createOnlineRuntime(store,providers);activeOnline++;try{return await onlineRuntime.online(request);}finally{activeOnline--;}}
   async function response(request: ResponseEnvelope): Promise<unknown> { if(closed)fail('CLOSED','Service closed');if(!store)fail('NOT_INITIALIZED','Explicit initialize required'); if (!responseRuntime) responseRuntime = createResponseRuntime(store, providers, {native, feedback, online, goal:(scope,id)=>execute({operation:'goal.inspect',scope,input:{id}})}); return responseRuntime.response(request); }
-  function close() { if(activeOnline)fail('BUSY','Online operation is in progress'); responseRuntime?.assertQuiescent(); nativeRuntime?.close();for(const c of controllers)c.abort(); if(store){store.db.close();store=null;} closed=true; }
-  return Object.freeze({capabilities,initialize,execute,native,feedback,online,response,dispatch:(args: ExternalRequest)=>external(args,false),reconcile:(args: ExternalRequest)=>external(args,true),close});
+  async function planning(request: PlanningEnvelope):Promise<unknown>{
+    if(closed)fail('CLOSED','Service closed');if(!store)fail('NOT_INITIALIZED','Explicit initialize required');
+    if(['planning.revise','planning.decide','planning.bind'].includes(request.operation)&&!nativeRuntime)nativeRuntime=createNativeRuntime(store,providers);
+    if(!planningRuntime)planningRuntime=createPlanningRuntime(store,providers,{native,goal:(scope,id)=>execute({operation:'goal.inspect',scope,input:{id}})});
+    return planningRuntime.planning(request);
+  }
+  let activeReadable=0;
+  const readableAPI=createReadableAPI({kind:'project',list:scope=>native({operation:'project.list',scope,input:{}}),get:(scope,identity)=>runtimeReadSnapshot(options.workspaceId,scope,identity,{native,planning})});
+  async function readable(request:ReadRequest):Promise<unknown>{if(closed)fail('CLOSED','Service is closed');if(!store)fail('NOT_INITIALIZED','Explicit initialize required');activeReadable++;try{return await readableAPI(request);}finally{activeReadable--;}}
+  function close() { if(activeReadable)fail('BUSY','Readable snapshot is in progress'); if(activeOnline)fail('BUSY','Online operation is in progress'); responseRuntime?.assertQuiescent(); nativeRuntime?.close();for(const c of controllers)c.abort(); if(store){store.db.close();store=null;} closed=true; }
+  return Object.freeze({capabilities,initialize,execute,native,readable,feedback,online,response,planning,dispatch:(args: ExternalRequest)=>external(args,false),reconcile:(args: ExternalRequest)=>external(args,true),close});
 }
 
 function sqlText(value: unknown): string { if (typeof value !== 'string') fail('CORRUPT_STATE','Invalid stored text'); return value; }

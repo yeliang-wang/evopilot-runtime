@@ -12,7 +12,7 @@ Start with the [v0.6.0 Preview quickstart](../README.md#quickstart) for prerequi
 
 ## Installation paths
 
-For the standalone SDK and CLI, follow the [Runtime v0.6.0 tarball installation](../README.md#install-a-release-tarball). The package includes compiled JavaScript and declarations; its standalone CLI supplies no execution providers.
+For the standalone SDK and CLI, follow the [published Runtime tarball installation](../README.md#install-a-release-tarball). The package includes compiled JavaScript and declarations; its standalone CLI supplies no execution providers.
 
 For the composed product and Codex installation, use the [parent EvoPilot instructions](https://github.com/yeliang-wang/evopilot#readme) and [parent release assets](https://github.com/yeliang-wang/evopilot/releases). Provider configuration and the Codex entry belong to that separate distribution.
 
@@ -23,3 +23,7 @@ For the composed product and Codex installation, use the [parent EvoPilot instru
 ## v0.6 response linkage
 
 Read [reviewed response execution](response.md) for the supported pinned Node collection profile, independent verification, durable recovery and exact owner feedback. Response state uses database marker 5; retain a matching stopped-state backup for rollback. Native v1 specifications remain unchanged. Exact release assets are recorded on the [v0.6.0 Release page](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.6.0).
+
+## v0.7 candidate
+
+Read [owner-readable API](readable-api.md) for exact snapshots, table-first reports and bounded comparisons. Native v1 formats and validators remain unchanged. Candidate verification does not establish installed Host acceptance.

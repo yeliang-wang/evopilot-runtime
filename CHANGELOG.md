@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0 Preview candidate — unreleased
+
+- Add owner-verified, table-first reports with exact references and explicit unknown, missing, not-executed and tool-error states. Expected rejection remains distinct from business success.
+- Preserve corrected native v1 standards, immutable history and independent decision/release authority. No Dashboard is included.
+- Add immutable project planning revisions, scoped conversation provenance, human-reviewed baseline bindings and stale-execution admission protection.
+- Candidate verification is in progress; shared maintenance and daily installation cutover remain deferred. This entry is not a release or acceptance receipt.
+
+
 ## 0.6.0 Preview
 
 - Add reviewed response plans around actual isolated collection, independent verification, durable recovery and exact owner feedback.

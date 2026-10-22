@@ -1,5 +1,7 @@
 # Runtime roadmap
 
+Current edition: [RUN-F05 / v0.7 explainable workflow state and maintenance](#run-f05-v07-explainable-workflow-state-and-maintenance). Implemented for the v0.7 edition; exact publication and download records remain on the versioned Release page.
+
 Runtime owns project execution, decisions, durable claims, receipts and audit. Ontology and Harness own their respective assets and validation; the parent composes their public package APIs and provides the Expert and Codex entry. The [parent roadmap](https://github.com/yeliang-wang/evopilot/blob/main/docs/roadmap.md) coordinates product evolution and v1.0 readiness.
 
 This document distinguishes existing behavior, historical repair, proposed work and deferred targets. A roadmap entry is not an implementation, acceptance result or release decision. Exact verification and project-specific evidence remain private and candidate-bound.
@@ -46,7 +48,7 @@ RUN-F01–F03 remain deferred product directions. `CANDIDATE` records a follow-u
 
 ### RUN-F02: sustained reliability and scale budgets
 
-- **Status:** `CANDIDATE`; not scheduled.
+- **Status:** `CANDIDATE`; broader reliability/scale work is not scheduled. Bounded Workspace maintenance and explanatory state are included in RUN-F05's accepted v0.7 plan below; implementation is isolated.
 - **Trigger:** Multiple real projects or measured workload growth exposes limits beyond the current bounded asset and execution cases.
 - **Scope and boundary:** Establish reproducible budgets for large asset packages, long-running execution, concurrency, storage growth and resource use, with candidate-bound benchmarks and recovery records. This is Runtime reliability work, not continuous monitoring of a project's production business service. Existing v0.3.0 timeout, bounded-resource and recovery requirements remain mandatory now.
 - **Acceptance:** Define workload sizes and pass/fail thresholds before execution; record tool, hardware and environment identity. Test resource exhaustion, output limits, interrupted persistence, concurrent requests and recovery under load. Verify bounded failure without fabricated PASS results, duplicate execution, lost receipts or changes to immutable history. Publish synthetic reproducible fixtures and measurements without private project data.
@@ -101,3 +103,19 @@ These remaining candidates are not uncompleted v0.5 or v0.6 criteria and have no
 ## Current v0.6.0 implementation
 
 RUN-F04 implements the approved parent [v0.6 response Target](https://github.com/yeliang-wang/evopilot/blob/main/governance/response-v06.json), including its execution and recovery portion of the 36 fixed variants. See [response execution](response.md) for the supported profile and API. Technical evidence and published artifacts are distinct; use the [Release page](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.6.0) to identify an actual distribution. Maintained core source uses strict TypeScript; native standards and historical records stay intact.
+
+## RUN-F05: v0.7 explainable workflow state and maintenance
+
+**Status:** `IMPLEMENTED` for v0.7.0 Preview. The parent execution Target fixes 50 acceptance variants. Actual source, installed Host, recovery and release evidence remain private and candidate-bound; this roadmap does not itself grant authority.
+
+**Scope:** own the Runtime contribution to V07-T1–T3. Preserve safe typed prerequisites/errors through parent MCP; expose scoped execution/decision/receipt timelines, incomplete dependencies, already accepted decisions and permitted next steps. Separate asset-stage conformance from product E2E and release readiness. Parent Expert can explain which already authorized tasks remain actionable without treating a local dependency failure as a total project halt. This is not an autonomous Target/coding scheduler or a change to approval policy.
+
+Support parent-coordinated capacity preflight and consistent larger-Workspace maintenance through owned snapshot/recovery APIs. The implementation Target must pin workload, file/byte limits, link/cache handling and time/memory budgets before code changes. Preserve audit, claims, decisions, cross-owner references and uncertain outcomes; interruption, resumed copying or restored state must not redispatch external work. No evidence deletion, live database copying, unbounded limit removal or silent backup exclusions are permitted shortcuts.
+
+**Acceptance mapping:** V07-E01 distinguish owner prerequisites, validation failure, disconnection and uncertainty with safe correlation and retained receipts; E02 surface complete requirements before freeze; E04 show actionable versus blocked work and exact stage/product/release scope without deriving authority from a count; E05 reject stale dependent pins; E06 deterministic scoped queries and explicit cross-owner snapshot freshness; E07 representative-volume backup/isolated restore/interruption/corruption and upgrade recovery with immutable identities; E08 read-only local/Host journeys and current documentation. Cover owned behavior in `tests/e2e`, with parent `integration/e2e` and actual Codex evidence. Exact-candidate acceptance is recorded independently of this scope document.
+
+The parent owns Codex report composition; Dashboard implementation is excluded. Rebuildable indexes cannot become another execution database; page views cannot dispatch or decide. Future Java/Maven and CI adapters stay in RUN-F01 and require real installed collection/Run/recovery evidence; isolated provider tests alone do not complete that direction. Autonomous scheduling and approval-policy changes need their own Targets and supported external-Agent interfaces. No extra LLM profile, general CI platform, WorkBuddy implementation or production automation is introduced by this plan. Existing v1.0 criteria remain unchanged; a release never silently switches an installation.
+
+### v0.7 project planning addition
+
+The approved parent V07-T0 adds project-scoped conversation provenance, immutable planning revisions and Runtime-owned Roadmap decisions/execution bindings. Ontology and Harness assets retain independent native validation and review. User planning stays private; native specifications/v1 remain unchanged. Installation changes follow the separately authorized stopped-state backup, recovery and Host verification procedure. See the parent [planning decision](https://github.com/yeliang-wang/evopilot/blob/main/docs/adr-planning.md).

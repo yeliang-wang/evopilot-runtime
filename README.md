@@ -4,9 +4,11 @@
 
 Runtime is the durable execution layer of [EvoPilot](https://github.com/yeliang-wang/evopilot). It owns scoped projects, immutable goals, reviewed plans, human decisions, execution claims, receipts and audit. [Harness](https://github.com/yeliang-wang/evopilot-harness) owns quality assets and evaluation; [Ontology](https://github.com/yeliang-wang/evopilot-ontology) owns semantic models and validation.
 
-**v0.6.0 Preview** adds reviewed response plans around actual isolated collection, independent verification, durable recovery and exact owner feedback. It retains trusted online repair candidates and registered execution feedback from earlier versions. Read [response execution](docs/response.md), the [changelog](CHANGELOG.md) and [roadmap](docs/roadmap.md). Published assets and their exact source are recorded on the [v0.6.0 Release page](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.6.0).
+Earlier **v0.6.0 Preview** introduced reviewed response plans around actual isolated collection, independent verification, durable recovery and exact owner feedback. It retains trusted online repair candidates and registered execution feedback from earlier versions. Read [response execution](docs/response.md), the [changelog](CHANGELOG.md) and [roadmap](docs/roadmap.md). Published assets and their exact source are recorded on the [v0.6.0 Release page](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.6.0).
 
 Maintained product source uses strict TypeScript; installed processes execute compiled JavaScript with public type declarations. JavaScript build, packaging and test drivers remain separate from product behavior. The [parent language policy](https://github.com/yeliang-wang/evopilot/blob/main/docs/language-policy.md) defines the cross-product boundaries.
+
+v0.7 adds [immutable conversation-driven planning](docs/planning-api.md), exact execution bindings and [readable gate reports](docs/readable-api.md). See the [v0.7.0 release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.7.0).
 
 ## Capabilities
 
@@ -94,3 +96,9 @@ v0.4 adds private, source-bound feedback through the public service API. Runtime
 ## Online findings
 
 `service.online()` reads trusted Harness findings into scoped, durable `REVIEW_REQUIRED` repair candidates. It preserves failure and recovery history, leaves the requested software version empty, and neither dispatches a repair nor mutates Ontology. See [online repair API](docs/online-repair.md) and the [parent online guide](https://github.com/yeliang-wang/evopilot/blob/main/docs/online-harness.md).
+
+### Isolated v0.7 candidate
+
+The approved candidate adds a [readable API](docs/readable-api.md) with pinned snapshots, fixed denominators and explicit evidence limits. Candidate validation is ongoing; this is not a v0.7 release or daily installation claim.
+
+The isolated v0.7 candidate adds [readable owner reports](docs/readable-api.md); acceptance and daily cutover remain pending.
