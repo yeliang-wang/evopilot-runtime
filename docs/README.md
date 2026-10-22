@@ -1,7 +1,8 @@
 # Runtime documentation
 
-Start with the [v0.6.0 Preview quickstart](../README.md#quickstart) for prerequisites and source setup.
+Start with the [v0.7.0 Preview quickstart](../README.md#quickstart) for prerequisites and source setup.
 
+- [Conversation-driven planning](planning-api.md): scoped revisions, exact human decisions and immutable execution bindings.
 - [Service API](service.md): embed the durable service, configure trusted providers and recover uncertain execution.
 - [Reviewed response execution](response.md): exact runbook and source pins, one actual action, independent verification and reviewed closure.
 - [Registered execution feedback](feedback.md): durable evidence delivery and exact reviewed owner dispositions.
@@ -24,6 +25,10 @@ For the composed product and Codex installation, use the [parent EvoPilot instru
 
 Read [reviewed response execution](response.md) for the supported pinned Node collection profile, independent verification, durable recovery and exact owner feedback. Response state uses database marker 5; retain a matching stopped-state backup for rollback. Native v1 specifications remain unchanged. Exact release assets are recorded on the [v0.6.0 Release page](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.6.0).
 
-## v0.7 candidate
+## v0.7.0 Preview
 
-Read [owner-readable API](readable-api.md) for exact snapshots, table-first reports and bounded comparisons. Native v1 formats and validators remain unchanged. Candidate verification does not establish installed Host acceptance.
+Read [owner-readable API](readable-api.md) for exact snapshots, table-first reports and bounded comparisons. Native v1 formats and validators remain unchanged. The [v0.7.0 Preview release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.7.0) records publication. Installing it and accepting a business project remain separate operations.
+
+## Documentation maintenance
+
+This default branch includes post-release documentation corrections for v0.7.0. Original tagged archives are immutable. See the [documentation correction policy](https://github.com/yeliang-wang/evopilot/blob/main/docs/github-release.md#documentation-corrections-after-publication).

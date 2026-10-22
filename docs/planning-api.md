@@ -1,4 +1,4 @@
-# Planning API — v0.7 candidate
+# Planning API — v0.7.0 Preview
 
 Call `service.planning(envelope)` through the public service package. Codex forwards the same envelope using `evopilot_v01_native` with `owner: runtime`. The session must be active. All operations require an exact project scope `{visibility, projectId}`; private material never enters another project or a public consumer implicitly.
 

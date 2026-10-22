@@ -33,3 +33,7 @@ Submit Runtime changes to [yeliang-wang/evopilot-runtime](https://github.com/yel
 Preserve frozen vendor/specification bytes and provenance. Shared vendor regeneration belongs to the parent canonical generator. Release preparation binds a successful own-repository source CI run, exact commit and distribution digest. The parent consumes its exact CI ZIP without rebuilding. Tests, CI and PR review do not independently grant acceptance or publication authority.
 
 Use your real Git identity, including your GitHub-provided noreply address when desired. Attribute actual contributions accurately; do not invent contributors or rewrite v0.1.0 history to alter attribution. Keep private evidence, credentials and daily data out of commits, issues and logs. See [SECURITY.md](SECURITY.md).
+
+## Documentation consistency
+
+`npm run check` includes `scripts/check-documentation.mjs`. Keep the README, documentation index, current changelog section and default installation examples aligned with `package.json`; retain explicitly historical version records. Run `node --test tests/e2e/documentation.test.mjs` for the gate regression cases. Source documentation updates do not replace existing tags or release archives.

@@ -100,7 +100,7 @@ The delivered scope is a bounded OpenSLO v1 RatioTimeslices profile and macOS ar
 
 These remaining candidates are not uncompleted v0.5 or v0.6 criteria and have no assigned release date. They require their own reviewed Target. Reviewed response linkage moved into RUN-F04 for v0.6; existing v1.0 readiness conditions remain unchanged.
 
-## Current v0.6.0 implementation
+## v0.6.0 response implementation
 
 RUN-F04 implements the approved parent [v0.6 response Target](https://github.com/yeliang-wang/evopilot/blob/main/governance/response-v06.json), including its execution and recovery portion of the 36 fixed variants. See [response execution](response.md) for the supported profile and API. Technical evidence and published artifacts are distinct; use the [Release page](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.6.0) to identify an actual distribution. Maintained core source uses strict TypeScript; native standards and historical records stay intact.
 

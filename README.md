@@ -1,4 +1,4 @@
-# EvoPilot Runtime
+# EvoPilot Runtime · v0.7.0 Preview
 
 [Quickstart](#quickstart) · [Documentation](docs/README.md) · [Service API](docs/service.md) · [CLI](docs/cli.md) · [Releases](https://github.com/yeliang-wang/evopilot-runtime/releases) · [Contributing](CONTRIBUTING.md)
 
@@ -44,12 +44,12 @@ Build cleans only generated `dist`, emits JavaScript and declarations, then make
 
 ### Install a release tarball
 
-For v0.6.0 Preview, download `evopilot-next-runtime-0.6.0.tgz`, `source-revision.txt` and `SHA256SUMS` from the [Runtime release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.6.0). In that download directory, verify the checksums and inspect the revision before installing into your consumer project:
+For v0.7.0 Preview, download `evopilot-next-runtime-0.7.0.tgz`, `source-revision.txt` and `SHA256SUMS` from the [Runtime release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.7.0). In that download directory, verify the checksums and inspect the revision before installing into your consumer project:
 
 ```sh
 shasum -a 256 -c SHA256SUMS
 cat source-revision.txt
-npm install --ignore-scripts /absolute/downloads/evopilot-next-runtime-0.6.0.tgz
+npm install --ignore-scripts /absolute/downloads/evopilot-next-runtime-0.7.0.tgz
 npx --no-install evopilot-next-runtime help
 ```
 
@@ -75,7 +75,7 @@ service.close();
 
 This example only inspects metadata. Construction and imports perform no filesystem operations. To persist projects and goals, choose an explicitly owned canonical workspace outside source/Git trees with an existing parent, then call `initialize()`. The [service API reference](docs/service.md) explains requests, revisions, trusted callbacks and recovery; the [CLI guide](docs/cli.md) includes complete project/goal examples.
 
-The root also exports `PRODUCT`, `inspectPinnedInputs` and the `Reference` type. The service subpath exports `createRuntimeService` and request/result types. v0.6 preserves corrected native v1 standards and earlier immutable records. See [registered feedback](docs/feedback.md), [online repair candidates](docs/online-repair.md) and [response execution](docs/response.md) for the additive APIs. The composed response executor supports the pinned Node collector in an isolated copied directory; Java/Maven, remote execution and production remediation are outside this release.
+The root also exports `PRODUCT`, `inspectPinnedInputs` and the `Reference` type. The service subpath exports `createRuntimeService` and request/result types. v0.7 preserves corrected native v1 standards and earlier immutable records. See [registered feedback](docs/feedback.md), [online repair candidates](docs/online-repair.md) and [response execution](docs/response.md) for the additive APIs. The composed response executor supports the pinned Node collector in an isolated copied directory; Java/Maven, remote execution and production remediation are outside this release.
 
 ## Trust and Preview scope
 
@@ -96,9 +96,3 @@ v0.4 adds private, source-bound feedback through the public service API. Runtime
 ## Online findings
 
 `service.online()` reads trusted Harness findings into scoped, durable `REVIEW_REQUIRED` repair candidates. It preserves failure and recovery history, leaves the requested software version empty, and neither dispatches a repair nor mutates Ontology. See [online repair API](docs/online-repair.md) and the [parent online guide](https://github.com/yeliang-wang/evopilot/blob/main/docs/online-harness.md).
-
-### Isolated v0.7 candidate
-
-The approved candidate adds a [readable API](docs/readable-api.md) with pinned snapshots, fixed denominators and explicit evidence limits. Candidate validation is ongoing; this is not a v0.7 release or daily installation claim.
-
-The isolated v0.7 candidate adds [readable owner reports](docs/readable-api.md); acceptance and daily cutover remain pending.

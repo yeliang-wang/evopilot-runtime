@@ -1,6 +1,6 @@
 # Online repair candidates
 
-Introduced in v0.5 and retained in the v0.7 candidate, the Runtime public service exposes `.online(envelope)`. A trusted `readOnlineFinding` provider reads the immutable record from Harness; caller-authored finding bodies or approval flags are not accepted.
+Introduced in v0.5 and retained in the v0.7.0 Preview, the Runtime public service exposes `.online(envelope)`. A trusted `readOnlineFinding` provider reads the immutable record from Harness; caller-authored finding bodies or approval flags are not accepted.
 
 | Operation | Input | Result |
 |---|---|---|

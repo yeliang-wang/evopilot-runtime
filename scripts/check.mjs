@@ -1,3 +1,4 @@
+import { checkDocumentation } from './check-documentation.mjs';
 import assert from 'node:assert/strict';
 import { lstat, readFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -73,6 +74,7 @@ async function files(directory) {
 }
 
 export async function checkSource() {
+  await checkDocumentation();
   for (const args of [['--noEmit'], ['--noEmit','--strict','--target','ES2023','--module','NodeNext','tests/types/contracts.ts']]) {
     const checked = spawnSync(process.execPath, [resolve(ROOT, 'node_modules/typescript/bin/tsc'), ...args], {cwd: ROOT, encoding: 'utf8'});
     assert.ifError(checked.error); assert.equal(checked.status, 0, checked.stdout + checked.stderr);
