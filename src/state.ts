@@ -146,8 +146,8 @@ export function openState(root: string, id: string) {
     if (existed) {
       if (db.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok') fail('CORRUPT_STATE', 'SQLite integrity check failed');
       const version=db.prepare('PRAGMA user_version').get()?.user_version;
-      if (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8) fail('CORRUPT_STATE', 'Unknown state schema');
-      if(version===2 || version===3 || version===4 || version===5 || version===6 || version===7 || version===8){const identity=db.prepare('SELECT contract_digest,producer FROM native_runtime_identity WHERE singleton=1').get();if(identity?.contract_digest!==NATIVE_CONTRACT_DIGEST||identity?.producer!=='runtime@0.3.0')fail('CORRUPT_STATE','Unknown corrected native state identity');}
+      if (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9) fail('CORRUPT_STATE', 'Unknown state schema');
+      if(version===2 || version===3 || version===4 || version===5 || version===6 || version===7 || version===8 || version===9){const identity=db.prepare('SELECT contract_digest,producer FROM native_runtime_identity WHERE singleton=1').get();if(identity?.contract_digest!==NATIVE_CONTRACT_DIGEST||identity?.producer!=='runtime@0.3.0')fail('CORRUPT_STATE','Unknown corrected native state identity');}
       const row = db.prepare('SELECT revision, data FROM state WHERE singleton = 1').get();
       if (!row || typeof row.revision !== 'number' || typeof row.data !== 'string' || !Number.isSafeInteger(row.revision) || row.revision < 0 || Buffer.byteLength(row.data)>LIMITS.stateBytes || !validateState(JSON.parse(row.data))) fail('CORRUPT_STATE', 'Invalid state');
       db.prepare('SELECT scope, request_id, digest, receipt FROM receipts LIMIT 1').all();

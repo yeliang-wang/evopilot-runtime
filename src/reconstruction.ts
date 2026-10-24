@@ -1,3 +1,5 @@
+import {createEvaluationRuntime,EVALUATION_FIELDS,EVALUATION_WRITES} from './reconstruction-evaluation.js';
+import type {EvaluationProviders,EvaluationInputs,EvaluationResults,EvaluationWrite,EvaluationRequest} from './reconstruction-evaluation.js';
 import {nativeExact,nativeFrozenClone,nativeText} from '../vendor/compatibility/v1/native.mjs';
 import {verifyDecisionEvidence} from '../vendor/compatibility/v1/decision-evidence.mjs';
 import {createFeedbackStore,feedbackScope} from '../vendor/compatibility/feedback/v1/feedback.mjs';
@@ -35,14 +37,14 @@ export type ReconstructionReceipt=ReconstructionReceiptFields&({schema:'evopilot
 export interface ReconstructionAttempt {id:string;claim:ReconstructionClaim;status:'RUNNING'|'UNKNOWN'|'SUCCEEDED'|'FAILED'|'CANCELLED';receipt:ReconstructionReceipt|null;reason:string|null;cancelRequested:boolean}
 export interface ReconstructionContext {claim:Readonly<ReconstructionClaim>;signal:AbortSignal}
 /** Only installation-owned adapters may supply these callbacks. Request JSON cannot register a provider. */
-export interface ReconstructionProviders {
+export interface ReconstructionProviders extends EvaluationProviders {
   verifyReconstructionPlan?:(plan:Readonly<ReconstructionPlan>,signal:AbortSignal)=>Promise<{planDigest:string;current:boolean}>;
   executeReconstruction?:(context:ReconstructionContext)=>Promise<ReconstructionReceipt>;
   inspectReconstruction?:(context:ReconstructionContext)=>Promise<ReconstructionReceipt|null>;
   cancelReconstruction?:(context:ReconstructionContext)=>Promise<ReconstructionReceipt|null>;
   observeReconstruction?:(context:ReconstructionContext&{receipt:Readonly<ReconstructionReceipt>})=>Promise<ReconstructionObservation>;
 }
-export interface ReconstructionInputs {
+export interface ReconstructionInputs extends EvaluationInputs {
   'reconstruction.inspect':Record<string,never>;
   'reconstruction.review':{plan:ReconstructionPlan};
   'reconstruction.freeze':{plan:ReconstructionPlan;humanEvidenceRef:string};
@@ -55,7 +57,7 @@ export interface ReconstructionInputs {
   'reconstruction.evidence':{id:string};
 }
 export interface ReconstructionWriteReceipt<T> {revision:number;result:T;requestId:string;digest:string}
-export interface ReconstructionResults {
+export interface ReconstructionResults extends EvaluationResults {
   'reconstruction.inspect':{workspaceId:string;scope:Scope;revision:number;authority:false};
   'reconstruction.review':{plan:ReconstructionPlan;digest:string};
   'reconstruction.freeze':ReconstructionWriteReceipt<ReconstructionBinding>;
@@ -68,15 +70,15 @@ export interface ReconstructionResults {
   'reconstruction.evidence':ReconstructionObservation;
 }
 type Operation=keyof ReconstructionInputs;
-type Write='reconstruction.freeze'|'reconstruction.dispatch'|'reconstruction.reconcile'|'reconstruction.cancel';
+type Write=EvaluationWrite|'reconstruction.freeze'|'reconstruction.dispatch'|'reconstruction.reconcile'|'reconstruction.cancel';
 export type ReconstructionRequest<K extends Operation=Operation>={[P in K]:{operation:P;scope:Scope;input:ReconstructionInputs[P]}&(P extends Write?{requestId:string;expectedRevision:number}:{requestId?:never;expectedRevision?:never})}[K];
-const fields={
+const fields={...EVALUATION_FIELDS,
   'reconstruction.inspect':[],'reconstruction.review':['plan'],'reconstruction.freeze':['plan','humanEvidenceRef'],'reconstruction.plan':['digest'],
   'reconstruction.dispatch':['planDigest'],'reconstruction.attempt':['id'],'reconstruction.list':['planDigest'],
   'reconstruction.reconcile':['id'],'reconstruction.cancel':['id'],'reconstruction.evidence':['id'],
 };
 export const RECONSTRUCTION_OPERATIONS=Object.freeze(Object.keys(fields));
-const writes:readonly string[]=['reconstruction.freeze','reconstruction.dispatch','reconstruction.reconcile','reconstruction.cancel'];
+const writes:readonly string[]=[...EVALUATION_WRITES,'reconstruction.freeze','reconstruction.dispatch','reconstruction.reconcile','reconstruction.cancel'];
 const same=(a:unknown,b:unknown)=>usabilityStable(a)===usabilityStable(b);
 function id(value:unknown):asserts value is string{nativeText(value);if(value.length>128||!/^[a-z0-9][a-z0-9:._-]*$/.test(value))fail('RECONSTRUCTION_ID');}
 function integer(value:unknown,max:number,min=0):asserts value is number{if(!Number.isSafeInteger(value)||(value as number)<min||(value as number)>max)fail('RECONSTRUCTION_BUDGET');}
@@ -150,7 +152,9 @@ export function createReconstructionRuntime(store:Store,providers:Reconstruction
     active++;try{return await operate(raw as ReconstructionRequest) as ReconstructionResults[K];}finally{active--;}
   }
   async function operate(raw:ReconstructionRequest):Promise<unknown>{
-    usabilityStable(raw);const r=nativeFrozenClone(raw);if(!RECONSTRUCTION_OPERATIONS.includes(r.operation))fail('RECONSTRUCTION_OPERATION');const write=writes.includes(r.operation);nativeExact(r,['operation','scope','input',...(write?['requestId','expectedRevision']:[])]);feedbackScope(r.scope);nativeExact(r.input,fields[r.operation]);store.guard();
+    if(Object.hasOwn(EVALUATION_FIELDS,raw.operation))return evaluator.evaluation(raw as EvaluationRequest);
+    const legacy=raw as Exclude<ReconstructionRequest,EvaluationRequest>;
+    usabilityStable(legacy);const r=nativeFrozenClone(legacy);if(!RECONSTRUCTION_OPERATIONS.includes(r.operation))fail('RECONSTRUCTION_OPERATION');const write=writes.includes(r.operation);nativeExact(r,['operation','scope','input',...(write?['requestId','expectedRevision']:[])]);feedbackScope(r.scope);nativeExact(r.input,fields[r.operation]);store.guard();
     if(r.operation==='reconstruction.inspect')return records.inspect(r.scope);
     if(r.operation==='reconstruction.review')return review(r.scope,r.input.plan);
     if(r.operation==='reconstruction.plan')return get<ReconstructionBinding>(r.scope,'plan',r.input.digest);
@@ -180,7 +184,7 @@ export function createReconstructionRuntime(store:Store,providers:Reconstruction
         id(r.requestId);const b=get<ReconstructionBinding>(r.scope,'plan',r.input.planDigest);decision(b);
         if(!providers.executeReconstruction||!providers.inspectReconstruction||!providers.cancelReconstruction||!providers.verifyReconstructionPlan)fail('RECONSTRUCTION_UNSUPPORTED');
         // The one-builder bound applies across every scope and across service restarts.
-        if(store.db.prepare("SELECT data FROM feedback_records WHERE kind='reconstruction-attempt'").all().some(row=>['RUNNING','UNKNOWN'].includes((JSON.parse(String(row.data)) as ReconstructionAttempt).status)))fail('RECONSTRUCTION_BUSY');
+        if(store.db.prepare("SELECT data FROM feedback_records WHERE kind IN ('reconstruction-attempt','evaluation-session')").all().some(row=>['RUNNING','UNKNOWN'].includes((JSON.parse(String(row.data)) as ReconstructionAttempt).status)))fail('RECONSTRUCTION_BUSY');
         const previous=attempts(r.scope,b.digest);if(previous.length>=b.plan.budget.maxAttempts)fail('RECONSTRUCTION_ATTEMPT_LIMIT');
         // An absent measurement is not zero. No-receipt terminal records here
         // are exclusively failures/cancellations before provider invocation.
@@ -213,5 +217,9 @@ export function createReconstructionRuntime(store:Store,providers:Reconstruction
     finally{if(dispatch)controllers.delete(a.claim.claimId);}
     return {admission,attempt:a};
   }
+  const evaluator=createEvaluationRuntime(store,providers,{
+    read(scope,id){const a=get<ReconstructionAttempt>(scope,'attempt',id);decision(get<ReconstructionBinding>(scope,'plan',a.claim.planDigest));return a;},
+    async current(scope,id){const a=get<ReconstructionAttempt>(scope,'attempt',id),b=get<ReconstructionBinding>(scope,'plan',a.claim.planDigest);await current(b);if(!a.receipt||!providers.inspectReconstruction)fail('RECONSTRUCTION_UNSUPPORTED');const receipt=validateReconstructionReceipt(await bounded(signal=>providers.inspectReconstruction!({claim:a.claim,signal}),2000),a.claim);if(!same(receipt,a.receipt))fail('RECONSTRUCTION_RECEIPT_DRIFT');return a;}
+  });
   return {reconstruction,assertQuiescent(){if(active)fail('BUSY');}};
 }
