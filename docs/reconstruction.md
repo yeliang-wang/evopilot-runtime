@@ -30,3 +30,13 @@ Receipt wall time records the actual safe-integer measurement, including cleanup
 `SUCCEEDED` means the configured generation/build/run stages completed with a valid receipt. It is not a behavior equivalence verdict. `UNKNOWN` requires original-receipt reconciliation. Old results remain readable after planning or asset drift, but current evidence consumption fails closed. Synthetic, source-assisted or non-independent evidence cannot establish real L3.
 
 State marker 7 prevents older writers from changing reconstruction records. Close all services before using the supported workspace backup/restore APIs. Do not copy a live database or reset an unresolved claim to repeat execution.
+
+## Versioned execution authority
+
+The v0.8 correction adds exact `evopilot-reconstruction-plan/v2` and `evopilot-reconstruction-receipt/v2` envelopes. A v2 plan adds `authority`: the policy schema, denied external network/original source/hidden oracle/prior outputs/host credentials, declared `NONE` or `OWNED_LOOPBACK` internal transport, `DENY` or `BROKERED_OWNED` children, and broker/dependency-manifest digests. Owned loopback requires brokered owned children. The selected trusted adapter must enforce the reviewed policy; schema validation is not enforcement.
+
+A v2 receipt adds the exact policy, policy digest, enforcement journal digest, actual external/unrelated-peer connection counts and owned-process closure. Successful receipts require both counts zero and complete closure. `networkDenied` remains true only when internal transport is `NONE`; a loopback profile uses false and must satisfy the new evidence contract. The original v1 receipt rule is unchanged. Unknown fields or v2 fields inside v1 fail closed.
+
+Runtime binds the same authority evidence into a v2 observation before Harness consumption. Changed policy, journal, output or dependency pins cannot reuse old evidence. A policy manifest can explicitly pin normative compatibility modules and generic third-party packages; it never approves original business code, and executable dependencies do not enter specification export. Actual project review supplies that semantic authority.
+
+The first v2 plan write advances Runtime state to marker 8. Read-only operations do not migrate state; old plans and receipts are not rewritten. Released readers limited to marker 7 refuse the new state. Same-host snapshot/relocation supports marker 8; rollbacks require a verified stopped backup rather than downgrading the marker. No registered production adapter, complete reconstruction, L3 or release follows from this contract alone.
