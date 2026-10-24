@@ -31,3 +31,15 @@ service.native({operation:'workspace.inspect',scope,input:{},requestId:'read'});
 // @ts-expect-error Native selectors have closed fixed semantics, not arbitrary XPath.
 const invalidSelector: import('@evopilot-next/runtime/service').CollectionSelector = {id:'tests',output:'junit.xml',kind:'xpath',pointer:'//testcase'};
 void invalidSelector;
+
+const reconstruction: Promise<import('@evopilot-next/runtime/service').ReconstructionAttempt> = service.reconstruction({operation:'reconstruction.attempt',scope,input:{id:'attempt'}});
+// @ts-expect-error Reconstruction dispatch requires a durable request identity and revision.
+service.reconstruction({operation:'reconstruction.dispatch',scope,input:{planDigest:'sha256:'+'a'.repeat(64)}});
+// @ts-expect-error Evidence reads cannot inject observations or a PASS assertion.
+service.reconstruction({operation:'reconstruction.evidence',scope,input:{id:'attempt',approved:true}});
+void reconstruction;
+const measured: import('@evopilot-next/runtime/service').ReconstructionReceipt['usage']={wallMs:10,tokens:100,costMicros:null,iterations:1};
+const interrupted: import('@evopilot-next/runtime/service').ReconstructionReceipt['usage']={wallMs:10,tokens:null,costMicros:null,iterations:1};
+// @ts-expect-error Unavailable cost must be explicit null, not omitted.
+const omittedCost: import('@evopilot-next/runtime/service').ReconstructionReceipt['usage']={wallMs:10,tokens:100,iterations:1};
+void [measured,interrupted,omittedCost];

@@ -112,7 +112,7 @@ export function createPlanningRuntime(store:Store,providers:Readonly<Providers>,
     if(!PLANNING_OPERATIONS.includes(request.operation as typeof PLANNING_OPERATIONS[number]))fail('PLANNING_OPERATION');
     const {operation,scope,input}=request;
     if(!read && request.requestId && records.receipt(scope,request.requestId)) return records.mutate(request,()=>{fail('PLANNING_RECEIPT_STATE');});
-    const mutate=<T>(fn:()=>T)=>records.mutate(request,()=>{const value=fn();store.db.exec('PRAGMA user_version=6');return value;});
+    const mutate=<T>(fn:()=>T)=>records.mutate(request,()=>{const value=fn();if(Number(store.db.prepare('PRAGMA user_version').get()!.user_version)<6)store.db.exec('PRAGMA user_version=6');return value;});
     if(operation==='planning.inspect'){nativeExact(input,[]);return {...records.inspect(scope),operations:PLANNING_OPERATIONS,softwareRelease:false,executionAuthorized:false};}
     if(operation==='planning.list'){nativeExact(input,[]);return records.list<PlanningHead>(scope,'planning-head');}
     if(operation==='planning.receipt.inspect'){nativeExact(input,['requestId']);text(input.requestId);return records.receipt(scope,input.requestId);}
