@@ -1,26 +1,31 @@
+import {createEvaluationRuntime,EVALUATION_FIELDS,EVALUATION_WRITES} from './reconstruction-evaluation.js';
+import type {EvaluationProviders,EvaluationInputs,EvaluationResults,EvaluationWrite,EvaluationRequest} from './reconstruction-evaluation.js';
 import {nativeExact,nativeFrozenClone,nativeText} from '../vendor/compatibility/v1/native.mjs';
 import {verifyDecisionEvidence} from '../vendor/compatibility/v1/decision-evidence.mjs';
 import {createFeedbackStore,feedbackScope} from '../vendor/compatibility/feedback/v1/feedback.mjs';
 import type {FeedbackEnvelope} from '../vendor/compatibility/feedback/v1/feedback.mjs';
 import {usabilityStable,usabilityDigest,validateUsabilityDigest,usabilityFail as fail} from '../vendor/usability/v1/contract.mjs';
 import {validateReconstructionObservation} from '../vendor/usability/v1/oracle.mjs';
+import {validateExecutionPolicy,validateExecutionEvidence,executionIsolated} from '../vendor/usability/v1/execution.mjs';
+import type {ExecutionPolicy,ExecutionEvidence} from '../vendor/usability/v1/execution.mjs';
 import type {ReconstructionObservation} from '../vendor/usability/v1/oracle.mjs';
 import type {Store,Scope} from './types.js';
 import type {PlanningRevision,PlanningDecision} from './planning.js';
 
 /** null explicitly declines a monetary ceiling when the provider cannot measure charges. */
 export interface ReconstructionBudget {wallMs:number;maxAttempts:number;maxOutputBytes:number;maxTokens:number;maxCostMicros:number|null;maxIterations:number}
-export interface ReconstructionPlan {
-  schema:'evopilot-reconstruction-plan/v1';workspaceId:string;scope:Scope;
+interface ReconstructionPlanFields {
+  workspaceId:string;scope:Scope;
   planning:{id:string;digest:string;milestoneId:string};
   inventoryDigest:string;specificationDigest:string;oracleDigest:string;inputManifestDigest:string;environmentDigest:string;dependenciesDigest:string;
   executor:{id:string;version:string;executableDigest:string;configurationDigest:string;provider:string;model:string};
   inputMode:'ASSETS_ONLY'|'SOURCE_ASSISTED';origin:'ACTUAL'|'SYNTHETIC';independentConsumer:boolean;budget:ReconstructionBudget;
 }
+export type ReconstructionPlan=ReconstructionPlanFields&({schema:'evopilot-reconstruction-plan/v1'}|{schema:'evopilot-reconstruction-plan/v2';authority:ExecutionPolicy});
 export interface ReconstructionBinding {plan:ReconstructionPlan;digest:string;humanEvidenceRef:string}
 export interface ReconstructionClaim {workspaceId:string;scope:Scope;attemptId:string;claimId:string;planDigest:string;plan:ReconstructionPlan;ordinal:number;admittedAt:string;remaining:{tokens:number;costMicros:number|null;wallMs:number}}
-export interface ReconstructionReceipt {
-  schema:'evopilot-reconstruction-receipt/v1';claimId:string;planDigest:string;attemptId:string;
+interface ReconstructionReceiptFields {
+  claimId:string;planDigest:string;attemptId:string;
   status:'SUCCEEDED'|'FAILED'|'CANCELLED';origin:'ACTUAL'|'SYNTHETIC';
   executorDigest:string;inputManifestDigest:string;environmentDigest:string;dependenciesDigest:string;
   workspaceId:string;cleanStart:boolean;isolation:'DENY_BY_DEFAULT'|'NONE';networkDenied:boolean;
@@ -28,17 +33,18 @@ export interface ReconstructionReceipt {
   usage:{wallMs:number;tokens:number|null;costMicros:number|null;iterations:number};
   interventions:string[];outputs:{path:string;bytes:number;digest:string}[];outputDigest:string;traceDigest:string;diagnostic:string|null;digest:string;
 }
+export type ReconstructionReceipt=ReconstructionReceiptFields&({schema:'evopilot-reconstruction-receipt/v1'}|{schema:'evopilot-reconstruction-receipt/v2';authority:ExecutionEvidence});
 export interface ReconstructionAttempt {id:string;claim:ReconstructionClaim;status:'RUNNING'|'UNKNOWN'|'SUCCEEDED'|'FAILED'|'CANCELLED';receipt:ReconstructionReceipt|null;reason:string|null;cancelRequested:boolean}
 export interface ReconstructionContext {claim:Readonly<ReconstructionClaim>;signal:AbortSignal}
 /** Only installation-owned adapters may supply these callbacks. Request JSON cannot register a provider. */
-export interface ReconstructionProviders {
+export interface ReconstructionProviders extends EvaluationProviders {
   verifyReconstructionPlan?:(plan:Readonly<ReconstructionPlan>,signal:AbortSignal)=>Promise<{planDigest:string;current:boolean}>;
   executeReconstruction?:(context:ReconstructionContext)=>Promise<ReconstructionReceipt>;
   inspectReconstruction?:(context:ReconstructionContext)=>Promise<ReconstructionReceipt|null>;
   cancelReconstruction?:(context:ReconstructionContext)=>Promise<ReconstructionReceipt|null>;
   observeReconstruction?:(context:ReconstructionContext&{receipt:Readonly<ReconstructionReceipt>})=>Promise<ReconstructionObservation>;
 }
-export interface ReconstructionInputs {
+export interface ReconstructionInputs extends EvaluationInputs {
   'reconstruction.inspect':Record<string,never>;
   'reconstruction.review':{plan:ReconstructionPlan};
   'reconstruction.freeze':{plan:ReconstructionPlan;humanEvidenceRef:string};
@@ -51,7 +57,7 @@ export interface ReconstructionInputs {
   'reconstruction.evidence':{id:string};
 }
 export interface ReconstructionWriteReceipt<T> {revision:number;result:T;requestId:string;digest:string}
-export interface ReconstructionResults {
+export interface ReconstructionResults extends EvaluationResults {
   'reconstruction.inspect':{workspaceId:string;scope:Scope;revision:number;authority:false};
   'reconstruction.review':{plan:ReconstructionPlan;digest:string};
   'reconstruction.freeze':ReconstructionWriteReceipt<ReconstructionBinding>;
@@ -64,22 +70,23 @@ export interface ReconstructionResults {
   'reconstruction.evidence':ReconstructionObservation;
 }
 type Operation=keyof ReconstructionInputs;
-type Write='reconstruction.freeze'|'reconstruction.dispatch'|'reconstruction.reconcile'|'reconstruction.cancel';
+type Write=EvaluationWrite|'reconstruction.freeze'|'reconstruction.dispatch'|'reconstruction.reconcile'|'reconstruction.cancel';
 export type ReconstructionRequest<K extends Operation=Operation>={[P in K]:{operation:P;scope:Scope;input:ReconstructionInputs[P]}&(P extends Write?{requestId:string;expectedRevision:number}:{requestId?:never;expectedRevision?:never})}[K];
-const fields={
+const fields={...EVALUATION_FIELDS,
   'reconstruction.inspect':[],'reconstruction.review':['plan'],'reconstruction.freeze':['plan','humanEvidenceRef'],'reconstruction.plan':['digest'],
   'reconstruction.dispatch':['planDigest'],'reconstruction.attempt':['id'],'reconstruction.list':['planDigest'],
   'reconstruction.reconcile':['id'],'reconstruction.cancel':['id'],'reconstruction.evidence':['id'],
 };
 export const RECONSTRUCTION_OPERATIONS=Object.freeze(Object.keys(fields));
-const writes:readonly string[]=['reconstruction.freeze','reconstruction.dispatch','reconstruction.reconcile','reconstruction.cancel'];
+const writes:readonly string[]=[...EVALUATION_WRITES,'reconstruction.freeze','reconstruction.dispatch','reconstruction.reconcile','reconstruction.cancel'];
 const same=(a:unknown,b:unknown)=>usabilityStable(a)===usabilityStable(b);
 function id(value:unknown):asserts value is string{nativeText(value);if(value.length>128||!/^[a-z0-9][a-z0-9:._-]*$/.test(value))fail('RECONSTRUCTION_ID');}
 function integer(value:unknown,max:number,min=0):asserts value is number{if(!Number.isSafeInteger(value)||(value as number)<min||(value as number)>max)fail('RECONSTRUCTION_BUDGET');}
 function bool(value:unknown){if(typeof value!=='boolean')fail('RECONSTRUCTION_SCHEMA');}
 export function validateReconstructionPlan(value:unknown):ReconstructionPlan{
-  usabilityStable(value);nativeExact(value,['schema','workspaceId','scope','planning','inventoryDigest','specificationDigest','oracleDigest','inputManifestDigest','environmentDigest','dependenciesDigest','executor','inputMode','origin','independentConsumer','budget']);
-  if(value.schema!=='evopilot-reconstruction-plan/v1'||!['ASSETS_ONLY','SOURCE_ASSISTED'].includes(String(value.inputMode))||!['ACTUAL','SYNTHETIC'].includes(String(value.origin)))fail('RECONSTRUCTION_SCHEMA');
+  usabilityStable(value);const v2=!!value&&typeof value==='object'&&'schema'in value&&value.schema==='evopilot-reconstruction-plan/v2';nativeExact(value,['schema','workspaceId','scope','planning','inventoryDigest','specificationDigest','oracleDigest','inputManifestDigest','environmentDigest','dependenciesDigest','executor','inputMode','origin','independentConsumer','budget',...(v2?['authority']:[])]);
+  if(!['evopilot-reconstruction-plan/v1','evopilot-reconstruction-plan/v2'].includes(String(value.schema))||!['ASSETS_ONLY','SOURCE_ASSISTED'].includes(String(value.inputMode))||!['ACTUAL','SYNTHETIC'].includes(String(value.origin)))fail('RECONSTRUCTION_SCHEMA');
+  if(v2)validateExecutionPolicy(value.authority);
   id(value.workspaceId);feedbackScope(value.scope);bool(value.independentConsumer);nativeExact(value.planning,['id','digest','milestoneId']);id(value.planning.id);id(value.planning.milestoneId);validateUsabilityDigest(value.planning.digest);
   for(const key of ['inventoryDigest','specificationDigest','oracleDigest','inputManifestDigest','environmentDigest','dependenciesDigest'] as const)validateUsabilityDigest(value[key]);
   nativeExact(value.executor,['id','version','executableDigest','configurationDigest','provider','model']);
@@ -90,11 +97,11 @@ export function validateReconstructionPlan(value:unknown):ReconstructionPlan{
   return nativeFrozenClone(value) as unknown as ReconstructionPlan;
 }
 export function validateReconstructionReceipt(raw:unknown,claim:ReconstructionClaim):ReconstructionReceipt{
-  usabilityStable(raw);nativeExact(raw,['schema','claimId','planDigest','attemptId','status','origin','executorDigest','inputManifestDigest','environmentDigest','dependenciesDigest','workspaceId','cleanStart','isolation','networkDenied','stages','usage','interventions','outputs','outputDigest','traceDigest','diagnostic','digest']);
+  usabilityStable(raw);const v2=claim.plan.schema==='evopilot-reconstruction-plan/v2';nativeExact(raw,['schema','claimId','planDigest','attemptId','status','origin','executorDigest','inputManifestDigest','environmentDigest','dependenciesDigest','workspaceId','cleanStart','isolation','networkDenied','stages','usage','interventions','outputs','outputDigest','traceDigest','diagnostic','digest',...(v2?['authority']:[])]);
   validateUsabilityDigest(raw.traceDigest);const {digest,...body}=raw;
   if(digest!==usabilityDigest(body))fail('RECONSTRUCTION_RECEIPT_DIGEST');
   const p=claim.plan;
-  if(raw.schema!=='evopilot-reconstruction-receipt/v1'||raw.claimId!==claim.claimId||raw.planDigest!==claim.planDigest||raw.attemptId!==claim.attemptId||raw.origin!==p.origin||raw.executorDigest!==usabilityDigest(p.executor))fail('RECONSTRUCTION_RECEIPT_BINDING');
+  if(raw.schema!==(v2?'evopilot-reconstruction-receipt/v2':'evopilot-reconstruction-receipt/v1')||raw.claimId!==claim.claimId||raw.planDigest!==claim.planDigest||raw.attemptId!==claim.attemptId||raw.origin!==p.origin||raw.executorDigest!==usabilityDigest(p.executor))fail('RECONSTRUCTION_RECEIPT_BINDING');
   for(const key of ['inputManifestDigest','environmentDigest','dependenciesDigest'] as const)if(raw[key]!==p[key])fail('RECONSTRUCTION_RECEIPT_BINDING');
   if(!['SUCCEEDED','FAILED','CANCELLED'].includes(String(raw.status))||!['DENY_BY_DEFAULT','NONE'].includes(String(raw.isolation)))fail('RECONSTRUCTION_SCHEMA');
   id(raw.workspaceId);bool(raw.cleanStart);bool(raw.networkDenied);nativeExact(raw.stages,['generation','build','run']);
@@ -107,7 +114,10 @@ export function validateReconstructionReceipt(raw:unknown,claim:ReconstructionCl
   for(const file of raw.outputs){nativeExact(file,['path','bytes','digest']);nativeText(file.path);if(!/^[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*$/.test(file.path)||file.path.split('/').some(p=>p==='.'||p==='..')||paths.has(file.path))fail('RECONSTRUCTION_OUTPUT');paths.add(file.path);integer(file.bytes,p.budget.maxOutputBytes);size+=file.bytes;validateUsabilityDigest(file.digest);}
   if(size>p.budget.maxOutputBytes||raw.outputDigest!==usabilityDigest(raw.outputs))fail('RECONSTRUCTION_OUTPUT');
   if(raw.status==='SUCCEEDED'&&(!raw.cleanStart||Object.values(raw.stages).some(s=>s!=='SUCCEEDED')||!raw.outputs.length||raw.usage.wallMs>claim.remaining.wallMs||raw.usage.tokens===null||raw.usage.tokens>claim.remaining.tokens||(claim.remaining.costMicros!==null&&(raw.usage.costMicros===null||raw.usage.costMicros>claim.remaining.costMicros))||raw.usage.iterations>p.budget.maxIterations))fail('RECONSTRUCTION_INCOMPLETE');
-  if(raw.status==='SUCCEEDED'&&p.inputMode==='ASSETS_ONLY'&&(raw.isolation!=='DENY_BY_DEFAULT'||!raw.networkDenied))fail('RECONSTRUCTION_ISOLATION');
+  let authority:ExecutionEvidence|undefined;
+  if(p.schema==='evopilot-reconstruction-plan/v2'){authority=validateExecutionEvidence(raw.authority);if(!same(authority.policy,p.authority))fail('RECONSTRUCTION_AUTHORITY_BINDING');}
+  if(raw.status==='SUCCEEDED'&&authority&&(raw.networkDenied!==(authority.policy.internalTransport==='NONE')||!executionIsolated(authority)))fail('RECONSTRUCTION_ISOLATION');
+  if(raw.status==='SUCCEEDED'&&p.inputMode==='ASSETS_ONLY'&&(raw.isolation!=='DENY_BY_DEFAULT'||(!authority&&!raw.networkDenied)))fail('RECONSTRUCTION_ISOLATION');
   return nativeFrozenClone(raw) as unknown as ReconstructionReceipt;
 }
 async function bounded<T>(callback:(signal:AbortSignal)=>Promise<T>,ms:number,controller=new AbortController()):Promise<T>{
@@ -118,7 +128,7 @@ export function createReconstructionRuntime(store:Store,providers:Reconstruction
   const records=createFeedbackStore(store,'runtime'),controllers=new Map<string,AbortController>();let active=0;
   const get=<T>(scope:Scope,kind:string,key:string):T=>{const value=records.get<T>(scope,'reconstruction-'+kind,key);if(!value)fail('RECONSTRUCTION_NOT_FOUND');return value;};
   const attempts=(scope:Scope,digest:string)=>records.list<ReconstructionAttempt>(scope,'reconstruction-attempt').filter(a=>a.claim.planDigest===digest);
-  const mark=()=>{if(Number(store.db.prepare('PRAGMA user_version').get()!.user_version)<7)store.db.exec('PRAGMA user_version=7');};
+  const mark=(version=7)=>{if(Number(store.db.prepare('PRAGMA user_version').get()!.user_version)<version)store.db.exec('PRAGMA user_version='+version);};
   function planning(plan:ReconstructionPlan){
     const h=records.get<{latestDigest:string;acceptedDigest:string|null}>(plan.scope,'planning-head',plan.planning.id);
     const r=records.get<PlanningRevision>(plan.scope,'planning-revision',plan.planning.digest),d=records.get<PlanningDecision>(plan.scope,'planning-decision',plan.planning.digest);
@@ -142,7 +152,9 @@ export function createReconstructionRuntime(store:Store,providers:Reconstruction
     active++;try{return await operate(raw as ReconstructionRequest) as ReconstructionResults[K];}finally{active--;}
   }
   async function operate(raw:ReconstructionRequest):Promise<unknown>{
-    usabilityStable(raw);const r=nativeFrozenClone(raw);if(!RECONSTRUCTION_OPERATIONS.includes(r.operation))fail('RECONSTRUCTION_OPERATION');const write=writes.includes(r.operation);nativeExact(r,['operation','scope','input',...(write?['requestId','expectedRevision']:[])]);feedbackScope(r.scope);nativeExact(r.input,fields[r.operation]);store.guard();
+    if(Object.hasOwn(EVALUATION_FIELDS,raw.operation))return evaluator.evaluation(raw as EvaluationRequest);
+    const legacy=raw as Exclude<ReconstructionRequest,EvaluationRequest>;
+    usabilityStable(legacy);const r=nativeFrozenClone(legacy);if(!RECONSTRUCTION_OPERATIONS.includes(r.operation))fail('RECONSTRUCTION_OPERATION');const write=writes.includes(r.operation);nativeExact(r,['operation','scope','input',...(write?['requestId','expectedRevision']:[])]);feedbackScope(r.scope);nativeExact(r.input,fields[r.operation]);store.guard();
     if(r.operation==='reconstruction.inspect')return records.inspect(r.scope);
     if(r.operation==='reconstruction.review')return review(r.scope,r.input.plan);
     if(r.operation==='reconstruction.plan')return get<ReconstructionBinding>(r.scope,'plan',r.input.digest);
@@ -151,14 +163,15 @@ export function createReconstructionRuntime(store:Store,providers:Reconstruction
     if(r.operation==='reconstruction.freeze')return records.mutate(r as FeedbackEnvelope,()=>{
       const reviewed=review(r.scope,r.input.plan);verifyDecisionEvidence(r.input.humanEvidenceRef,{owner:'runtime',operation:r.operation,workspaceId:store.identity.id,scope:r.scope,reviewDigest:reviewed.digest,decision:'APPROVE'});
       const old=records.get<ReconstructionBinding>(r.scope,'reconstruction-plan',reviewed.digest);if(old)return old;
-      const binding={...reviewed,humanEvidenceRef:r.input.humanEvidenceRef};records.put(r.scope,'reconstruction-plan',binding.digest,binding);mark();return binding;
+      const binding={...reviewed,humanEvidenceRef:r.input.humanEvidenceRef};records.put(r.scope,'reconstruction-plan',binding.digest,binding);mark(binding.plan.schema==='evopilot-reconstruction-plan/v2'?8:7);return binding;
     });
     if(r.operation==='reconstruction.evidence'){
       const a=get<ReconstructionAttempt>(r.scope,'attempt',r.input.id),b=get<ReconstructionBinding>(r.scope,'plan',a.claim.planDigest);if(a.status!=='SUCCEEDED'||!a.receipt||a.cancelRequested)fail('RECONSTRUCTION_NOT_SUCCEEDED');
       if(!providers.inspectReconstruction||!providers.observeReconstruction)fail('RECONSTRUCTION_UNSUPPORTED');await current(b);
       const retained=validateReconstructionReceipt(await bounded(signal=>providers.inspectReconstruction!({claim:a.claim,signal}),2000),a.claim);if(!same(retained,a.receipt))fail('RECONSTRUCTION_RECEIPT_DRIFT');
       const o=validateReconstructionObservation(await bounded(signal=>providers.observeReconstruction!({claim:a.claim,receipt:retained,signal}),2000)),p=b.plan;
-      if(o.workspaceId!==store.identity.id||!same(o.scope,r.scope)||o.attemptId!==a.id||o.origin!==p.origin||o.inputMode!==p.inputMode||o.independent!==p.independentConsumer||o.isolated!==(retained.isolation==='DENY_BY_DEFAULT'&&retained.networkDenied)||o.outputDigest!==retained.outputDigest||o.executorDigest!==retained.executorDigest||o.status!=='SUCCEEDED')fail('RECONSTRUCTION_OBSERVATION_BINDING');
+      if(retained.schema==='evopilot-reconstruction-receipt/v2'){if(o.schema!=='evopilot-reconstruction-observation/v2'||!same(o.authority,retained.authority))fail('RECONSTRUCTION_OBSERVATION_BINDING');}else if(o.schema!=='evopilot-reconstruction-observation/v1')fail('RECONSTRUCTION_OBSERVATION_BINDING');
+      if(o.workspaceId!==store.identity.id||!same(o.scope,r.scope)||o.attemptId!==a.id||o.origin!==p.origin||o.inputMode!==p.inputMode||o.independent!==p.independentConsumer||o.isolated!==(retained.isolation==='DENY_BY_DEFAULT'&&(retained.schema==='evopilot-reconstruction-receipt/v2'?executionIsolated(retained.authority):retained.networkDenied))||o.outputDigest!==retained.outputDigest||o.executorDigest!==retained.executorDigest||o.status!=='SUCCEEDED')fail('RECONSTRUCTION_OBSERVATION_BINDING');
       for(const k of ['inventoryDigest','specificationDigest','oracleDigest','inputManifestDigest','environmentDigest','dependenciesDigest'] as const)if(o[k]!==p[k])fail('RECONSTRUCTION_OBSERVATION_BINDING');
       const execution={planDigest:a.claim.planDigest,claimId:a.claim.claimId,cleanWorkspaceId:retained.workspaceId,receiptDigest:retained.digest};
       if(o.execution&&!same(o.execution,execution))fail('RECONSTRUCTION_OBSERVATION_BINDING');
@@ -171,7 +184,7 @@ export function createReconstructionRuntime(store:Store,providers:Reconstruction
         id(r.requestId);const b=get<ReconstructionBinding>(r.scope,'plan',r.input.planDigest);decision(b);
         if(!providers.executeReconstruction||!providers.inspectReconstruction||!providers.cancelReconstruction||!providers.verifyReconstructionPlan)fail('RECONSTRUCTION_UNSUPPORTED');
         // The one-builder bound applies across every scope and across service restarts.
-        if(store.db.prepare("SELECT data FROM feedback_records WHERE kind='reconstruction-attempt'").all().some(row=>['RUNNING','UNKNOWN'].includes((JSON.parse(String(row.data)) as ReconstructionAttempt).status)))fail('RECONSTRUCTION_BUSY');
+        if(store.db.prepare("SELECT data FROM feedback_records WHERE kind IN ('reconstruction-attempt','evaluation-session')").all().some(row=>['RUNNING','UNKNOWN'].includes((JSON.parse(String(row.data)) as ReconstructionAttempt).status)))fail('RECONSTRUCTION_BUSY');
         const previous=attempts(r.scope,b.digest);if(previous.length>=b.plan.budget.maxAttempts)fail('RECONSTRUCTION_ATTEMPT_LIMIT');
         // An absent measurement is not zero. No-receipt terminal records here
         // are exclusively failures/cancellations before provider invocation.
@@ -204,5 +217,9 @@ export function createReconstructionRuntime(store:Store,providers:Reconstruction
     finally{if(dispatch)controllers.delete(a.claim.claimId);}
     return {admission,attempt:a};
   }
+  const evaluator=createEvaluationRuntime(store,providers,{
+    read(scope,id){const a=get<ReconstructionAttempt>(scope,'attempt',id);decision(get<ReconstructionBinding>(scope,'plan',a.claim.planDigest));return a;},
+    async current(scope,id){const a=get<ReconstructionAttempt>(scope,'attempt',id),b=get<ReconstructionBinding>(scope,'plan',a.claim.planDigest);await current(b);if(!a.receipt||!providers.inspectReconstruction)fail('RECONSTRUCTION_UNSUPPORTED');const receipt=validateReconstructionReceipt(await bounded(signal=>providers.inspectReconstruction!({claim:a.claim,signal}),2000),a.claim);if(!same(receipt,a.receipt))fail('RECONSTRUCTION_RECEIPT_DRIFT');return a;}
+  });
   return {reconstruction,assertQuiescent(){if(active)fail('BUSY');}};
 }
