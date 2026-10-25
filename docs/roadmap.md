@@ -1,6 +1,6 @@
 # Runtime roadmap
 
-Current edition: [RUN-F05 / v0.7 explainable workflow state and maintenance](#run-f05-v07-explainable-workflow-state-and-maintenance). Implemented for the v0.7 edition; exact publication and download records remain on the versioned Release page.
+Current edition: [RUN-F06 / v0.8 controlled reconstruction](#run-f06--v08-controlled-reconstruction), delivered in [v0.8.0 Preview](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.8.0). Earlier v0.7 capabilities remain available. Exact publication, installation and project acceptance are separate records.
 
 Runtime owns project execution, decisions, durable claims, receipts and audit. Ontology and Harness own their respective assets and validation; the parent composes their public package APIs and provides the Expert and Codex entry. The [parent roadmap](https://github.com/yeliang-wang/evopilot/blob/main/docs/roadmap.md) coordinates product evolution and v1.0 readiness.
 
@@ -119,3 +119,11 @@ The parent owns Codex report composition; Dashboard implementation is excluded. 
 ### v0.7 project planning addition
 
 The approved parent V07-T0 adds project-scoped conversation provenance, immutable planning revisions and Runtime-owned Roadmap decisions/execution bindings. Ontology and Harness assets retain independent native validation and review. User planning stays private; native specifications/v1 remain unchanged. Installation changes follow the separately authorized stopped-state backup, recovery and Host verification procedure. See the parent [planning decision](https://github.com/yeliang-wang/evopilot/blob/main/docs/adr-planning.md).
+
+## RUN-F06 — v0.8 controlled reconstruction
+
+**Status:** `RELEASED_PREVIEW`. See the [current guide](reconstruction.md) and [v0.8.0 release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.8.0).
+
+Runtime owns immutable reconstruction plans, exact specification/dependency/environment bindings, bounded Agent execution, retained attempts, cancellation and original-receipt reconciliation. A successful execution receipt does not award L3: Harness must evaluate the independent fixed oracle and both clean reconstructions. Unknown outcomes retain their original claim and cannot be redispatched as an automatic retry.
+
+The [parent v0.8 plan](https://github.com/yeliang-wang/evopilot/blob/main/docs/asset-usability-v08.md) retains 18 requirements and 20 acceptance IDs. Planning projections and synthetic examples are not completed execution evidence. Published software does not automatically upgrade original project assets, prove whole-project functional equivalence or authorize a later correction release. Preserve native specifications, immutable history and exact candidate evidence. Project-specific environment deferrals stay in private acceptance records and never count as passed requirements.
