@@ -1,6 +1,6 @@
 # Runtime documentation
 
-Start with the [v0.8.0 Preview quickstart](../README.md#quickstart) for prerequisites and source setup.
+Start with the [v0.8.1 Preview quickstart](../README.md#quickstart) for prerequisites and source setup.
 
 - [Conversation-driven planning](planning-api.md): scoped revisions, exact human decisions and immutable execution bindings.
 - [Service API](service.md): embed the durable service, configure trusted providers and recover uncertain execution.
@@ -34,6 +34,8 @@ Read [owner-readable API](readable-api.md) for exact snapshots, table-first repo
 This default branch includes post-release documentation corrections for v0.7.0. Original tagged archives are immutable. See the [documentation correction policy](https://github.com/yeliang-wang/evopilot/blob/main/docs/github-release.md#documentation-corrections-after-publication).
 
 
-## v0.8.0 Preview
+## v0.8.1 Preview
 
 v0.8 adds independent asset consumption, explicit L1/L2/L3 usability assessment, mandatory purpose/scope/level admission before reverse modeling, and controlled reconstruction with an independent fixed oracle. Verified L3 is limited to the reviewed functional slice and requires two clean complete reconstructions; it does not mean byte-identical source, whole-project coverage, production readiness or automatic release. Read [the current workflow/API](reconstruction.md). Publication and project acceptance retain separate evidence.
+
+- [Asset readiness v2 API](readiness-v2.md)

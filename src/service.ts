@@ -1,3 +1,5 @@
+import {createRuntimeReadiness,READINESS_RUNTIME_OPERATIONS} from './readiness.js';
+export type * from './readiness.js';
 import {createReconstructionRuntime,RECONSTRUCTION_OPERATIONS} from './reconstruction.js';
 import type {ReconstructionRequest,ReconstructionResults} from './reconstruction.js';
 export type * from './reconstruction.js';
@@ -32,7 +34,7 @@ function providerOptions(value: unknown): Readonly<Providers> {
   if (!value || typeof value !== 'object' || types.isProxy(value) || ![Object.prototype,null].includes(Object.getPrototypeOf(value))) fail('INVALID_PROVIDER','Expected plain provider object');
   const descriptors=Object.getOwnPropertyDescriptors(value), providers: Record<string,unknown>=Object.create(null);
   for (const key of Reflect.ownKeys(descriptors)) {
-    if (typeof key !== 'string' || !['resolveOntology','resolveHarness','execute','inspectReceipt','timeoutMs','nativeStandards','collect','inspectCollection','resolveNative','executeNative','inspectNative','readOwnerReceipt','inspectSource','resolveRequirements','verifyProject','deliverFeedback','readFeedbackInbox','readOnlineFinding','resolveResponseRunbook','readResponseProblem','readResponseEvidence','readResponseRecovery','cancelResponseCollection','verifyReconstructionPlan','executeReconstruction','inspectReconstruction','cancelReconstruction','observeReconstruction'].includes(key)) fail('INVALID_PROVIDER','Unknown provider option');
+    if (typeof key !== 'string' || !['readReadinessAssessment','resolveOntology','resolveHarness','execute','inspectReceipt','timeoutMs','nativeStandards','collect','inspectCollection','resolveNative','executeNative','inspectNative','readOwnerReceipt','inspectSource','resolveRequirements','verifyProject','deliverFeedback','readFeedbackInbox','readOnlineFinding','resolveResponseRunbook','readResponseProblem','readResponseEvidence','readResponseRecovery','cancelResponseCollection','verifyReconstructionPlan','executeReconstruction','inspectReconstruction','cancelReconstruction','observeReconstruction'].includes(key)) fail('INVALID_PROVIDER','Unknown provider option');
     const d=descriptors[key];
     if (!Object.hasOwn(d,'value') || !d.enumerable) fail('INVALID_PROVIDER','Provider data descriptors required');
     if (key === 'timeoutMs') {
@@ -55,7 +57,7 @@ export function createRuntimeService(options: ServiceOptions,trustedProviders: P
   let planningRuntime: ReturnType<typeof createPlanningRuntime> | null = null;
   let responseRuntime: ReturnType<typeof createResponseRuntime> | null = null;
   const controllers=new Set<AbortController>();
-  const capabilities=()=>frozenClone({product:'runtime',version:'0.8.0',stage:'NATIVE_STANDARDS',operations:operations.filter(op=>!['run.prepare','run.decide'].includes(op)),historicalRunsReadOnly:true,nativeOperations:NATIVE_RUNTIME_OPERATIONS,feedbackOperations:RUNTIME_FEEDBACK_OPERATIONS,onlineOperations:ONLINE_RUNTIME_OPERATIONS,responseOperations:RESPONSE_RUNTIME_OPERATIONS,readableOperations:READABLE_OPERATIONS,planningOperations:PLANNING_OPERATIONS,reconstructionOperations:RECONSTRUCTION_OPERATIONS,asyncOperations:['reconcile','native','response'],authority:false,softwareRelease:false,limits:LIMITS});
+  const capabilities=()=>frozenClone({product:'runtime',version:'0.8.1',stage:'NATIVE_STANDARDS',operations:operations.filter(op=>!['run.prepare','run.decide'].includes(op)),historicalRunsReadOnly:true,nativeOperations:NATIVE_RUNTIME_OPERATIONS,feedbackOperations:RUNTIME_FEEDBACK_OPERATIONS,onlineOperations:ONLINE_RUNTIME_OPERATIONS,responseOperations:RESPONSE_RUNTIME_OPERATIONS,readinessOperations:READINESS_RUNTIME_OPERATIONS, readableOperations:READABLE_OPERATIONS,planningOperations:PLANNING_OPERATIONS,reconstructionOperations:RECONSTRUCTION_OPERATIONS,asyncOperations:['reconcile','native','response'],authority:false,softwareRelease:false,limits:LIMITS});
   function initialize() { if(closed) fail('CLOSED','Service closed'); if(!store) store=openState(options.workspaceRoot,options.workspaceId); return frozenClone({workspaceId:options.workspaceId,initialized:true,authority:false}); }
   function transact<K extends Operation>(request: Request<K>, internal?: (state: State, request: Request)=>unknown, completion=false): Response<K> {
     bounded(request); const r=frozenClone(request) as Request,write=validateRequest(r);
@@ -143,8 +145,10 @@ export function createRuntimeService(options: ServiceOptions,trustedProviders: P
   let activeReadable=0;
   const readableAPI=createReadableAPI({kind:'project',list:scope=>native({operation:'project.list',scope,input:{}}),get:(scope,identity)=>runtimeReadSnapshot(options.workspaceId,scope,identity,{native,planning})});
   async function readable(request:ReadRequest):Promise<unknown>{if(closed)fail('CLOSED','Service is closed');if(!store)fail('NOT_INITIALIZED','Explicit initialize required');activeReadable++;try{return await readableAPI(request);}finally{activeReadable--;}}
-  function close() { reconstructionRuntime?.assertQuiescent(); if(activeReadable)fail('BUSY','Readable snapshot is in progress'); if(activeOnline)fail('BUSY','Online operation is in progress'); responseRuntime?.assertQuiescent(); nativeRuntime?.close();for(const c of controllers)c.abort(); if(store){store.db.close();store=null;} closed=true; }
-  return Object.freeze({capabilities,initialize,execute,native,readable,feedback,online,response,planning,reconstruction,dispatch:(args: ExternalRequest)=>external(args,false),reconcile:(args: ExternalRequest)=>external(args,true),close});
+  let activeReadiness=0;
+  async function readiness(request:FeedbackEnvelope):Promise<unknown>{if(closed)fail('CLOSED','Service closed');if(!store)fail('NOT_INITIALIZED','Explicit initialize required');if(request.requestId&&!nativeRuntime)nativeRuntime=createNativeRuntime(store,providers);activeReadiness++;try{return await createRuntimeReadiness(store,providers).readiness(request);}finally{activeReadiness--;}}
+  function close() { if(activeReadiness)fail('BUSY','Readiness operation in progress'); reconstructionRuntime?.assertQuiescent(); if(activeReadable)fail('BUSY','Readable snapshot is in progress'); if(activeOnline)fail('BUSY','Online operation is in progress'); responseRuntime?.assertQuiescent(); nativeRuntime?.close();for(const c of controllers)c.abort(); if(store){store.db.close();store=null;} closed=true; }
+  return Object.freeze({readiness,capabilities,initialize,execute,native,readable,feedback,online,response,planning,reconstruction,dispatch:(args: ExternalRequest)=>external(args,false),reconcile:(args: ExternalRequest)=>external(args,true),close});
 }
 
 function sqlText(value: unknown): string { if (typeof value !== 'string') fail('CORRUPT_STATE','Invalid stored text'); return value; }
