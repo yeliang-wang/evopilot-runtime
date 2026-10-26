@@ -1,4 +1,4 @@
-# EvoPilot Runtime · v0.8.1 Preview
+# EvoPilot Runtime · v0.8.2 Preview
 
 [Quickstart](#quickstart) · [Documentation](docs/README.md) · [Service API](docs/service.md) · [CLI](docs/cli.md) · [Releases](https://github.com/yeliang-wang/evopilot-runtime/releases) · [Contributing](CONTRIBUTING.md)
 
@@ -8,7 +8,7 @@ Earlier **v0.6.0 Preview** introduced reviewed response plans around actual isol
 
 Maintained product source uses strict TypeScript; installed processes execute compiled JavaScript with public type declarations. JavaScript build, packaging and test drivers remain separate from product behavior. The [parent language policy](https://github.com/yeliang-wang/evopilot/blob/main/docs/language-policy.md) defines the cross-product boundaries.
 
-v0.8.1 adds explicit usability **v2** content grades: L1 domain understanding, L2 implementation specification and L3 reconstruction specification closure. L3 does not require running the original environment or reconstructing software. Content assessment and optional reconstruction verification are separate; `v2 / L3 / NOT_REQUESTED` is valid. It does not establish generated functional equivalence, byte-identical source, production readiness or release authority. Historical usability v1 APIs and records retain their original meaning. Read [the v2 API](docs/readiness-v2.md).
+v0.8.2 corrects the parent transport guide and refreshes the synchronized offline distribution. Runtime behavior is unchanged. v0.8.1 introduced explicit usability **v2** content grades: L1 domain understanding, L2 implementation specification and L3 reconstruction specification closure. L3 does not require running the original environment or reconstructing software. Content assessment and optional reconstruction verification are separate; `v2 / L3 / NOT_REQUESTED` is valid. It does not establish generated functional equivalence, byte-identical source, production readiness or release authority. Historical usability v1 APIs and records retain their original meaning. Read [the v2 API](docs/readiness-v2.md).
 
 ## Capabilities
 
@@ -44,12 +44,12 @@ Build cleans only generated `dist`, emits JavaScript and declarations, then make
 
 ### Install a release tarball
 
-For v0.8.1 Preview, download `evopilot-next-runtime-0.8.1.tgz`, `source-revision.txt` and `SHA256SUMS` from the [Runtime release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.8.1). In that download directory, verify the checksums and inspect the revision before installing into your consumer project:
+For v0.8.2 Preview, download `evopilot-next-runtime-0.8.2.tgz`, `source-revision.txt` and `SHA256SUMS` from the [Runtime release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.8.2). In that download directory, verify the checksums and inspect the revision before installing into your consumer project:
 
 ```sh
 shasum -a 256 -c SHA256SUMS
 cat source-revision.txt
-npm install --ignore-scripts /absolute/downloads/evopilot-next-runtime-0.8.1.tgz
+npm install --ignore-scripts /absolute/downloads/evopilot-next-runtime-0.8.2.tgz
 npx --no-install evopilot-next-runtime help
 ```
 
