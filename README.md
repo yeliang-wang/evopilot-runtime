@@ -1,34 +1,45 @@
 # EvoPilot Runtime · v0.8.3 Preview
 
-[Quickstart](#quickstart) · [Documentation](docs/README.md) · [Service API](docs/service.md) · [CLI](docs/cli.md) · [Releases](https://github.com/yeliang-wang/evopilot-runtime/releases) · [Contributing](CONTRIBUTING.md)
+English | [简体中文](README_CN.md)
 
-Runtime is the durable execution layer of [EvoPilot](https://github.com/yeliang-wang/evopilot). It owns scoped projects, immutable goals, reviewed plans, human decisions, execution claims, receipts and audit. [Harness](https://github.com/yeliang-wang/evopilot-harness) owns quality assets and evaluation; [Ontology](https://github.com/yeliang-wang/evopilot-ontology) owns semantic models and validation.
+Runtime is the durable execution layer of [EvoPilot](https://github.com/yeliang-wang/evopilot/blob/main/README.md). It owns projects, goals, reviewed plans, decisions, execution claims, receipts and audit. [Ontology](https://github.com/yeliang-wang/evopilot-ontology/blob/main/README.md) owns semantic models; [Harness](https://github.com/yeliang-wang/evopilot-harness/blob/main/README.md) owns quality policies and evidence evaluation.
 
-Earlier **v0.6.0 Preview** introduced reviewed response plans around actual isolated collection, independent verification, durable recovery and exact owner feedback. It retains trusted online repair candidates and registered execution feedback from earlier versions. Read [response execution](docs/response.md), the [changelog](CHANGELOG.md) and [roadmap](docs/roadmap.md). Published assets and their exact source are recorded on the [v0.6.0 Release page](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.6.0).
-
-Maintained product source uses strict TypeScript; installed processes execute compiled JavaScript with public type declarations. JavaScript build, packaging and test drivers remain separate from product behavior. The [parent language policy](https://github.com/yeliang-wang/evopilot/blob/main/docs/language-policy.md) defines the cross-product boundaries.
-
-v0.8.3 synchronizes current v2 content-grade guidance, installation and migration routes, plugin naming and offline documentation. Product behavior is unchanged. v0.8.1 introduced explicit usability **v2** content grades: L1 domain understanding, L2 implementation specification and L3 reconstruction specification closure. L3 does not require running the original environment or reconstructing software. Content assessment and optional reconstruction verification are separate; `v2 / L3 / NOT_REQUESTED` is valid. It does not establish generated functional equivalence, byte-identical source, production readiness or release authority. Historical usability v1 APIs and records retain their original meaning. Read [the v2 API](docs/readiness-v2.md).
+[Quickstart](#quickstart) · [Service API](docs/service.md) · [CLI](docs/cli.md) · [Documentation](docs/README.md) · [Release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.8.3)
 
 ## Capabilities
 
-| Capability | Standalone behavior |
-| --- | --- |
-| Project and goal planning | Create and inspect scoped projects and immutable goals in an explicit workspace. |
-| Reference inspection | Compare exact Ontology/Harness pins through the pure root API; no latest-version selection. |
-| Reviewed run plans | Preparing a pinned plan requires trusted material resolvers. Decisions bind its exact review digest. |
-| Durable execution | A configured trusted executor receives one committed claim; uncertain outcomes are inspected and reconciled without redispatch. |
-| Reviewed response linkage | Bind a scoped problem and published runbook to exact Goal/Target/Loop, collection and source references; require independent verification and both owners' reviewed feedback before closure. |
-| Receipts and audit | SQLite persistence, revision checks and scoped idempotency retain evidence independently of evaluation or acceptance. |
-| SDK and CLI | Strict TypeScript source, compiled ESM JavaScript and declarations; no runtime dependencies. |
+| Capability | Behavior |
+|---|---|
+| Planning | Scoped projects, immutable goals, reviewed revisions and exact execution bindings |
+| Asset references | Fixed Ontology/Harness versions and digests; no implicit latest-version selection |
+| Execution | Trusted resolvers prepare a pinned plan; a configured executor receives one committed claim |
+| Recovery | Inspect and reconcile uncertain outcomes using the original request and retained receipt |
+| Feedback and response | Retain registered evidence, reviewed runbook bindings, independent verification and both owners' dispositions |
+| Online findings | Read trusted Harness findings into `REVIEW_REQUIRED` repair candidates without dispatching repairs |
+| SDK and CLI | Strict TypeScript source, compiled ESM and declarations; no runtime dependencies |
 
-The standalone CLI supplies no resolvers, executor or receipt inspector. Discovery, project/goal planning and state inspection do not need an execution provider. Run preparation requires resolvers; dispatch requires an executor. Missing providers fail explicitly. Installing Runtime alone does not configure coding work.
-
-For the composed product and Codex entry, use [parent EvoPilot](https://github.com/yeliang-wang/evopilot) and its [releases](https://github.com/yeliang-wang/evopilot/releases). Integration and provider configuration belong to that separate distribution.
+The standalone CLI supplies no resolvers, executor or receipt inspector. Discovery, project/goal planning and state inspection work without an execution provider; preparing and dispatching Runs require the corresponding trusted providers. Installing Runtime does not configure arbitrary coding or deployment.
 
 ## Quickstart
 
-Use Node **24.14.0** on a platform with OS uid support. SQLite is experimental. Source development uses the locked **TypeScript 5.9.3** compiler:
+For Codex and the composed product, use the [parent installation guide](https://github.com/yeliang-wang/evopilot/blob/main/docs/installation.md). Runtime has no separate Codex plugin.
+
+### Install a release tarball
+
+Use **Node 24.14.0** on a platform with OS uid support. SQLite is experimental. Download all three assets from [v0.8.3 Preview](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.8.3): `evopilot-next-runtime-0.8.3.tgz`, `source-revision.txt` and `SHA256SUMS`. In their directory, verify and inspect before installing into your consumer project:
+
+```sh
+shasum -a 256 -c SHA256SUMS
+cat source-revision.txt
+npm install --ignore-scripts /absolute/downloads/evopilot-next-runtime-0.8.3.tgz
+npx --no-install evopilot-next-runtime help
+```
+
+Distribution uses GitHub Releases, not an npm registry. There is no Runtime dependency-lock asset. The package contains compiled entry points, declarations, source and documentation; development scripts and tests are excluded. See [service examples](docs/service.md) and [CLI examples](docs/cli.md).
+
+### Develop from source
+
+From a source checkout with locked TypeScript 5.9.3 tools:
 
 ```sh
 npm ci --ignore-scripts
@@ -40,59 +51,23 @@ node dist/cli.js version
 node dist/cli.js capabilities
 ```
 
-Build cleans only generated `dist`, emits JavaScript and declarations, then makes the CLI executable. Check verifies strict source types, package-export declarations, owned imports and pinned vendor bytes. Full tests create isolated workspaces. Discovery commands create no workspace.
+Build regenerates only `dist`; checks verify types, public exports and vendor integrity. Tests use isolated workspaces. Discovery does not create a Workspace. Persisted operations require an explicitly owned canonical path outside source/Git trees and an existing parent directory.
 
-### Install a release tarball
+## Content levels and trust
 
-For v0.8.3 Preview, download `evopilot-next-runtime-0.8.3.tgz`, `source-revision.txt` and `SHA256SUMS` from the [Runtime release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.8.3). In that download directory, verify the checksums and inspect the revision before installing into your consumer project:
+Current `readiness.*` operations explicitly select `standardVersion: "v2"`. L1 describes domain understanding, L2 implementation specifications and L3 complete reconstruction specifications. Runtime records modeling intent and `ASSET_CONTENT_ONLY` completion; Harness owns the content assessment. Read the [v2 API](docs/readiness-v2.md).
 
-```sh
-shasum -a 256 -c SHA256SUMS
-cat source-revision.txt
-npm install --ignore-scripts /absolute/downloads/evopilot-next-runtime-0.8.3.tgz
-npx --no-install evopilot-next-runtime help
-```
+L3 does not require software reconstruction. `assetAssessment` and `reconstructionVerification` are independent; `L3 / NOT_REQUESTED` is valid. It does not establish generated functional equivalence, identical source, production readiness or release authority. Historical usability v1 records retain their original meaning.
 
-The tarball includes compiled `dist`, declarations, owned TypeScript source, docs and retained vendor/provenance. It excludes development scripts and tests. Its `package.json` scripts are source-maintainer commands; release consumers import the compiled package or use the installed CLI. Runtime has no installed runtime dependencies or Runtime dependency-lock release asset. There is no npm registry publication.
+Runtime trusts a non-malicious single OS uid and injected adapters; it does not isolate hostile code running as that uid. Preserve exact receipts after uncertainty. Metadata is not evidence of configured providers or acceptance. Preview is not GA. The composed response collector supports pinned Node work in an isolated copied directory; Java/Maven, remote execution and production remediation are outside that profile.
 
-### Use the TypeScript SDK
+## Documentation and contribution
 
-From an ESM consumer with NodeNext module resolution:
+- [Documentation index](docs/README.md), [planning](docs/planning-api.md), [readable API](docs/readable-api.md) and [decision evidence](docs/native-decisions.md).
+- [Registered feedback](docs/feedback.md), [online repair candidates](docs/online-repair.md) and [reviewed response](docs/response.md).
+- [Changelog](CHANGELOG.md), [Roadmap](docs/roadmap.md), [contribution guide](CONTRIBUTING.md) and [bilingual maintenance](docs/documentation-languages.md).
+- [Security](SECURITY.md), [Apache-2.0 license](LICENSE), [notices](NOTICE) and [provenance](provenance/).
 
-```ts
-import { capabilities, VERSION } from '@evopilot-next/runtime';
-import { createRuntimeService, type Scope } from '@evopilot-next/runtime/service';
+Documentation navigation draws inspiration from [OpenHands](https://github.com/OpenHands/OpenHands); wording is independently written and no affiliation is implied.
 
-console.log(VERSION, capabilities());
-const scope: Scope = { visibility: 'private', projectId: 'example' };
-const service = createRuntimeService({
-  workspaceRoot: '/absolute/owned/workspace',
-  workspaceId: 'example',
-});
-console.log(scope, service.capabilities());
-service.close();
-```
-
-This example only inspects metadata. Construction and imports perform no filesystem operations. To persist projects and goals, choose an explicitly owned canonical workspace outside source/Git trees with an existing parent, then call `initialize()`. The [service API reference](docs/service.md) explains requests, revisions, trusted callbacks and recovery; the [CLI guide](docs/cli.md) includes complete project/goal examples.
-
-The root also exports `PRODUCT`, `inspectPinnedInputs` and the `Reference` type. The service subpath exports `createRuntimeService` and request/result types. v0.7 preserves corrected native v1 standards and earlier immutable records. See [registered feedback](docs/feedback.md), [online repair candidates](docs/online-repair.md) and [response execution](docs/response.md) for the additive APIs. The composed response executor supports the pinned Node collector in an isolated copied directory; Java/Maven, remote execution and production remediation are outside this release.
-
-## Trust and Preview scope
-
-Runtime assumes a non-malicious single OS uid and trusted code-injected adapters. It does not isolate hostile code running as that uid. Keep exact requests and receipts; an uncertain response is not permission to dispatch again. Read the [security policy](SECURITY.md).
-
-Capability metadata describes generic service support, not configured providers. `hostIntegrationReady`, `acceptance`, `authority` and `softwareRelease` remain false. Source checks and CI are technical evidence independent of exact-version acceptance and release authority. Preview does not claim production readiness, GA, old 6.3 feature parity or arbitrary coding-agent support.
-
-## Contributing and attribution
-
-See [Contributing](CONTRIBUTING.md) for source checks and the parent gitlink workflow. Runtime is Apache-2.0 licensed; retained attributions are in [NOTICE](NOTICE) and [provenance](provenance/). Documentation layout draws inspiration from OpenHands with independently written content.
-
-Native approvals bind readable, digest-pinned evidence to the exact review, Workspace and operation. See [decision evidence](docs/native-decisions.md) for the format, historical readback and trusted-operator boundary.
-
-## Execution feedback (v0.4)
-
-v0.4 adds private, source-bound feedback through the public service API. Runtime owns capture and retained delivery; final completion requires exact reviewed owner dispositions. See [feedback](docs/feedback.md). Native v0.3 standard and contract bytes remain unchanged. Publication and exact installed acceptance are recorded separately.
-
-## Online findings
-
-`service.online()` reads trusted Harness findings into scoped, durable `REVIEW_REQUIRED` repair candidates. It preserves failure and recovery history, leaves the requested software version empty, and neither dispatches a repair nor mutates Ontology. See [online repair API](docs/online-repair.md) and the [parent online guide](https://github.com/yeliang-wang/evopilot/blob/main/docs/online-harness.md).
+These source pages include documentation improvements after v0.8.3. Existing tagged archives retain their original documentation; future releases package the updated pages.

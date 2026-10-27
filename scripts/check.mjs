@@ -24,6 +24,7 @@ const expected = {
     "src",
     "vendor",
     "README.md",
+    "README_CN.md",
     "CONTRIBUTING.md",
     "SECURITY.md",
     "CHANGELOG.md",
