@@ -38,12 +38,12 @@ test('package boundary: changed bindings and unsupported input fail closed', () 
 });
 
 test('package boundary: default capabilities are truthful immutable data', () => {
-  assert.equal(api.VERSION, '0.8.2');
+  assert.equal(api.VERSION, '0.8.3');
   assert.equal(api.PRODUCT, 'runtime');
   const capabilities = api.capabilities();
   assert.deepEqual(capabilities, {
     product: 'runtime',
-    version: '0.8.2',
+    version: '0.8.3',
     implementationStage: "NATIVE_STANDARDS",
     businessOperationsReady: true,
     persistentBusinessOperationsReady: true,
