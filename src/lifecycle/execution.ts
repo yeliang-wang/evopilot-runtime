@@ -7,8 +7,10 @@ import { containsInlineSecret, type EffectiveDefinition } from './compiler.js';
 import { validateBindings, type DefinitionBindingProvider } from './bindings.js';
 import { inspectInstance, requestStage, recordStageOutcome, resolveAuthority, stageAdmission, stageBudget, type AuthorityResolver, type ExecutionAuthority, type LifecycleInstance, type ReleaseAuthority, type StageOutcome } from './instance.js';
 import { readImplementationEvidence } from '../adapters/implementation-stages.js';
+import { readReleaseMaterial } from '../adapters/release-stages.js';
+import type { AuthorityPolicyProvider } from '../adapters/authority.js';
 
-export const EXECUTION_READS=['lifecycle.stage.request.inspect','lifecycle.stage.observation.read','lifecycle.implementation.evidence.read'] as const;
+export const EXECUTION_READS=['lifecycle.stage.request.inspect','lifecycle.stage.observation.read','lifecycle.implementation.evidence.read','lifecycle.release.evidence.read'] as const;
 export const EXECUTION_WRITES=['lifecycle.stage.request','lifecycle.stage.reconcile','lifecycle.stage.advance'] as const;
 export interface StagePlan { adapterId:string; adapterDigest:string; action:string; bindingDigest:string; parameters:Record<string,unknown>; }
 export interface StageRequest {
@@ -31,6 +33,10 @@ export interface StageAdapter {
   /** Explicit continuation of the same retained plan, not a retry of dispatch.
    * Each remaining side effect still needs its own durable action/permit. */
   advance?(request:StageRequest,instance:LifecycleInstance,progress:StageProgress,permit:()=>Promise<Principal>,signal:AbortSignal):Promise<StageObservation>;
+}
+export interface StageServices {
+  releaseAuthority:(instance:LifecycleInstance,actor:Principal)=>ReleaseAuthority|undefined;
+  authorityPolicy?:AuthorityPolicyProvider;
 }
 export interface ExecutionDependencies {
   bindings?:DefinitionBindingProvider; authorities?:AuthorityResolver;
@@ -162,6 +168,10 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
   const timer=setInterval(observePending,1000);timer.unref();
   function read(actor:Principal,projectId:string,operation:string,input:Record<string,unknown>):unknown{
     authorize(actor,projectId,'read');
+    if(operation==='lifecycle.release.evidence.read'){
+      exact(input,['stageRequestId']);const r=request(projectId,string(input.stageRequestId));if(r.stageId!=='release-decision')reject('STAGE_SCOPE','Release material requires its original admission request',409);
+      return{material:readReleaseMaterial(store,fixedInstance(r),false),historical:true,releaseAuthorized:false};
+    }
     if(operation==='lifecycle.implementation.evidence.read'){exact(input,['stageRequestId']);const r=request(projectId,string(input.stageRequestId));if(r.stageId!=='implementation')reject('STAGE_SCOPE','Implementation evidence requires the original coding request',409);return readImplementationEvidence(store,r);}
     if(operation==='lifecycle.stage.observation.read'){
       exact(input,['stageRequestId','observationRef']);const r=request(projectId,string(input.stageRequestId)),ref=hash(input.observationRef),evidence=store.object(projectId,'stage-observation',ref);

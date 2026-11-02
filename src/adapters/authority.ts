@@ -8,6 +8,7 @@ import { inspectInstance, pinInstance, requiredChecksDigest, type AuthorityResol
 import { readIntegrationConfiguration } from './config.js';
 import { validateResourceDefinition } from './bindings.js';
 import { isPreparationRef, type PreparationVerifier } from '../lifecycle/preparation.js';
+import { readReleaseMaterial, releasePredecessors, type ReleaseMaterial } from './release-stages.js';
 
 export const AUTHORITY_READS=['lifecycle.authority.preview','lifecycle.authority.inspect'] as const;
 export const AUTHORITY_WRITES=['lifecycle.authority.record','lifecycle.authority.revoke'] as const;
@@ -89,9 +90,7 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
     return checked;
   }
   function releaseEvidence(saved:LifecycleInstance):void{
-    const required=new Set<string>(),pending=[...saved.definition.nodes.find(n=>n.id==='release-decision')!.dependsOn];
-    while(pending.length){const id=pending.pop()!;if(required.has(id))continue;required.add(id);pending.push(...saved.definition.nodes.find(n=>n.id===id)!.dependsOn);}
-    if([...required].some(id=>saved.stages[id].status!=='PASSED'||!saved.stages[id].expiresAt||Date.parse(saved.stages[id].expiresAt!)<=Date.now()))reject('RELEASE_EVIDENCE_REQUIRED','Every fixed release predecessor and its dependencies must currently pass',409);
+    releasePredecessors(saved);
   }
   function policy(definition:EffectiveDefinition,actor:Principal,deciding=false):AuthorityPolicy{
     if(!policies)reject('AUTHORITY_POLICY_UNAVAILABLE','No current authority policy adapter is configured',409);
@@ -129,6 +128,8 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
       const saved=instance(d.projectId,d.subject.instanceId);
       if(saved.pinsDigest!==d.subject.pinsDigest||saved.candidateDigest!==d.subject.candidateDigest)reject('AUTHORITY_MISMATCH','Release instance or candidate changed',409);
       releaseEvidence(saved);
+      const material=readReleaseMaterial(store,saved);
+      if(material.digest!==d.subject.releaseMaterialDigest||material.bindingContextDigest!==p.bindingContextDigest)reject('RELEASE_MATERIAL_CHANGED','Release decision no longer matches exact collected material and configuration',409);
     }
   }
   function execution(d:DecisionRecord):ExecutionAuthority{
@@ -144,7 +145,7 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
   function prepare(actor:Principal,projectId:string,input:Record<string,unknown>){
     exact(input,['kind','subject']);const type=kind(input.kind),source=record(input.subject);
     if(containsInlineSecret(canonical(source)))reject('INLINE_SECRET','Authority subjects use references, not raw credentials');
-    let effective:EffectiveDefinition,subject:Record<string,unknown>;
+    let effective:EffectiveDefinition,subject:Record<string,unknown>,releaseMaterial:ReleaseMaterial|undefined;
     if(type==='execution'){
       exact(source,['instanceId','definitionRevisionId','goalRef','targetRef','loopRef','budget','expiresAt']);
       const instanceId=slug(source.instanceId),revisionId=hash(source.definitionRevisionId);
@@ -160,12 +161,14 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
       if(!saved.candidateDigest||hash(source.candidateDigest)!==saved.candidateDigest)reject('CANDIDATE_REQUIRED','Release authority requires the exact immutable candidate',409);
       effective=saved.definition;
       releaseEvidence(saved);
-      subject={instanceId:saved.id,pinsDigest:saved.pinsDigest,definitionRevisionId:saved.pins.definitionRevisionId,semanticDigest:saved.pins.semanticDigest,requirementsDigest:saved.pins.requirementsDigest,candidateDigest:saved.candidateDigest,channel:atPath(effective.semantic,'config.publication.channel'),expiresAt:expiry(source.expiresAt)};
+      releaseMaterial=readReleaseMaterial(store,saved);
+      subject={instanceId:saved.id,pinsDigest:saved.pinsDigest,definitionRevisionId:saved.pins.definitionRevisionId,semanticDigest:saved.pins.semanticDigest,requirementsDigest:saved.pins.requirementsDigest,candidateDigest:saved.candidateDigest,releaseMaterialDigest:releaseMaterial.digest,channel:atPath(effective.semantic,'config.publication.channel'),expiresAt:expiry(source.expiresAt)};
     }
     const p=policy(effective,actor,true);
+    if(releaseMaterial&&releaseMaterial.bindingContextDigest!==p.bindingContextDigest)reject('RELEASE_BINDINGS_CHANGED','Configuration changed after release material collection',409);
     if(Date.parse(String(subject.expiresAt))>Math.min(Date.parse(p.expiresAt),Date.parse(actor.expiresAt)))reject('AUTHORITY_EXPIRY_BOUND','Decision expiry must fit the current policy and deciding credential');
     const preparation=type==='execution'?prepared(subject,effective,actor,actor.id):null;
-    const review={schema:'runtime-authority-review/v1',workspaceId:store.workspaceId,projectId,kind:type,subject,policyDigest:p.digest,bindingContextDigest:p.bindingContextDigest,principalId:actor.id,principalRevision:actor.revision,...(preparation?{preparation}:{})};
+    const review={schema:'runtime-authority-review/v1',workspaceId:store.workspaceId,projectId,kind:type,subject,policyDigest:p.digest,bindingContextDigest:p.bindingContextDigest,principalId:actor.id,principalRevision:actor.revision,...(preparation?{preparation}:{}),...(releaseMaterial?{releaseMaterial}:{})};
     return{...review,reviewDigest:valueDigest(review)};
   }
   const resolveExecution:AuthorityResolver=async(ref,effective,actor,signal)=>{

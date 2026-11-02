@@ -17,8 +17,10 @@ import { gitlabClient } from './gitlab.js';
 import { inspectExternalAgent, type AgentIdentity } from './external-agent.js';
 import { readRegisteredNativeToolchain } from './config.js';
 import { createImplementationStageAdapters } from './implementation-stages.js';
+import { releaseDocuments } from './documents.js';
 import type { RuntimeStore } from '../server/store.js';
-import type { StageAdapter } from '../lifecycle/execution.js';
+import type { StageAdapter, StageServices } from '../lifecycle/execution.js';
+import { createReleaseStageAdapter } from './release-stages.js';
 import type { PreparationValidator } from '../lifecycle/preparation.js';
 import { createPlanStageAdapter, createScopeStageAdapter, registeredPreparation } from './preparation-stages.js';
 import { registeredImplementationReview, type ImplementationReviewBindings } from '../lifecycle/implementation-review.js';
@@ -83,7 +85,7 @@ export function validateResourceDefinition(resource:ResourceRegistration):void{
     case 'failure':fields(['onFailure','onUnknown']);fixed('onFailure','BLOCK');fixed('onUnknown','BLOCK');break;
     case 'authority-policy':fields(['principalIds','exactSubjectRequired']);strings(d.principalIds,128).forEach(slug);yes('exactSubjectRequired');break;
     case 'decision-source':fields(['backend','decisionTypes']);fixed('backend','runtime');if(canonical([...strings(d.decisionTypes)].sort())!==canonical(['execution','release']))reject('INVALID_RESOURCE','Execution and release decisions must remain separate');break;
-    case 'evidence-policy':fields(['requireAll','requireCurrent','allowSkipped']);yes('requireAll');yes('requireCurrent');fixed('allowSkipped',false);break;
+    case 'evidence-policy':fields(['requireAll','requireCurrent','allowSkipped','documentation']);yes('requireAll');yes('requireCurrent');fixed('allowSkipped',false);releaseDocuments(d.documentation);break;
     case 'channel':fields(['platformRef','channel']);ref(d.platformRef);if(!['github-release','gitlab-release'].includes(String(d.channel)))reject('INVALID_RESOURCE','Unsupported publication channel');break;
     case 'readback':fields(['verifyDownloadedDigests','requireExactCandidate']);yes('verifyDownloadedDigests');yes('requireExactCandidate');break;
     case 'followup':fields(['onGap','autoExecute']);fixed('onGap','create-target');fixed('autoExecute',false);break;
@@ -238,7 +240,7 @@ export function createRegisteredBindings(configPath:string,workspaceId:string,co
 /** Fixed local composition of published owner consumers, the existing Runtime
  * readiness API and registered HTTPS providers. No caller-selected imports,
  * owner authoring, raw database access or default external execution. */
-export async function openRegisteredBindings(configPath:string,workspaceId:string):Promise<{provider:DefinitionBindingProvider;preparation:PreparationValidator;implementationReview:ImplementationReviewBindings;executor(store:RuntimeStore):StageAdapter;close():void}>{
+export async function openRegisteredBindings(configPath:string,workspaceId:string):Promise<{provider:DefinitionBindingProvider;preparation:PreparationValidator;implementationReview:ImplementationReviewBindings;executor(store:RuntimeStore,services:StageServices):StageAdapter;close():void}>{
   slug(workspaceId);string(configPath,4096);
   let legacy:ReturnType<typeof createRuntimeService>|undefined,opening:Promise<void>|null=null,connectedDigest:string|null=null,closed=false;
   const adapters=new Map<string,PublishedOwnerAdapter>();
@@ -286,14 +288,19 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
     await ensure(signal);return registered(definition,actor,requirements,signal);
   };
   // Owner outages block dependent admission, never service/history availability.
-  return{provider,preparation:registeredPreparation(configPath,workspaceId),implementationReview:registeredImplementationReview(configPath,workspaceId,connections),executor(store){
+  return{provider,preparation:registeredPreparation(configPath,workspaceId),implementationReview:registeredImplementationReview(configPath,workspaceId,connections),executor(store,services){
     if(store.workspaceId!==workspaceId)reject('INTEGRATION_SCOPE','Stage executor must share the service workspace',403);
-    let stages:ReturnType<typeof createImplementationStageAdapters>|undefined,scope:StageAdapter|undefined,plan:StageAdapter|undefined;
+    let stages:ReturnType<typeof createImplementationStageAdapters>|undefined,scope:StageAdapter|undefined,plan:StageAdapter|undefined,release:StageAdapter|undefined;
     async function current(signal:AbortSignal,stageId:string):Promise<StageAdapter>{
       const config=await ensure(signal),toolchain=readRegisteredNativeToolchain(config);
       if(stageId==='scope'){scope??=createScopeStageAdapter(store,configPath,connections);return scope;}
       if(stageId==='plan'){plan??=createPlanStageAdapter(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest});return plan;}
-      stages??=createImplementationStageAdapters(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest});return stageId==='implementation'?stages.implementation:stages.ci;
+      stages??=createImplementationStageAdapters(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest});
+      if(stageId==='release-decision'){
+        if(!services.authorityPolicy)reject('AUTHORITY_POLICY_UNAVAILABLE','Release admission requires the service authority policy',409);
+        release??=createReleaseStageAdapter(store,configPath,{platform:connections.platform,verification:stages.ci},services.releaseAuthority,services.authorityPolicy);return release;
+      }
+      return stageId==='implementation'?stages.implementation:stages.ci;
     }
     return{
       async prepare(instance,stage,actor,signal){return(await current(signal,stage)).prepare(instance,stage,actor,signal);},

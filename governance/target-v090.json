@@ -150,7 +150,11 @@
         "src/lifecycle/implementation-review.ts",
         "tests/e2e/implementation-review-v090.test.mjs",
         "src/adapters/implementation-stages.ts",
-        "tests/e2e/implementation-stages-v090.test.mjs"
+        "tests/e2e/implementation-stages-v090.test.mjs",
+        "src/adapters/documents.ts",
+        "src/adapters/release-stages.ts",
+        "tests/e2e/documents-v090.test.mjs",
+        "tests/e2e/release-stages-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

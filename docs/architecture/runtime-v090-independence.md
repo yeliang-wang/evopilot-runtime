@@ -292,8 +292,11 @@ from that static configuration digest; their applicable scope/freshness checks
 still apply at admission and dispatch. Old development authority records without
 this binding remain historical and cannot silently acquire new permissions.
 A release preview binds a separately verified instance, its immutable candidate,
-required checks and configured channel. The release-decision predecessors must
-currently pass. Preview does not grant either authority. Recording requires the
+required checks, configured channel and the full material collected in its
+original release-decision stage. That material includes exact candidate-source
+release documentation and original verification evidence. All transitive
+release-decision predecessors must currently pass. Preview does not grant either
+authority. Recording requires the
 exact preview digest and existing pinned `evopilot-decision-evidence/v1` evidence
 for that decision and its retained source. File integrity alone does not
 authenticate a human; the current authenticated project capability and explicit
@@ -621,6 +624,57 @@ records and revoked its synthetic execution authority on completion. Assets and
 decisions remain explicitly synthetic; release-decision, publication and closure
 were not executed. This is development integration evidence, not full lifecycle
 or final candidate acceptance, a product release or a daily installation change.
+
+## Development release admission
+
+`base.release-decision` uses the existing stage request and existing authority
+review operations. After verification, request this stage to collect reviewable
+material. It remains `RUNNING` until a distinct current release decision approves
+that material. No extra approval page or caller-supplied PASS endpoint exists.
+Collecting documents cannot dispatch publication, CI, an Agent or owner mutation.
+
+The mandatory resource referenced by
+`config.release-decision.evidencePolicyRef` contains
+`{kind: "evidence-policy", requireAll: true, requireCurrent: true,
+allowSkipped: false, documentation: [...]}`. `documentation` maps 4–16 required
+documents as `{role, path}`. All four roles are required: `release-notes`,
+`migration`, `readme`, and `technical`. Map applicable language editions explicitly.
+A document may serve multiple roles; duplicate role/path pairs are rejected.
+Paths are bounded repository-relative `.md`, `.markdown` or `.txt` files, not
+URLs. Historical development configurations without these mappings cannot gain
+new release admission automatically.
+
+Runtime reads each file from the exact verified candidate commit through the
+registered GitHub/GitLab provider. It verifies complete bounded Git trees,
+regular-file modes, Git blob identity, content hashes, nonempty UTF-8 text and
+transfer limits (1 MiB per file, 8 MiB total). Links, submodules, incomplete trees,
+missing files, mismatched bytes and detected inline credentials fail closed.
+The independently re-observed original verification must still match its complete
+CI/native outcome, including consumption of the original candidate archive.
+
+`lifecycle.release.evidence.read {stageRequestId}` exposes the retained full
+material to a scoped reader. This is a historical evidence read, not a current
+release grant. The existing `lifecycle.authority.preview` for `kind: "release"`
+includes that material and its digest, along with exact instance/candidate/channel
+and current configuration pins. The decision evidence must bind this preview.
+Document presence proves availability and integrity; the explicit review decides
+whether their content is acceptable for the proposed release.
+
+The adapter rechecks original verification and exact release authority before
+completing. Policy changes, stale dependencies, revoked decisions or changed
+verification cannot produce PASS. Restart inspects the original request and
+preserves its material, deadline, attempt and receipts. If collection ended before
+material was retained, explicit `lifecycle.stage.advance` may finish read-only
+collection on that same request; background inspection does not recollect it.
+Publication retains its separate execution capability and exact release grant.
+
+Development HTTP/MCP regressions cover material visibility, missing approval,
+restart, interrupted collection, configuration drift, changed verification and
+revocation. Read-only probes verified exact document bytes from both real test
+providers; their one-file/four-role fixture tests transport, not release-document
+adequacy. The prior five-stage GitLab probe remains ended and unchanged. A complete
+real release-admission/publication/closure chain and the frozen final acceptance
+are still required; these development checks confer no product release authority.
 
 ## Development plan execution
 

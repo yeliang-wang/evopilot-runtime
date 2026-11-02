@@ -6,6 +6,7 @@ import { validatePlatformRegistration, type PlatformRegistration } from './confi
 import { containsInlineSecret } from '../lifecycle/compiler.js';
 import { MAX_ARCHIVE_BYTES, validateCandidateInput, type CandidateInput } from './artifacts.js';
 import type { SourceRequest, SourceObservation } from './source.js';
+import type { ReleaseDocument, DocumentObservation } from './documents.js';
 
 /** Trusted process credential resolution; never provided by a lifecycle/API. */
 export type PlatformCredentialReader=(binding:PlatformRegistration,actor:Principal,signal:AbortSignal)=>Promise<string>;
@@ -26,6 +27,7 @@ export interface PlatformJobObservation {
 }
 export interface PlatformRevisionReadiness extends PlatformReadiness {sourceSelection:'exact-commit';branchHeadCommit:string;}
 export interface PlatformClient {
+  documents(actor:Principal,request:{commit:string;documents:ReleaseDocument[]},signal:AbortSignal):Promise<DocumentObservation>;
   source(actor:Principal,request:SourceRequest,signal:AbortSignal):Promise<SourceObservation>;
   readiness(actor:Principal,signal:AbortSignal):Promise<PlatformReadiness>;
   revision(actor:Principal,commit:string,signal:AbortSignal):Promise<PlatformRevisionReadiness>;
