@@ -2,22 +2,24 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { canonical, exact, record, reject, ServiceError, slug, string } from './errors.js';
-import { authenticate, authorize, assertCredentials } from './security.js';
+import { authenticate, authorize, assertCredentials, currentPrincipal } from './security.js';
 import { RuntimeStore } from './store.js';
 import { handleMcp, HTTP_PROTOCOLS, READ_OPERATIONS, WRITE_OPERATIONS } from './mcp.js';
-import { createDefinitionService, DEFINITION_READS, DEFINITION_WRITES } from '../lifecycle/service.js';
+import { createDefinitionService, DEFINITION_READS } from '../lifecycle/service.js';
 import type { DefinitionBindingProvider } from '../lifecycle/bindings.js';
 import type { AuthorityResolver } from '../lifecycle/instance.js';
+import { createAuthorityService, AUTHORITY_READS, AUTHORITY_WRITES, type AuthorityPolicyProvider } from '../adapters/authority.js';
 
 const VERSION = String(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version);
 export interface ServerOptions { stateRoot: string; workspaceId: string; port?: number; }
-export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver) {
+export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver, trustedPolicy?:AuthorityPolicyProvider) {
   const config = record(options); exact(config,['stateRoot','workspaceId'],['port']);
   string(options.stateRoot,4096); slug(options.workspaceId);
   if (options.port !== undefined && (!Number.isSafeInteger(options.port) || options.port < 0 || options.port > 65535)) reject('INVALID_PORT','Invalid loopback port');
   assertCredentials(options.stateRoot,options.workspaceId);
   const store = new RuntimeStore(options.stateRoot, options.workspaceId);
-  const definitions=createDefinitionService(store,trustedBindings,trustedAuthorities);
+  const authorities=createAuthorityService(store,trustedPolicy,id=>currentPrincipal(options.stateRoot,options.workspaceId,id));
+  const definitions=createDefinitionService(store,trustedBindings,trustedAuthorities??authorities.resolveExecution,trustedAuthorities?undefined:authorities.verifyExecution,authorities.resolveRelease);
   const streams = new Set<ServerResponse>();
   let port = 0, closing = false;
   const status = () => ({ product: 'evopilot-runtime', version: VERSION, developmentTarget: '0.9.0', contract: 'runtime-service/v1', workspaceId: options.workspaceId, serviceId: store.serviceId, transport: 'streamable-http', protocols: HTTP_PROTOCOLS, operations: [...READ_OPERATIONS,...WRITE_OPERATIONS], independentLlm: false, productAcceptance: 'NOT_EVALUATED' });
@@ -26,9 +28,14 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     const envelope = record(value); exact(envelope,['operation','projectId','input'],['requestId','expectedRevision']);
     const projectId = slug(envelope.projectId), operation = string(envelope.operation), input = record(envelope.input);
     const actor = principal(req); authorize(actor,projectId,'read');
-    if(DEFINITION_WRITES.includes(operation as typeof DEFINITION_WRITES[number])){exact(envelope,['operation','projectId','input','requestId','expectedRevision']);if(!Number.isSafeInteger(envelope.expectedRevision)||Number(envelope.expectedRevision)<0)reject('INVALID_REVISION','Expected a nonnegative revision');return definitions.write(actor,projectId,operation,input,string(envelope.requestId),Number(envelope.expectedRevision),()=>principal(req));}
+    if(WRITE_OPERATIONS.includes(operation as typeof WRITE_OPERATIONS[number])){
+      exact(envelope,['operation','projectId','input','requestId','expectedRevision']);if(!Number.isSafeInteger(envelope.expectedRevision)||Number(envelope.expectedRevision)<0)reject('INVALID_REVISION','Expected a nonnegative revision');
+      const service=AUTHORITY_WRITES.includes(operation as typeof AUTHORITY_WRITES[number])?authorities:definitions;
+      return service.write(actor,projectId,operation,input,string(envelope.requestId),Number(envelope.expectedRevision),()=>principal(req));
+    }
     exact(envelope,['operation','projectId','input']);
     if(DEFINITION_READS.includes(operation as typeof DEFINITION_READS[number]))return definitions.read(actor,projectId,operation,input);
+    if(AUTHORITY_READS.includes(operation as typeof AUTHORITY_READS[number]))return authorities.read(actor,projectId,operation,input);
     switch (operation) {
       case 'runtime.status': exact(input,[]); return { ...status(), projectId, revision: store.revision(projectId) };
       case 'runtime.projects.list': exact(input,[]); return { projects: store.projects(actor) };

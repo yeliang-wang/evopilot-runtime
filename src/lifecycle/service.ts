@@ -4,7 +4,8 @@ import { RuntimeStore, type StoredObject, type Receipt } from '../server/store.j
 import { loadPublisherBase, valueDigest } from './base.js';
 import { compileLifecycle, containsInlineSecret, type Compilation, type Issue } from './compiler.js';
 import { validateBindings, type DefinitionBindingProvider, type BindingValidation } from './bindings.js';
-import { pinInstance, inspectInstance, stageAdmission, resolveAuthority, type LifecycleInstance, type AuthorityResolver } from './instance.js';
+import { pinInstance, inspectInstance, stageAdmission, resolveAuthority, type LifecycleInstance, type AuthorityResolver, type ExecutionAuthority, type ReleaseAuthority } from './instance.js';
+import type { EffectiveDefinition } from './compiler.js';
 
 export const DEFINITION_READS=['lifecycle.base.inspect','lifecycle.definition.inspect','lifecycle.definition.read','lifecycle.definition.source.read','lifecycle.definition.validate','lifecycle.instance.inspect','lifecycle.stage.admission'] as const;
 export const DEFINITION_WRITES=['lifecycle.draft.save','lifecycle.definition.activate','lifecycle.definition.save-and-activate','lifecycle.instance.create'] as const;
@@ -13,7 +14,7 @@ export interface DefinitionValidation { compilation:Compilation; bindings:Bindin
 function yamlInput(value:unknown):string{if(typeof value!=='string'||Buffer.byteLength(value)>262144)reject('YAML_LIMIT','YAML must be at most 256 KiB',413);if(containsInlineSecret(value))reject('INLINE_SECRET','Use protected credential references; inline secrets cannot be stored');return value;}
 const ref=(value:unknown):string=>{const v=string(value,128);if(!/^sha256:[a-f0-9]{64}$/.test(v))reject('INVALID_REFERENCE','An exact revision digest is required');return v;};
 
-export function createDefinitionService(store:RuntimeStore,bindings?:DefinitionBindingProvider,authorities?:AuthorityResolver){
+export function createDefinitionService(store:RuntimeStore,bindings?:DefinitionBindingProvider,authorities?:AuthorityResolver,verifyAuthority?:(grant:ExecutionAuthority,definition:EffectiveDefinition,actor:Principal)=>void,releaseAuthority?:(instance:LifecycleInstance,actor:Principal)=>ReleaseAuthority|undefined){
   function revision(projectId:string,id:string):Revision{
     const stored=store.object(projectId,'definition-revision',ref(id)) as Revision|null;
     if(!stored)reject('NOT_FOUND','Definition revision not found',404);
@@ -53,7 +54,10 @@ export function createDefinitionService(store:RuntimeStore,bindings?:DefinitionB
       if(!authorityBinding)reject('CORRUPT_INSTANCE','Instance authority reference is missing',503);
       const authority=await resolveAuthority(authorities,string(authorityBinding.evidenceRef,512),saved.definition,actor);
       const checked=await validateBindings(saved.definition,actor,bindings);
-      return{...stageAdmission(saved,string(input.stageId),{authority,bindingsCurrent:checked.ready}),executionDispatched:false};
+      verifyAuthority?.(authority,saved.definition,actor);
+      const stageId=string(input.stageId);
+      if(stageId==='publication')authorize(actor,projectId,'release.request');
+      return{...stageAdmission(saved,stageId,{authority,bindingsCurrent:checked.ready,releaseAuthority:stageId==='publication'?releaseAuthority?.(saved,actor):undefined}),executionDispatched:false};
     }
     if(operation==='lifecycle.base.inspect'){
       exact(input,[]);const {pin,base}=loadPublisherBase();return{pin,fields:base.fields,stages:base.stages,slots:base.slots,actions:base.actions.map(a=>({...a,digest:valueDigest(a)})),projectMutationAllowed:false};
@@ -91,6 +95,7 @@ export function createDefinitionService(store:RuntimeStore,bindings?:DefinitionB
       return store.mutate(actor,mutation,()=>{
         if(store.object(projectId,'lifecycle-instance',id))reject('INSTANCE_EXISTS','An instance cannot be overwritten or reset',409);
         if(Date.parse(checked.expiresAt!)<=Date.now())reject('BINDINGS_NOT_CURRENT','Reference evidence expired before commit',409);
+        verifyAuthority?.(authority,selected.compilation.effective!,reauthorize());
         const created=pinInstance(id,definitionRevisionId,selected.compilation.effective!,authority);
         return{objects:[{kind:'lifecycle-instance',id,value:created},{kind:'instance-authority',id,value:{evidenceRef:authorityRef}}],value:{instanceId:id,pinsDigest:created.pinsDigest,definitionRevisionId,status:'PENDING',executionDispatched:false,releaseAuthorized:false},event:{type:'lifecycle-instance-created',data:{instanceId:id,pinsDigest:created.pinsDigest,definitionRevisionId,authorityRef,executionDispatched:false}}};
       },reauthorize);

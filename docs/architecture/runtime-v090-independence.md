@@ -103,8 +103,8 @@ state; admission itself dispatches no work. The deterministic stage reducer
 checks all predecessors, candidate identities, bounded attempts and unknown
 outcome reconciliation. It cannot manufacture owner evidence or release authority.
 
-The protected owner/platform binding composition is implemented in development.
-Exact execution/release authority and external stage dispatch remain M3 work.
+The protected owner/platform binding composition and retained exact authority
+are implemented in development. External stage dispatch remains M3 work.
 Unconfigured adapters fail closed; synthetic regression adapters are test
 fixtures only and cannot certify real asset usability or final E2E. The two
 Dashboard pages, independent installed Expert/plugin, migration and complete
@@ -143,3 +143,37 @@ not invoke a model or introduce Runtime model credentials. Owner connections
 are initialized lazily: unavailable dependencies block validation while retained
 definitions and receipts remain readable. Changed owner connection registrations
 require a service restart; active instances are never silently retargeted.
+
+## Development execution and release decisions
+
+The shared HTTP/MCP/CLI dispatcher offers `lifecycle.authority.preview`,
+`lifecycle.authority.record`, `lifecycle.authority.inspect` and
+`lifecycle.authority.revoke`. These use the configured scoped authority policy and
+the existing `decision.record` capability. They add no approval page or second
+approval workflow. `auth-init` still creates only its explicitly selected
+reader/editor/activator role; installation does not silently grant decision,
+execution or publication permissions.
+
+An execution preview binds an explicit instance ID, active definition revision,
+semantics, required checks, goal/target/loop references, exact budget and expiry.
+A release preview binds a separately verified instance, its immutable candidate,
+required checks and configured channel. The release-decision predecessors must
+currently pass. Preview does not grant either authority. Recording requires the
+exact preview digest and existing pinned `evopilot-decision-evidence/v1` evidence
+for that decision and its retained source. File integrity alone does not
+authenticate a human; the current authenticated project capability and explicit
+policy remain mandatory. Expert must not invent a human decision or replace it
+with model output. Tests label their synthetic decisions explicitly.
+
+Decisions and withdrawals retain immutable receipts and audit. The latest exact
+decision for an instance supersedes its predecessor, including a rejection;
+revocation never falls back to an older approval. Inspection distinguishes a
+historical APPROVE from current usability. The service rechecks policy, deciding
+principal, scope, expiry, evidence bytes and revocation before using a grant and
+again before instance commit. An old request replay returns its original receipt,
+not renewed authority or a replenished budget. An authority cannot be used to
+create a different instance, and an existing instance cannot be reset by recording
+an amended decision. Publication additionally needs `release.request` and the
+separate exact instance/candidate/channel grant. None of these operations dispatch
+external work; CI/Agent actions and original-request reconciliation are the next
+implementation step.

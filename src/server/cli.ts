@@ -7,6 +7,7 @@ import { canonical, exact, record, reject, ServiceError, slug, string } from './
 import { ensurePrivateRoot, initializeCredentials, readPrivateJson, tokenDigest, type Permission } from './security.js';
 import { startRuntimeServer } from './http.js';
 import { openRegisteredBindings } from '../adapters/bindings.js';
+import { registeredAuthorityPolicy } from '../adapters/authority.js';
 
 export async function serviceMain(argv: string[], output: { write(value: string): unknown } = process.stdout): Promise<number> {
   const print=(v:unknown)=>output.write(canonical(v)+'\n');
@@ -30,7 +31,8 @@ export async function serviceMain(argv: string[], output: { write(value: string)
       exact(flags,['state-root','workspace-id'],['port','integrations-ref']);
       const integrations=flags['integrations-ref']?await openRegisteredBindings(flags['integrations-ref'],flags['workspace-id']):undefined;
       try{
-        const server=await startRuntimeServer({stateRoot:flags['state-root'],workspaceId:flags['workspace-id'],port:flags.port===undefined?0:Number(flags.port)},integrations?.provider);
+        const policy=flags['integrations-ref']?registeredAuthorityPolicy(flags['integrations-ref'],flags['workspace-id']):undefined;
+        const server=await startRuntimeServer({stateRoot:flags['state-root'],workspaceId:flags['workspace-id'],port:flags.port===undefined?0:Number(flags.port)},integrations?.provider,undefined,policy);
         print({ready:true,url:server.url,...server.identity});
         await new Promise<void>(resolve=>{
           const stop=()=>{process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop);void server.close().then(resolve);};

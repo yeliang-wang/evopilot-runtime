@@ -64,6 +64,12 @@ export function initializeCredentials(root: string, workspaceId: string, princip
   try { writeFileSync(fd, canonical(value)); fsyncSync(fd); } finally { closeSync(fd); }
 }
 export function assertCredentials(root: string, workspaceId: string): void { credentials(readPrivateJson(join(root,'auth.json')),workspaceId); }
+/** Current authority metadata only; never return or export stored token digests. */
+export function currentPrincipal(root:string,workspaceId:string,id:string):Principal|null {
+  const found=credentials(readPrivateJson(join(root,'auth.json')),workspaceId).find(p=>p.id===id);
+  if(!found)return null;
+  const {tokenDigest:unused,...principal}=found;return Object.freeze(principal);
+}
 export function authenticate(root: string, workspaceId: string, authorization: string | undefined, now = Date.now()): Principal {
   if (!authorization || !/^Bearer [a-zA-Z0-9_-]{32,256}$/.test(authorization)) return reject('UNAUTHENTICATED', 'A valid service credential is required', 401);
   const actual = Buffer.from(tokenDigest(authorization.slice(7)), 'hex');

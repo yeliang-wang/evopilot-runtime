@@ -1,4 +1,4 @@
-import { canonical, exact, record, reject, slug, string } from '../server/errors.js';
+import { canonical, exact, record, reject, ServiceError, slug, string } from '../server/errors.js';
 import { valueDigest, type BasePin } from './base.js';
 import { atPath, compileLifecycle, type EffectiveDefinition, type EffectiveNode } from './compiler.js';
 import type { Principal } from '../server/security.js';
@@ -6,7 +6,7 @@ import type { Principal } from '../server/security.js';
 export interface Budget { timeoutSeconds:number; maxAttempts:number; maxConcurrency:number; maxLoops:number; }
 /** Obtained from a trusted authority adapter, never directly from API/YAML data. */
 export interface ExecutionAuthority {
-  projectId:string; definitionRevisionId:string; semanticDigest:string;
+  projectId:string; instanceId:string; definitionRevisionId:string; semanticDigest:string;
   goalRef:string; targetRef:string; loopRef:string; requirementsDigest:string;
   budget:Budget; evidenceRef:string; revision:string; expiresAt:string;
 }
@@ -16,7 +16,7 @@ export async function resolveAuthority(provider:AuthorityResolver|undefined,auth
   const controller=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;
   let authority:ExecutionAuthority|null;
   try{authority=await Promise.race([provider(authorityRef,definition,actor,controller.signal),new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new Error('Authority lookup timed out'));},5000);})]);}
-  catch{return reject('AUTHORITY_UNKNOWN','Inspect authority configuration before attempting execution',409);}
+  catch(e){if(e instanceof ServiceError)throw e;return reject('AUTHORITY_UNKNOWN','Inspect authority configuration before attempting execution',409);}
   finally{if(timer)clearTimeout(timer);}
   if(!authority||authority.evidenceRef!==authorityRef)reject('AUTHORITY_REQUIRED','No exact execution authority was found',403);
   validateAuthority(authority);return authority;
@@ -27,7 +27,8 @@ export interface CandidateManifest {
   artifacts:{name:string;digest:string;bytes:number}[];
 }
 export interface ReleaseAuthority {
-  projectId:string; semanticDigest:string; candidateDigest:string; channel:string;
+  projectId:string; instanceId:string; pinsDigest:string; definitionRevisionId:string;
+  semanticDigest:string; requirementsDigest:string; candidateDigest:string; channel:string;
   decisionRef:string; expiresAt:string;
 }
 /** Current facts from server-side adapters; client assertions cannot fill this. */
@@ -68,8 +69,8 @@ function budget(value:unknown):Budget{
   return v as unknown as Budget;
 }
 function validateAuthority(a:ExecutionAuthority):void{
-  const v=record(a);exact(v,['projectId','definitionRevisionId','semanticDigest','goalRef','targetRef','loopRef','requirementsDigest','budget','evidenceRef','revision','expiresAt']);
-  slug(a.projectId);for(const k of ['definitionRevisionId','semanticDigest','requirementsDigest'])if(!hash(v[k]))reject('INVALID_AUTHORITY','Authority must pin exact content');
+  const v=record(a);exact(v,['projectId','instanceId','definitionRevisionId','semanticDigest','goalRef','targetRef','loopRef','requirementsDigest','budget','evidenceRef','revision','expiresAt']);
+  slug(a.projectId);slug(a.instanceId);for(const k of ['definitionRevisionId','semanticDigest','requirementsDigest'])if(!hash(v[k]))reject('INVALID_AUTHORITY','Authority must pin exact content');
   for(const s of [a.goalRef,a.targetRef,a.loopRef,a.evidenceRef,a.revision])string(s,512);
   if(!Number.isFinite(Date.parse(a.expiresAt)))reject('INVALID_AUTHORITY','Authority needs an exact expiry');budget(a.budget);
 }
@@ -95,7 +96,7 @@ export function pinInstance(id:string,definitionRevisionId:string,definition:Eff
   if(!compilation.valid||compilation.effective!.semanticDigest!==definition.semanticDigest)reject('INVALID_DEFINITION','Instance requires a valid publisher-resolved definition');
   // Derive the graph again from trusted Base instead of trusting supplied nodes.
   const effective=compilation.effective!;validateAuthority(authority);
-  if(authority.projectId!==effective.projectId||authority.definitionRevisionId!==definitionRevisionId||authority.semanticDigest!==effective.semanticDigest||authority.requirementsDigest!==requiredChecksDigest(effective)||Date.parse(authority.expiresAt)<=now)reject('AUTHORITY_MISMATCH','Current authority does not cover these exact pins');
+  if(authority.instanceId!==id||authority.projectId!==effective.projectId||authority.definitionRevisionId!==definitionRevisionId||authority.semanticDigest!==effective.semanticDigest||authority.requirementsDigest!==requiredChecksDigest(effective)||Date.parse(authority.expiresAt)<=now)reject('AUTHORITY_MISMATCH','Current authority does not cover these exact pins');
   for(const phase of ['plan','verification']){
     const configured=budget(atPath(effective.semantic,'config.'+phase+'.budget'));
     for(const key of Object.keys(configured) as (keyof Budget)[])if(configured[key]>authority.budget[key])reject('BUDGET_AUTHORITY','Definition budget exceeds current exact execution authority');
@@ -125,7 +126,7 @@ export function stageAdmission(instance:LifecycleInstance,stageId:string,context
   if(needsCandidate(node)&&!instance.candidate)reasons.push('CANDIDATE_REQUIRED');
   if(stageId==='publication'){
     const decision=context.releaseAuthority;
-    if(!decision||decision.projectId!==instance.pins.projectId||decision.semanticDigest!==instance.pins.semanticDigest||decision.candidateDigest!==instance.candidateDigest||decision.channel!==atPath(instance.definition.semantic,'config.publication.channel')||typeof decision.decisionRef!=='string'||!decision.decisionRef.length||!Number.isFinite(Date.parse(decision.expiresAt))||Date.parse(decision.expiresAt)<=now)reasons.push('EXACT_RELEASE_AUTHORITY_REQUIRED');
+    if(!decision||decision.projectId!==instance.pins.projectId||decision.instanceId!==instance.id||decision.pinsDigest!==instance.pinsDigest||decision.definitionRevisionId!==instance.pins.definitionRevisionId||decision.requirementsDigest!==instance.pins.requirementsDigest||decision.semanticDigest!==instance.pins.semanticDigest||decision.candidateDigest!==instance.candidateDigest||decision.channel!==atPath(instance.definition.semantic,'config.publication.channel')||typeof decision.decisionRef!=='string'||!decision.decisionRef.length||!Number.isFinite(Date.parse(decision.expiresAt))||Date.parse(decision.expiresAt)<=now)reasons.push('EXACT_RELEASE_AUTHORITY_REQUIRED');
   }
   return{allowed:reasons.length===0,reasons,inputDigest:valueDigest({instanceId:instance.id,pinsDigest:instance.pinsDigest,stageId,checks:node.checks,candidateDigest:needsCandidate(node)?instance.candidateDigest:null})};
 }

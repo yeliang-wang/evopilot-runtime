@@ -170,7 +170,7 @@ test('CLI request only forwards a protected exact envelope and uses service auth
 function pinned(extensions=[]){
   const d=lifecycle();for(const stage of ['plan','verification'])d.config[stage].budget={timeoutSeconds:600,maxAttempts:2,maxConcurrency:2,maxLoops:1};d.extensions=extensions;
   const definition=compile(d).effective,revisionId=valueDigest({syntheticRevision:true,source:yaml(d)}),now=Date.now();
-  const authority={projectId:'alpha',definitionRevisionId:revisionId,semanticDigest:definition.semanticDigest,goalRef:'synthetic:goal/one',targetRef:'synthetic:target/one',loopRef:'synthetic:loop/one',requirementsDigest:requiredChecksDigest(definition),budget:{timeoutSeconds:600,maxAttempts:2,maxConcurrency:2,maxLoops:1},evidenceRef:'synthetic:authority/one',revision:'1',expiresAt:new Date(now+3600000).toISOString()};
+  const authority={projectId:'alpha',instanceId:'synthetic-instance',definitionRevisionId:revisionId,semanticDigest:definition.semanticDigest,goalRef:'synthetic:goal/one',targetRef:'synthetic:target/one',loopRef:'synthetic:loop/one',requirementsDigest:requiredChecksDigest(definition),budget:{timeoutSeconds:600,maxAttempts:2,maxConcurrency:2,maxLoops:1},evidenceRef:'synthetic:authority/one',revision:'1',expiresAt:new Date(now+3600000).toISOString()};
   return{definition,authority,context:{authority,bindingsCurrent:true,now},instance:pinInstance('synthetic-instance',revisionId,definition,authority,now)};
 }
 const candidate=()=>({schema:'runtime-candidate/v1',version:'0.9.0-beta.1',profile:'candidate-verification',sourceDigest:valueDigest('synthetic-source'),buildDigest:valueDigest('synthetic-build'),artifacts:[{name:'synthetic.tgz',digest:valueDigest('synthetic-bytes'),bytes:64}]});
@@ -225,7 +225,7 @@ test('candidate validation requires immutable artifacts, not RC naming; publicat
   assert.throws(()=>recordStageOutcome(i,'verification',observed(i,'verification',{inputDigest:valueDigest('other-source')})),{code:'RECEIPT_MISMATCH'});
   i=recordStageOutcome(i,'verification',observed(i,'verification'));i=pass(i,'release-decision',f.context);
   assert.ok(stageAdmission(i,'publication',f.context).reasons.includes('EXACT_RELEASE_AUTHORITY_REQUIRED'));
-  const releaseAuthority={projectId:'alpha',semanticDigest:i.pins.semanticDigest,candidateDigest:fixed,channel:'github-release',decisionRef:'synthetic:release-decision/one',expiresAt:f.authority.expiresAt};
+  const releaseAuthority={projectId:'alpha',instanceId:i.id,pinsDigest:i.pinsDigest,definitionRevisionId:i.pins.definitionRevisionId,requirementsDigest:i.pins.requirementsDigest,semanticDigest:i.pins.semanticDigest,candidateDigest:fixed,channel:'github-release',decisionRef:'synthetic:release-decision/one',expiresAt:f.authority.expiresAt};
   assert.equal(stageAdmission(i,'publication',{...f.context,releaseAuthority}).allowed,true);
   assert.ok(stageAdmission(i,'publication',{...f.context,releaseAuthority:{...releaseAuthority,candidateDigest:valueDigest('other-candidate')}}).reasons.includes('EXACT_RELEASE_AUTHORITY_REQUIRED'));
   i=pass(i,'publication',{...f.context,releaseAuthority});i=pass(i,'closure',f.context);assert.equal(Object.values(i.stages).every(s=>s.status==='PASSED'),true);assert.equal(i.candidateDigest,fixed);
@@ -238,7 +238,7 @@ test('HTTP instance creation has separate authority, pins old definition, persis
   try{
     const p=pinned(),source=yaml(p.definition.semantic),preview=await validate(s,f,source);
     const enabled=await activate(s,f,source,preview.result.validationDigest,'instance-definition',0),revisionId=enabled.result.result.activeRevisionId;
-    currentAuthority={...p.authority,definitionRevisionId:revisionId};
+    currentAuthority={...p.authority,instanceId:'http-instance',definitionRevisionId:revisionId};
     const input={instanceId:'http-instance',definitionRevisionId:revisionId,authorityRef:currentAuthority.evidenceRef},meta={requestId:'create-instance',expectedRevision:1};
     assert.equal((await request(s,f,'lifecycle.instance.create',input,meta)).status,403,'definition owner is not an executor');
     const created=await request(s,f,'lifecycle.instance.create',input,meta,'executor');assert.equal(created.status,200,JSON.stringify(created));assert.equal(created.result.result.executionDispatched,false);
