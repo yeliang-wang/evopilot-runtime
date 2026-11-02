@@ -9,6 +9,10 @@ import { verifyOwnerDistribution } from '../../dist/adapters/published-owners.js
 import { createRuntimeService } from '../../dist/service.js';
 import { nativeSha256 } from '../../vendor/compatibility/v1/native.mjs';
 import { READINESS_STANDARD_DIGEST, READINESS_SPEC_PATH, readinessCriteria, validateReadinessSpecification } from '../../vendor/compatibility/usability/v2/contract.mjs';
+import { lifecycle, setPath } from './lifecycle-v090.mjs';
+import { loadPublisherBase } from '../../dist/lifecycle/base.js';
+import { compileLifecycle } from '../../dist/lifecycle/compiler.js';
+import { stringify } from 'yaml';
 
 const digest=bytes=>'sha256:'+createHash('sha256').update(bytes).digest('hex');
 export function syntheticReadinessMaterial(workspaceId='runtime-adapter-fixture',projectId='synthetic'){
@@ -18,6 +22,61 @@ export function syntheticReadinessMaterial(workspaceId='runtime-adapter-fixture'
   const intentDigest=nativeSha256(definition),citation={path,contentDigest:digest(text),locator:'line:1'};
   const specification=validateReadinessSpecification({schema:'evopilot-readiness-specification/v2',standardVersion:'v2',standardDigest:READINESS_STANDARD_DIGEST,intentDigest,intent:definition,author:'synthetic-adapter-fixture',statements:readinessCriteria(definition).map(criterionId=>({criterionId,text:'Synthetic declared criterion '+criterionId+': '+text.trim(),status:'RESOLVED',provenance:[{kind:'DESIGN_DECLARATION',sourceId:'fixture-design',locator:'line:1',resolutionReference:null}],citations:[citation]})),dependencies:[],normativeFiles:[{path,digest:digest(text)}]});
   return{definition,intentDigest,specification,citation,files:{[path]:text,[READINESS_SPEC_PATH]:JSON.stringify(specification)}};
+}
+
+// Explicit complete example configuration for admission testing. All policy
+// choices are visible data. This helper never approves execution, emits PASS
+// evidence or creates credentials for a real project.
+export function lifecycleBindingExample({root,workspaceId,projectId,platform,credential,ownerRegistrations,references,assessmentId,evidenceOrigin='SYNTHETIC',ontologySemanticId='https://example.invalid/r1/project',harnessRule='H001',harnessVariant='positive',harnessRequirements=[{ruleId:harnessRule,variantIds:[harnessVariant]}],agentExecutable=process.execPath,agentVersion='synthetic-unexecuted'}){
+  const data=lifecycle(platform.provider,projectId),platformRef=platform.ref,location={kind:'location',directory:root,purpose:'Isolated lifecycle test preparation'},review={kind:'review',reviewerIds:['fixture'],evidenceRequired:true},recovery={kind:'recovery',strategy:'inspect-original',onUnknown:'BLOCK',maxAttempts:1};
+  for(const key of ['provider','host','repository','repositoryId','defaultBranch','credentialRef','workflowPath','pipelinePath','runner']){if(platform[key]!==undefined)data.config.implementation[key]=platform[key];else delete data.config.implementation[key];}
+  data.config.publication.credentialRef=credential.ref;data.config.closure.deliveryMode='distribution';
+  const documentPath=join(root,'target.md');writeFileSync(documentPath,'Synthetic bounded fixture target. No business or release authority.\n',{mode:0o600});
+  const executable={path:agentExecutable,digest:digest(readFileSync(agentExecutable))};
+  const definitions={
+    'config.scope.targetInputRef':{kind:'document',file:{path:documentPath,digest:digest(readFileSync(documentPath))},format:'markdown'},
+    'config.scope.baselineRuleRef':{kind:'baseline',branch:platform.defaultBranch,changeMode:'pull-request',requireClean:true,exactSource:true},
+    'config.scope.requirementsMappingRef':{kind:'requirements-map',...references,rows:harnessRequirements.map((r,i)=>({id:'synthetic-requirement-'+i,semanticId:ontologySemanticId,...r}))},
+    'config.scope.deliveryTargetRef':{kind:'delivery',mode:'distribution',platformRef},
+    'config.plan.planLocationRef':location,'config.plan.adrLocationRef':location,
+    'config.plan.compatibilityPolicyRef':{kind:'compatibility',strategy:'exact-pins',allowUnreviewedDrift:false},
+    'config.plan.reviewPolicyRef':review,'config.plan.recoveryPolicyRef':recovery,'config.implementation.reviewPolicyRef':review,
+    'config.implementation.agentBindingRef':{kind:'agent',adapter:'codex',executable,version:agentVersion,hostId:'synthetic-fixture-host',workspaceRoot:root},
+    'config.candidate.buildWorkflowRef':{kind:'workflow',platformRef,purpose:'build',outputContract:'runtime-ci/v1'},
+    'config.candidate.toolchainRef':{kind:'toolchain',executables:[{file:{path:process.execPath,digest:digest(readFileSync(process.execPath))},version:process.version}]},
+    'config.candidate.artifactLocationRef':{kind:'artifact-store',platformRef,retentionDays:data.config.candidate.retentionDays},
+    'config.candidate.manifestActionRef':{kind:'manifest',action:'runtime.candidate.manifest/v1'},
+    'config.verification.environmentRef':{kind:'environment',platformRef,scope:'dedicated-test',maxConcurrency:data.config.verification.budget.maxConcurrency},
+    'config.verification.verifyWorkflowRef':{kind:'workflow',platformRef,purpose:'verify',outputContract:'runtime-ci/v1'},
+    'config.verification.failurePolicyRef':{kind:'failure',onFailure:'BLOCK',onUnknown:'BLOCK'},
+    'config.release-decision.authorityPolicyRef':{kind:'authority-policy',principalIds:['fixture'],exactSubjectRequired:true},
+    'config.release-decision.decisionSourceRef':{kind:'decision-source',backend:'runtime',decisionTypes:['execution','release']},
+    'config.release-decision.evidencePolicyRef':{kind:'evidence-policy',requireAll:true,requireCurrent:true,allowSkipped:false},
+    'config.publication.channelTargetRef':{kind:'channel',platformRef,channel:data.config.publication.channel},
+    'config.publication.publishWorkflowRef':{kind:'workflow',platformRef,purpose:'publish',outputContract:'runtime-ci/v1'},
+    'config.publication.readbackPolicyRef':{kind:'readback',verifyDownloadedDigests:true,requireExactCandidate:true},
+    'config.publication.recoveryPolicyRef':recovery,
+    'config.closure.deliveryTargetRef':{kind:'delivery',mode:'distribution',platformRef},
+    'config.closure.smokeWorkflowRef':{kind:'workflow',platformRef,purpose:'smoke',outputContract:'runtime-ci/v1'},
+    'config.closure.archiveRef':location,'config.closure.followupPolicyRef':{kind:'followup',onGap:'create-target',autoExecute:false},
+  };
+  const check={kind:'check',owner:'harness',criterionId:harnessRule,variantIds:[harnessVariant]};
+  for(const owner of ['ontology','harness']){
+    const reference=references[owner];data.assets[owner]={...data.assets[owner],adapterRef:ownerRegistrations.find(o=>o.owner===owner).ref,projectId,visibility:reference.visibility,id:reference.id,version:reference.version,digest:reference.digest,targetLevel:'L3'};
+    definitions['assets.'+owner+'.mappingRef']={kind:'asset-map',owner,reference,assessmentId:owner==='ontology'?assessmentId:null,evidenceOrigin};
+    definitions['assets.'+owner+'.standardRef']={kind:'standard',owner,standardDigest:reference.standardDigest,standardLockDigest:reference.standardLockDigest,contractDigest:reference.contractDigest,readinessStandardDigest:READINESS_STANDARD_DIGEST};
+  }
+  for(const stage of ['plan','implementation','verification','release-decision','closure'])definitions['config.'+stage+'.requiredChecks']=check;
+  const compilation=compileLifecycle(stringify(data),projectId),effective=compilation.effective;assert(effective,JSON.stringify(compilation.issues));
+  definitions['config.verification.evidenceMappingRef']={kind:'evidence-map',...references,rows:effective.nodes.flatMap(node=>node.checks.map(checkId=>({stage:node.id,checkId,owner:'harness',criterionId:harnessRule,variantIds:[harnessVariant],source:'owner-receipt'})))};
+  const resources=[];
+  for(const field of loadPublisherBase().base.fields){
+    if(!field.providers.includes(platform.provider)||!['bindingRef','bindingList'].includes(field.type)||field.path.endsWith('.adapterRef'))continue;
+    const definition=definitions[field.path];assert(definition,'Missing explicit example resource '+field.path);
+    const parts=field.path.split('.');let value=data;for(const part of parts)value=value[part];
+    for(const ref of Array.isArray(value)?value:[value])resources.push({ref,workspaceId,projectId,role:field.path,revision:1,expiresAt:platform.expiresAt,definition:structuredClone(definition)});
+  }
+  return{data,configuration:{schema:'runtime-integrations/v1',workspaceId,revision:1,platforms:[platform],credentials:[credential],owners:ownerRegistrations,resources}};
 }
 // Fixture shape follows the published native package contract and reads the
 // standard's shipped positive/negative example material, not sibling source.

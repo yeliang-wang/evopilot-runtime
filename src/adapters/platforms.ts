@@ -10,7 +10,7 @@ export interface PlatformReadiness {
   schema:'runtime-platform-readiness/v1'; provider:'github'|'gitlab'; projectId:string;
   bindingRef:string; bindingDigest:string; repositoryId:string; repository:string;
   branch:string; commit:string; workflowPath:string; workflowDigest:string;
-  runner:{id:string;online:boolean}|null;
+  runner:{id:string;online:boolean|null}|null;
   evidenceRef:string; observedAt:string; expiresAt:string; factsDigest:string;
   executionAuthorized:false; workflowExecuted:false;
 }

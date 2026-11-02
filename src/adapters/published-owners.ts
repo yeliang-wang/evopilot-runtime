@@ -160,7 +160,7 @@ export async function openPublishedOwner(configuration:OwnerConfiguration,toolch
     return output;
   };
   return Object.freeze({owner:config.owner,workspaceId:config.workspaceId,
-    capabilities:()=>({...identity,readOperations:[...NATIVE_READS,...FEEDBACK_READS,...READINESS_READS[config.owner],'workspace.inspect'],mutationOperations:['native.package.validate',...(config.owner==='ontology'?['native.package.reconcile']:[]),'feedback.ingest'],authoring:false,assetPublication:false,softwareRelease:false}),
+    capabilities:()=>({...identity,registrationDigest:valueDigest(config),readOperations:[...NATIVE_READS,...FEEDBACK_READS,...READINESS_READS[config.owner],'workspace.inspect'],mutationOperations:['native.package.validate',...(config.owner==='ontology'?['native.package.reconcile']:[]),'feedback.ingest'],authoring:false,assetPublication:false,softwareRelease:false}),
     read,readPackage,
     async mutate(actor:Principal,projectId:string,request:OwnerRequest,permit:OwnerMutationPermit){
       exact(record(request),['operation','scope','input','requestId','expectedRevision']);record(request.input);string(request.requestId);

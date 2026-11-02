@@ -9,9 +9,15 @@ import { validatePlatformRegistration, readIntegrationConfiguration, configuredP
 import { githubClient } from '../../dist/adapters/github.js';
 import { gitlabClient } from '../../dist/adapters/gitlab.js';
 import { fileBytes, platformReader } from '../../dist/adapters/platforms.js';
-import { syntheticReadinessMaterial } from '../fixtures/adapters-v090.mjs';
+import { syntheticReadinessMaterial, lifecycleBindingExample } from '../fixtures/adapters-v090.mjs';
 import { nativeSha256 } from '../../vendor/compatibility/v1/native.mjs';
 import { READINESS_STANDARD_DIGEST, noReconstruction } from '../../vendor/compatibility/usability/v2/contract.mjs';
+import { createRegisteredBindings, openRegisteredBindings } from '../../dist/adapters/bindings.js';
+import { compileLifecycle } from '../../dist/lifecycle/compiler.js';
+import { validateBindings } from '../../dist/lifecycle/bindings.js';
+import { valueDigest } from '../../dist/lifecycle/base.js';
+import { yaml } from '../fixtures/lifecycle-v090.mjs';
+import { inspectExternalAgent } from '../../dist/adapters/external-agent.js';
 
 function fixture(){const dir=mkdtempSync(join(realpathSync(tmpdir()),'runtime-owner-boundary-'));return{dir,cleanup:()=>rmSync(dir,{recursive:true,force:true})};}
 test('supported owner distribution metadata pins GitHub release packages and production dependency installations',()=>{
@@ -60,7 +66,7 @@ test('owner mutation permit digest fixes owner, scope, input, request ID and own
 
 const actor={id:'fixture',projects:['alpha'],permissions:['read'],revision:1,expiresAt:'2030-01-01T00:00:00Z'};
 function platform(provider='github'){
-  return{ref:'binding:alpha/platform',workspaceId:'test',projectId:'alpha',provider,host:provider==='github'?'https://github.com':'https://gitlab.example.test',repository:'synthetic/project',repositoryId:'42',defaultBranch:'main',credentialRef:'credential:alpha/platform',revision:1,expiresAt:'2030-01-01T00:00:00Z',...(provider==='github'?{workflowPath:'.github/workflows/test.yml'}:{pipelinePath:'.gitlab-ci.yml',runner:'56'})};
+  return{ref:'binding:alpha/platform',workspaceId:'test',projectId:'alpha',provider,host:provider==='github'?'https://github.com':'https://gitlab.example.test',repository:'synthetic/project',repositoryId:'42',defaultBranch:'main',credentialRef:'credential:alpha/platform',revision:1,expiresAt:'2030-01-01T00:00:00Z',...(provider==='github'?{workflowPath:'.github/workflows/test.yml',runner:'ubuntu-latest'}:{pipelinePath:'.gitlab-ci.yml',runner:'56'})};
 }
 function configFixture(provider='github'){
   const f=fixture(),p=platform(provider),tokenFile=join(f.dir,'token'),path=join(f.dir,'integrations.json');
@@ -94,7 +100,7 @@ test('configuration and credential access checks ownership, symlinks, scope, rev
 
 // Network doubles here establish parser/error boundaries only. Real provider
 // observations are retained separately; these tests never claim live CI E2E.
-const commit='a'.repeat(40),wrongCommit='b'.repeat(40),content=Buffer.from('name: Synthetic\non: workflow_dispatch\njobs: {}\n');
+const commit='a'.repeat(40),wrongCommit='b'.repeat(40),content=Buffer.from('name: Synthetic\non: workflow_dispatch\njobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo synthetic\n');
 const contentDigest=createHash('sha256').update(content).digest('hex');
 const blob=createHash('sha1').update(Buffer.from('blob '+content.length+'\0')).update(content).digest('hex');
 const json=v=>new Response(JSON.stringify(v),{headers:{'content-type':'application/json'}});
@@ -107,7 +113,7 @@ function responses(provider){
     routes.set(base+'/actions/workflows/test.yml',{id:11,path:p.workflowPath,state:'active'});
     routes.set(base+'/contents/'+p.workflowPath+'?ref='+commit,{type:'file',path:p.workflowPath,encoding:'base64',content:content.toString('base64').match(/.{1,20}/g).join('\n')+'\n',size:content.length,sha:blob});
     routes.set(base+'/actions/runs/23',{id:23,repository:{id:42},head_sha:commit,head_branch:'main',path:p.workflowPath});
-    routes.set(base+'/actions/jobs/24',{id:24,run_id:23,head_sha:commit,status:'completed',conclusion:'success',runner_id:25});
+    routes.set(base+'/actions/jobs/24',{id:24,run_id:23,head_sha:commit,status:'completed',conclusion:'success',runner_id:25,labels:['ubuntu-latest']});
   }else{
     routes.set(base+'/repository/branches/main',{name:'main',commit:{id:commit}});
     routes.set(base+'/repository/files/.gitlab-ci.yml?ref='+commit,{file_path:p.pipelinePath,encoding:'base64',content:content.toString('base64'),size:content.length,commit_id:commit,content_sha256:contentDigest});
@@ -206,3 +212,73 @@ test('stale, incomplete, forged and mismatched readiness views cannot certify a 
   }
   const view=f.wrap(f.result);view.result.assetAssessment.level='L2';assert.throws(()=>verifyReadinessView(view,f.projection,'L3','SYNTHETIC'),{code:'ASSET_READINESS_INTEGRITY'});
 });
+
+function bindingFixture(){
+  const f=configFixture(),r=readinessFixture(),references={ontology:r.projection.reference,harness:{...r.projection.reference,id:'synthetic-rules',product:'harness',producer:{product:'harness',version:'0.3.0'}}};
+  const ownerRegistrations=['ontology','harness'].map(owner=>({ref:'binding:alpha/'+owner,owner,packageRoot:f.dir,workspaceRoot:f.dir,workspaceId:'test',projects:['alpha']}));
+  const example=lifecycleBindingExample({root:f.dir,workspaceId:'test',projectId:'alpha',platform:f.p,credential:f.config.credentials[0],ownerRegistrations,references,assessmentId:'synthetic-content'});
+  const ontologyPackage={manifest:{entrypoints:{coverage:'coverage.json',cases:'cases.json'},sourceBindingRef:'bindings.json'},files:{'coverage.json':JSON.stringify({requiredCaseIds:['positive'],expectedEntities:[{id:'https://example.invalid/r1/project'}],requiredShapeIds:['https://example.invalid/r1/ProjectShape']}),'bindings.json':JSON.stringify({requirements:[{id:'scope'}]}),'cases.json':JSON.stringify({cases:[{id:'positive',requirementIds:['scope']}]})}};
+  const harnessPackage={manifest:{entrypoints:{coverage:'coverage.json'},dependencies:[references.ontology]},files:{'coverage.json':JSON.stringify({requiredRuleIds:['H001'],requiredCaseIds:['positive'],requirements:[{id:'requirement-H001',ruleIds:['H001'],caseIds:['positive']}]})}};
+  const state={current:true,ownerReads:0,platformReads:0,during:null};
+  const owners=Object.fromEntries(ownerRegistrations.map(({ref,...registration})=>[registration.owner,{owner:registration.owner,workspaceId:'test',capabilities:()=>({registrationDigest:valueDigest(registration)}),readPackage:async()=>{state.ownerReads++;return{package:registration.owner==='ontology'?ontologyPackage:harnessPackage};},read:async(_actor,_project,request)=>{
+    state.ownerReads++;if(request.operation==='readiness.package.inspect')return r.projection;
+    const copy=structuredClone(r.result);if(!state.current){copy.assetAssessment.freshness='STALE';copy.assetAssessment.level=null;copy.assetAssessment.status='STALE';}return r.wrap(copy);
+  }}]));
+  const connections={owner:ref=>owners[ref.split('/').at(-1)],agent:async d=>({adapter:'codex',version:d.version,executableDigest:d.executable.digest,hostId:d.hostId,modelInvoked:false}),platform:p=>({readiness:async()=>{state.platformReads++;if(state.during)await state.during();return{provider:p.provider,projectId:p.projectId,repositoryId:p.repositoryId,bindingDigest:valueDigest(p),factsDigest:valueDigest({synthetic:p.ref}),expiresAt:new Date(Date.now()+60000).toISOString()};}})};
+  const save=()=>writeFileSync(f.path,JSON.stringify(example.configuration),{mode:0o600});save();
+  const definition=()=>{const c=compileLifecycle(yaml(example.data),'alpha');assert.equal(c.valid,true);return c.effective;};
+  return{...f,...example,definition,state,connections,save,provider:createRegisteredBindings(f.path,'test',connections),cleanup:f.cleanup};
+}
+test('registered admission resolves every required role, exact owner inventories and platform facts without dispatch',async()=>{
+  const f=bindingFixture();try{
+    const result=await validateBindings(f.definition(),actor,f.provider);assert.equal(result.ready,true,JSON.stringify(result.issues));assert.equal(result.checks.length>40,true);assert.equal(f.state.platformReads,1);
+    assert.equal(result.checks.every(c=>c.status==='VALID'),true);assert.equal(JSON.stringify(result).includes('token-0123'),false);
+    const first=result.stamp;f.configuration.credentials[0].revision++;f.save();const changed=await validateBindings(f.definition(),actor,f.provider);assert.equal(changed.ready,true);assert.notEqual(changed.stamp,first);
+  }finally{f.cleanup();}
+});
+test('required registrations cannot be replaced by a generic document, missing reference, changed scope or weakened policy',async()=>{
+  const f=bindingFixture();try{
+    const original=structuredClone(f.configuration.resources);
+    for(const role of ['config.scope.targetInputRef','config.plan.recoveryPolicyRef','config.implementation.agentBindingRef','config.candidate.buildWorkflowRef','config.verification.evidenceMappingRef','assets.ontology.mappingRef','assets.harness.standardRef']){
+      f.configuration.resources=original.filter(r=>r.role!==role);f.save();const result=await validateBindings(f.definition(),actor,f.provider);assert.equal(result.ready,false,role);assert(result.issues.some(i=>i.path===role),role);
+    }
+    f.configuration.resources=structuredClone(original);const review=f.configuration.resources.find(r=>r.role==='config.plan.reviewPolicyRef');review.definition={kind:'document',...f.configuration.resources[0].definition};f.save();assert.equal((await validateBindings(f.definition(),actor,f.provider)).ready,false);
+    f.configuration.resources=structuredClone(original);f.configuration.resources.find(r=>r.role==='config.verification.failurePolicyRef').definition.onUnknown='PASS';f.save();assert.equal((await validateBindings(f.definition(),actor,f.provider)).ready,false);
+    f.configuration.resources=structuredClone(original);f.configuration.resources.find(r=>r.role==='config.plan.adrLocationRef').projectId='beta';f.save();assert.equal((await validateBindings(f.definition(),actor,f.provider)).ready,false);
+  }finally{f.cleanup();}
+});
+test('admission rejects stale grades, wrong published rule/variant, missing fixed mappings and owner registration drift',async()=>{
+  const f=bindingFixture();try{
+    f.state.current=false;assert.equal((await validateBindings(f.definition(),actor,f.provider)).ready,false);f.state.current=true;
+    const mapping=f.configuration.resources.find(r=>r.role==='config.verification.evidenceMappingRef'),original=structuredClone(mapping.definition);
+    mapping.definition.rows.pop();f.save();assert.equal((await validateBindings(f.definition(),actor,f.provider)).ready,false);
+    mapping.definition=structuredClone(original);mapping.definition.rows[0].criterionId='UNPUBLISHED';f.save();assert.equal((await validateBindings(f.definition(),actor,f.provider)).ready,false);
+    mapping.definition=structuredClone(original);mapping.definition.rows[0].variantIds=['unknown-variant'];f.save();assert.equal((await validateBindings(f.definition(),actor,f.provider)).ready,false);
+    mapping.definition=structuredClone(original);f.configuration.owners[0].packageRoot=join(f.dir,'other');f.save();assert.equal((await validateBindings(f.definition(),actor,f.provider)).ready,false);
+  }finally{f.cleanup();}
+});
+test('protected resource byte drift and configuration mutation during live verification invalidate admission',async()=>{
+  const f=bindingFixture();try{
+    writeFileSync(join(f.dir,'target.md'),'changed target');assert.equal((await validateBindings(f.definition(),actor,f.provider)).ready,false);
+    f.state.during=async()=>{f.configuration.revision++;f.save();};const checked=await validateBindings(f.definition(),actor,f.provider);assert.equal(checked.ready,false);assert.equal(checked.issues[0].code,'BINDINGS_UNKNOWN');
+  }finally{f.cleanup();}
+});
+test('external Agent identity probe cannot treat another executable, changed bytes or a caller-defined command as Codex',async()=>{
+  const f=bindingFixture();try{
+    const d=f.configuration.resources.find(r=>r.role==='config.implementation.agentBindingRef').definition;
+    await assert.rejects(()=>inspectExternalAgent(d,AbortSignal.timeout(5000)),{code:'AGENT_IDENTITY_CHANGED'});
+    await assert.rejects(()=>inspectExternalAgent({...d,command:['exec','do-work']},AbortSignal.timeout(5000)),{code:'INVALID_FIELDS'});
+    await assert.rejects(()=>inspectExternalAgent({...d,executable:{...d.executable,digest:'sha256:'+'f'.repeat(64)}},AbortSignal.timeout(5000)),{code:'AGENT_IDENTITY_CHANGED'});
+  }finally{f.cleanup();}
+});
+test('unavailable owner composition is lazy and blocks validation without preventing service/history startup',async()=>{
+  const f=bindingFixture(),connections=await openRegisteredBindings(join(f.dir,'missing-integrations.json'),'test');
+  try{const result=await validateBindings(f.definition(),actor,connections.provider);assert.equal(result.ready,false);assert.equal(result.issues[0].code,'BINDINGS_UNKNOWN');}
+  finally{connections.close();f.cleanup();}
+});
+test('GitHub runner binding rejects a wrong workflow label and mismatched completed job runner',()=>withNetwork('github',async f=>{
+  const bytes=Buffer.from(content.toString().replace('ubuntu-latest','windows-latest')),file=f.routes.get(f.base+'/contents/'+f.p.workflowPath+'?ref='+commit);
+  file.content=bytes.toString('base64');file.size=bytes.length;file.sha=createHash('sha1').update(Buffer.from('blob '+bytes.length+'\0')).update(bytes).digest('hex');
+  await assert.rejects(()=>f.client.readiness(actor,AbortSignal.timeout(5000)),{code:'RUNNER_NOT_READY'});
+  f.routes.get(f.base+'/actions/jobs/24').labels=['windows-latest'];await assert.rejects(()=>f.client.job(actor,'23','24',commit,AbortSignal.timeout(5000)),{code:'PLATFORM_RECEIPT_MISMATCH'});
+}));

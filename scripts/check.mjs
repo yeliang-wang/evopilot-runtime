@@ -186,7 +186,7 @@ export async function checkSource() {
     assert.doesNotMatch(checkedSource, /\bimport\s*\(|\brequire\s*\(|\beval\s*\(|\/Users\/|\/home\/|EVOPILOT_HARNESS_HOME|defaultHarnessHome|\.evopilot-harness|\bprocess\s*(?:\.\s*(?:env|cwd|chdir)|\[)|\bglobalThis\s*(?:\.|\[)|\bm0\//);
     for (const specifier of specifiers(source)) {
       if (isBuiltin(specifier)) continue;
-      if(path.endsWith('/src/lifecycle/compiler.ts')&&specifier==='yaml')continue;
+      if((path.endsWith('/src/lifecycle/compiler.ts')||path.endsWith('/src/adapters/github.ts'))&&specifier==='yaml')continue;
       if (path.endsWith('/src/server/mcp.ts') && ['@modelcontextprotocol/sdk/server/index.js','@modelcontextprotocol/sdk/server/streamableHttp.js','@modelcontextprotocol/sdk/types.js'].includes(specifier)) continue;
       if (specifier === 'yaml' && (path.endsWith('/src/asset-sources.mjs') || PRODUCT === 'ontology' && path.includes('/src/compat/'))) continue;
       if (PRODUCT === 'ontology' && path.includes('/src/compat/') && specifier === 'ajv/dist/2020.js') continue;

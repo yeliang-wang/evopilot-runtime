@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { canonical, exact, record, reject, ServiceError, slug, string } from './errors.js';
 import { ensurePrivateRoot, initializeCredentials, readPrivateJson, tokenDigest, type Permission } from './security.js';
 import { startRuntimeServer } from './http.js';
+import { openRegisteredBindings } from '../adapters/bindings.js';
 
 export async function serviceMain(argv: string[], output: { write(value: string): unknown } = process.stdout): Promise<number> {
   const print=(v:unknown)=>output.write(canonical(v)+'\n');
@@ -26,13 +27,16 @@ export async function serviceMain(argv: string[], output: { write(value: string)
       print({initialized:true,workspaceId,projectId,principalId:id,role:flags.role,tokenRef,executionAuthorized:false,releaseAuthorized:false});return 0;
     }
     if(command==='serve'){
-      exact(flags,['state-root','workspace-id'],['port']);
-      const server=await startRuntimeServer({stateRoot:flags['state-root'],workspaceId:flags['workspace-id'],port:flags.port===undefined?0:Number(flags.port)});
-      print({ready:true,url:server.url,...server.identity});
-      await new Promise<void>(resolve=>{
-        const stop=()=>{process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop);void server.close().then(resolve);};
-        process.once('SIGINT',stop);process.once('SIGTERM',stop);
-      });return 0;
+      exact(flags,['state-root','workspace-id'],['port','integrations-ref']);
+      const integrations=flags['integrations-ref']?await openRegisteredBindings(flags['integrations-ref'],flags['workspace-id']):undefined;
+      try{
+        const server=await startRuntimeServer({stateRoot:flags['state-root'],workspaceId:flags['workspace-id'],port:flags.port===undefined?0:Number(flags.port)},integrations?.provider);
+        print({ready:true,url:server.url,...server.identity});
+        await new Promise<void>(resolve=>{
+          const stop=()=>{process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop);void server.close().then(resolve);};
+          process.once('SIGINT',stop);process.once('SIGTERM',stop);
+        });return 0;
+      }finally{integrations?.close();}
     }
     if(command==='status'||command==='request'){
       exact(flags,command==='status'?['url','token-ref','project']:['url','token-ref','project','request-ref']);

@@ -103,9 +103,43 @@ state; admission itself dispatches no work. The deterministic stage reducer
 checks all predecessors, candidate identities, bounded attempts and unknown
 outcome reconciliation. It cannot manufacture owner evidence or release authority.
 
-Real owner/platform authority adapters and external stage dispatch remain M3
-work. Unconfigured adapters fail closed; synthetic regression adapters are test
+The protected owner/platform binding composition is implemented in development.
+Exact execution/release authority and external stage dispatch remain M3 work.
+Unconfigured adapters fail closed; synthetic regression adapters are test
 fixtures only and cannot certify real asset usability or final E2E. The two
 Dashboard pages, independent installed Expert/plugin, migration and complete
 candidate acceptance remain unfinished. These development features do not claim
 that the frozen 664 acceptance instances have passed.
+
+## Development integration admission
+
+`serve` accepts `--integrations-ref <protected-json-file>`. This operator file
+uses `runtime-integrations/v1`, with workspace identity, revision and scoped
+`owners`, `platforms`, `credentials` and `resources`. It contains credential
+references, never raw tokens. A resource binds its exact lifecycle field role,
+revision, expiry and typed definition: documents, locations, policies, workflows,
+toolchains, delivery targets, required checks, standards and asset mappings.
+An absent registration or a document supplied in place of a workflow blocks
+admission. A valid configuration does not supply future candidate evidence.
+
+Owner consumers verify the complete published 0.8.3 distributions and dependency
+files before importing their public APIs. They check exact scope, asset identity,
+standards, Ontology dependencies or published compatibility declarations, and
+mandatory criterion/variant mappings. Content grade comes from Harness's current
+v2 assessment view and the current Runtime modeling intent; historical grades,
+stale references and a synthetic review presented as actual evidence cannot
+satisfy that binding. A content grade does not prove reconstructed software.
+
+GitHub.com registrations include an exact workflow path and concrete runner
+label; the adapter checks that label in the workflow and observed job. GitLab
+registrations include the pipeline path and a numeric project runner ID, checked
+for current availability. Both adapters pin repository identity, default branch,
+source commit and workflow bytes. Unknown, skipped and neutral job results cannot
+be treated as passing verification. These observations do not trigger CI.
+
+The Codex binding pins the selected local executable bytes, version, host
+identity and workspace. Admission issues only a fixed `--version` query. It does
+not invoke a model or introduce Runtime model credentials. Owner connections
+are initialized lazily: unavailable dependencies block validation while retained
+definitions and receipts remain readable. Changed owner connection registrations
+require a service restart; active instances are never silently retargeted.

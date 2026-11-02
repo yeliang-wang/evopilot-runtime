@@ -4,22 +4,27 @@ import { canonical, exact, record, reject, slug, string } from '../server/errors
 import { authorize, privateFile, readPrivateJson, type Principal } from '../server/security.js';
 import { valueDigest } from '../lifecycle/base.js';
 import type { OwnerConfiguration } from './published-owners.js';
+import { containsInlineSecret } from '../lifecycle/compiler.js';
 
 export type Platform = 'github'|'gitlab';
 export interface PlatformRegistration {
   ref:string; workspaceId:string; projectId:string; provider:Platform; host:string;
   repository:string; repositoryId:string; defaultBranch:string; credentialRef:string;
-  workflowPath?:string; pipelinePath?:string; runner?:string;
+  workflowPath?:string; pipelinePath?:string; runner:string;
   revision:number; expiresAt:string;
 }
-interface CredentialRegistration {
+export interface CredentialRegistration {
   ref:string; workspaceId:string; projectId:string; provider:Platform; host:string;
   tokenFile:string; revision:number; expiresAt:string;
 }
-interface RegisteredOwner extends OwnerConfiguration { ref:string; }
+export interface RegisteredOwner extends OwnerConfiguration { ref:string; }
+export interface ResourceRegistration {
+  ref:string; workspaceId:string; projectId:string; role:string; revision:number; expiresAt:string;
+  definition:Record<string,unknown>;
+}
 export interface IntegrationConfiguration {
   schema:'runtime-integrations/v1'; workspaceId:string; revision:number;
-  platforms:PlatformRegistration[]; credentials:CredentialRegistration[]; owners:RegisteredOwner[];
+  platforms:PlatformRegistration[]; credentials:CredentialRegistration[]; owners:RegisteredOwner[]; resources:ResourceRegistration[];
 }
 function immutable<T>(v:T):T{if(v&&typeof v==='object'){for(const item of Object.values(v))immutable(item);Object.freeze(v);}return v;}
 function reference(v:unknown,prefix:'binding'|'credential'):string{
@@ -40,7 +45,7 @@ function scope(v:Record<string,unknown>,workspaceId:string):void{
 }
 export function validatePlatformRegistration(value:unknown):PlatformRegistration{
   const p=record(value);const provider=p.provider;
-  exact(p,['ref','workspaceId','projectId','provider','host','repository','repositoryId','defaultBranch','credentialRef','revision','expiresAt',...(provider==='github'?['workflowPath']:['pipelinePath','runner'])]);
+  exact(p,['ref','workspaceId','projectId','provider','host','repository','repositoryId','defaultBranch','credentialRef','revision','expiresAt','runner',...(provider==='github'?['workflowPath']:['pipelinePath'])]);
   slug(p.workspaceId);scope(p,String(p.workspaceId));reference(p.ref,'binding');reference(p.credentialRef,'credential');
   const repository=string(p.repository,512);
   if(!/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+$/.test(repository)||repository.split('/').some(x=>x==='.'||x==='..')||provider==='github'&&repository.split('/').length!==2)reject('INVALID_REGISTRATION','Repository needs its exact provider namespace/path');
@@ -49,6 +54,7 @@ export function validatePlatformRegistration(value:unknown):PlatformRegistration
   const path=string(p.workflowPath??p.pipelinePath,512);
   if(path.startsWith('/')||path.split('/').some(x=>!x||x==='.'||x==='..')||!/^[-A-Za-z0-9_./]+\.ya?ml$/.test(path)||provider==='github'&&!/^\.github\/workflows\/[^/]+\.ya?ml$/.test(path))reject('INVALID_REGISTRATION','Invalid registered workflow path');
   if(provider==='gitlab'&&!/^[1-9][0-9]{0,19}$/.test(string(p.runner,20)))reject('INVALID_REGISTRATION','GitLab runner must be registered by exact numeric identity');
+  if(provider==='github'&&!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(string(p.runner,128)))reject('INVALID_REGISTRATION','GitHub runner requires an exact configured label');
   return immutable(JSON.parse(canonical(p)) as PlatformRegistration);
 }
 /** This protected operator file registers existing integrations. It grants no
@@ -57,7 +63,7 @@ export function validatePlatformRegistration(value:unknown):PlatformRegistration
 export function readIntegrationConfiguration(path:string,workspaceId:string):Readonly<IntegrationConfiguration>{
   try{
     absolute(path);if(realpathSync(path)!==path)reject('UNSAFE_INTEGRATION_CONFIG','Symlinked integration configuration is not allowed');
-    const config=record(readPrivateJson(path));exact(config,['schema','workspaceId','revision','platforms','credentials','owners']);
+    const config=record(readPrivateJson(path));exact(config,['schema','workspaceId','revision','platforms','credentials','owners'],['resources']);
     if(config.schema!=='runtime-integrations/v1'||config.workspaceId!==workspaceId)reject('INTEGRATION_SCOPE','Integration configuration belongs to another workspace',403);
     slug(workspaceId);revision(config.revision);
     for(const key of ['platforms','credentials','owners'])if(!Array.isArray(config[key])||config[key].length>128)reject('INVALID_REGISTRATION','Integration collections must be bounded arrays');
@@ -71,8 +77,15 @@ export function readIntegrationConfiguration(path:string,workspaceId:string):Rea
       if(o.workspaceId!==workspaceId||!['ontology','harness'].includes(String(o.owner))||!Array.isArray(o.projects)||!o.projects.length||o.projects.length>1000||new Set(o.projects).size!==o.projects.length)reject('INTEGRATION_SCOPE','Invalid owner scope');
       o.projects.forEach(slug);absolute(o.packageRoot);absolute(o.workspaceRoot);return o as unknown as RegisteredOwner;
     });
+    if(config.resources!==undefined&&(!Array.isArray(config.resources)||config.resources.length>256))reject('INVALID_REGISTRATION','Resource registrations must be a bounded array');
+    const resources=((config.resources??[]) as unknown[]).map(v=>{
+      const r=record(v);exact(r,['ref','workspaceId','projectId','role','revision','expiresAt','definition']);unique(reference(r.ref,'binding'));slug(r.projectId);revision(r.revision);expiry(r.expiresAt);string(r.role,256);record(r.definition);
+      if(r.workspaceId!==workspaceId)reject('INTEGRATION_SCOPE','Resource belongs to another workspace',403);
+      if(containsInlineSecret(canonical(r.definition)))reject('INLINE_SECRET','Use a registered credential reference, not inline secrets');
+      return r as unknown as ResourceRegistration;
+    });
     for(const p of platforms){const c=credentials.find(c=>c.ref===p.credentialRef);if(!c||c.projectId!==p.projectId||c.provider!==p.provider||c.host!==p.host)reject('CREDENTIAL_SCOPE','Platform and credential registrations must have identical project/provider/host scope',403);}
-    return immutable({schema:'runtime-integrations/v1',workspaceId,revision:Number(config.revision),platforms,credentials,owners});
+    return immutable({schema:'runtime-integrations/v1',workspaceId,revision:Number(config.revision),platforms,credentials,owners,resources});
   }catch(e){if(e&&typeof e==='object'&&'code'in e&&typeof e.code==='string'&&!/^E[A-Z]+$/.test(e.code))throw e;return reject('UNSAFE_INTEGRATION_CONFIG','Protected integration configuration is unavailable',503);}
 }
 export function configuredPlatform(configuration:Readonly<IntegrationConfiguration>,actor:Principal,projectId:string,ref:string,now=Date.now()):PlatformRegistration{

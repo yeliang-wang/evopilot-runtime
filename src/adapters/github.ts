@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { parseDocument } from 'yaml';
 import { record, reject } from '../server/errors.js';
 import type { PlatformRegistration } from './config.js';
 import { commitId, fileBytes, jobResult, matchRepository, platformReader, positiveId, readinessResult, safePlatformError, sha256, type PlatformClient, type PlatformCredentialReader, type PlatformJobObservation } from './platforms.js';
@@ -19,13 +20,19 @@ export function githubClient(configuration:PlatformRegistration,credentials:Plat
       if(file.type!=='file'||file.path!==path||file.encoding!=='base64')reject('WORKFLOW_NOT_READY','Registered workflow is not a versioned file',409);
       const bytes=fileBytes(file.content,file.size),blob=createHash('sha1').update(Buffer.from('blob '+bytes.length+'\0')).update(bytes).digest('hex');
       if(file.sha!==blob)reject('WORKFLOW_CONTENT_CHANGED','Workflow blob integrity check failed',409);
-      return readinessResult(binding,commit,path,sha256(bytes),null);
+      const document=parseDocument(bytes.toString('utf8'),{uniqueKeys:true});if(document.errors.length)reject('WORKFLOW_NOT_READY','Workflow YAML could not be inspected',409);
+      const jobs=record(record(document.toJS({maxAliasCount:32})).jobs);
+      const matches=Object.values(jobs).some(raw=>{const job=record(raw),labels=job['runs-on'];return labels===binding.runner||Array.isArray(labels)&&labels.includes(binding.runner);});
+      if(!matches)reject('RUNNER_NOT_READY','Registered runner label is not present in a concrete workflow job',409);
+      // Hosted capacity is established by an actual job, not by configuration.
+      return readinessResult(binding,commit,path,sha256(bytes),{id:'label:'+binding.runner,online:null});
     }catch(error){return safePlatformError(error);}},
     async job(actor,runId,jobId,commit,signal){try{
       positiveId(runId);positiveId(jobId);commitId(commit);
       matchRepository(await get(actor,'',signal),binding);
       const run=record(await get(actor,'/actions/runs/'+runId,signal)),job=record(await get(actor,'/actions/jobs/'+jobId,signal));
       if(positiveId(run.id)!==runId||positiveId(record(run.repository).id)!==binding.repositoryId||run.head_sha!==commit||run.head_branch!==binding.defaultBranch||run.path!==binding.workflowPath||positiveId(job.id)!==jobId||positiveId(job.run_id)!==runId||job.head_sha!==commit)reject('PLATFORM_RECEIPT_MISMATCH','GitHub observation does not match the exact repository/workflow/run/job/source',409);
+      if(!Array.isArray(job.labels)||!job.labels.includes(binding.runner))reject('PLATFORM_RECEIPT_MISMATCH','GitHub job did not select the registered runner label',409);
       let status:PlatformJobObservation['status']='UNKNOWN';
       if(job.status==='queued'||job.status==='waiting'||job.status==='pending')status='PENDING';
       else if(job.status==='in_progress')status='RUNNING';
