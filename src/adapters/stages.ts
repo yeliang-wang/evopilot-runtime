@@ -7,6 +7,7 @@ import { RuntimeStore } from '../server/store.js';
 import { byteDigest, valueDigest } from '../lifecycle/base.js';
 import { atPath } from '../lifecycle/compiler.js';
 import { inspectInstance, type LifecycleInstance } from '../lifecycle/instance.js';
+import { isPreparationRef, readPreparationPacket } from '../lifecycle/preparation.js';
 import type { StageAdapter, StageObservation, StagePlan, StageProgress, StageRequest } from '../lifecycle/execution.js';
 import { nativeSha256, validateNativeReference, type NativeReference, type NativeScope, type NativeValidationContext } from '../../vendor/compatibility/v1/native.mjs';
 import { configuredPlatform, readIntegrationConfiguration, type IntegrationConfiguration, type PlatformRegistration } from './config.js';
@@ -75,6 +76,12 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
     renameSync(temporary,path);const directory=openSync(root,constants.O_RDONLY);try{fsyncSync(directory);}finally{closeSync(directory);}
   }
   function configuration(actor:Principal,projectId:string):Readonly<IntegrationConfiguration>{authorize(actor,projectId,'read');return readIntegrationConfiguration(configPath,store.workspaceId);}
+  function targetVersion(instance:LifecycleInstance):string|null{
+    if(!isPreparationRef(instance.pins.targetRef))return null;
+    const packet=readPreparationPacket(store,instance.pins.projectId,instance.pins.targetRef);
+    if(packet.input.definitionRevisionId!==instance.pins.definitionRevisionId||packet.input.goalRef!==instance.pins.goalRef||packet.input.loopRef!==instance.pins.loopRef||packet.semanticDigest!==instance.pins.semanticDigest)reject('PREPARATION_SCOPE','CI must use the exact reviewed preparation',409);
+    return packet.input.target.version;
+  }
   function resource(config:Readonly<IntegrationConfiguration>,instance:LifecycleInstance,role:string){
     const ref=atPath(instance.definition.semantic,role),r=config.resources.find(x=>x.ref===ref&&x.projectId===instance.pins.projectId&&x.role===role);
     if(!r||Date.parse(r.expiresAt)<=Date.now())reject('STAGE_BINDING_UNAVAILABLE','Current scoped stage resource is required');validateResourceDefinition(r);return r;
@@ -113,6 +120,7 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
   }
   function plan(r:StageRequest,instance:LifecycleInstance,actor:Principal):{p:CiPlan;config:Readonly<IntegrationConfiguration>;client:PlatformClient;ci:PlatformRunRequest}{
     inspectInstance(instance);const p=r.plan.parameters as unknown as CiPlan,config=configuration(actor,r.projectId);
+    const version=targetVersion(instance);if(version&&instance.candidate&&instance.candidate.version!==version)reject('CANDIDATE_VERSION_MISMATCH','Existing candidate differs from the reviewed target version',409);
     if(p.toolchainManifestDigest!==connections.toolchainManifestDigest)reject('TOOLCHAIN_CHANGED','Original native stage manifest cannot change across service restarts',409);
     if(r.workspaceId!==store.workspaceId||r.projectId!==instance.pins.projectId||r.instanceId!==instance.id||r.pinsDigest!==instance.pinsDigest||r.plan.adapterId!==ADAPTER_ID||r.plan.adapterDigest!==ADAPTER_DIGEST||r.plan.action!=='base.'+r.stageId||r.plan.bindingDigest!==valueDigest(p)||valueDigest(r.plan)!==r.planDigest||p.stageId!==r.stageId||!['candidate','verification'].includes(p.stageId)||p.toolchainLockDigest!==connections.toolchainLockDigest||p.candidateDigest!==instance.candidateDigest||!same(p.expectedChecks,instance.definition.nodes.find(n=>n.id===r.stageId)?.checks))reject('STAGE_PLAN_MISMATCH','CI execution differs from its original immutable stage plan');
     const current=configuredPlatform(config,actor,r.projectId,p.binding.ref);if(!same(current,p.binding))reject('PLATFORM_BINDING_CHANGED','Original stage platform registration changed');
@@ -160,6 +168,11 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
     if(run.status==='FAILED')return observation(r,p,ci,'FAILED');
     const archive=await client.artifact(actor,ci,run.runId,signal),verified=await verifyCiArtifact(archive,ci,p.expectedChecks,signal);archiveBytes(archive);
     retain(r.projectId,'ci-stage-artifact',r.id,verified,true);
+    const version=targetVersion(instance);
+    if(version&&verified.candidate&&verified.candidate.version!==version){
+      const evidence={schema:'runtime-ci-target-mismatch/v1',requestId:r.id,inputDigest:r.inputDigest,preparationRef:instance.pins.targetRef,expectedVersion:version,actualVersion:verified.candidate.version,artifact:verified},ref=valueDigest(evidence);retain(r.projectId,'ci-stage-evidence',ref,evidence,true);
+      return observation(r,p,ci,'FAILED',p.expectedChecks.map(id=>({id,status:id==='base.candidate.immutable-manifest'?'FAIL':'UNKNOWN',evidenceRef:ref})));
+    }
     if(verified.status==='FAILED')return observation(r,p,ci,'FAILED',verified.checks.map(c=>({id:c.id,status:c.status,evidenceRef:verified.evidenceRef})));
     if(verified.status!=='PASSED')return observation(r,p,ci,'UNKNOWN');
     const owners=await Promise.all((['ontology','harness'] as const).map(kind=>ownerResult(r,p,config,kind,actor)));signal.throwIfAborted();

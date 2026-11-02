@@ -19,6 +19,8 @@ import { readRegisteredNativeToolchain } from './config.js';
 import { createCiStageAdapter } from './stages.js';
 import type { RuntimeStore } from '../server/store.js';
 import type { StageAdapter } from '../lifecycle/execution.js';
+import type { PreparationValidator } from '../lifecycle/preparation.js';
+import { createScopeStageAdapter, registeredPreparation } from './preparation-stages.js';
 import type { ReadinessIntentRecord } from '../../vendor/compatibility/usability/v2/contract.mjs';
 
 export interface BindingConnections {
@@ -235,7 +237,7 @@ export function createRegisteredBindings(configPath:string,workspaceId:string,co
 /** Fixed local composition of published owner consumers, the existing Runtime
  * readiness API and registered HTTPS providers. No caller-selected imports,
  * owner authoring, raw database access or default external execution. */
-export async function openRegisteredBindings(configPath:string,workspaceId:string):Promise<{provider:DefinitionBindingProvider;executor(store:RuntimeStore):StageAdapter;close():void}>{
+export async function openRegisteredBindings(configPath:string,workspaceId:string):Promise<{provider:DefinitionBindingProvider;preparation:PreparationValidator;executor(store:RuntimeStore):StageAdapter;close():void}>{
   slug(workspaceId);string(configPath,4096);
   let legacy:ReturnType<typeof createRuntimeService>|undefined,opening:Promise<void>|null=null,connectedDigest:string|null=null,closed=false;
   const adapters=new Map<string,PublishedOwnerAdapter>();
@@ -283,18 +285,19 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
     await ensure(signal);return registered(definition,actor,requirements,signal);
   };
   // Owner outages block dependent admission, never service/history availability.
-  return{provider,executor(store){
+  return{provider,preparation:registeredPreparation(configPath,workspaceId),executor(store){
     if(store.workspaceId!==workspaceId)reject('INTEGRATION_SCOPE','Stage executor must share the service workspace',403);
-    let adapter:StageAdapter|undefined;
-    async function current(signal:AbortSignal):Promise<StageAdapter>{
+    let adapter:StageAdapter|undefined,scope:StageAdapter|undefined;
+    async function current(signal:AbortSignal,stageId:string):Promise<StageAdapter>{
       const config=await ensure(signal),toolchain=readRegisteredNativeToolchain(config);
+      if(stageId==='scope'){scope??=createScopeStageAdapter(store,configPath,connections);return scope;}
       adapter??=createCiStageAdapter(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest});return adapter;
     }
     return{
-      async prepare(instance,stage,actor,signal){return(await current(signal)).prepare(instance,stage,actor,signal);},
-      async dispatch(request,instance,permit,signal){return(await current(signal)).dispatch(request,instance,permit,signal);},
-      async inspect(request,instance,progress,actor,signal){return(await current(signal)).inspect(request,instance,progress,actor,signal);},
-      async advance(request,instance,progress,permit,signal){return(await current(signal)).advance!(request,instance,progress,permit,signal);},
+      async prepare(instance,stage,actor,signal){return(await current(signal,stage)).prepare(instance,stage,actor,signal);},
+      async dispatch(request,instance,permit,signal){return(await current(signal,request.stageId)).dispatch(request,instance,permit,signal);},
+      async inspect(request,instance,progress,actor,signal){return(await current(signal,request.stageId)).inspect(request,instance,progress,actor,signal);},
+      async advance(request,instance,progress,permit,signal){return(await current(signal,request.stageId)).advance!(request,instance,progress,permit,signal);},
     };
   },close(){if(!closed){closed=true;disconnect();}}};
 }

@@ -6,10 +6,11 @@ import { record, ServiceError } from './errors.js';
 import { DEFINITION_READS, DEFINITION_WRITES } from '../lifecycle/service.js';
 import { AUTHORITY_READS, AUTHORITY_WRITES } from '../adapters/authority.js';
 import { EXECUTION_READS, EXECUTION_WRITES } from '../lifecycle/execution.js';
+import { PREPARATION_READS, PREPARATION_WRITES } from '../lifecycle/preparation.js';
 
 export const HTTP_PROTOCOLS = ['2025-06-18','2025-11-25'] as const;
-export const READ_OPERATIONS = ['runtime.status','runtime.projects.list','runtime.events.read','runtime.receipt.read',...DEFINITION_READS,...AUTHORITY_READS,...EXECUTION_READS] as const;
-export const WRITE_OPERATIONS=[...DEFINITION_WRITES,...AUTHORITY_WRITES,...EXECUTION_WRITES] as const;
+export const READ_OPERATIONS = ['runtime.status','runtime.projects.list','runtime.events.read','runtime.receipt.read',...DEFINITION_READS,...AUTHORITY_READS,...EXECUTION_READS,...PREPARATION_READS] as const;
+export const WRITE_OPERATIONS=[...DEFINITION_WRITES,...AUTHORITY_WRITES,...EXECUTION_WRITES,...PREPARATION_WRITES] as const;
 /** The same scoped dispatcher serves HTTP and MCP; the transport never opens state itself. */
 export async function handleMcp(req: IncomingMessage, res: ServerResponse, body: unknown, version: string, dispatch: (value: unknown) => unknown|Promise<unknown>, requestId: string): Promise<void> {
   const server = new Server({ name: 'evopilot-runtime', version }, { capabilities: { tools: {} } });

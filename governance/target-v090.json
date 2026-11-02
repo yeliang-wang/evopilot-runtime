@@ -139,7 +139,10 @@
         "src/adapters/stages.ts",
         "tests/e2e/artifacts-v090.test.mjs",
         "tests/e2e/stages-v090.test.mjs",
-        "NOTICE"
+        "NOTICE",
+        "src/lifecycle/preparation.ts",
+        "src/adapters/preparation-stages.ts",
+        "tests/e2e/preparation-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

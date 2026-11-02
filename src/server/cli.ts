@@ -32,7 +32,7 @@ export async function serviceMain(argv: string[], output: { write(value: string)
       const integrations=flags['integrations-ref']?await openRegisteredBindings(flags['integrations-ref'],flags['workspace-id']):undefined;
       try{
         const policy=flags['integrations-ref']?registeredAuthorityPolicy(flags['integrations-ref'],flags['workspace-id']):undefined;
-        const server=await startRuntimeServer({stateRoot:flags['state-root'],workspaceId:flags['workspace-id'],port:flags.port===undefined?0:Number(flags.port)},integrations?.provider,undefined,policy,integrations?.executor);
+        const server=await startRuntimeServer({stateRoot:flags['state-root'],workspaceId:flags['workspace-id'],port:flags.port===undefined?0:Number(flags.port)},integrations?.provider,undefined,policy,integrations?.executor,integrations?.preparation);
         print({ready:true,url:server.url,...server.identity});
         await new Promise<void>(resolve=>{
           const stop=()=>{process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop);void server.close().then(resolve);};

@@ -107,7 +107,8 @@ The protected owner/platform binding composition, retained exact authority and
 durable stage execution core, fixed CI dispatch clients, artifact verifier and
 owner feedback delivery are implemented in development. Candidate/verification
 CI stages now compose these clients with exact native owner validation through
-the standalone CLI's registered executor. The other native stages and Codex
+the standalone CLI's registered executor. Immutable target/plan preparation and
+the fixed scope stage are also implemented. The other native stages and Codex
 task handoff remain M3 work.
 Unconfigured adapters fail closed; synthetic regression adapters are test
 fixtures only and cannot certify real asset usability or final E2E. The two
@@ -278,6 +279,55 @@ separate exact instance/candidate/channel grant. None of these operations dispat
 external work. The separate stage request operation below may dispatch only
 through a configured fixed adapter and fresh authority.
 
+## Development target and plan preparation
+
+Project configuration selects input rules, plan/ADR directories and review
+policies. It does not need future target outputs to activate. Before requesting
+execution, `lifecycle.preparation.save` retains an immutable
+`runtime-preparation/v1` packet for an active definition. It includes the exact
+goal and loop references, target ID/version/scope/exclusions, repository and
+baseline commit, compatibility impact, and file pins for the plan, impact,
+verification and rollback documents. Migration impact additionally requires a
+migration document. Plan/verification/rollback files must remain inside the
+registered plan location; impact/migration files inside the ADR location.
+Files are canonical regular non-writable-by-others documents, bounded to 1 MiB
+each. Their actual bytes must match the supplied digests.
+
+The packet's verification rows name every fixed stage/check exactly once,
+including added checks, with a concrete procedure and the registered evidence
+source. Missing, duplicate or substituted rows cannot reduce the denominator.
+The version follows the configured `semver` or `immutable-build` rule. Saving
+requires `draft.write`, exact CAS and idempotency; it neither approves the plan
+nor creates an instance. A later change creates a different preparation
+reference. `lifecycle.preparation.read` preserves the original packet and
+separately reports whether its current files and registrations still verify.
+
+Use the returned `preparation:sha256:…` as the execution subject's `targetRef`.
+The existing authority preview includes that exact packet. The authenticated
+decision principal must also be a configured plan reviewer. Its decision binds
+the packet, definition, goal, loop, budget, policy and retained decision evidence;
+material storage or a model's statement cannot replace it. Ordinary authorized
+stages do not require another identical review. Changed documents, mappings,
+reviewer policy or goal/loop identity invalidate dependent new work. Historical
+development authority references remain readable; they cannot supply the
+mandatory preparation to the new scope adapter.
+
+The fixed `base.scope` action checks the reviewed preparation and current exact
+source baseline through the registered read-only platform adapter. It durably
+records those facts under the original stage request before returning COMPLETE.
+`lifecycle.scope.evidence.read` reads the original source, document and mapping
+evidence without granting authority. Restart inspection only reads retained
+evidence; it cannot turn an absent action into PASS. Explicit continuation may
+complete an interrupted local evidence commit under the same current authority
+and deadline. Scope completion does not run CI or prefill later stage states.
+
+The plan's attached material and review are now bound, but executing its
+additional Harness checks remains a separate implementation obligation. The
+service does not mark them PASS merely because documents exist. Candidate
+collection also checks its version against the retained preparation; a valid CI
+archive for a different version is retained as a known failure before native
+owner validation. These are development behaviors, not final release evidence.
+
 ## Development durable stage requests and observations
 
 `lifecycle.stage.request` takes only an instance ID and a stage ID, with the usual
@@ -318,7 +368,7 @@ with actual killed processes and clearly synthetic provider effects. Observation
 storage/index failures are visible in request inspection and the scoped worker
 health in `runtime.status`. Missing adapters leave historical state readable and
 new execution blocked. The ordinary development CLI wires the fixed native
-candidate/verification executor when `--integrations-ref` is supplied;
+scope/candidate/verification executor when `--integrations-ref` is supplied;
 the remaining actions and end-to-end closure are not yet complete. These regression results
 are not final candidate acceptance.
 

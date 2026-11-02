@@ -7,6 +7,7 @@ import { atPath, bindingPattern, containsInlineSecret, type EffectiveDefinition 
 import { inspectInstance, pinInstance, requiredChecksDigest, type AuthorityResolver, type ExecutionAuthority, type LifecycleInstance, type ReleaseAuthority } from '../lifecycle/instance.js';
 import { readIntegrationConfiguration } from './config.js';
 import { validateResourceDefinition } from './bindings.js';
+import { isPreparationRef, type PreparationVerifier } from '../lifecycle/preparation.js';
 
 export const AUTHORITY_READS=['lifecycle.authority.preview','lifecycle.authority.inspect'] as const;
 export const AUTHORITY_WRITES=['lifecycle.authority.record','lifecycle.authority.revoke'] as const;
@@ -62,7 +63,15 @@ export function registeredAuthorityPolicy(configPath:string,workspaceId:string):
 /** Existing local operator evidence + authenticated capability, not an approval
  * portal or an assertion that a file hash authenticates a human. No YAML, LLM
  * output, content grade or successful activation creates a grant. */
-export function createAuthorityService(store:RuntimeStore,policies:AuthorityPolicyProvider|undefined,principals:PrincipalLookup){
+export function createAuthorityService(store:RuntimeStore,policies:AuthorityPolicyProvider|undefined,principals:PrincipalLookup,preparations?:PreparationVerifier){
+  function prepared(subject:Record<string,unknown>,effective:EffectiveDefinition,actor:Principal,reviewerId:string){
+    if(!String(subject.targetRef).startsWith('preparation:'))return null;
+    if(!isPreparationRef(subject.targetRef)||!preparations)reject('PREPARATION_REQUIRED','Exact retained preparation and current validation are required',409);
+    const {packet,facts}=preparations(subject.targetRef,effective,actor);
+    if(packet.input.definitionRevisionId!==subject.definitionRevisionId||packet.input.goalRef!==subject.goalRef||packet.input.loopRef!==subject.loopRef)reject('PREPARATION_SCOPE','Authority must bind the same preparation, goal, loop and definition',409);
+    if(!facts.reviewerIds.includes(reviewerId))reject('PREPARATION_REVIEWER','The deciding principal is not a configured plan reviewer',403);
+    return packet;
+  }
   function definition(projectId:string,id:unknown):EffectiveDefinition{
     const digest=hash(id),saved=store.object(projectId,'definition-revision',digest);
     if(!saved)reject('NOT_FOUND','Definition revision not found',404);
@@ -115,6 +124,7 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
     const grantor=principals(d.principalId);
     if(!grantor||grantor.revision!==d.principalRevision||!p.principalIds.includes(grantor.id))reject('AUTHORITY_PRINCIPAL_CHANGED','The deciding principal changed or was removed',403);
     authorize(grantor,d.projectId,'decision.record');verifyEvidence(d);
+    if(d.kind==='execution')prepared(d.subject,effective,actor,grantor.id);
     if(d.kind==='release'){
       const saved=instance(d.projectId,d.subject.instanceId);
       if(saved.pinsDigest!==d.subject.pinsDigest||saved.candidateDigest!==d.subject.candidateDigest)reject('AUTHORITY_MISMATCH','Release instance or candidate changed',409);
@@ -154,7 +164,8 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
     }
     const p=policy(effective,actor,true);
     if(Date.parse(String(subject.expiresAt))>Math.min(Date.parse(p.expiresAt),Date.parse(actor.expiresAt)))reject('AUTHORITY_EXPIRY_BOUND','Decision expiry must fit the current policy and deciding credential');
-    const review={schema:'runtime-authority-review/v1',workspaceId:store.workspaceId,projectId,kind:type,subject,policyDigest:p.digest,bindingContextDigest:p.bindingContextDigest,principalId:actor.id,principalRevision:actor.revision};
+    const preparation=type==='execution'?prepared(subject,effective,actor,actor.id):null;
+    const review={schema:'runtime-authority-review/v1',workspaceId:store.workspaceId,projectId,kind:type,subject,policyDigest:p.digest,bindingContextDigest:p.bindingContextDigest,principalId:actor.id,principalRevision:actor.revision,...(preparation?{preparation}:{})};
     return{...review,reviewDigest:valueDigest(review)};
   }
   const resolveExecution:AuthorityResolver=async(ref,effective,actor,signal)=>{
