@@ -722,6 +722,21 @@ does not change identity. A second metadata read detects changes during download
 CI, artifact and channel observations, including partial release facts. A passing
 channel readback alone cannot complete publication: the original CI contract and
 candidate consumption must pass and the exact release grant must remain current.
+The pinned published Harness must also evaluate the independent channel evidence.
+Its `evopilot-observation/v1` input has `values.runtimePublication` with schema
+`runtime-publication-observation/v1`, the original request/plan, candidate and
+release material digests, verified CI artifact and distribution facts. A complete
+native criterion/variant inventory, exact context, configuration, toolchain and
+observation digest are verified against the original owner receipt. CI success
+cannot substitute for that native quality result.
+
+After the original CI and channel readback pass, explicit
+`lifecycle.stage.advance` requests the already planned native evaluation under
+current authority. Passive inspection never starts it. Runtime records the exact
+owner action before calling it; lost responses only inspect that original receipt.
+Changed channel evidence cannot reuse an older Harness PASS, and changed owner
+registrations or toolchains cannot replace the pinned evaluation. The historical
+publication evidence read includes the retained native input, action and receipt.
 Failures retain evidence without automatic deletion, upload retry or rollback.
 This implements publication mechanics; final delivery closure and all frozen
 product acceptance cases remain independently required.
@@ -729,9 +744,11 @@ product acceptance cases remain independently required.
 The dedicated GitLab 15.0.2 development probe completed candidate, original-byte
 verification and publication pipelines, followed by independent Runtime release
 and Generic Package readback. These are explicit synthetic test artifacts, not a
-product Release. Native Harness evaluation of channel observations and closure
-evidence, terminal owner-feedback integration and the complete registered journey
-remain required before this development implementation can pass final acceptance.
+product Release. An isolated real Harness 0.8.3 integration evaluated that channel
+readback using explicit synthetic rules: all 12 native criteria passed, and
+restart/continuation preserved its receipt without another owner mutation.
+Closure evidence, terminal owner-feedback integration and the complete registered
+journey remain required before final acceptance.
 
 ## Development plan execution
 

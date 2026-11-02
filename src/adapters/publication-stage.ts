@@ -7,15 +7,17 @@ import {atPath} from '../lifecycle/compiler.js';
 import type {LifecycleInstance,ReleaseAuthority} from '../lifecycle/instance.js';
 import type {StageAdapter,StageObservation,StagePlan,StageRequest} from '../lifecycle/execution.js';
 import {configuredPlatform,readIntegrationConfiguration,type PlatformRegistration} from './config.js';
-import {validateResourceDefinition,type BindingConnections} from './bindings.js';
+import {validateResourceDefinition} from './bindings.js';
 import {readReleaseMaterial,type ReleaseMaterial} from './release-stages.js';
 import {publicationTarget,publicationTag,publicationDescription,validatePublicationInput,type PublicationInput,type DistributionRequest,type DistributionObservation} from './distribution.js';
 import {ciInputs,validateRunRequest,type PlatformRunRequest,type PlatformRunObservation} from './platforms.js';
 import {verifyCiArtifact,type VerifiedCiArtifact} from './artifacts.js';
+import {createPublicationHarness,type PublicationHarnessPin,type PublicationHarnessInput} from './publication-harness.js';
+import type {NativeStageConnections,OwnerResult} from './stages.js';
 
-const ID='runtime-publication-stage-v1',ADAPTER_DIGEST=valueDigest({id:ID,workflow:'runtime-ci/v1',input:'runtime-publication-input/v1',distribution:'runtime-distribution-observation/v1',recovery:'inspect-original-only'});
+const ID='runtime-publication-stage-v2',ADAPTER_DIGEST=valueDigest({id:ID,workflow:'runtime-ci/v1',input:'runtime-publication-input/v1',distribution:'runtime-distribution-observation/v1',harness:'runtime-publication-observation/v1',recovery:'inspect-original-only'});
 const same=(a:unknown,b:unknown)=>canonical(a)===canonical(b);
-interface Parameters {binding:PlatformRegistration;commit:string;workflowDigest:string;resourceDigest:string;releaseMaterialDigest:string;releaseAuthorityRef:string;releaseOutcomeDigest:string;publication:PublicationInput;expectedChecks:string[];}
+interface Parameters {binding:PlatformRegistration;commit:string;workflowDigest:string;resourceDigest:string;releaseMaterialDigest:string;releaseAuthorityRef:string;releaseOutcomeDigest:string;publication:PublicationInput;expectedChecks:string[];harness:PublicationHarnessPin;}
 function retainedAction(store:RuntimeStore,r:StageRequest):PlatformRunRequest|null{
   const raw=store.object(r.projectId,'publication-ci-action',r.id);if(!raw)return null;const a=record(raw),{digest,...body}=a;
   if(digest!==valueDigest(body)||a.requestDigest!==r.digest||a.planDigest!==r.planDigest)reject('CORRUPT_PUBLICATION','Original publication action changed',503);return a.ci as PlatformRunRequest;
@@ -25,12 +27,13 @@ export function readPublicationEvidence(store:RuntimeStore,r:StageRequest){
   const pointer=store.object(r.projectId,'publication-evidence-pointer',r.id) as {ref:string}|null;
   const evidence=pointer?store.object(r.projectId,'publication-evidence',pointer.ref):null;
   if(pointer&&(!evidence||valueDigest(evidence)!==pointer.ref||record(evidence).requestDigest!==r.digest))reject('CORRUPT_PUBLICATION','Publication readback changed',503);
-  return{ciRequest:retainedAction(store,r),run:store.object(r.projectId,'publication-ci-run',r.id),evidenceRef:pointer?.ref??null,evidence,historical:true,automaticRedispatch:false};
+  return{ciRequest:retainedAction(store,r),run:store.object(r.projectId,'publication-ci-run',r.id),evidenceRef:pointer?.ref??null,evidence,harness:{input:store.object(r.projectId,'publication-harness-input',r.id),action:store.object(r.projectId,'publication-harness-action',r.id),receipt:store.object(r.projectId,'publication-harness-receipt',r.id)},historical:true,automaticRedispatch:false};
 }
 /** CI performs the configured publication; Runtime independently re-reads the
  * public channel and every original artifact. No release/asset mutation API is
  * exposed, and a lost workflow response never authorizes another dispatch. */
-export function createPublicationStageAdapter(store:RuntimeStore,configPath:string,connections:Pick<BindingConnections,'platform'>,resolveRelease:(instance:LifecycleInstance,actor:Principal)=>ReleaseAuthority|undefined):StageAdapter{
+export function createPublicationStageAdapter(store:RuntimeStore,configPath:string,connections:NativeStageConnections,resolveRelease:(instance:LifecycleInstance,actor:Principal)=>ReleaseAuthority|undefined):StageAdapter{
+  const harness=createPublicationHarness(store,configPath,connections);
   function resources(instance:LifecycleInstance,actor:Principal){
     authorize(actor,instance.pins.projectId,'read');const config=readIntegrationConfiguration(configPath,store.workspaceId),selected=['channelTargetRef','publishWorkflowRef','readbackPolicyRef','recoveryPolicyRef'].map(field=>{
       const role='config.publication.'+field,r=config.resources.find(r=>r.projectId===instance.pins.projectId&&r.role===role&&r.ref===atPath(instance.definition.semantic,role));
@@ -56,7 +59,7 @@ export function createPublicationStageAdapter(store:RuntimeStore,configPath:stri
   function original(r:StageRequest,instance:LifecycleInstance,actor:Principal,current=false){
     const{digest,...body}=r,p=r.plan.parameters as unknown as Parameters,m=material(instance,current),c=resources(instance,actor),s=instance.stages.publication;
     if(digest!==valueDigest(body)||r.schema!=='runtime-stage-request/v1'||r.workspaceId!==store.workspaceId||r.projectId!==instance.pins.projectId||r.instanceId!==instance.id||r.pinsDigest!==instance.pinsDigest||r.stageId!=='publication'||s.requestId!==r.id||s.inputDigest!==r.inputDigest||r.plan.adapterId!==ID||r.plan.adapterDigest!==ADAPTER_DIGEST||r.plan.action!=='base.publication'||r.planDigest!==valueDigest(r.plan)||r.plan.bindingDigest!==valueDigest(p)||p.releaseMaterialDigest!==m.digest||r.releaseAuthorityRef!==p.releaseAuthorityRef||p.releaseOutcomeDigest!==instance.stages['release-decision'].outcomeDigest||p.commit!==m.documents.commit||!same(p.expectedChecks,instance.definition.nodes.find(n=>n.id==='publication')!.checks)||!same(p.binding,c.binding)||p.resourceDigest!==c.resourceDigest||!same(p.publication.target,c.target))reject('PUBLICATION_PLAN_CHANGED','Original publication scope or configured destination changed',409);
-    const ci=ciRequest(r,p,m);if(Buffer.byteLength(canonical(ciInputs(ci)))>65536)reject('PUBLICATION_INPUT_LIMIT','Combined CI inputs exceed the fixed 64 KiB dispatch profile',409);
+    harness.current(p.harness,r.projectId);const ci=ciRequest(r,p,m);if(Buffer.byteLength(canonical(ciInputs(ci)))>65536)reject('PUBLICATION_INPUT_LIMIT','Combined CI inputs exceed the fixed 64 KiB dispatch profile',409);
     const notes=m.documents.documents.filter(d=>d.role==='release-notes');
     if(!same(p.publication.notes,notes.map(({path,digest,bytes})=>({path,digest,bytes})))||p.publication.releaseMaterialDigest!==m.digest||p.publication.releaseAuthorityRef!==r.releaseAuthorityRef)reject('PUBLICATION_PLAN_CHANGED','Publication notes or release authority differ',409);
     const description=publicationDescription(notes.map(d=>d.text),ci),distribution:DistributionRequest={commit:p.commit,candidate:instance.candidate!,tag:p.publication.tag,prerelease:p.publication.target.prerelease,packageName:p.publication.target.packageName,descriptionDigest:byteDigest(description)};
@@ -84,8 +87,10 @@ export function createPublicationStageAdapter(store:RuntimeStore,configPath:stri
     let currentGrant=false;
     if(verified?.status==='PASSED'&&delivery?.status==='PASSED')try{original(r,instance,actor,true);const grant=resolveRelease(instance,actor);if(!grant||grant.decisionRef!==r.releaseAuthorityRef)reject('RELEASE_AUTHORITY_CHANGED','Original exact publication grant is no longer usable',409);currentGrant=true;}catch(e){reasons.push(code(e));}
     const ciFacts=run?{provider:run.provider,repositoryId:run.repositoryId,requestId:run.requestId,inputDigest:run.inputDigest,commit:run.commit,ref:run.ref,runId:run.runId,status:run.status,evidenceRef:run.evidenceRef,jobs:run.jobs.map(j=>({jobId:j.jobId,status:j.status,factsDigest:j.factsDigest}))}:null;
-    const deliveryFacts=delivery?(({observedAt,...facts})=>facts)(delivery):null,ref=evidence(actor,r,{ci:ciFacts,artifact:verified,distribution:deliveryFacts,reasons,currentGrant});
-    const phase=run?.status==='FAILED'||verified?.status==='FAILED'?'FAILED':currentGrant?'COMPLETE':run?.status==='RUNNING'?'CI_RUNNING':run?.status==='PENDING'?'CI_PENDING':'UNKNOWN';return observed(r,p,ci,phase,ref);
+    const deliveryFacts=delivery?(({observedAt,...facts})=>facts)(delivery):null;let evaluation:OwnerResult|null=null;
+    if(currentGrant&&verified&&deliveryFacts)try{evaluation=await harness.inspect(r,instance,p.harness,{ci:verified,distribution:deliveryFacts,releaseMaterialDigest:p.releaseMaterialDigest},actor,signal);}catch(e){reasons.push(code(e));}
+    const ref=evidence(actor,r,{ci:ciFacts,artifact:verified,distribution:deliveryFacts,harness:evaluation,reasons,currentGrant});
+    const phase=run?.status==='FAILED'||verified?.status==='FAILED'||evaluation?.status==='FAIL'?'FAILED':currentGrant&&evaluation?.status==='PASS'?'COMPLETE':currentGrant&&evaluation?'RUNNING':run?.status==='RUNNING'?'CI_RUNNING':run?.status==='PENDING'?'CI_PENDING':'UNKNOWN';return observed(r,p,ci,phase,ref);
   }
   async function dispatch(r:StageRequest,instance:LifecycleInstance,permit:()=>Promise<Principal>,signal:AbortSignal):Promise<StageObservation>{
     let actor=await permit();const{p,ci,client}=original(r,instance,actor,true);
@@ -105,7 +110,12 @@ export function createPublicationStageAdapter(store:RuntimeStore,configPath:stri
     const source=await connections.platform(c.binding).revision(actor,m.documents.commit,signal);
     if(source.commit!==m.documents.commit||source.bindingDigest!==valueDigest(c.binding)||source.repositoryId!==c.binding.repositoryId||source.projectId!==instance.pins.projectId||source.sourceSelection!=='exact-commit'||Date.parse(source.expiresAt)<=Date.now())reject('PUBLICATION_CONFIGURATION','The exact publication workflow revision must be available',409);
     const publication:PublicationInput={schema:'runtime-publication-input/v1',target:c.target,tag:publicationTag(instance.candidate!.version,c.target),releaseMaterialDigest:m.digest,releaseAuthorityRef:grant.decisionRef,notes:m.documents.documents.filter(d=>d.role==='release-notes').map(({path,digest,bytes})=>({path,digest,bytes}))};validatePublicationInput(publication,{candidateInput:m.candidateInput,stageId:'publication'},c.binding.provider);
-    const p:Parameters={binding:c.binding,commit:m.documents.commit,workflowDigest:source.workflowDigest,resourceDigest:c.resourceDigest,releaseMaterialDigest:m.digest,releaseAuthorityRef:grant.decisionRef,releaseOutcomeDigest:instance.stages['release-decision'].outcomeDigest!,publication,expectedChecks:instance.definition.nodes.find(n=>n.id===stageId)!.checks};
+    const p:Parameters={binding:c.binding,commit:m.documents.commit,workflowDigest:source.workflowDigest,resourceDigest:c.resourceDigest,releaseMaterialDigest:m.digest,releaseAuthorityRef:grant.decisionRef,releaseOutcomeDigest:instance.stages['release-decision'].outcomeDigest!,publication,expectedChecks:instance.definition.nodes.find(n=>n.id===stageId)!.checks,harness:await harness.prepare(instance,actor,signal)};
     return{adapterId:ID,adapterDigest:ADAPTER_DIGEST,action:'base.publication',bindingDigest:valueDigest(p),parameters:p as unknown as Record<string,unknown>};
-  },dispatch,inspect,advance:(r,i,_p,permit,signal)=>dispatch(r,i,permit,signal)};
+  },dispatch,inspect,async advance(r,i,_progress,permit,signal){
+    const observed=await dispatch(r,i,permit,signal);if(observed.phase!=='RUNNING')return observed;
+    const allowed=async()=>{const actor=await permit();original(r,i,actor,true);const grant=resolveRelease(i,actor);if(!grant||grant.decisionRef!==r.releaseAuthorityRef)reject('RELEASE_AUTHORITY_CHANGED','Original publication grant is required for native continuation',409);return actor;};
+    const actor=await allowed(),{p}=original(r,i,actor,true),saved=record(readPublicationEvidence(store,r).evidence),input:PublicationHarnessInput={ci:saved.artifact as VerifiedCiArtifact,distribution:saved.distribution as PublicationHarnessInput['distribution'],releaseMaterialDigest:p.releaseMaterialDigest};
+    await harness.advance(r,i,p.harness,input,allowed,signal);return inspect(r,i,null,actor,signal);
+  }};
 }

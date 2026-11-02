@@ -302,7 +302,7 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
         if(!services.authorityPolicy)reject('AUTHORITY_POLICY_UNAVAILABLE','Release admission requires the service authority policy',409);
         release??=createReleaseStageAdapter(store,configPath,{platform:connections.platform,verification:stages.ci},services.releaseAuthority,services.authorityPolicy);return release;
       }
-      if(stageId==='publication'){publication??=createPublicationStageAdapter(store,configPath,connections,services.releaseAuthority);return publication;}
+      if(stageId==='publication'){publication??=createPublicationStageAdapter(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest},services.releaseAuthority);return publication;}
       return stageId==='implementation'?stages.implementation:stages.ci;
     }
     return{
