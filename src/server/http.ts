@@ -12,10 +12,11 @@ import { createAuthorityService, AUTHORITY_READS, AUTHORITY_WRITES, type Authori
 import { createExecutionService, EXECUTION_READS, EXECUTION_WRITES, type StageAdapter } from '../lifecycle/execution.js';
 import { createPreparationService, PREPARATION_READS, PREPARATION_WRITES, type PreparationValidator } from '../lifecycle/preparation.js';
 import { createAgentService, AGENT_READS, AGENT_WRITES } from '../lifecycle/agent.js';
+import { createImplementationReviewService, IMPLEMENTATION_REVIEW_READS, IMPLEMENTATION_REVIEW_WRITES, type ImplementationReviewBindings } from '../lifecycle/implementation-review.js';
 
 const VERSION = String(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version);
 export interface ServerOptions { stateRoot: string; workspaceId: string; port?: number; }
-export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver, trustedPolicy?:AuthorityPolicyProvider, trustedExecutor?:StageAdapter|((store:RuntimeStore)=>StageAdapter), trustedPreparation?:PreparationValidator) {
+export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver, trustedPolicy?:AuthorityPolicyProvider, trustedExecutor?:StageAdapter|((store:RuntimeStore)=>StageAdapter), trustedPreparation?:PreparationValidator, trustedImplementationReview?:ImplementationReviewBindings) {
   const config = record(options); exact(config,['stateRoot','workspaceId'],['port']);
   string(options.stateRoot,4096); slug(options.workspaceId);
   if (options.port !== undefined && (!Number.isSafeInteger(options.port) || options.port < 0 || options.port > 65535)) reject('INVALID_PORT','Invalid loopback port');
@@ -28,6 +29,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
   try{execution=createExecutionService(store,{bindings:trustedBindings,authorities:trustedAuthorities??authorities.resolveExecution,verifyAuthority:trustedAuthorities?undefined:authorities.verifyExecution,releaseAuthority:authorities.resolveRelease,principal:id=>currentPrincipal(options.stateRoot,options.workspaceId,id),adapter:typeof trustedExecutor==='function'?trustedExecutor(store):trustedExecutor});}
   catch(e){store.close();throw e;}
   const agents=createAgentService(store,(actor,projectId,id)=>execution.authorizeOriginal(actor,projectId,id));
+  const implementationReviews=createImplementationReviewService(store,trustedImplementationReview,id=>currentPrincipal(options.stateRoot,options.workspaceId,id));
   const streams = new Set<ServerResponse>();
   let port = 0, closing = false;
   const status = () => ({ product: 'evopilot-runtime', version: VERSION, developmentTarget: '0.9.0', contract: 'runtime-service/v1', workspaceId: options.workspaceId, serviceId: store.serviceId, transport: 'streamable-http', protocols: HTTP_PROTOCOLS, operations: [...READ_OPERATIONS,...WRITE_OPERATIONS], independentLlm: false, productAcceptance: 'NOT_EVALUATED' });
@@ -38,7 +40,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     const actor = principal(req); authorize(actor,projectId,'read');
     if(WRITE_OPERATIONS.includes(operation as typeof WRITE_OPERATIONS[number])){
       exact(envelope,['operation','projectId','input','requestId','expectedRevision']);if(!Number.isSafeInteger(envelope.expectedRevision)||Number(envelope.expectedRevision)<0)reject('INVALID_REVISION','Expected a nonnegative revision');
-      const service=AGENT_WRITES.includes(operation as typeof AGENT_WRITES[number])?agents:PREPARATION_WRITES.includes(operation as typeof PREPARATION_WRITES[number])?preparations:AUTHORITY_WRITES.includes(operation as typeof AUTHORITY_WRITES[number])?authorities:EXECUTION_WRITES.includes(operation as typeof EXECUTION_WRITES[number])?execution:definitions;
+      const service=IMPLEMENTATION_REVIEW_WRITES.includes(operation as typeof IMPLEMENTATION_REVIEW_WRITES[number])?implementationReviews:AGENT_WRITES.includes(operation as typeof AGENT_WRITES[number])?agents:PREPARATION_WRITES.includes(operation as typeof PREPARATION_WRITES[number])?preparations:AUTHORITY_WRITES.includes(operation as typeof AUTHORITY_WRITES[number])?authorities:EXECUTION_WRITES.includes(operation as typeof EXECUTION_WRITES[number])?execution:definitions;
       return service.write(actor,projectId,operation,input,string(envelope.requestId),Number(envelope.expectedRevision),()=>principal(req));
     }
     exact(envelope,['operation','projectId','input']);
@@ -47,6 +49,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     if(EXECUTION_READS.includes(operation as typeof EXECUTION_READS[number]))return execution.read(actor,projectId,operation,input);
     if(PREPARATION_READS.includes(operation as typeof PREPARATION_READS[number]))return preparations.read(actor,projectId,operation,input);
     if(AGENT_READS.includes(operation as typeof AGENT_READS[number]))return agents.read(actor,projectId,operation,input);
+    if(IMPLEMENTATION_REVIEW_READS.includes(operation as typeof IMPLEMENTATION_REVIEW_READS[number]))return implementationReviews.read(actor,projectId,operation,input);
     switch (operation) {
       case 'runtime.status': exact(input,[]); return { ...status(), projectId, revision: store.revision(projectId),observationWorker:execution.health(projectId) };
       case 'runtime.projects.list': exact(input,[],['cursor','limit']); return store.projects(actor,input.cursor===undefined?undefined:string(input.cursor,2048),input.limit===undefined?50:input.limit as number);

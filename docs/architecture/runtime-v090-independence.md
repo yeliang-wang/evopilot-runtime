@@ -466,8 +466,8 @@ Usage is `null` when unavailable. Optional provider/model/token/cost measurement
 need a source reference and digest and remain Host-reported. Runtime neither
 fetches an arbitrary evidence URL nor invents zero usage. Every report is
 `independentlyVerified:false`; the current implementation deliberately cannot
-complete the stage from a report alone. Independent source-review/CI/native
-verification is a remaining implementation obligation.
+complete the stage from a report alone. Exact source review is described below;
+independent CI/native verification remains an implementation obligation.
 
 The development probe used the actual standalone CLI, published native owners
 and current Codex to write two isolated files, pass three local tests and create
@@ -502,6 +502,48 @@ The actual GitLab development readback verified the current Codex probe's exact
 two-file MR without any remote mutation. Both-provider regression tests exercise
 wrong base/head, byte mismatches, pagination and incomplete evidence; actual
 GitHub source-review and full lifecycle acceptance remain separate obligations.
+
+## Development implementation review decisions
+
+The standalone CLI now wires the configured implementation review policy and
+exact source reader into the same HTTP/MCP service. The policy's `reviewerIds`
+are Runtime principal IDs, not GitHub/GitLab account names. Read-only callers
+can inspect the exact source, but recording a decision requires both the current
+`decision.record` capability and membership in that project's configured policy.
+No additional reviewer quorum or automatic provider-to-principal mapping exists.
+
+`lifecycle.implementation.review.preview {stageRequestId}` reads the original
+claimed/submitted Agent result, independently observes the exact provider change,
+and returns its full changed-file inventory, policy, deadline and review digest.
+The digest binds workspace/project, original request and instance pins, report,
+source facts, policy and reviewer identity/revision. Repeated observation times
+do not change identical source facts. Source or policy movement rejects a stale
+preview. A draft PR/MR may be reviewed; the review does not merge it or release
+anything.
+
+`lifecycle.implementation.review.record` takes `stageRequestId`, `reviewDigest`,
+`decision` (`APPROVE` or `REJECT`) and `evidenceRef`, with normal CAS/idempotency.
+It re-reads the exact source and requires retained decision evidence for operation
+`lifecycle.implementation.review`, the same digest and actual decision. This is
+the existing evidence mechanism; evidence-file integrity alone does not
+authenticate a human or grant a client missing review permissions. A new decision
+requires the source change to remain open and the original task unexpired.
+
+`lifecycle.implementation.review.inspect {reviewRef}` preserves the original
+decision and reports current usability. Revoked/expired reviewer credentials,
+changed policy/source, rejection, supersession or an exhausted task block reuse.
+`lifecycle.implementation.review.revoke {reviewRef, reason}` records a separate
+revocation under the configured review authority. Historical decisions remain
+unchanged; an exact replay returns its old receipt without re-deciding or dispatch.
+Neither approval nor revocation renews execution authority, completes a stage,
+starts CI or grants publication. CI/native composition and binding the resulting
+verified source into candidate creation remain pending work.
+
+The development CLI/HTTP/MCP probe read the same real GitLab MR and produced the
+same review digest from both transports. It reused the original isolated state,
+with its execution authority already revoked, and recorded no review decision.
+Separate regression tests use explicitly synthetic decisions to exercise write,
+replay, current permission, drift, revocation and recovery boundaries.
 
 ## Development plan execution
 
