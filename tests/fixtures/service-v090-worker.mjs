@@ -1,6 +1,27 @@
 import { DatabaseSync } from 'node:sqlite';
 import { RuntimeStore } from '../../dist/server/store.js';
+import { startRuntimeServer } from '../../dist/server/http.js';
+import { registeredAuthorityPolicy } from '../../dist/adapters/authority.js';
+import { valueDigest } from '../../dist/lifecycle/base.js';
+import { syntheticBindings } from './lifecycle-v090.mjs';
+import { writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 const [mode, root, workspaceId] = process.argv.slice(2);
+if(mode.startsWith('execution-crash-')){
+  const bindings=syntheticBindings(),adapterDigest=valueDigest('synthetic-stage-adapter-v1');
+  const adapter={
+    async prepare(_instance,stageId){return{adapterId:'synthetic-stage-adapter',adapterDigest,action:'base.'+stageId,bindingDigest:valueDigest('synthetic-binding'),parameters:{synthetic:true}};},
+    async dispatch(request,_instance,permit){
+      await permit();
+      if(mode==='execution-crash-after-dispatch')writeFileSync(join(root,'synthetic-provider-request.json'),JSON.stringify({requestId:request.id,inputDigest:request.inputDigest}),{mode:0o600});
+      process.kill(process.pid,'SIGKILL');return new Promise(()=>{});
+    },
+    async inspect(){throw new Error('A crashed process cannot synthesize provider completion');},
+  };
+  const server=await startRuntimeServer({stateRoot:root,workspaceId},bindings.provider,undefined,registeredAuthorityPolicy(join(dirname(root),'integrations.json'),workspaceId),adapter);
+  process.stdout.write(JSON.stringify({ready:true,url:server.url})+'\n');
+  await new Promise(()=>{});
+}else{
 const store = new RuntimeStore(root,workspaceId);
 const actor = {id:'fixture',projects:['alpha'],permissions:['read','draft.write'],revision:1,expiresAt:'2030-01-01T00:00:00Z'};
 if (mode.startsWith('crash-')) {
@@ -17,3 +38,5 @@ if(mode==='hold') {
   process.stdout.write(JSON.stringify({ready:true})+'\n');
   setInterval(()=>{},1000);
 } else store.close();
+
+}

@@ -73,6 +73,13 @@ export class RuntimeStore {
     const row = this.db.prepare('SELECT data FROM objects WHERE project_id=? AND kind=? AND id=?').get(projectId,kind,id);
     return row ? JSON.parse(String(row.data)) as unknown : null;
   }
+  /** Internal bounded scan for the owned observation worker, never an HTTP
+   * cross-project read. The worker may inspect an existing request, not dispatch. */
+  pendingStageRequests(after?:{projectId:string;id:string}):{rows:{projectId:string;id:string}[];next:{projectId:string;id:string}|null}{
+    this.guard();if(after){slug(after.projectId);string(after.id);}
+    const rows=this.db.prepare("SELECT project_id,id FROM objects WHERE kind='stage-progress' AND json_extract(data,'$.terminal')=0 AND (project_id>? OR (project_id=? AND id>?)) ORDER BY project_id,id LIMIT 50").all(after?.projectId??'',after?.projectId??'',after?.id??'').map(r=>({projectId:String(r.project_id),id:String(r.id)}));
+    return{rows,next:rows.length===50?rows.at(-1)!:null};
+  }
   projects(principal: Principal): { projectId: string; revision: number }[] {
     this.guard();
     return principal.projects.filter(p => principal.permissions.includes('read')).slice(0,50).map(projectId => ({ projectId, revision: this.revision(projectId) }));

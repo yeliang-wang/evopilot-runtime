@@ -3,21 +3,21 @@ import { canonical, exact, record, reject, slug, string } from '../server/errors
 import { authorize, type Principal } from '../server/security.js';
 import { RuntimeStore, type Receipt, type StoredObject } from '../server/store.js';
 import { valueDigest } from '../lifecycle/base.js';
-import { atPath, containsInlineSecret, type EffectiveDefinition } from '../lifecycle/compiler.js';
+import { atPath, bindingPattern, containsInlineSecret, type EffectiveDefinition } from '../lifecycle/compiler.js';
 import { inspectInstance, pinInstance, requiredChecksDigest, type AuthorityResolver, type ExecutionAuthority, type LifecycleInstance, type ReleaseAuthority } from '../lifecycle/instance.js';
 import { readIntegrationConfiguration } from './config.js';
 import { validateResourceDefinition } from './bindings.js';
 
 export const AUTHORITY_READS=['lifecycle.authority.preview','lifecycle.authority.inspect'] as const;
 export const AUTHORITY_WRITES=['lifecycle.authority.record','lifecycle.authority.revoke'] as const;
-export interface AuthorityPolicy { digest:string; principalIds:readonly string[]; expiresAt:string; }
+export interface AuthorityPolicy { digest:string; bindingContextDigest:string; principalIds:readonly string[]; expiresAt:string; }
 export type AuthorityPolicyProvider=(definition:EffectiveDefinition,actor:Principal)=>AuthorityPolicy;
 export type PrincipalLookup=(id:string)=>Principal|null;
 type Kind='execution'|'release';
 type Choice='APPROVE'|'REJECT';
 interface DecisionRecord {
   schema:'runtime-authority-decision/v1'; ref:string; workspaceId:string; projectId:string;
-  kind:Kind; subject:Record<string,unknown>; reviewDigest:string; policyDigest:string;
+  kind:Kind; subject:Record<string,unknown>; reviewDigest:string; policyDigest:string; bindingContextDigest:string;
   principalId:string; principalRevision:number; choice:Choice; evidenceRef:string; at:string;
 }
 interface Revocation { schema:'runtime-authority-revocation/v1'; authorityRef:string; revokedBy:string; principalRevision:number; reason:string; at:string; }
@@ -26,8 +26,9 @@ const reference=(v:unknown):string=>{const s=string(v,128);if(!/^authority:sha25
 const kind=(v:unknown):Kind=>{if(v!=='execution'&&v!=='release')reject('INVALID_AUTHORITY_KIND','Choose execution or release');return v;};
 function expiry(v:unknown):string{const s=string(v,128);if(!Number.isFinite(Date.parse(s))||Date.parse(s)<=Date.now())reject('AUTHORITY_EXPIRED','Authority needs a future explicit expiry');return s;}
 
-/** Policy config does not contain decisions. Only the two exact scoped policy
- * registrations participate, so an unrelated platform edit cannot widen it. */
+/** Policy config does not contain decisions. Referenced configuration is pinned
+ * independently from the decision policy. Credential bytes, remote branch head,
+ * and unrelated projects/registrations are not execution scope changes. */
 export function registeredAuthorityPolicy(configPath:string,workspaceId:string):AuthorityPolicyProvider {
   return(definition,actor)=>{
     authorize(actor,definition.projectId,'read');
@@ -38,7 +39,20 @@ export function registeredAuthorityPolicy(configPath:string,workspaceId:string):
       if(!resource||Date.parse(resource.expiresAt)<=Date.now())reject('AUTHORITY_POLICY_UNAVAILABLE','Current scoped decision policy is required',409);
       validateResourceDefinition(resource);return resource;
     });
-    return{digest:valueDigest({workspaceId,projectId:definition.projectId,resources}),principalIds:resources[0].definition.principalIds as string[],expiresAt:new Date(Math.min(...resources.map(r=>Date.parse(r.expiresAt)))).toISOString()};
+    const refs=new Set<string>();
+    const collect=(value:unknown):void=>{if(typeof value==='string'&&bindingPattern.test(value))refs.add(value);else if(Array.isArray(value))value.forEach(collect);else if(value&&typeof value==='object')Object.values(value).forEach(collect);};
+    collect(definition.semantic);
+    const selected:Record<string,unknown>[]=[];
+    for(const ref of refs){
+      const resource=config.resources.find(r=>r.ref===ref&&r.projectId===definition.projectId);
+      const platform=config.platforms.find(p=>p.ref===ref&&p.projectId===definition.projectId);
+      const owner=config.owners.find(o=>o.ref===ref&&o.projects.includes(definition.projectId));
+      if(resource){const {revision:unusedRevision,expiresAt:unusedExpiry,...scope}=resource;selected.push(scope);collect(resource.definition);}
+      else if(platform){const {revision:unusedRevision,expiresAt:unusedExpiry,...scope}=platform;selected.push(scope);}
+      else if(owner){const {projects:unusedProjects,...scope}=owner;selected.push({...scope,projectId:definition.projectId});}
+      else selected.push({ref,registration:null});
+    }
+    return{digest:valueDigest({workspaceId,projectId:definition.projectId,resources}),bindingContextDigest:valueDigest(selected.sort((a,b)=>String(a.ref).localeCompare(String(b.ref)))),principalIds:resources[0].definition.principalIds as string[],expiresAt:new Date(Math.min(...resources.map(r=>Date.parse(r.expiresAt)))).toISOString()};
   };
 }
 
@@ -69,7 +83,7 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
   }
   function policy(definition:EffectiveDefinition,actor:Principal,deciding=false):AuthorityPolicy{
     if(!policies)reject('AUTHORITY_POLICY_UNAVAILABLE','No current authority policy adapter is configured',409);
-    const p=policies(definition,actor);hash(p.digest);
+    const p=policies(definition,actor);hash(p.digest);hash(p.bindingContextDigest);
     if(!Array.isArray(p.principalIds)||!p.principalIds.length||p.principalIds.some(id=>typeof id!=='string')||Date.parse(p.expiresAt)<=Date.now()||!Number.isFinite(Date.parse(p.expiresAt)))reject('AUTHORITY_POLICY_UNAVAILABLE','Current explicit authority policy is required',409);
     if(deciding){authorize(actor,definition.projectId,'decision.record');if(!p.principalIds.includes(actor.id))reject('DECISION_PRINCIPAL','Principal is not allowed by this exact project policy',403);}
     return p;
@@ -94,6 +108,7 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
     expiry(d.subject.expiresAt);
     const effective=selectedDefinition(d),p=policy(effective,actor);
     if(p.digest!==d.policyDigest)reject('AUTHORITY_POLICY_CHANGED','The exact authority policy changed; prior approval cannot be reused',409);
+    if(p.bindingContextDigest!==d.bindingContextDigest)reject('AUTHORITY_BINDINGS_CHANGED','Referenced execution configuration changed; an existing instance cannot be retargeted',409);
     const grantor=principals(d.principalId);
     if(!grantor||grantor.revision!==d.principalRevision||!p.principalIds.includes(grantor.id))reject('AUTHORITY_PRINCIPAL_CHANGED','The deciding principal changed or was removed',403);
     authorize(grantor,d.projectId,'decision.record');verifyEvidence(d);
@@ -136,7 +151,7 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
     }
     const p=policy(effective,actor,true);
     if(Date.parse(String(subject.expiresAt))>Math.min(Date.parse(p.expiresAt),Date.parse(actor.expiresAt)))reject('AUTHORITY_EXPIRY_BOUND','Decision expiry must fit the current policy and deciding credential');
-    const review={schema:'runtime-authority-review/v1',workspaceId:store.workspaceId,projectId,kind:type,subject,policyDigest:p.digest,principalId:actor.id,principalRevision:actor.revision};
+    const review={schema:'runtime-authority-review/v1',workspaceId:store.workspaceId,projectId,kind:type,subject,policyDigest:p.digest,bindingContextDigest:p.bindingContextDigest,principalId:actor.id,principalRevision:actor.revision};
     return{...review,reviewDigest:valueDigest(review)};
   }
   const resolveExecution:AuthorityResolver=async(ref,effective,actor,signal)=>{
@@ -181,7 +196,7 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
       const review=prepare(fresh,projectId,{kind:input.kind,subject:input.subject});
       if(hash(input.reviewDigest)!==review.reviewDigest)reject('AUTHORITY_REVIEW_STALE','Exact subject, policy or principal changed after review',409);
       if(input.decision!=='APPROVE'&&input.decision!=='REJECT')reject('INVALID_DECISION','An explicit APPROVE or REJECT decision is required');
-      const content:Omit<DecisionRecord,'ref'>={schema:'runtime-authority-decision/v1',workspaceId:store.workspaceId,projectId,kind:review.kind,subject:review.subject,reviewDigest:review.reviewDigest,policyDigest:review.policyDigest,principalId:fresh.id,principalRevision:fresh.revision,choice:input.decision,evidenceRef:string(input.evidenceRef,8192),at:new Date().toISOString()};
+      const content:Omit<DecisionRecord,'ref'>={schema:'runtime-authority-decision/v1',workspaceId:store.workspaceId,projectId,kind:review.kind,subject:review.subject,reviewDigest:review.reviewDigest,policyDigest:review.policyDigest,bindingContextDigest:review.bindingContextDigest,principalId:fresh.id,principalRevision:fresh.revision,choice:input.decision,evidenceRef:string(input.evidenceRef,8192),at:new Date().toISOString()};
       const d:DecisionRecord={...content,ref:'authority:'+valueDigest(content)};verifyEvidence(d);
       const objects:StoredObject[]=[{kind:'authority-decision',id:d.ref,value:d}];
       objects.push({kind:d.kind==='release'?'instance-release':'instance-execution',id:String(d.subject.instanceId),value:{authorityRef:d.ref}});

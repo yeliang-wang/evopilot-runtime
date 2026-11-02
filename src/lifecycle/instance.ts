@@ -55,7 +55,7 @@ export interface LifecycleInstance {
 }
 export interface StageOutcome {
   requestId:string; inputDigest:string; receiptRef:string;
-  status:'COMPLETE'|'FAILED'|'UNKNOWN'; expiresAt:string;
+  status:'RUNNING'|'COMPLETE'|'FAILED'|'UNKNOWN'; expiresAt:string;
   checks:{id:string;status:'PASS'|'FAIL'|'UNKNOWN';evidenceRef:string}[];
   candidate?:CandidateManifest;
 }
@@ -104,7 +104,7 @@ export function pinInstance(id:string,definitionRevisionId:string,definition:Eff
   const pins:InstancePins={projectId:effective.projectId,definitionRevisionId,semanticDigest:effective.semanticDigest,base:effective.base,requirementsDigest:requiredChecksDigest(effective),graphDigest:valueDigest(effective.nodes),authorityDigest:valueDigest(authority),goalRef:authority.goalRef,targetRef:authority.targetRef,loopRef:authority.loopRef,budget:cloned(authority.budget),authorityExpiresAt:authority.expiresAt};
   return immutable({schema:'runtime-lifecycle-instance/v1',id,pins,pinsDigest:valueDigest(pins),definition:cloned(effective),stages:Object.fromEntries(effective.nodes.map(n=>[n.id,{status:'PENDING',attempts:0,requestId:null,inputDigest:null,requestedAt:null,receiptRef:null,outcomeDigest:null,expiresAt:null}])),requestIds:[],candidate:null,candidateDigest:null,createdAt:new Date(now).toISOString()});
 }
-function stageBudget(instance:LifecycleInstance,node:EffectiveNode):Budget{
+export function stageBudget(instance:LifecycleInstance,node:EffectiveNode):Budget{
   if(node.source==='project')return budget(node.action!.budget);
   return budget(atPath(instance.definition.semantic,'config.'+(['verification','release-decision','publication','closure'].includes(node.id)?'verification':'plan')+'.budget'));
 }
@@ -149,7 +149,7 @@ export function recordStageOutcome(instance:LifecycleInstance,stageId:string,out
   const outcomeDigest=valueDigest(outcome);
   if(stage.outcomeDigest===outcomeDigest)return instance;
   if(!['RUNNING','UNKNOWN'].includes(stage.status))reject('STAGE_OUTCOME_CONFLICT','Completed stage cannot be rewritten by another receipt',409);
-  if(!['COMPLETE','FAILED','UNKNOWN'].includes(outcome.status)||!Array.isArray(outcome.checks)||outcome.checks.length>128||!Number.isFinite(Date.parse(outcome.expiresAt)))reject('INVALID_STAGE_OUTCOME','Invalid bounded stage observation');
+  if(!['RUNNING','COMPLETE','FAILED','UNKNOWN'].includes(outcome.status)||!Array.isArray(outcome.checks)||outcome.checks.length>128||!Number.isFinite(Date.parse(outcome.expiresAt)))reject('INVALID_STAGE_OUTCOME','Invalid bounded stage observation');
   const next=cloned(instance),updated=next.stages[stageId],ids=new Set<string>();
   for(const check of outcome.checks){exact(record(check),['id','status','evidenceRef']);string(check.id);string(check.evidenceRef,512);if(ids.has(check.id)||!node.checks.includes(check.id)||!['PASS','FAIL','UNKNOWN'].includes(check.status))reject('CHECK_SCOPE','Evidence check is duplicate or outside the fixed set');ids.add(check.id);}
   const complete=ids.size===node.checks.length&&outcome.checks.every(c=>c.status==='PASS')&&Date.parse(outcome.expiresAt)>now;
@@ -158,6 +158,6 @@ export function recordStageOutcome(instance:LifecycleInstance,stageId:string,out
     if(!outcome.candidate)reject('CANDIDATE_REQUIRED','Candidate completion requires actual manifest evidence');
     next.candidateDigest=candidateDigest(outcome.candidate);next.candidate=cloned(outcome.candidate);
   }else if(outcome.candidate!==undefined)reject('CANDIDATE_MUTATION','Only candidate completion may bind a candidate');
-  updated.status=outcome.status==='COMPLETE'?'PASSED':outcome.status==='FAILED'?'FAILED':'UNKNOWN';updated.receiptRef=outcome.receiptRef;updated.outcomeDigest=outcomeDigest;updated.expiresAt=outcome.expiresAt;
+  updated.status=outcome.status==='COMPLETE'?'PASSED':outcome.status==='FAILED'?'FAILED':outcome.status==='RUNNING'?'RUNNING':'UNKNOWN';updated.receiptRef=outcome.receiptRef;updated.outcomeDigest=outcomeDigest;updated.expiresAt=outcome.expiresAt;
   return immutable(next);
 }

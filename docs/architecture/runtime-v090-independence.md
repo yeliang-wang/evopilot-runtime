@@ -103,8 +103,9 @@ state; admission itself dispatches no work. The deterministic stage reducer
 checks all predecessors, candidate identities, bounded attempts and unknown
 outcome reconciliation. It cannot manufacture owner evidence or release authority.
 
-The protected owner/platform binding composition and retained exact authority
-are implemented in development. External stage dispatch remains M3 work.
+The protected owner/platform binding composition, retained exact authority and
+durable stage execution core are implemented in development. Fixed real CI/Agent
+dispatch adapters and their default CLI composition remain M3 work.
 Unconfigured adapters fail closed; synthetic regression adapters are test
 fixtures only and cannot certify real asset usability or final E2E. The two
 Dashboard pages, independent installed Expert/plugin, migration and complete
@@ -156,6 +157,12 @@ execution or publication permissions.
 
 An execution preview binds an explicit instance ID, active definition revision,
 semantics, required checks, goal/target/loop references, exact budget and expiry.
+It also pins referenced resource, owner and platform configuration so keeping
+the same reference name cannot retarget an existing instance. Unrelated project
+registrations, credential bytes and changing remote branch heads are excluded
+from that static configuration digest; their applicable scope/freshness checks
+still apply at admission and dispatch. Old development authority records without
+this binding remain historical and cannot silently acquire new permissions.
 A release preview binds a separately verified instance, its immutable candidate,
 required checks and configured channel. The release-decision predecessors must
 currently pass. Preview does not grant either authority. Recording requires the
@@ -175,5 +182,45 @@ not renewed authority or a replenished budget. An authority cannot be used to
 create a different instance, and an existing instance cannot be reset by recording
 an amended decision. Publication additionally needs `release.request` and the
 separate exact instance/candidate/channel grant. None of these operations dispatch
-external work; CI/Agent actions and original-request reconciliation are the next
-implementation step.
+external work. The separate stage request operation below may dispatch only
+through a configured fixed adapter and fresh authority.
+
+## Development durable stage requests and observations
+
+`lifecycle.stage.request` takes only an instance ID and a stage ID, with the usual
+project revision and idempotency key. The service checks exact authority, current
+bindings, fixed predecessors, candidate/release identity and remaining budgets.
+It stores the immutable request, action plan, instance transition, receipt, audit
+and event before calling a trusted adapter. Repeating the original request
+returns its original receipt. A later request cannot retry an UNKNOWN or RUNNING
+attempt, overwrite its provider handle or reset its budget. API callers cannot
+submit PASS or supply a stage outcome.
+
+`lifecycle.stage.request.inspect` returns the fixed request and current progress.
+Progress distinguishes DISPATCHING, WAITING_AGENT, CI_PENDING, CI_RUNNING,
+RUNNING, UNKNOWN, COMPLETE and FAILED. Every observed response is retained as an
+immutable object, including failures and uncertain outcomes;
+`lifecycle.stage.observation.read` retrieves it by exact request and observation
+reference. Later reconciliation does not erase an earlier receipt.
+
+The service worker only inspects already retained requests. It has at most four
+concurrent observation/dispatch calls, bounded provider calls and paged traversal.
+The instance budget additionally bounds new actions. Client disconnection does
+not cancel an already authorized external job. An explicit
+`lifecycle.stage.reconcile` requests read-only inspection of the original request;
+it grants no new external side effect. Revoked or expired execution authority
+blocks new dispatch but does not prohibit retaining the actual outcome of an
+already dispatched request. Service observations are audited as
+`runtime:observer`, an internal identity that cannot be issued as a user
+credential or record a human decision.
+
+Shutdown bounds pending waits and retains uncertainty. Startup marks interrupted
+requests for inspection; it never redispatches them, even when a crash occurred
+between local commit and external dispatch. Both crash boundaries are exercised
+with actual killed processes and clearly synthetic provider effects. Observation
+storage/index failures are visible in request inspection and the scoped worker
+health in `runtime.status`. Missing adapters leave historical state readable and
+new execution blocked. The ordinary development CLI still has no fixed native
+stage executor configured; the actual CI/Agent actions, artifact/owner result
+evaluation and end-to-end closure are not yet complete. These regression results
+are not final candidate acceptance.

@@ -9,10 +9,11 @@ import { createDefinitionService, DEFINITION_READS } from '../lifecycle/service.
 import type { DefinitionBindingProvider } from '../lifecycle/bindings.js';
 import type { AuthorityResolver } from '../lifecycle/instance.js';
 import { createAuthorityService, AUTHORITY_READS, AUTHORITY_WRITES, type AuthorityPolicyProvider } from '../adapters/authority.js';
+import { createExecutionService, EXECUTION_READS, EXECUTION_WRITES, type StageAdapter } from '../lifecycle/execution.js';
 
 const VERSION = String(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version);
 export interface ServerOptions { stateRoot: string; workspaceId: string; port?: number; }
-export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver, trustedPolicy?:AuthorityPolicyProvider) {
+export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver, trustedPolicy?:AuthorityPolicyProvider, trustedExecutor?:StageAdapter) {
   const config = record(options); exact(config,['stateRoot','workspaceId'],['port']);
   string(options.stateRoot,4096); slug(options.workspaceId);
   if (options.port !== undefined && (!Number.isSafeInteger(options.port) || options.port < 0 || options.port > 65535)) reject('INVALID_PORT','Invalid loopback port');
@@ -20,6 +21,9 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
   const store = new RuntimeStore(options.stateRoot, options.workspaceId);
   const authorities=createAuthorityService(store,trustedPolicy,id=>currentPrincipal(options.stateRoot,options.workspaceId,id));
   const definitions=createDefinitionService(store,trustedBindings,trustedAuthorities??authorities.resolveExecution,trustedAuthorities?undefined:authorities.verifyExecution,authorities.resolveRelease);
+  let execution:ReturnType<typeof createExecutionService>;
+  try{execution=createExecutionService(store,{bindings:trustedBindings,authorities:trustedAuthorities??authorities.resolveExecution,verifyAuthority:trustedAuthorities?undefined:authorities.verifyExecution,releaseAuthority:authorities.resolveRelease,principal:id=>currentPrincipal(options.stateRoot,options.workspaceId,id),adapter:trustedExecutor});}
+  catch(e){store.close();throw e;}
   const streams = new Set<ServerResponse>();
   let port = 0, closing = false;
   const status = () => ({ product: 'evopilot-runtime', version: VERSION, developmentTarget: '0.9.0', contract: 'runtime-service/v1', workspaceId: options.workspaceId, serviceId: store.serviceId, transport: 'streamable-http', protocols: HTTP_PROTOCOLS, operations: [...READ_OPERATIONS,...WRITE_OPERATIONS], independentLlm: false, productAcceptance: 'NOT_EVALUATED' });
@@ -30,14 +34,15 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     const actor = principal(req); authorize(actor,projectId,'read');
     if(WRITE_OPERATIONS.includes(operation as typeof WRITE_OPERATIONS[number])){
       exact(envelope,['operation','projectId','input','requestId','expectedRevision']);if(!Number.isSafeInteger(envelope.expectedRevision)||Number(envelope.expectedRevision)<0)reject('INVALID_REVISION','Expected a nonnegative revision');
-      const service=AUTHORITY_WRITES.includes(operation as typeof AUTHORITY_WRITES[number])?authorities:definitions;
+      const service=AUTHORITY_WRITES.includes(operation as typeof AUTHORITY_WRITES[number])?authorities:EXECUTION_WRITES.includes(operation as typeof EXECUTION_WRITES[number])?execution:definitions;
       return service.write(actor,projectId,operation,input,string(envelope.requestId),Number(envelope.expectedRevision),()=>principal(req));
     }
     exact(envelope,['operation','projectId','input']);
     if(DEFINITION_READS.includes(operation as typeof DEFINITION_READS[number]))return definitions.read(actor,projectId,operation,input);
     if(AUTHORITY_READS.includes(operation as typeof AUTHORITY_READS[number]))return authorities.read(actor,projectId,operation,input);
+    if(EXECUTION_READS.includes(operation as typeof EXECUTION_READS[number]))return execution.read(actor,projectId,operation,input);
     switch (operation) {
-      case 'runtime.status': exact(input,[]); return { ...status(), projectId, revision: store.revision(projectId) };
+      case 'runtime.status': exact(input,[]); return { ...status(), projectId, revision: store.revision(projectId),observationWorker:execution.health(projectId) };
       case 'runtime.projects.list': exact(input,[]); return { projects: store.projects(actor) };
       case 'runtime.events.read': exact(input,[],['cursor']); return store.events(actor,projectId,input.cursor === undefined ? undefined : string(input.cursor,1024));
       case 'runtime.receipt.read': exact(input,['requestId']); return store.receipt(actor,projectId,string(input.requestId));
@@ -120,11 +125,11 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
   });
   server.requestTimeout=15000;server.headersTimeout=10000;server.keepAliveTimeout=5000;server.maxRequestsPerSocket=100;
   try { await new Promise<void>((resolve,reject) => {server.once('error',reject);server.listen(options.port ?? 0,'127.0.0.1',() => {server.removeListener('error',reject);resolve();});}); }
-  catch(e){store.close();throw e;}
-  const address=server.address(); if(!address || typeof address==='string'){store.close();reject('START_FAILED','No loopback listener',500);}
+  catch(e){await execution.close();store.close();throw e;}
+  const address=server.address(); if(!address || typeof address==='string'){await execution.close();store.close();reject('START_FAILED','No loopback listener',500);}
   port=address.port;
   return Object.freeze({ url:'http://127.0.0.1:'+port,port,identity:status(), async close(){
     if(closing)return;closing=true;for(const res of streams)res.end();streams.clear();
-    server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));store.close();
+    server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));await execution.close();store.close();
   }});
 }
