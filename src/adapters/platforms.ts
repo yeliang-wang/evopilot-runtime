@@ -7,6 +7,7 @@ import { containsInlineSecret } from '../lifecycle/compiler.js';
 import { MAX_ARCHIVE_BYTES, validateCandidateInput, type CandidateInput } from './artifacts.js';
 import type { SourceRequest, SourceObservation } from './source.js';
 import type { ReleaseDocument, DocumentObservation } from './documents.js';
+import type { SourceTreeObservation } from './source-tree.js';
 import { validatePublicationInput, type PublicationInput, type DistributionRequest, type DistributionObservation } from './distribution.js';
 
 /** Trusted process credential resolution; never provided by a lifecycle/API. */
@@ -28,6 +29,7 @@ export interface PlatformJobObservation {
 }
 export interface PlatformRevisionReadiness extends PlatformReadiness {sourceSelection:'exact-commit';branchHeadCommit:string;}
 export interface PlatformClient {
+  sourceTree(actor:Principal,request:{commit:string},signal:AbortSignal):Promise<SourceTreeObservation>;
   distribution(actor:Principal,request:DistributionRequest,signal:AbortSignal):Promise<DistributionObservation>;
   documents(actor:Principal,request:{commit:string;documents:ReleaseDocument[]},signal:AbortSignal):Promise<DocumentObservation>;
   source(actor:Principal,request:SourceRequest,signal:AbortSignal):Promise<SourceObservation>;

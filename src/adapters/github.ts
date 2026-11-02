@@ -6,6 +6,7 @@ import { aggregateJobs, ciInputs, ciRunTitle, ciSourceRef, commitId, executionPr
 import type { Principal } from '../server/security.js';
 import { sourceReader } from './source.js';
 import { documentReader } from './documents.js';
+import { sourceTreeReader } from './source-tree.js';
 import { distributionReader } from './distribution.js';
 
 /** GitHub.com REST observations. A successful old job is not evidence for a new
@@ -73,7 +74,7 @@ export function githubClient(configuration:PlatformRegistration,credentials:Plat
       return{observation:readinessResult(binding,commit,path,sha256(bytes),{id:'label:'+binding.runner,online:null}),branchHeadCommit};
     }catch(error){return safePlatformError(error);}}
   const client:PlatformClient={
-    source:sourceReader(binding,get),documents:documentReader(binding,get),distribution:distributionReader(binding,get,download),
+    source:sourceReader(binding,get),sourceTree:sourceTreeReader(binding,get),documents:documentReader(binding,get),distribution:distributionReader(binding,get,download),
     async readiness(actor,signal){return(await ready(actor,signal)).observation;},
     async revision(actor,commit,signal){commitId(commit);const r=await ready(actor,signal,commit);return revisionReadinessResult(r.observation,r.branchHeadCommit);},
     async job(actor,runId,jobId,commit,signal,sourceRef=binding.defaultBranch){try{

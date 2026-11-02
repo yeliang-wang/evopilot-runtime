@@ -812,6 +812,22 @@ acceptance or a new grade for the original projects.
 
 ## Development owner feedback delivery
 
+The fixed GitHub/GitLab source-tree reader obtains complete Git object metadata
+at an exact commit. It preserves regular, executable, link and submodule entries
+without reading their contents or following links/submodules. It reconstructs
+each Git tree identity and rejects omitted, duplicated, truncated or inconsistent
+entries. GitHub also exposes the root tree ID in its commit response; GitLab
+15.0 selects the complete root inventory by exact commit, from which Runtime
+reconstructs that ID. Limits are 16,384 entries, 256 directories, 1,000 entries
+per directory, 512 API requests and 30 seconds; exceeding a bound never returns
+a partial inventory as complete. The result has separate inventory, tree and
+observed-facts digests. It is provenance evidence, not source approval.
+
+Both existing dedicated test repositories passed actual read-only inventory
+readback and stable repeated observation. Connecting this inventory to the
+registered terminal Run remains required; metadata readback by itself does not
+create a Run, feedback event or semantic decision.
+
 The fixed internal feedback consumer accepts an event ID only from a trusted
 registered terminal Run reader. It checks the workspace, project, event digest,
 original claim/cause and exact asset pins, then retains the event in Runtime's
