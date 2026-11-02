@@ -19,13 +19,21 @@
       "version": "0.8.3",
       "filesDigest": "f964dbcf37b0537d771320675b51704f836ebd7485a0a0fc2787906c11586767",
       "manifestFile": "ontology-published-fixture-files.json",
-      "usage": "Published public package APIs and synthetic distributed fixture inputs only; no private project assets or sibling source imports."
+      "usage": "Published public package APIs and synthetic distributed fixture inputs only; no private project assets or sibling source imports.",
+      "distributionManifestFile": "provenance/published-owners/ontology-0.8.3.json",
+      "distributionManifestDigest": "61d8047679d74ccf9f8a11e72a1f1ce06cf103348b46d0b06cd488f10faa1da5",
+      "releasePackageDigest": "sha256:acc195f006aeeadb0ad8e01121ef258ab2b171c7a6b48a01b424beae8ddc345b",
+      "dependencyLockDigest": "sha256:d2e88d58adbe87fabd96dc02d9cefa5d6368cb502bccf8ce60efd8d8b771ffc1"
     },
     "harness": {
       "version": "0.8.3",
       "filesDigest": "71a2f0870c7ee604d8de17489d5074db2bf86e6656f2143acaaefb290f2e3e9b",
       "manifestFile": "harness-published-fixture-files.json",
-      "usage": "Published public package APIs and synthetic distributed fixture inputs only; no private project assets or sibling source imports."
+      "usage": "Published public package APIs and synthetic distributed fixture inputs only; no private project assets or sibling source imports.",
+      "distributionManifestFile": "provenance/published-owners/harness-0.8.3.json",
+      "distributionManifestDigest": "9a878fb7862008895244ae27b8898301e58d1c1ad162753cc848c0ea1a963c31",
+      "releasePackageDigest": "sha256:24be3cb65c8b7dbe07d4970730cece928c9cac1a31a08a0359a4ca4560f64dc6",
+      "dependencyLockDigest": "sha256:c96e0059a26126e88b5b3aa3d0b4f95aa697ea4d5fba99e2c58f23f45a5799dd"
     }
   },
   "roles": {

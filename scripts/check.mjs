@@ -180,7 +180,10 @@ export async function checkSource() {
     const syntax = spawnSync(process.execPath, ['--check', path], { encoding: 'utf8' });
     assert.ifError(syntax.error); assert.equal(syntax.status, 0, syntax.stderr);
     }
-    assert.doesNotMatch(source, /\bimport\s*\(|\brequire\s*\(|\beval\s*\(|\/Users\/|\/home\/|EVOPILOT_HARNESS_HOME|defaultHarnessHome|\.evopilot-harness|\bprocess\s*(?:\.\s*(?:env|cwd|chdir)|\[)|\bglobalThis\s*(?:\.|\[)|\bm0\//);
+    // Only this publisher-pinned loader can import an installed public owner API.
+    // Its fixed entry is checked after full distribution/dependency verification.
+    const checkedSource=path.endsWith('/src/adapters/published-owners.ts')?source.replace("await import(pathToFileURL(join(config.packageRoot, 'dist/service.js')).href)",'VERIFIED_PUBLIC_OWNER_IMPORT'):source;
+    assert.doesNotMatch(checkedSource, /\bimport\s*\(|\brequire\s*\(|\beval\s*\(|\/Users\/|\/home\/|EVOPILOT_HARNESS_HOME|defaultHarnessHome|\.evopilot-harness|\bprocess\s*(?:\.\s*(?:env|cwd|chdir)|\[)|\bglobalThis\s*(?:\.|\[)|\bm0\//);
     for (const specifier of specifiers(source)) {
       if (isBuiltin(specifier)) continue;
       if(path.endsWith('/src/lifecycle/compiler.ts')&&specifier==='yaml')continue;
