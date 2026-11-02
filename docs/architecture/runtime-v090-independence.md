@@ -118,9 +118,10 @@ CI stages now compose these clients with exact native owner validation through
 the standalone CLI's registered executor. Immutable target/plan preparation and
 the fixed scope and plan stages and external Codex task handoff are also
 implemented. Reviewed implementation CI now composes the same native validators
-and supplies its verified source to candidate and verification stages. Actual
-end-to-end execution of this composed chain and the remaining native stages
-remain M3 work.
+and supplies its verified source to candidate and verification stages. A bounded
+real GitLab probe has exercised scope through verification without seeded
+predecessors. The remaining native stages and full lifecycle acceptance remain
+M3 work.
 Unconfigured adapters fail closed; synthetic regression adapters are test
 fixtures only and cannot certify real asset usability or final E2E. The two
 Dashboard pages, independent installed Expert/plugin, migration and complete
@@ -607,8 +608,19 @@ Development regressions cover the composed implementation/candidate/verification
 chain, restart, changed branch head, missing review, response loss, revoked review
 and failed CI/native validation. Their assets, decisions and external effects are
 explicitly synthetic. A real GitLab read independently verified an older exact
-commit and its workflow while retaining the newer branch head; it dispatched no
-CI. These results do not establish actual full lifecycle or final acceptance.
+commit and its workflow while retaining the newer branch head.
+
+The subsequent isolated CLI probe ran scope, plan, current-Codex implementation,
+candidate and verification with real GitLab CI and released 0.8.3 native owners.
+It seeded no predecessor outcomes. Independent readback confirmed exactly three
+CI pipelines for one reviewed commit, all owner criteria passing, and verification
+downloading and testing the original candidate archive with identical artifact
+bytes. Service restart preserved the completed implementation and source pins.
+The probe retained its earlier fixture/configuration failures and driver recovery
+records and revoked its synthetic execution authority on completion. Assets and
+decisions remain explicitly synthetic; release-decision, publication and closure
+were not executed. This is development integration evidence, not full lifecycle
+or final candidate acceptance, a product release or a daily installation change.
 
 ## Development plan execution
 
