@@ -13,6 +13,50 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { initializeCredentials, tokenDigest, authenticate } from '../../dist/server/security.js';
 import { RuntimeStore } from '../../dist/server/store.js';
 import { startRuntimeServer } from '../../dist/server/http.js';
+import {canonical,canonicalEvidence,canonicalReadback,evidenceValueDigest,EVIDENCE_MAX_BYTES} from '../../dist/server/errors.js';
+import {valueDigest} from '../../dist/lifecycle/base.js';
+
+test('original evidence serialization preserves old digests and keeps request/page, depth and structure limits separate',()=>{
+  const small={z:[1,true,null],a:'original'};
+  assert.equal(canonicalEvidence(small),canonical(small));assert.equal(evidenceValueDigest(small),valueDigest(small));
+  const original={stdout:'x'.repeat(300000)};
+  assert.deepEqual(JSON.parse(canonicalEvidence(original)),original);
+  for(const operation of ['runtime.projects.list','runtime.events.read','lifecycle.definition.read','unknown'])assert.throws(()=>canonicalReadback(operation,original),{code:'INPUT_LIMIT'});
+  assert.equal(canonicalReadback('lifecycle.plan.evidence.read',original),canonicalEvidence(original));
+  assert.throws(()=>canonicalEvidence({stdout:'x'.repeat(EVIDENCE_MAX_BYTES)}),{code:'INPUT_LIMIT'});
+  assert.throws(()=>canonicalEvidence(Array(200001).fill(0)),{code:'INPUT_LIMIT'});
+  let deep={};for(let i=0;i<34;i++)deep={child:deep};assert.throws(()=>canonicalEvidence(deep),{code:'INPUT_LIMIT'});
+  assert.throws(()=>canonicalEvidence(JSON.parse('{"__proto__":{}}')),{code:'INVALID_INPUT'});
+});
+
+test('large original native evidence survives restart; untrusted records and requests retain the small limit with atomic rollback',()=>{
+  const f=fixture();let s=new RuntimeStore(f.root,'test');
+  try{
+    const receipt={result:{stdout:'original native output\n'.repeat(20000)}};
+    s.mutate(f.actor,mutation(),()=>({value:{digest:evidenceValueDigest(receipt)},objects:[{kind:'stage-native-receipt',id:'original',value:receipt}],event:{type:'fixture-written',data:{original:true}}}));
+    s.close();s=new RuntimeStore(f.root,'test');assert.deepEqual(s.object('alpha','stage-native-receipt','original'),receipt);
+    assert.throws(()=>s.mutate(f.actor,{...mutation('large-input',1),input:receipt},()=>change()),{code:'INPUT_LIMIT'});
+    assert.throws(()=>s.mutate(f.actor,mutation('ordinary-object',1),()=>({value:{},objects:[{kind:'stage-native-receipt',id:'uncommitted',value:receipt},{kind:'fixture',id:'untrusted',value:receipt}],event:{type:'fixture-written',data:{}}})),{code:'INPUT_LIMIT'});
+    assert.equal(s.revision('alpha'),1);assert.equal(s.object('alpha','stage-native-receipt','uncommitted'),null);
+    assert.throws(()=>s.mutate(f.actor,mutation('too-large-evidence',1),()=>({value:{},objects:[{kind:'stage-native-receipt',id:'large',value:{stdout:'x'.repeat(EVIDENCE_MAX_BYTES)}}],event:{type:'fixture-written',data:{}}})),{code:'INPUT_LIMIT'});
+    assert.equal(s.revision('alpha'),1);
+  }finally{s.close();f.cleanup();}
+});
+
+test('HTTP and actual Streamable MCP read the same bounded original plan evidence without granting cross-project or request-size access',async()=>{
+  const f=fixture();let s=new RuntimeStore(f.root,'test'),server;const client=new Client({name:'original-evidence-probe',version:'1'});
+  try{
+    // Synthetic retained bytes test transport/recovery only, never native PASS.
+    const id='original',requestDigest=valueDigest('synthetic request'),planDigest=valueDigest('synthetic plan'),body={requestDigest,planDigest},input={...body,digest:valueDigest(body)},receipt={result:{stdout:'synthetic original output\n'.repeat(16000)}};
+    s.mutate(f.actor,mutation(),()=>({value:{retained:true},objects:[{kind:'plan-stage-input',id,value:input},{kind:'stage-request',id,value:{id,projectId:'alpha',workspaceId:'test',stageId:'plan',digest:requestDigest,planDigest}},{kind:'plan-stage-native-receipt',id:id+':harness',value:receipt}],event:{type:'fixture-written',data:{}}}));
+    s.close();s=null;server=await startRuntimeServer({stateRoot:f.root,workspaceId:'test'});
+    const http=await request(server,f.token,'lifecycle.plan.evidence.read','alpha',{stageRequestId:id});assert.equal(http.status,200);assert.deepEqual(http.body.result.owners.harness.receipt,receipt);assert(Buffer.byteLength(JSON.stringify(http.body))>262144);
+    assert.equal((await request(server,f.other,'lifecycle.plan.evidence.read','alpha',{stageRequestId:id})).status,403);
+    assert.equal((await request(server,f.token,'lifecycle.plan.evidence.read','alpha',{stageRequestId:id,untrusted:'x'.repeat(300000)})).status,413);
+    await client.connect(new StreamableHTTPClientTransport(new URL(server.url+'/mcp'),{requestInit:{headers:{authorization:'Bearer '+f.token}}}));
+    const result=await client.callTool({name:'runtime_read',arguments:{operation:'lifecycle.plan.evidence.read',projectId:'alpha',input:{stageRequestId:id}}});assert.notEqual(result.isError,true);assert.deepEqual(JSON.parse(result.content[0].text).result,http.body.result);
+  }finally{await client.close();await server?.close();s?.close();f.cleanup();}
+});
 
 function fixture() {
   const dir=mkdtempSync(join(realpathSync(tmpdir()),'runtime-v090-http-')),root=join(dir,'state');

@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { record, ServiceError } from './errors.js';
+import { record, ServiceError, canonicalReadback } from './errors.js';
 import { DEFINITION_READS, DEFINITION_WRITES } from '../lifecycle/service.js';
 import { AUTHORITY_READS, AUTHORITY_WRITES } from '../adapters/authority.js';
 import { EXECUTION_READS, EXECUTION_WRITES } from '../lifecycle/execution.js';
@@ -30,7 +30,7 @@ export async function handleMcp(req: IncomingMessage, res: ServerResponse, body:
       const argumentsValue=record(request.params.arguments),operation=argumentsValue.operation;
       if(request.params.name==='runtime_read'&&!READ_OPERATIONS.includes(operation as typeof READ_OPERATIONS[number])||request.params.name==='runtime_write'&&!WRITE_OPERATIONS.includes(operation as typeof WRITE_OPERATIONS[number])||!['runtime_read','runtime_write'].includes(request.params.name))throw new ServiceError('UNKNOWN_TOOL','Tool does not permit this operation',404);
       const result = await dispatch(argumentsValue);
-      return { content: [{ type: 'text', text: JSON.stringify({ requestId, result }) }] };
+      return { content: [{ type: 'text', text: canonicalReadback(operation,{ requestId, result }) }] };
     } catch (e) {
       const error = e instanceof ServiceError ? e : new ServiceError('INTERNAL', 'Request could not be completed', 500);
       return { isError: true, content: [{ type: 'text', text: JSON.stringify({ requestId, error: { code: error.code, message: error.message } }) }] };

@@ -1,5 +1,24 @@
 # Runtime v0.9 independence and lifecycle boundary
 
+Original native evidence has a separate bounded serialization profile: 8 MiB,
+200,000 JSON nodes and depth 32. It applies only to fixed native-receipt,
+verification-run and owner-feedback record kinds and the six explicit plan,
+implementation, release, publication, closure and verification-feedback evidence
+read operations. HTTP and Streamable MCP apply the same response bound. Ordinary
+requests, YAML, other responses and monitor pages retain their 256 KiB limit;
+the event payload limit remains 64 KiB. No caller selects the larger profile or
+supplies a record kind. Original receipts retain their complete command output,
+canonical digests and scope; no truncation creates a PASS. Exceeding the evidence
+profile still blocks retention/readback and requires inspection of the original
+owner receipt, without redispatch. Private archival uses the same bounded JSON
+profile for each original receipt document, within its existing total bound.
+
+An explicit stage continuation checks worker availability again after asynchronous
+permission verification. If an original observation acquired the worker in that
+interval, the request returns `EXECUTOR_BUSY` before recording an acknowledgement.
+The client may retry the same stage after inspection finishes; this does not
+create another attempt, change its deadline or redispatch its retained action.
+
 Status: user-approved direction; implementation in progress, acceptance not evaluated.
 
 Runtime owns its version, release, deterministic service, lifecycle state/gates,

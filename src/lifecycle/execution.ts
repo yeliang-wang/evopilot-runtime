@@ -201,6 +201,10 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
       if(!deps.adapter?.advance)reject('STAGE_ADVANCE_UNAVAILABLE','This adapter has no explicitly requested continuation',409);
       if(active.has(key(projectId,r.id))||active.size>=4)reject('EXECUTOR_BUSY','Wait for the retained original observation; do not create a replacement stage',429);
       if(!p.terminal)await permit(r);
+      // Permit verification performs asynchronous owner/provider reads. The
+      // observer can acquire this request in that interval. Never acknowledge
+      // an advance which start() would then silently discard as already active.
+      if(active.has(key(projectId,r.id))||active.size>=4)reject('EXECUTOR_BUSY','Original observation acquired the worker during permission verification; inspect and retry the same stage',429);
       const result=store.mutate(actor,mutation,()=>({value:{stageRequestId:r.id,status:p.terminal?'TERMINAL':'ADVANCE_REQUESTED',newAttempt:false,deadlineAt:r.deadlineAt},event:{type:'stage-advance-requested',data:{instanceId:r.instanceId,stageId:r.stageId,stageRequestId:r.id,newAttempt:false}}}),reauthorize);
       if(!p.terminal)start(r,'advance');return result;
     }

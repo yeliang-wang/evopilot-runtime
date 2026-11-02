@@ -1,10 +1,11 @@
 import {randomUUID} from 'node:crypto';
 import {lstatSync,readFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {canonical,record,reject,string} from '../server/errors.js';
+import {canonicalEvidence as canonical,record,reject,string} from '../server/errors.js';
 import {authorize,privateFile,type Principal} from '../server/security.js';
 import {RuntimeStore} from '../server/store.js';
-import {byteDigest,valueDigest} from '../lifecycle/base.js';
+import {byteDigest} from '../lifecycle/base.js';
+import {evidenceValueDigest as valueDigest} from '../server/errors.js';
 import {inspectInstance,type LifecycleInstance} from '../lifecycle/instance.js';
 import type {StageProgress,StageRequest} from '../lifecycle/execution.js';
 import {nativeSha256,type NativeJSON,type NativeReference} from '../../vendor/compatibility/v1/native.mjs';

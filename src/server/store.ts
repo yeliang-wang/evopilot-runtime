@@ -2,13 +2,17 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { canonical, digest, exact, record, reject, slug, string } from './errors.js';
+import { canonical, canonicalEvidence, digest, exact, record, reject, slug, string } from './errors.js';
 import { authorize, ensurePrivateRoot, privateFile, type Principal, type Permission } from './security.js';
 
 export interface Mutation { projectId: string; operation: string; requestId: string; expectedRevision: number; input: unknown; permission: Permission; }
 export interface StoredObject { kind: string; id: string; value: unknown; }
 export interface MutationResult { value: unknown; objects?: StoredObject[]; event: { type: string; data: unknown }; }
 export interface Receipt { projectId: string; requestId: string; operation: string; principalId: string; revision: number; requestDigest: string; result: unknown; at: string; }
+
+// Only fixed adapters can produce these original evidence records. No public
+// mutation accepts an object kind or arbitrary evidence payload.
+const LARGE_EVIDENCE_KINDS=new Set(['plan-stage-native-receipt','stage-native-receipt','stage-evaluation-run','owner-feedback-event','owner-feedback-inbox','publication-harness-receipt','closure-harness-receipt']);
 
 /** Owns one local writer. The OS releases the separate SQLite exclusive lock after process death. */
 export class RuntimeStore {
@@ -128,7 +132,7 @@ export class RuntimeStore {
       if (Buffer.byteLength(eventData) > 65536) reject('EVENT_LIMIT', 'Event exceeds 64 KiB', 413);
       for (const item of result.objects ?? []) {
         slug(item.kind); string(item.id);
-        this.db.prepare('INSERT INTO objects VALUES(?,?,?,?) ON CONFLICT(project_id,kind,id) DO UPDATE SET data=excluded.data').run(request.projectId,item.kind,item.id,canonical(item.value));
+        this.db.prepare('INSERT INTO objects VALUES(?,?,?,?) ON CONFLICT(project_id,kind,id) DO UPDATE SET data=excluded.data').run(request.projectId,item.kind,item.id,LARGE_EVIDENCE_KINDS.has(item.kind)?canonicalEvidence(item.value):canonical(item.value));
       }
       if (reauthorize) {
         const current = reauthorize(); authorize(current, request.projectId, request.permission);

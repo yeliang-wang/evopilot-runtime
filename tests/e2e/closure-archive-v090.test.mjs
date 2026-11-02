@@ -5,6 +5,16 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {valueDigest,byteDigest} from '../../dist/lifecycle/base.js';
 import {inspectClosureArchive,writeClosureArchive} from '../../dist/adapters/closure-archive.js';
+import {canonicalEvidence,EVIDENCE_MAX_BYTES} from '../../dist/server/errors.js';
+test('archive preserves large original native receipt bytes and rejects the evidence ceiling before writing',()=>{
+ const f=fixture();try{
+  const receipt={schema:'synthetic-native-receipt',commands:[{stdout:'original bounded AST\n'.repeat(20000)}]};
+  f.input.documents=[{name:'native-receipt.json',content:receipt}];const a=f.write();assert.equal(a.status,'COMPLETE');
+  const bytes=readFileSync(join(a.directory,'native-receipt.json'));assert.equal(bytes.toString(),canonicalEvidence(receipt)+'\n');assert.equal(f.read().status,'COMPLETE');
+  const manifest=JSON.parse(readFileSync(join(a.directory,'manifest.json')));assert.equal(manifest.files.find(x=>x.name==='native-receipt.json').digest,byteDigest(bytes));
+ }finally{f.close();}
+ const oversized=fixture();try{oversized.input.documents=[{name:'oversized.json',content:{stdout:'x'.repeat(EVIDENCE_MAX_BYTES)}}];assert.throws(()=>oversized.write(),{code:'INPUT_LIMIT'});assert.deepEqual(readdirSync(oversized.root),['original.zip']);}finally{oversized.close();}
+});
 function fixture(){const root=mkdtempSync(join(realpathSync(tmpdir()),'runtime-closure-archive-')),source=join(root,'original.zip'),bytes=Buffer.from('synthetic original CI archive bytes');writeFileSync(source,bytes,{mode:0o600});const input={workspaceId:'test',projectId:'alpha',instanceId:'instance',requestDigest:valueDigest('request'),content:{schema:'synthetic-closure-evidence',delivery:'verified',owners:{ontology:'REUSE_APPROVED',harness:'REUSE_APPROVED'}},artifacts:[{name:'verification.zip',sourcePath:source,digest:byteDigest(bytes),bytes:bytes.length}]};return{root,source,input,read:()=>inspectClosureArchive(root,input,AbortSignal.timeout(5000)),write:()=>writeClosureArchive(root,input,AbortSignal.timeout(5000)),close:()=>rmSync(root,{recursive:true,force:true})};}
 test('archive copies original bytes, seals exact evidence and repeated reads/writes preserve the original files',()=>{const f=fixture();try{assert.equal(f.read().status,'ABSENT');const a=f.write();assert.equal(a.status,'COMPLETE');assert.equal(f.read().factsDigest,a.factsDigest);assert.equal(f.write().factsDigest,a.factsDigest);assert.deepEqual(readFileSync(join(a.directory,'verification.zip')),readFileSync(f.source));assert.deepEqual(JSON.parse(readFileSync(join(a.directory,'evidence.json'))),f.input.content);assert.equal(readdirSync(a.directory).length,4);}finally{f.close();}});
 test('missing seal stays partial and cannot be silently completed by a repeated write',()=>{const f=fixture();try{const a=f.write();unlinkSync(join(a.directory,'seal.json'));assert.equal(f.read().status,'PARTIAL');assert.equal(f.write().status,'PARTIAL');assert(!readdirSync(a.directory).includes('seal.json'));}finally{f.close();}});

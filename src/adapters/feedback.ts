@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { canonical, exact, record, reject, ServiceError, string } from '../server/errors.js';
+import { canonicalEvidence as canonical, exact, record, reject, ServiceError, string } from '../server/errors.js';
 import { authorize, type Principal } from '../server/security.js';
 import { RuntimeStore } from '../server/store.js';
-import { valueDigest } from '../lifecycle/base.js';
+import {evidenceValueDigest as valueDigest} from '../server/errors.js';
 import { containsInlineSecret } from '../lifecycle/compiler.js';
 import { nativeSha256, validateNativeReference } from '../../vendor/compatibility/v1/native.mjs';
 import { verifyDecisionEvidence } from '../../vendor/compatibility/v1/decision-evidence.mjs';

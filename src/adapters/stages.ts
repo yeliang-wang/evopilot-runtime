@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { constants, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { canonical, exact, record, reject, ServiceError, string } from '../server/errors.js';
+import { canonicalEvidence as canonical, exact, record, reject, ServiceError, string } from '../server/errors.js';
 import { authorize, privateFile, type Principal } from '../server/security.js';
 import { RuntimeStore } from '../server/store.js';
-import { byteDigest, valueDigest } from '../lifecycle/base.js';
+import {byteDigest} from '../lifecycle/base.js';
+import {evidenceValueDigest as valueDigest} from '../server/errors.js';
 import { atPath } from '../lifecycle/compiler.js';
 import { inspectInstance, type LifecycleInstance } from '../lifecycle/instance.js';
 import { isPreparationRef, readPreparationPacket } from '../lifecycle/preparation.js';

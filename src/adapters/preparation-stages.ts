@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { relative, sep } from 'node:path';
-import { canonical, record, reject, ServiceError, string } from '../server/errors.js';
+import { canonicalEvidence as canonical, record, reject, ServiceError, string } from '../server/errors.js';
 import { authorize, type Principal } from '../server/security.js';
 import { RuntimeStore } from '../server/store.js';
-import { valueDigest } from '../lifecycle/base.js';
+import {evidenceValueDigest as valueDigest} from '../server/errors.js';
 import { atPath, type EffectiveDefinition } from '../lifecycle/compiler.js';
 import { inspectInstance, type LifecycleInstance } from '../lifecycle/instance.js';
 import { readPreparationPacket, type PreparationPacket, type PreparationValidator } from '../lifecycle/preparation.js';

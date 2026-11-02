@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { canonical, exact, record, reject, ServiceError, slug, string } from './errors.js';
+import { canonical, canonicalReadback, exact, record, reject, ServiceError, slug, string } from './errors.js';
 import { authenticate, authorize, assertCredentials, currentPrincipal } from './security.js';
 import { RuntimeStore } from './store.js';
 import { handleMcp, HTTP_PROTOCOLS, READ_OPERATIONS, WRITE_OPERATIONS } from './mcp.js';
@@ -58,8 +58,8 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
       default: return reject('UNKNOWN_OPERATION','Unsupported Runtime operation',404);
     }
   }
-  function json(res: ServerResponse, code: number, value: unknown) {
-    const body = canonical(value); res.writeHead(code,{ 'content-type':'application/json; charset=utf-8','cache-control':'no-store' }); res.end(body);
+  function json(res: ServerResponse, code: number, value: unknown, operation?:unknown) {
+    const body = canonicalReadback(operation,value); res.writeHead(code,{ 'content-type':'application/json; charset=utf-8','cache-control':'no-store' }); res.end(body);
   }
   async function body(req: IncomingMessage): Promise<unknown> {
     if (!/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(req.headers['content-type'] ?? '')) return reject('CONTENT_TYPE','JSON content type required',415);
@@ -121,7 +121,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
         if (protocol === undefined && (!message || typeof message !== 'object' || Array.isArray(message) || record(message).method !== 'initialize')) reject('UNSUPPORTED_PROTOCOL','MCP protocol header is required after initialization');
         await handleMcp(req,res,message,VERSION,v=>dispatch(req,v),requestId); return;
       }
-      if (req.method === 'POST' && url.pathname === '/api/v1/request') { json(res,200,{ requestId,result:await dispatch(req,await body(req)) }); return; }
+      if (req.method === 'POST' && url.pathname === '/api/v1/request') { const input=await body(req); const result=await dispatch(req,input); json(res,200,{requestId,result},record(input).operation); return; }
       if (req.method === 'GET' && url.pathname === '/api/v1/status') { json(res,200,{requestId,result:await dispatch(req,{operation:'runtime.status',projectId:url.searchParams.get('projectId'),input:{}})});return; }
       if (req.method === 'GET' && url.pathname === '/api/v1/events') {
         const projectId=slug(url.searchParams.get('projectId')); stream(req,res,projectId,url.searchParams.get('cursor') ?? undefined);return;

@@ -369,6 +369,30 @@ test('stage advance cannot bypass revocation or substitute another execution pri
   }finally{await f.server.close();f.cleanup();}
 });
 
+test('an observer acquiring the worker during async permission checks cannot silently consume an acknowledged advance',async()=>{
+  const f=fixture(),{state,adapter,observe}=stageAdapter(f),originalBindings=f.bindings.provider;
+  let pause=false,entered,releasePermit,observed,releaseInspection,advances=0;
+  const inPermit=new Promise(r=>entered=r),permitGate=new Promise(r=>releasePermit=r),inInspection=new Promise(r=>observed=r),inspectionGate=new Promise(r=>releaseInspection=r);
+  f.bindings.provider=async(...args)=>{if(pause){entered();await permitGate;}return originalBindings(...args);};
+  adapter.advance=async(r,i,p,permit)=>{await permit();advances++;const o=observe(r,i,'complete');o.handle=p.handle;return o;};
+  state.mode='running';state.inspectMode='running';await f.open();
+  try{
+    await activate(f);const g=await grant(f);await create(f,g);
+    const started=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=started.result.result.stageRequestId;
+    await until(()=>stageState(f,id),v=>v.result.progress.phase==='CI_RUNNING');
+    await until(()=>request(f,'runtime.status'),v=>v.result.observationWorker.inFlight===0);
+    const inspect=adapter.inspect;adapter.inspect=async(...args)=>{observed();await inspectionGate;return inspect(...args);};pause=true;
+    const advancing=execWrite(f,'lifecycle.stage.advance',{stageRequestId:id});
+    await Promise.race([inPermit,new Promise((_,fail)=>setTimeout(()=>fail(Error('permit did not begin')),5000))]);
+    await Promise.race([inInspection,new Promise((_,fail)=>setTimeout(()=>fail(Error('observer did not acquire worker')),5000))]);
+    releasePermit();const busy=await advancing;assert.equal(busy.status,429,JSON.stringify(busy));assert.equal(busy.error.code,'EXECUTOR_BUSY');assert.equal(advances,0);
+    pause=false;adapter.inspect=inspect;releaseInspection();await until(()=>request(f,'runtime.status'),v=>v.result.observationWorker.inFlight===0);
+    const continued=await execWrite(f,'lifecycle.stage.advance',{stageRequestId:id});assert.equal(continued.status,200,JSON.stringify(continued));
+    await until(()=>stageState(f,id),v=>v.result.progress.phase==='COMPLETE');assert.equal(advances,1);assert.equal(state.dispatches,1);
+    const instance=(await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance;assert.equal(instance.stages.scope.attempts,1);assert.equal(instance.requestIds.length,1);
+  }finally{pause=false;releasePermit();releaseInspection();await f.server.close();f.cleanup();}
+});
+
 test('stage request is durable before adapter side effects; exact replay never redispatches and client PASS is rejected',async()=>{
   const {f,state,observe}=await executingFixture();try{
     state.dispatch=async(r,i)=>{

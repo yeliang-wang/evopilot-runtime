@@ -1,8 +1,9 @@
 import {createHash} from 'node:crypto';
 import {constants,closeSync,fstatSync,fsyncSync,lstatSync,mkdirSync,openSync,readSync,readdirSync,realpathSync,writeFileSync,writeSync} from 'node:fs';
 import {isAbsolute,join,resolve} from 'node:path';
-import {canonical,reject,ServiceError,string} from '../server/errors.js';
-import {byteDigest,valueDigest} from '../lifecycle/base.js';
+import {canonicalEvidence as canonical,reject,ServiceError,string} from '../server/errors.js';
+import {byteDigest} from '../lifecycle/base.js';
+import {evidenceValueDigest as valueDigest} from '../server/errors.js';
 import {containsInlineSecret} from '../lifecycle/compiler.js';
 import {MAX_ARCHIVE_BYTES} from './artifacts.js';
 
