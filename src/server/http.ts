@@ -13,7 +13,7 @@ import { createExecutionService, EXECUTION_READS, EXECUTION_WRITES, type StageAd
 
 const VERSION = String(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version);
 export interface ServerOptions { stateRoot: string; workspaceId: string; port?: number; }
-export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver, trustedPolicy?:AuthorityPolicyProvider, trustedExecutor?:StageAdapter) {
+export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver, trustedPolicy?:AuthorityPolicyProvider, trustedExecutor?:StageAdapter|((store:RuntimeStore)=>StageAdapter)) {
   const config = record(options); exact(config,['stateRoot','workspaceId'],['port']);
   string(options.stateRoot,4096); slug(options.workspaceId);
   if (options.port !== undefined && (!Number.isSafeInteger(options.port) || options.port < 0 || options.port > 65535)) reject('INVALID_PORT','Invalid loopback port');
@@ -22,7 +22,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
   const authorities=createAuthorityService(store,trustedPolicy,id=>currentPrincipal(options.stateRoot,options.workspaceId,id));
   const definitions=createDefinitionService(store,trustedBindings,trustedAuthorities??authorities.resolveExecution,trustedAuthorities?undefined:authorities.verifyExecution,authorities.resolveRelease);
   let execution:ReturnType<typeof createExecutionService>;
-  try{execution=createExecutionService(store,{bindings:trustedBindings,authorities:trustedAuthorities??authorities.resolveExecution,verifyAuthority:trustedAuthorities?undefined:authorities.verifyExecution,releaseAuthority:authorities.resolveRelease,principal:id=>currentPrincipal(options.stateRoot,options.workspaceId,id),adapter:trustedExecutor});}
+  try{execution=createExecutionService(store,{bindings:trustedBindings,authorities:trustedAuthorities??authorities.resolveExecution,verifyAuthority:trustedAuthorities?undefined:authorities.verifyExecution,releaseAuthority:authorities.resolveRelease,principal:id=>currentPrincipal(options.stateRoot,options.workspaceId,id),adapter:typeof trustedExecutor==='function'?trustedExecutor(store):trustedExecutor});}
   catch(e){store.close();throw e;}
   const streams = new Set<ServerResponse>();
   let port = 0, closing = false;

@@ -257,6 +257,34 @@ async function stageState(f,id){return request(f,'lifecycle.stage.request.inspec
 async function until(probe,predicate,timeout=5000){const end=Date.now()+timeout;let value;do{value=await probe();if(predicate(value))return value;await new Promise(r=>setTimeout(r,10));}while(Date.now()<end);assert.fail('Timed out waiting for exact retained stage state: '+JSON.stringify(value));}
 async function executingFixture(){const f=fixture(),adapter=stageAdapter(f);await f.open();await activate(f);const g=await grant(f);assert.equal((await create(f,g)).status,200);return{f,g,...adapter};}
 
+test('explicit stage advance retains the original plan and budget; replay and background inspection cannot repeat it',async()=>{
+  const {f,state,adapter,observe}=await executingFixture();let advances=0;
+  try{
+    state.mode='running';state.inspectMode='running';adapter.advance=async(r,i,p,permit)=>{await permit();advances++;const o=observe(r,i,'complete');o.handle=p.handle;return o;};
+    const started=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=started.result.result.stageRequestId;
+    const original=await until(()=>stageState(f,id),r=>r.result.progress.phase==='CI_RUNNING');
+    assert.equal(advances,0);assert.equal((await execWrite(f,'lifecycle.stage.advance',{stageRequestId:id},'reader')).status,403);
+    assert.equal((await execWrite(f,'lifecycle.stage.advance',{stageRequestId:id,command:'arbitrary'})).error.code,'INVALID_FIELDS');
+    const advanced=await execWrite(f,'lifecycle.stage.advance',{stageRequestId:id});assert.equal(advanced.status,200,JSON.stringify(advanced));assert.equal(advanced.result.result.newAttempt,false);
+    assert.equal(advanced.result.result.deadlineAt,original.result.request.deadlineAt);await until(()=>stageState(f,id),r=>r.result.progress.phase==='COMPLETE');
+    const replay=await execWrite(f,'lifecycle.stage.advance',{stageRequestId:id},'executor',{requestId:advanced.result.requestId,expectedRevision:0});assert.deepEqual(replay.result,advanced.result);
+    assert.equal(advances,1);assert.equal(state.dispatches,1);
+    const saved=(await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance;assert.equal(saved.stages.scope.attempts,1);assert.equal(saved.requestIds.length,1);
+    await f.server.close();await f.open();assert.equal((await stageState(f,id)).result.progress.phase,'COMPLETE');assert.equal(advances,1);
+  }finally{await f.server.close();f.cleanup();}
+});
+test('stage advance cannot bypass revocation or substitute another execution principal',async()=>{
+  const {f,g,state,adapter,observe}=await executingFixture();let advances=0;
+  try{
+    state.mode='running';state.inspectMode='running';adapter.advance=async(r,i,p,permit)=>{await permit();advances++;return observe(r,i,'complete');};
+    const started=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=started.result.result.stageRequestId;await until(()=>stageState(f,id),r=>r.result.progress.phase==='CI_RUNNING');
+    assert.equal((await execWrite(f,'lifecycle.stage.advance',{stageRequestId:id},'publisher')).error.code,'AUTHORITY_CHANGED');
+    await execWrite(f,'lifecycle.authority.revoke',{authorityRef:g.ref,reason:'Synthetic withdrawal'},'decider');
+    assert.equal((await execWrite(f,'lifecycle.stage.advance',{stageRequestId:id})).error.code,'AUTHORITY_REVOKED');assert.equal(advances,0);assert.equal(state.dispatches,1);
+    assert.equal((await execWrite(f,'lifecycle.stage.reconcile',{stageRequestId:id},'reader')).status,200);
+  }finally{await f.server.close();f.cleanup();}
+});
+
 test('stage request is durable before adapter side effects; exact replay never redispatches and client PASS is rejected',async()=>{
   const {f,state,observe}=await executingFixture();try{
     state.dispatch=async(r,i)=>{

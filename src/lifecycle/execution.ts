@@ -8,7 +8,7 @@ import { validateBindings, type DefinitionBindingProvider } from './bindings.js'
 import { inspectInstance, requestStage, recordStageOutcome, resolveAuthority, stageAdmission, stageBudget, type AuthorityResolver, type ExecutionAuthority, type LifecycleInstance, type ReleaseAuthority, type StageOutcome } from './instance.js';
 
 export const EXECUTION_READS=['lifecycle.stage.request.inspect','lifecycle.stage.observation.read'] as const;
-export const EXECUTION_WRITES=['lifecycle.stage.request','lifecycle.stage.reconcile'] as const;
+export const EXECUTION_WRITES=['lifecycle.stage.request','lifecycle.stage.reconcile','lifecycle.stage.advance'] as const;
 export interface StagePlan { adapterId:string; adapterDigest:string; action:string; bindingDigest:string; parameters:Record<string,unknown>; }
 export interface StageRequest {
   schema:'runtime-stage-request/v1'; id:string; workspaceId:string; projectId:string;
@@ -27,6 +27,9 @@ export interface StageAdapter {
   prepare(instance:LifecycleInstance,stageId:string,actor:Principal,signal:AbortSignal):Promise<StagePlan>;
   dispatch(request:StageRequest,instance:LifecycleInstance,permit:()=>Promise<Principal>,signal:AbortSignal):Promise<StageObservation>;
   inspect(request:StageRequest,instance:LifecycleInstance,progress:StageProgress,actor:Principal,signal:AbortSignal):Promise<StageObservation>;
+  /** Explicit continuation of the same retained plan, not a retry of dispatch.
+   * Each remaining side effect still needs its own durable action/permit. */
+  advance?(request:StageRequest,instance:LifecycleInstance,progress:StageProgress,permit:()=>Promise<Principal>,signal:AbortSignal):Promise<StageObservation>;
 }
 export interface ExecutionDependencies {
   bindings?:DefinitionBindingProvider; authorities?:AuthorityResolver;
@@ -119,7 +122,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     const observation:StageObservation={requestId:r.id,inputDigest:r.inputDigest,adapterDigest:r.plan.adapterDigest,phase:'UNKNOWN',handle:p.handle,outcome:{requestId:r.id,inputDigest:r.inputDigest,receiptRef:'runtime:stage/'+r.id,status:'UNKNOWN',expiresAt:r.deadlineAt,checks:[]}};
     recordObservation(r,observation,code);
   }
-  function start(r:StageRequest,mode:'dispatch'|'inspect'):void{
+  function start(r:StageRequest,mode:'dispatch'|'inspect'|'advance'):void{
     const id=key(r.projectId,r.id);if(closed||active.has(id)||progress(r).terminal)return;
     if(!deps.adapter){unknown(r,'EXECUTOR_UNAVAILABLE');return;}
     const controller=new AbortController();
@@ -128,11 +131,12 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
         const saved=fixedInstance(r);
         const observed=await bounded(async signal=>{
           if(mode==='dispatch'){await permit(r);return deps.adapter!.dispatch(r,saved,()=>permit(r),signal);}
+          if(mode==='advance'){await permit(r);if(!deps.adapter!.advance)reject('STAGE_ADVANCE_UNAVAILABLE','This adapter has no explicitly requested continuation');return deps.adapter!.advance(r,saved,progress(r),()=>permit(r),signal);}
           return deps.adapter!.inspect(r,saved,progress(r),system(r.projectId),signal);
         // Multi-request provider protocols include current permit checks and
         // immutable ref creation. Keep their transport window bounded without
         // replacing or extending the already approved original stage deadline.
-        },controller.signal,mode==='dispatch'?Math.max(1,Math.min(60000,Date.parse(r.deadlineAt)-Date.now())):30000);
+        },controller.signal,mode!=='inspect'?Math.max(1,Math.min(60000,Date.parse(r.deadlineAt)-Date.now())):30000);
         recordObservation(r,observed);
       }catch(e){unknown(r,e instanceof ServiceError?e.code:'ADAPTER_OUTCOME_UNKNOWN');}
     }).catch(e=>{
@@ -169,10 +173,19 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
   async function write(actor:Principal,projectId:string,operation:string,input:Record<string,unknown>,requestId:string,expectedRevision:number,reauthorize:()=>Principal):Promise<Receipt>{
     if(closed)reject('STOPPING','Service is stopping',503);
     if(!EXECUTION_WRITES.includes(operation as typeof EXECUTION_WRITES[number]))reject('UNKNOWN_OPERATION','Unsupported execution operation',404);
-    const reconciling=operation==='lifecycle.stage.reconcile',permission=reconciling?'read':'execution.request';authorize(actor,projectId,permission);
-    exact(input,reconciling?['stageRequestId']:['instanceId','stageId']);
+    const reconciling=operation==='lifecycle.stage.reconcile',advancing=operation==='lifecycle.stage.advance',permission=reconciling?'read':'execution.request';authorize(actor,projectId,permission);
+    exact(input,reconciling||advancing?['stageRequestId']:['instanceId','stageId']);
     const mutation={projectId,operation,requestId,expectedRevision,input,permission} as const;
     if(store.findReceipt(actor,projectId,requestId))return store.mutate(actor,mutation,()=>{throw new Error('Unreachable replay callback');},reauthorize);
+    if(advancing){
+      const r=request(projectId,string(input.stageRequestId)),p=progress(r);
+      if(actor.id!==r.initiatedBy.id||actor.revision!==r.initiatedBy.revision)reject('AUTHORITY_CHANGED','Only the original current execution principal may continue this request',403);
+      if(!deps.adapter?.advance)reject('STAGE_ADVANCE_UNAVAILABLE','This adapter has no explicitly requested continuation',409);
+      if(active.has(key(projectId,r.id))||active.size>=4)reject('EXECUTOR_BUSY','Wait for the retained original observation; do not create a replacement stage',429);
+      if(!p.terminal)await permit(r);
+      const result=store.mutate(actor,mutation,()=>({value:{stageRequestId:r.id,status:p.terminal?'TERMINAL':'ADVANCE_REQUESTED',newAttempt:false,deadlineAt:r.deadlineAt},event:{type:'stage-advance-requested',data:{instanceId:r.instanceId,stageId:r.stageId,stageRequestId:r.id,newAttempt:false}}}),reauthorize);
+      if(!p.terminal)start(r,'advance');return result;
+    }
     if(reconciling){
       const r=request(projectId,string(input.stageRequestId)),p=progress(r);
       const result=store.mutate(actor,mutation,()=>({value:{stageRequestId:r.id,status:p.terminal?'TERMINAL':'INSPECT_ORIGINAL',automaticRedispatch:false},event:{type:'stage-inspection-requested',data:{instanceId:r.instanceId,stageId:r.stageId,stageRequestId:r.id,automaticRedispatch:false}}}),reauthorize);

@@ -105,9 +105,9 @@ outcome reconciliation. It cannot manufacture owner evidence or release authorit
 
 The protected owner/platform binding composition, retained exact authority and
 durable stage execution core, fixed CI dispatch clients, artifact verifier and
-owner feedback delivery are implemented in development. Native stage composition,
-Codex task handoff and their default CLI
-wiring remain M3 work.
+owner feedback delivery are implemented in development. Candidate/verification
+CI stages now compose these clients with exact native owner validation. The
+other native stages, Codex task handoff and default CLI wiring remain M3 work.
 Unconfigured adapters fail closed; synthetic regression adapters are test
 fixtures only and cannot certify real asset usability or final E2E. The two
 Dashboard pages, independent installed Expert/plugin, migration and complete
@@ -296,9 +296,55 @@ with actual killed processes and clearly synthetic provider effects. Observation
 storage/index failures are visible in request inspection and the scoped worker
 health in `runtime.status`. Missing adapters leave historical state readable and
 new execution blocked. The ordinary development CLI still has no fixed native
-stage executor configured; the actual CI/Agent actions, artifact/owner result
-evaluation and end-to-end closure are not yet complete. These regression results
+stage executor configured. Candidate/verification composition is implemented;
+the remaining actions and end-to-end closure are not yet complete. These regression results
 are not final candidate acceptance.
+
+## Development CI and native stage composition
+
+The fixed candidate/verification adapter derives its plan from the current
+registered workflow, source commit, exact owner assets, native criterion/variant
+inventories and toolchain lock. Its action remains `base.candidate` or
+`base.verification`; YAML cannot choose executable code. The service constructs
+the adapter against its own store, avoiding a second writer or a parallel state
+database. Other lifecycle stages remain separate implementation obligations.
+
+The original stage request pins the CI request, input, workflow and source.
+Dispatch starts only that CI request. Reconciliation retains a stable provider
+handle, original run ID, exact downloaded ZIP and verified manifest/evidence
+digests. Archive bytes are stored privately under their content digest, without
+extracting or executing them. Another run or changed artifact cannot substitute
+for the original. A failed CI run remains failed even without a usable artifact.
+
+After CI passes, read-only inspection leaves the stage running until the native
+owner results exist. Codex may call `lifecycle.stage.advance` with only the
+original `stageRequestId`. This is an explicit continuation of the retained
+plan, not a new attempt or renewed budget. It requires the original current
+execution principal, authority, bindings and original deadline; an exact API
+replay does not repeat it. Background observation never calls `advance`.
+
+The CI ZIP must declare `evidence/owner-values.json` in its evidence manifest:
+`{"schema":"runtime-ci-owner-values/v1","values":{...}}`. These are actual
+rule input values, not a client-submitted owner verdict. Runtime binds them to
+the verified source, original stage request, candidate, configuration and fixed
+requirements, using the existing native observation/context contract. It retains
+each exact native request before calling the published owner's validation API.
+Each call checks current permission again; a prior action whose result is
+unknown is inspected, never blindly dispatched again.
+
+Runtime independently reads both native receipts, checks their exact request,
+asset, context, toolchain and report digests, and requires the complete native
+criterion/variant inventory. Harness quality applies to the actual CI-derived
+observation; Ontology validation remains its implemented model/constraint
+validation and is not a proof of software equivalence. A stage completes only
+when its fixed CI checks, artifact verification and both required owner results
+pass. Verification retains the previously bound candidate and cannot rebuild or
+follow a changed source commit. Only candidate completion introduces a manifest.
+
+The development probe exercises real GitHub/GitLab CI and published 0.8.3 native
+validators with synthetic assets and explicitly synthetic predecessor evidence.
+It does not establish full eight-stage admission, actual project semantic
+approval, publication, closure or any of the frozen final acceptance instances.
 
 ## Development owner feedback delivery
 
