@@ -23,6 +23,7 @@ import type { StageAdapter, StageServices } from '../lifecycle/execution.js';
 import { createReleaseStageAdapter } from './release-stages.js';
 import { publicationTarget } from './distribution.js';
 import { createPublicationStageAdapter } from './publication-stage.js';
+import {readVerificationFeedback} from './stage-feedback.js';
 import type { PreparationValidator } from '../lifecycle/preparation.js';
 import { createPlanStageAdapter, createScopeStageAdapter, registeredPreparation } from './preparation-stages.js';
 import { registeredImplementationReview, type ImplementationReviewBindings } from '../lifecycle/implementation-review.js';
@@ -245,6 +246,11 @@ export function createRegisteredBindings(configPath:string,workspaceId:string,co
 export async function openRegisteredBindings(configPath:string,workspaceId:string):Promise<{provider:DefinitionBindingProvider;preparation:PreparationValidator;implementationReview:ImplementationReviewBindings;executor(store:RuntimeStore,services:StageServices):StageAdapter;close():void}>{
   slug(workspaceId);string(configPath,4096);
   let legacy:ReturnType<typeof createRuntimeService>|undefined,opening:Promise<void>|null=null,connectedDigest:string|null=null,closed=false;
+  let serviceStore:RuntimeStore|undefined;
+  const feedback:Parameters<typeof openPublishedOwner>[4]=async(actor,projectId,request)=>{
+    if(!serviceStore||closed||request.workspaceId!==workspaceId)reject('FEEDBACK_RUN_UNAVAILABLE','Registered Runtime terminal Run reader is unavailable',409);
+    return readVerificationFeedback(serviceStore,actor,projectId,request.id);
+  };
   const adapters=new Map<string,PublishedOwnerAdapter>();
   const disconnect=()=>{for(const a of [...adapters.values()].reverse())a.close();adapters.clear();legacy?.close();legacy=undefined;connectedDigest=null;};
   const connectionDigest=(configuration:Readonly<IntegrationConfiguration>)=>valueDigest({owners:configuration.owners,nativeToolchain:configuration.nativeToolchain??null});
@@ -257,7 +263,7 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
       const marker=workspaceRoot+'/state/runtime/runtime.db';if(realpathSync(marker)!==marker||!lstatSync(marker).isFile())reject('RUNTIME_INTENT_STORE_MISSING','Initialize modeling intent through the existing Runtime owner workflow first');
       legacy=createRuntimeService({workspaceRoot,workspaceId});legacy.initialize();
       for(const registered of configuration.owners.filter(o=>o.owner==='ontology')){
-        const{ref,...config}=registered;adapters.set(ref,await openPublishedOwner(config,toolchain));if(closed)reject('CLOSED','Integration composition is closed',503);
+        const{ref,...config}=registered;adapters.set(ref,await openPublishedOwner(config,toolchain,undefined,undefined,feedback));if(closed)reject('CLOSED','Integration composition is closed',503);
       }
       for(const registered of configuration.owners.filter(o=>o.owner==='harness')){
         const possible=configuration.owners.filter(o=>o.owner==='ontology'&&registered.projects.every(p=>o.projects.includes(p)));
@@ -266,7 +272,7 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
         adapters.set(ref,await openPublishedOwner(config,toolchain,adapters.get(possible[0].ref),async(actor,projectId,request)=>{
           authorize(actor,projectId,'read');if(!legacy)reject('OWNER_UNAVAILABLE','Runtime intent reader is unavailable');
           return await legacy.readiness({operation:'readiness.intent.read',scope:request.scope,input:{standardVersion:'v2',digest:request.digest}}) as ReadinessIntentRecord&{current:boolean};
-        }));if(closed)reject('CLOSED','Integration composition is closed',503);
+        },feedback));if(closed)reject('CLOSED','Integration composition is closed',503);
       }
       connectedDigest=connectionDigest(configuration);
     }catch(error){disconnect();throw error;}
@@ -292,6 +298,7 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
   // Owner outages block dependent admission, never service/history availability.
   return{provider,preparation:registeredPreparation(configPath,workspaceId),implementationReview:registeredImplementationReview(configPath,workspaceId,connections),executor(store,services){
     if(store.workspaceId!==workspaceId)reject('INTEGRATION_SCOPE','Stage executor must share the service workspace',403);
+    if(serviceStore&&serviceStore!==store)reject('INTEGRATION_SCOPE','Owner feedback cannot switch to another service store',403);serviceStore=store;
     let stages:ReturnType<typeof createImplementationStageAdapters>|undefined,scope:StageAdapter|undefined,plan:StageAdapter|undefined,release:StageAdapter|undefined,publication:StageAdapter|undefined;
     async function current(signal:AbortSignal,stageId:string):Promise<StageAdapter>{
       const config=await ensure(signal),toolchain=readRegisteredNativeToolchain(config);

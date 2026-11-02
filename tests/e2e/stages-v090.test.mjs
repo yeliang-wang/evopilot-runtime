@@ -14,6 +14,7 @@ import { valueDigest, byteDigest } from '../../dist/lifecycle/base.js';
 import { compileLifecycle } from '../../dist/lifecycle/compiler.js';
 import { pinInstance, requiredChecksDigest, requestStage, recordStageOutcome, stageAdmission } from '../../dist/lifecycle/instance.js';
 import { createCiStageAdapter } from '../../dist/adapters/stages.js';
+import {readVerificationFeedback} from '../../dist/adapters/stage-feedback.js';
 import { ciSourceDigest, ciBuildDigest } from '../../dist/adapters/artifacts.js';
 import { nativeSha256, NATIVE_CONTRACT_DIGEST } from '../../vendor/compatibility/v1/native.mjs';
 import { lifecycle, yaml, syntheticBindings, syntheticSourceTree } from '../fixtures/lifecycle-v090.mjs';
@@ -25,16 +26,16 @@ function zip(entries){
   }
   const cd=Buffer.concat(central),end=Buffer.alloc(22);end.writeUInt32LE(0x06054b50);end.writeUInt16LE(entries.length,8);end.writeUInt16LE(entries.length,10);end.writeUInt32LE(cd.length,12);end.writeUInt32LE(offset,16);return Buffer.concat([...local,cd,end]);
 }
-async function fixture({targetVersion}={}){
+async function fixture({targetVersion,publicAssets=false}={}){
   const dir=mkdtempSync(join(realpathSync(tmpdir()),'runtime-ci-stage-')),stateRoot=join(dir,'state'),workspaceId='test',projectId='alpha';
   const actor={id:'executor',projects:[projectId],permissions:['read','execution.request'],revision:1,expiresAt:'2030-01-01T00:00:00Z'},data=lifecycle();
   const binding={ref:'binding:alpha/platform',workspaceId,projectId,provider:'github',host:'https://github.com',repository:'synthetic/project',repositoryId:'42',defaultBranch:'main',credentialRef:'credential:alpha/platform',workflowPath:'.github/workflows/test.yml',runner:'ubuntu-latest',revision:1,expiresAt:actor.expiresAt};
   Object.assign(data.config.implementation,{provider:binding.provider,host:binding.host,repository:binding.repository,repositoryId:binding.repositoryId,defaultBranch:binding.defaultBranch});
   for(const stage of ['plan','verification'])data.config[stage].budget={timeoutSeconds:600,maxAttempts:2,maxConcurrency:2,maxLoops:1};
-  const pin=owner=>({product:owner,id:'synthetic-'+owner,version:'1.0.0',specVersion:'v1',visibility:'private',digest:nativeSha256(owner),standardDigest:nativeSha256(owner+'standard'),standardLockDigest:nativeSha256(owner+'lock'),producer:{product:owner,version:'0.3.0'},contractDigest:NATIVE_CONTRACT_DIGEST}),references={ontology:pin('ontology'),harness:pin('harness')};
+  const pin=owner=>({product:owner,id:'synthetic-'+owner,version:'1.0.0',specVersion:'v1',visibility:publicAssets?'public':'private',digest:nativeSha256(owner),standardDigest:nativeSha256(owner+'standard'),standardLockDigest:nativeSha256(owner+'lock'),producer:{product:owner,version:'0.3.0'},contractDigest:NATIVE_CONTRACT_DIGEST}),references={ontology:pin('ontology'),harness:pin('harness')};
   const resources=[],owners=[];
   for(const kind of ['ontology','harness']){
-    const reference=references[kind];Object.assign(data.assets[kind],{id:reference.id,version:reference.version,digest:reference.digest});
+    const reference=references[kind];Object.assign(data.assets[kind],{id:reference.id,version:reference.version,digest:reference.digest,visibility:reference.visibility});
     owners.push({ref:data.assets[kind].adapterRef,owner:kind,packageRoot:dir,workspaceRoot:dir,workspaceId,projects:[projectId]});
     resources.push({ref:data.assets[kind].mappingRef,workspaceId,projectId,role:'assets.'+kind+'.mappingRef',revision:1,expiresAt:actor.expiresAt,definition:{kind:'asset-map',owner:kind,reference,assessmentId:kind==='ontology'?'synthetic':null,evidenceOrigin:'SYNTHETIC'}});
   }
@@ -66,7 +67,7 @@ async function fixture({targetVersion}={}){
   }]));
   const platform={revision:async(_actor,selected)=>({bindingDigest:valueDigest(binding),projectId,repositoryId:'42',commit:selected,workflowDigest:valueDigest('workflow'),expiresAt:actor.expiresAt,sourceSelection:'exact-commit',branchHeadCommit:controls.commit}),readiness:async()=>({bindingDigest:valueDigest(binding),projectId,repositoryId:'42',commit:controls.commit,workflowDigest:valueDigest('workflow'),expiresAt:actor.expiresAt}),
     sourceTree:async(_actor,{commit})=>{calls.push({operation:'source.tree',commit});const tree=syntheticSourceTree(binding,commit);if(controls.invalidTree)tree.commit='f'.repeat(40);return tree;},
-    dispatch:async(ci,permit)=>{await permit(ci);request??=store.object(projectId,'stage-request',store.object(projectId,'lifecycle-instance',instance.id).stages[ci.stageId].requestId);calls.push({operation:'ci.dispatch',ci});return run(ci);},run:async(_a,ci)=>{calls.push({operation:'ci.inspect',ci});return run(ci);},
+    dispatch:async(ci,permit)=>{await permit(ci);const retained=store.object(projectId,'lifecycle-instance',instance.id)?.stages[ci.stageId].requestId;if(retained)request=store.object(projectId,'stage-request',retained)??request;calls.push({operation:'ci.dispatch',ci});return run(ci);},run:async(_a,ci)=>{calls.push({operation:'ci.inspect',ci});return run(ci);},
     artifact:async(_a,ci)=>{
       calls.push({operation:'ci.artifact'});const values=JSON.stringify({schema:'runtime-ci-owner-values/v1',values:{healthy:!controls.changedArchive}}),content='synthetic software bytes',path=controls.observationMissing?'evidence/other.json':'evidence/owner-values.json';
       const result={schema:'runtime-ci/v1',requestId:ci.requestId,inputDigest:ci.inputDigest,provider:'github',repositoryId:'42',runId:controls.runId,sourceCommit:ci.commit,workflowDigest:ci.workflowDigest,stageId:ci.stageId,candidateDigest:ci.candidateDigest,checks:request.plan.parameters.expectedChecks.map(id=>({id,status:'PASS',evidence:[{path,digest:byteDigest(values),bytes:Buffer.byteLength(values)}]}))};
@@ -159,10 +160,13 @@ test('HTTP service owns the native CI adapter store and completes the same origi
       const body=await response.json();assert.equal(response.status,200,JSON.stringify(body));return body.result;
     };
     const started=await call('lifecycle.stage.request',{instanceId:'instance',stageId:'candidate'},true),id=started.result.stageRequestId;
-    const wait=async phase=>{for(let n=0;n<100;n++){const state=await call('lifecycle.stage.request.inspect',{stageRequestId:id});if(state.progress.phase===phase)return state;await new Promise(r=>setTimeout(r,10));}assert.fail('Expected native stage phase '+phase);};
+    const wait=async(phase,stageRequestId=id)=>{for(let n=0;n<100;n++){const state=await call('lifecycle.stage.request.inspect',{stageRequestId});if(state.progress.phase===phase)return state;await new Promise(r=>setTimeout(r,10));}assert.fail('Expected native stage phase '+phase);};
     await wait('RUNNING');assert.equal(f.calls.filter(x=>x.operation==='native.package.validate').length,0);
     const advanced=await call('lifecycle.stage.advance',{stageRequestId:id},true);assert.equal(advanced.result.newAttempt,false);await wait('COMPLETE');
     const saved=await call('lifecycle.instance.inspect',{instanceId:'instance'});assert.equal(saved.instance.stages.candidate.attempts,1);assert(saved.instance.candidateDigest);assert.equal(f.calls.filter(x=>x.operation==='ci.dispatch').length,1);assert.equal(f.calls.filter(x=>x.operation==='native.package.validate').length,2);
+    const verified=await call('lifecycle.stage.request',{instanceId:'instance',stageId:'verification'},true),verificationId=verified.result.stageRequestId;
+    await wait('RUNNING',verificationId);await call('lifecycle.stage.advance',{stageRequestId:verificationId},true);await wait('COMPLETE',verificationId);
+    const feedback=await call('lifecycle.verification.feedback.read',{stageRequestId:verificationId});assert.equal(feedback.event.stage,'SUCCEEDED');assert.equal(feedback.event.projectCandidateDigest,saved.instance.candidateDigest);assert.equal(feedback.feedbackDelivered,false);assert.equal(feedback.releaseAuthorized,false);assert.equal(f.calls.filter(x=>x.operation==='native.package.validate').length,4);
   }finally{await server?.close();f.cleanup();}
 });
 
@@ -177,4 +181,30 @@ test('retained source scope cannot change even if outer plan digests are recompu
 });
 test('historical v1 CI request readback preserves its original context and does not gain source inventory',async()=>{
   const f=await fixture();try{await f.prepare();const r=f.request;delete r.plan.parameters.sourceScope;delete r.plan.parameters.sourceTree;r.plan.adapterId='runtime-ci-owner-stage-v1';r.plan.adapterDigest=valueDigest({id:r.plan.adapterId,stages:['implementation','candidate','verification'],source:'verified-exact-commit/v1',candidate:'immutable-archive-consumption/v1',workflow:'runtime-ci/v1',owners:'native/v1',observation:'runtime-ci-owner-values/v1',continuation:'explicit-original-request/v1'});r.plan.bindingDigest=valueDigest(r.plan.parameters);r.planDigest=valueDigest(r.plan);const{digest,...body}=r;r.digest=valueDigest(body);await f.dispatch();const result=await f.advance();assert.equal(result.phase,'COMPLETE');assert.equal(result.adapterDigest,r.plan.adapterDigest);const a=f.store.object('alpha','stage-native-action',r.id+':harness');assert.equal(a.context.sourceScopeDigest,ciSourceDigest({commit:r.plan.parameters.commit},'github','42'));assert.equal(a.request.input.observation.source.digest,a.context.sourceScopeDigest);f.restart();assert.equal((await f.inspect()).phase,'COMPLETE');assert.equal(f.request.plan.parameters.sourceTree,undefined);assert.equal(f.calls.filter(x=>x.operation==='native.package.validate').length,2);}finally{f.cleanup();}
+});
+
+function syntheticCoreCommit(f,outcome){
+  f.complete(outcome);const r=f.request,projectId='alpha',objects=[{kind:'stage-request',id:r.id,value:r},{kind:'lifecycle-instance',id:f.instance.id,value:f.instance},{kind:'stage-progress',id:r.id,value:{requestId:r.id,phase:outcome.phase,terminal:true,handle:outcome.handle,observation:outcome,observationRef:valueDigest(outcome),reason:null,observedAt:new Date().toISOString()}}];
+  f.store.mutate(f.actor,{projectId,operation:'synthetic.core.commit',requestId:'synthetic-core-'+r.id,expectedRevision:f.store.revision(projectId),input:{synthetic:true},permission:'read'},()=>({objects,value:{synthetic:true},event:{type:'synthetic-core-terminal',data:{synthetic:true}}}));
+}
+const feedbackId=f=>nativeSha256({workspaceId:'test',scope:{visibility:'private',projectId:'alpha'},claimId:valueDigest({stageRequestDigest:f.request.digest})});
+async function verificationFixture(options){const f=await fixture(options);await f.prepare();await f.dispatch();f.complete(await f.advance());await f.prepare('verification');await f.dispatch();return f;}
+test('registered terminal verification feedback reuses exact native claims, source, CI and original receipts across restart',async()=>{
+  const f=await verificationFixture();try{const outcome=await f.advance();syntheticCoreCommit(f,outcome);const id=feedbackId(f),event=readVerificationFeedback(f.store,f.actor,'alpha',id);assert.equal(event.stage,'SUCCEEDED');assert.equal(event.runId,'verification:'+f.request.id);assert.equal(event.runReviewDigest,f.request.planDigest);assert.deepEqual(event.source,f.request.plan.parameters.sourceScope);assert.equal(event.observation.sourceScopeDigest,nativeSha256(event.source));assert.equal(event.observation.source.digest,event.source.treeDigest);assert.equal(event.claimId,event.observation.collectionReceiptRef.claimId);assert.equal(event.collectionRefs[0].digest,event.observation.collectionReceiptRef.digest);for(const owner of ['ontology','harness'])assert.deepEqual(event.results[owner],f.store.object('alpha','stage-native-receipt',f.request.id+':'+owner));f.restart();assert.deepEqual(readVerificationFeedback(f.store,f.actor,'alpha',id),event);assert.equal(f.calls.filter(c=>c.operation==='native.package.validate').length,4);}finally{f.cleanup();}
+});
+test('native success retained before the execution core terminal commit cannot be delivered as completed feedback',async()=>{
+  const f=await verificationFixture();try{const id=feedbackId(f);assert.throws(()=>readVerificationFeedback(f.store,f.actor,'alpha',id),{code:'FEEDBACK_RUN_INCOMPLETE'});const outcome=await f.advance();assert(f.store.object('alpha','stage-evaluation-run',f.request.id));assert.throws(()=>readVerificationFeedback(f.store,f.actor,'alpha',id),{code:'FEEDBACK_RUN_INCOMPLETE'});syntheticCoreCommit(f,outcome);assert.equal(readVerificationFeedback(f.store,f.actor,'alpha',id).stage,'SUCCEEDED');assert.throws(()=>readVerificationFeedback(f.store,{...f.actor,projects:['beta']},'alpha',id),{code:'FORBIDDEN'});assert.throws(()=>readVerificationFeedback(f.store,f.actor,'alpha',{id,status:'PASS'}));}finally{f.cleanup();}
+});
+test('native verification failures stay failed in the registered feedback event',async()=>{
+  const f=await verificationFixture();try{f.controls.ownerFail='harness';const result=await f.advance();assert.equal(result.phase,'FAILED');syntheticCoreCommit(f,result);const event=readVerificationFeedback(f.store,f.actor,'alpha',feedbackId(f));assert.equal(event.stage,'FAILED');assert.equal(event.results.harness.result.qualityStatus,'FAIL');assert.equal(event.pins.harness.version,'1.0.0');}finally{f.cleanup();}
+});
+test('changed original native receipt prevents reuse of an otherwise retained feedback event',async()=>{
+  const f=await verificationFixture();try{syntheticCoreCommit(f,await f.advance());const id=feedbackId(f),event=readVerificationFeedback(f.store,f.actor,'alpha',id),value=structuredClone(event.results.harness);value.result.qualityStatus='FAIL';f.store.mutate(f.actor,{projectId:'alpha',operation:'synthetic.fault',requestId:'synthetic-receipt-fault',expectedRevision:f.store.revision('alpha'),input:{synthetic:true},permission:'read'},()=>({objects:[{kind:'stage-native-receipt',id:f.request.id+':harness',value}],value:{synthetic:true},event:{type:'synthetic-fault',data:{synthetic:true}}}));assert.throws(()=>readVerificationFeedback(f.store,f.actor,'alpha',id),{code:'OWNER_REPORT_MISMATCH'});}finally{f.cleanup();}
+});
+test('public asset references do not make private project feedback public',async()=>{
+  const f=await verificationFixture({publicAssets:true});try{syntheticCoreCommit(f,await f.advance());const event=readVerificationFeedback(f.store,f.actor,'alpha',feedbackId(f));assert.equal(event.scope.visibility,'private');assert.equal(event.scope.projectId,'alpha');assert.equal(event.pins.ontology.visibility,'public');assert.equal(event.pins.harness.visibility,'public');}finally{f.cleanup();}
+});
+
+test('a missing or modified original CI archive cannot back a retained terminal feedback event',async()=>{
+  const f=await verificationFixture();try{syntheticCoreCommit(f,await f.advance());const id=feedbackId(f),ci=f.store.object('alpha','ci-stage-artifact',f.request.id),path=join(f.store.root,'stage-ci-artifacts',ci.archiveDigest.slice(7)+'.zip'),bytes=readFileSync(path);bytes[bytes.length-1]^=1;writeFileSync(path,bytes);assert.throws(()=>readVerificationFeedback(f.store,f.actor,'alpha',id),{code:'FEEDBACK_RUN_MISMATCH'});}finally{f.cleanup();}
 });

@@ -9,9 +9,10 @@ import { inspectInstance, requestStage, recordStageOutcome, resolveAuthority, st
 import { readImplementationEvidence } from '../adapters/implementation-stages.js';
 import { readReleaseMaterial } from '../adapters/release-stages.js';
 import { readPublicationEvidence } from '../adapters/publication-stage.js';
+import {readVerificationFeedbackForRequest} from '../adapters/stage-feedback.js';
 import type { AuthorityPolicyProvider } from '../adapters/authority.js';
 
-export const EXECUTION_READS=['lifecycle.stage.request.inspect','lifecycle.stage.observation.read','lifecycle.implementation.evidence.read','lifecycle.release.evidence.read','lifecycle.publication.evidence.read'] as const;
+export const EXECUTION_READS=['lifecycle.stage.request.inspect','lifecycle.stage.observation.read','lifecycle.implementation.evidence.read','lifecycle.release.evidence.read','lifecycle.publication.evidence.read','lifecycle.verification.feedback.read'] as const;
 export const EXECUTION_WRITES=['lifecycle.stage.request','lifecycle.stage.reconcile','lifecycle.stage.advance'] as const;
 export interface StagePlan { adapterId:string; adapterDigest:string; action:string; bindingDigest:string; parameters:Record<string,unknown>; }
 export interface StageRequest {
@@ -169,6 +170,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
   const timer=setInterval(observePending,1000);timer.unref();
   function read(actor:Principal,projectId:string,operation:string,input:Record<string,unknown>):unknown{
     authorize(actor,projectId,'read');
+    if(operation==='lifecycle.verification.feedback.read'){exact(input,['stageRequestId']);return{event:readVerificationFeedbackForRequest(store,actor,request(projectId,string(input.stageRequestId))),historical:true,feedbackDelivered:false,releaseAuthorized:false};}
     if(operation==='lifecycle.publication.evidence.read'){exact(input,['stageRequestId']);return readPublicationEvidence(store,request(projectId,string(input.stageRequestId)));}
     if(operation==='lifecycle.release.evidence.read'){
       exact(input,['stageRequestId']);const r=request(projectId,string(input.stageRequestId));if(r.stageId!=='release-decision')reject('STAGE_SCOPE','Release material requires its original admission request',409);

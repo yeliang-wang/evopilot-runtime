@@ -832,15 +832,33 @@ the tree identity and its original CI collection receipt. Candidate manifests
 continue to use their existing separate provider/repository/commit identity.
 Historical v1 requests preserve their original adapter digest, context and
 receipts; inspection does not add a missing inventory or promote their evidence.
-The registered terminal Run producer remains required; source readback and
-context binding by themselves do not create feedback or a semantic decision.
+After both original native validation receipts become terminal, Runtime retains
+`runtime-stage-evaluation-run/v1` for verification. This record links the original
+stage request, plan, execution authority, source scope, candidate, CI archive,
+collection reference and both complete native receipts. It preserves success or
+failure without constructing a historical legacy `NativeRun`. Its plan digest
+fills the feedback protocol's `runReviewDigest`; this is the exact technical
+evaluation plan, not a newly invented human decision. The original authenticated
+execution authority remains separately linked in the Run record.
+
+`lifecycle.verification.feedback.read` takes the original `stageRequestId` and
+returns a private project event only after the execution core has committed the
+matching terminal outcome. It recomputes the original Run and source/receipt
+links and verifies the retained CI archive bytes. Missing, changed, unknown or
+incomplete evidence blocks the read. A crash between native receipt retention
+and the core's terminal commit cannot expose a completed Run. Public asset
+references do not make private project feedback public. Historical v1 records
+without source inventories do not silently acquire this new evidence.
 
 The fixed internal feedback consumer accepts an event ID only from a trusted
 registered terminal Run reader. It checks the workspace, project, event digest,
 original claim/cause and exact asset pins, then retains the event in Runtime's
 own service store. It does not turn an arbitrary CI report or client-provided
 PASS into a registered Run. This internal component has no direct HTTP/YAML
-capture entry point; its native lifecycle composition remains unfinished.
+capture entry point. Published owner adapters now have a scoped callback to the
+registered verification event reader. The read endpoint does not deliver an
+event or approve an owner disposition; closure-stage delivery and final closure
+composition remain unfinished.
 
 For each owner, Runtime first inspects the authoritative inbox. If delivery is
 needed, it records the exact owner connection digest, request ID, event digest,

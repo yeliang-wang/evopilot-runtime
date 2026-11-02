@@ -163,7 +163,8 @@
         "src/adapters/installation.ts",
         "tests/e2e/installation-v090.test.mjs",
         "src/adapters/source-tree.ts",
-        "tests/e2e/source-tree-v090.test.mjs"
+        "tests/e2e/source-tree-v090.test.mjs",
+        "src/adapters/stage-feedback.ts"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

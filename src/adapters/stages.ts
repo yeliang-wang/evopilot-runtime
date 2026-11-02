@@ -17,6 +17,7 @@ import { MAX_ARCHIVE_BYTES, ciSourceDigest, readArtifactArchive, verifyCiArtifac
 import { ownerRequestDigest, type Owner, type OwnerRequest, type PublishedOwnerAdapter } from './published-owners.js';
 import type {SourceTreeObservation} from './source-tree.js';
 import type {NativeSourceScope} from '../native-types.js';
+import {retainVerificationRun} from './stage-feedback.js';
 
 const LEGACY_ID='runtime-ci-owner-stage-v1';
 const LEGACY_DIGEST=valueDigest({id:LEGACY_ID,stages:['implementation','candidate','verification'],source:'verified-exact-commit/v1',candidate:'immutable-archive-consumption/v1',workflow:'runtime-ci/v1',owners:'native/v1',observation:'runtime-ci-owner-values/v1',continuation:'explicit-original-request/v1'});
@@ -223,6 +224,7 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
     const failed=owners.some(o=>o.status==='FAIL'),complete=owners.every(o=>o.status==='PASS');
     if(complete)await currentSource(p,instance,actor,signal);
     const evidence={schema:'runtime-ci-stage-evidence/v1',requestId:r.id,inputDigest:r.inputDigest,ci:verified,owners,softwareRelease:false},ref=valueDigest(evidence);retain(r.projectId,'ci-stage-evidence',ref,evidence,true);
+    if(r.stageId==='verification'&&r.plan.adapterId===ADAPTER_ID&&owners.every(o=>o.status!=='UNKNOWN'))retainVerificationRun(store,r,instance,ref,actor);
     const checks=verified.checks.map(c=>({id:c.id,status:failed?'FAIL' as const:complete?'PASS' as const:'UNKNOWN' as const,evidenceRef:ref}));
     const result=observation(r,p,ci,failed?'FAILED':complete?'COMPLETE':'RUNNING',checks,complete&&p.stageId==='candidate'?verified.candidate!:undefined);
     if(complete&&p.stageId==='candidate'){
