@@ -217,5 +217,9 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     // perform an external action. Replays/restarts never enter this branch.
     start(r,'dispatch');return result;
   }
-  return{read,write,health(projectId:string){const error=scanError??(workerError?.projectId===projectId?workerError.code:null);return{state:error?'DEGRADED':closed?'STOPPED':'READY',error,inFlight:[...active.keys()].filter(k=>k.startsWith(projectId+'\0')).length,automaticRedispatch:false};},async close(){if(closed)return;closed=true;clearInterval(timer);for(const job of active.values())job.controller.abort();await Promise.allSettled([...active.values()].map(job=>job.promise));}};
+  return{read,write,async authorizeOriginal(actor:Principal,projectId:string,id:string):Promise<Principal>{
+    authorize(actor,projectId,'execution.request');const r=request(projectId,id);
+    if(actor.id!==r.initiatedBy.id||actor.revision!==r.initiatedBy.revision)reject('AUTHORITY_CHANGED','Only the original current principal may claim this task',403);
+    if(progress(r).terminal)reject('STAGE_TERMINAL','Original stage has already ended',409);return permit(r);
+  },health(projectId:string){const error=scanError??(workerError?.projectId===projectId?workerError.code:null);return{state:error?'DEGRADED':closed?'STOPPED':'READY',error,inFlight:[...active.keys()].filter(k=>k.startsWith(projectId+'\0')).length,automaticRedispatch:false};},async close(){if(closed)return;closed=true;clearInterval(timer);for(const job of active.values())job.controller.abort();await Promise.allSettled([...active.values()].map(job=>job.promise));}};
 }

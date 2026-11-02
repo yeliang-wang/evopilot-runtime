@@ -116,8 +116,9 @@ durable stage execution core, fixed CI dispatch clients, artifact verifier and
 owner feedback delivery are implemented in development. Candidate/verification
 CI stages now compose these clients with exact native owner validation through
 the standalone CLI's registered executor. Immutable target/plan preparation and
-the fixed scope and plan stages are also implemented. The other native stages and Codex
-task handoff remain M3 work.
+the fixed scope and plan stages and external Codex task handoff are also
+implemented. Independent implementation verification and the remaining native
+stages remain M3 work.
 Unconfigured adapters fail closed; synthetic regression adapters are test
 fixtures only and cannot certify real asset usability or final E2E. The two
 Dashboard pages, independent installed Expert/plugin, migration and complete
@@ -425,6 +426,55 @@ The development probe exercises real GitHub/GitLab CI and published 0.8.3 native
 validators with synthetic assets and explicitly synthetic predecessor evidence.
 It does not establish full eight-stage admission, actual project semantic
 approval, publication, closure or any of the frozen final acceptance instances.
+
+## Development external Codex handoff
+
+The registered `base.implementation` adapter requires the completed original
+scope/plan evidence and reviewed preparation. It pins the registered Codex
+executable/version, Host identifier, canonical workspace, fixed capabilities,
+original authority, request and deadline. Runtime retains a handoff and enters
+`WAITING_AGENT`; it never launches a coding process, selects a model or configures
+LLM credentials. Codex remains responsible for its own execution permissions.
+
+`lifecycle.agent.handoff.read {stageRequestId}` returns the original handoff,
+claim and latest report. The original authenticated execution principal calls
+`lifecycle.agent.claim` with that request, handoff digest and exact configured
+Host/version/capabilities plus its session ID and `host-managed` permission mode.
+Claiming requires the current original execution permit. A second claim is
+rejected; exact request replay returns its original receipt.
+
+`lifecycle.agent.report` takes `stageRequestId`, `claimDigest`,
+`previousReportDigest`, `state`, `summary`, `result` and `measurement`.
+`WORKING` requires current execution authority and the original unexpired budget.
+Without a fresh report within 30 seconds, observation returns `WAITING_AGENT`;
+that is an observation threshold, not a new attempt or timeout allowance.
+`WAITING`, `UNKNOWN`, `FAILED` and `SUBMITTED` may retain historical observations
+after execution authority expires or is revoked, but still require the original
+current authenticated principal. They never authorize more work. Late results
+are explicitly marked. Reports form an immutable chain; submitted results and
+known failures cannot be replaced. Replays and restart never redispatch coding.
+
+A submitted result identifies one exact commit, provider-matching PR/MR number
+and bounded output inventory. Runtime hashes owned regular files in the
+registered workspace, rejects links/escapes and changed bytes, and records
+digests and sizes. These hashes do not establish source review, CI success or
+functional acceptance. `lifecycle.agent.report.read` exposes the latest report
+or a prior `reportDigest` belonging to the same original request.
+
+Host session metadata is authenticated client testimony, not process attestation.
+Usage is `null` when unavailable. Optional provider/model/token/cost measurements
+need a source reference and digest and remain Host-reported. Runtime neither
+fetches an arbitrary evidence URL nor invents zero usage. Every report is
+`independentlyVerified:false`; the current implementation deliberately cannot
+complete the stage from a report alone. Independent source-review/CI/native
+verification is a remaining implementation obligation.
+
+The development probe used the actual standalone CLI, published native owners
+and current Codex to write two isolated files, pass three local tests and create
+one real private GitLab draft MR. Original claim/results survived service restart.
+The probe retained its driver interruption and recovery evidence, revoked its
+synthetic authority and did not dispatch CI, merge, release or change the daily
+installation. It is handoff evidence, not full lifecycle acceptance.
 
 ## Development plan execution
 

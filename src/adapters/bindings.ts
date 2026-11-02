@@ -14,7 +14,7 @@ import { createRuntimeService } from '../service.js';
 import { readPlatformToken } from './config.js';
 import { githubClient } from './github.js';
 import { gitlabClient } from './gitlab.js';
-import { inspectExternalAgent, type AgentIdentity } from './external-agent.js';
+import { createCodexStageAdapter, inspectExternalAgent, type AgentIdentity } from './external-agent.js';
 import { readRegisteredNativeToolchain } from './config.js';
 import { createCiStageAdapter } from './stages.js';
 import type { RuntimeStore } from '../server/store.js';
@@ -287,11 +287,12 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
   // Owner outages block dependent admission, never service/history availability.
   return{provider,preparation:registeredPreparation(configPath,workspaceId),executor(store){
     if(store.workspaceId!==workspaceId)reject('INTEGRATION_SCOPE','Stage executor must share the service workspace',403);
-    let adapter:StageAdapter|undefined,scope:StageAdapter|undefined,plan:StageAdapter|undefined;
+    let adapter:StageAdapter|undefined,scope:StageAdapter|undefined,plan:StageAdapter|undefined,agent:StageAdapter|undefined;
     async function current(signal:AbortSignal,stageId:string):Promise<StageAdapter>{
       const config=await ensure(signal),toolchain=readRegisteredNativeToolchain(config);
       if(stageId==='scope'){scope??=createScopeStageAdapter(store,configPath,connections);return scope;}
       if(stageId==='plan'){plan??=createPlanStageAdapter(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest});return plan;}
+      if(stageId==='implementation'){agent??=createCodexStageAdapter(store,configPath);return agent;}
       adapter??=createCiStageAdapter(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest});return adapter;
     }
     return{

@@ -142,7 +142,9 @@
         "NOTICE",
         "src/lifecycle/preparation.ts",
         "src/adapters/preparation-stages.ts",
-        "tests/e2e/preparation-v090.test.mjs"
+        "tests/e2e/preparation-v090.test.mjs",
+        "src/lifecycle/agent.ts",
+        "tests/e2e/agent-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",
