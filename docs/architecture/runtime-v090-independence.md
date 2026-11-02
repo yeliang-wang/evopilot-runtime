@@ -74,6 +74,14 @@ closes on revoked credentials. An OS-managed exclusive SQLite lock prevents a
 second writer; object changes, receipts, audit and events commit together.
 Restart rejects incompatible schemas and inconsistent receipt/event digests.
 
+`runtime.projects.list` returns `projects`, `hasMore` and `nextCursor`. Its optional
+`limit` is 1–100 (default 50); pass the returned cursor for the next page. Projects
+are sorted by identifier and restricted to the current principal's scope, including
+authorized projects not yet initialized (revision 0). Cursors bind the service,
+principal revision and exact current scope; they survive service restart but are
+rejected after scope/permission changes or when reused by another principal.
+Project revisions are read at each page request, not frozen into a snapshot.
+
 ## Development lifecycle definitions and instances
 
 The package includes a publisher-pinned Base manifest under `lifecycle/base`.

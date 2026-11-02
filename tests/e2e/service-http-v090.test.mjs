@@ -237,3 +237,40 @@ test('standalone registered executor leaves status/history available when owner 
     const store=new RuntimeStore(f.root,'test');try{assert.equal(store.revision('alpha'),0);}finally{store.close();}
   }finally{if(child?.exitCode===null&&child?.signalCode===null){const ended=once(child,'exit');child.kill('SIGTERM');await ended;}f.cleanup();}
 });
+
+test('project pagination covers every authorized project once and retains its cursor across restart',()=>{
+  const f=fixture();let s=new RuntimeStore(f.root,'test');
+  try{
+    const ids=Array.from({length:137},(_,i)=>'project-'+String(i).padStart(3,'0')),actor={...f.actor,projects:[...ids].reverse()};
+    const first=s.projects(actor);assert.equal(first.projects.length,50);assert.equal(first.hasMore,true);assert(first.nextCursor);s.close();s=new RuntimeStore(f.root,'test');
+    const next=s.projects(actor,first.nextCursor,70),last=s.projects(actor,next.nextCursor);assert.equal(next.projects.length,70);assert.equal(last.projects.length,17);assert.equal(last.hasMore,false);assert.equal(last.nextCursor,null);
+    assert.deepEqual([...first.projects,...next.projects,...last.projects].map(p=>p.projectId),ids);assert([...first.projects,...next.projects,...last.projects].every(p=>p.revision===0));
+    assert.throws(()=>s.projects(actor,first.nextCursor+'x'),{code:'INVALID_CURSOR'});
+    assert.throws(()=>s.projects(actor,first.nextCursor.split('.')[0]+'.'+'é'.repeat(43)),{code:'INVALID_CURSOR'});
+    assert.throws(()=>s.events(f.actor,'alpha',first.nextCursor),{code:'INVALID_CURSOR'});
+    assert.throws(()=>s.events(f.actor,'alpha',s.events(f.actor,'alpha').cursor.split('.')[0]+'.'+'é'.repeat(43)),{code:'INVALID_CURSOR'});
+    assert.throws(()=>s.projects({...actor,id:'another-reader'},first.nextCursor),{code:'INVALID_CURSOR'});
+    assert.throws(()=>s.projects({...actor,revision:2},first.nextCursor),{code:'INVALID_CURSOR'});
+    assert.throws(()=>s.projects({...actor,projects:ids.slice(1)},first.nextCursor),{code:'INVALID_CURSOR'});
+    assert.throws(()=>s.projects({...actor,permissions:[]}),{code:'FORBIDDEN'});
+    assert.throws(()=>s.projects({...actor,expiresAt:'2020-01-01T00:00:00Z'}),{code:'FORBIDDEN'});
+    assert.throws(()=>s.projects(actor,s.events(f.actor,'alpha').cursor),{code:'INVALID_CURSOR'});
+    for(const limit of [0,-1,101,1.5,'10',null])assert.throws(()=>s.projects(actor,undefined,limit),{code:'INVALID_LIMIT'});
+  }finally{s.close();f.cleanup();}
+});
+test('HTTP and MCP share project pagination and reject old cursors after live scope changes',async()=>{
+  const f=fixture(),config=JSON.parse(readFileSync(join(f.root,'auth.json'),'utf8'));
+  config.principals[0].projects=['alpha',...Array.from({length:76},(_,i)=>'project-'+String(i).padStart(3,'0'))];writeFileSync(join(f.root,'auth.json'),JSON.stringify(config));
+  let server=await startRuntimeServer({stateRoot:f.root,workspaceId:'test'});const client=new Client({name:'synthetic-pagination-client',version:'1'});
+  try{
+    const first=await request(server,f.token,'runtime.projects.list','alpha');assert.equal(first.status,200);assert.equal(first.body.result.projects.length,50);
+    await client.connect(new StreamableHTTPClientTransport(new URL(server.url+'/mcp'),{requestInit:{headers:{authorization:'Bearer '+f.token}}}));
+    const next=await client.callTool({name:'runtime_read',arguments:{operation:'runtime.projects.list',projectId:'alpha',input:{cursor:first.body.result.nextCursor,limit:100}}});assert.notEqual(next.isError,true);const result=JSON.parse(next.content[0].text).result;assert.equal(result.projects.length,27);assert.equal(result.nextCursor,null);
+    assert.equal((await request(server,f.other,'runtime.projects.list','beta',{cursor:first.body.result.nextCursor})).status,400);
+    assert.equal((await request(server,f.token,'runtime.projects.list','alpha',{limit:'100'})).status,400);
+    config.principals[0].projects.splice(-1,1);config.principals[0].revision++;writeFileSync(join(f.root,'auth.json'),JSON.stringify(config));
+    const stale=await request(server,f.token,'runtime.projects.list','alpha',{cursor:first.body.result.nextCursor});assert.equal(stale.body.error.code,'INVALID_CURSOR');
+    const fresh=await request(server,f.token,'runtime.projects.list','alpha',{limit:100});assert.equal(fresh.body.result.projects.length,76);assert(!fresh.body.result.projects.some(p=>p.projectId==='project-075'));
+    config.principals[0].permissions=['draft.write'];writeFileSync(join(f.root,'auth.json'),JSON.stringify(config));assert.equal((await request(server,f.token,'runtime.projects.list','alpha')).status,403);
+  }finally{await client.close();await server.close();f.cleanup();}
+});

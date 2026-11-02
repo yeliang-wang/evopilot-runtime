@@ -80,9 +80,22 @@ export class RuntimeStore {
     const rows=this.db.prepare("SELECT project_id,id FROM objects WHERE kind='stage-progress' AND json_extract(data,'$.terminal')=0 AND (project_id>? OR (project_id=? AND id>?)) ORDER BY project_id,id LIMIT 50").all(after?.projectId??'',after?.projectId??'',after?.id??'').map(r=>({projectId:String(r.project_id),id:String(r.id)}));
     return{rows,next:rows.length===50?rows.at(-1)!:null};
   }
-  projects(principal: Principal): { projectId: string; revision: number }[] {
+  projects(principal: Principal, cursor?:string, limit=50): {projects:{ projectId: string; revision: number }[];nextCursor:string|null;hasMore:boolean} {
     this.guard();
-    return principal.projects.filter(p => principal.permissions.includes('read')).slice(0,50).map(projectId => ({ projectId, revision: this.revision(projectId) }));
+    if(!principal.permissions.includes('read')||Date.parse(principal.expiresAt)<=Date.now())reject('FORBIDDEN','Current project read permission is required',403);
+    if(!Number.isSafeInteger(limit)||limit<1||limit>100)reject('INVALID_LIMIT','Project page size must be an integer from 1 to 100');
+    const ids=[...new Set(principal.projects)].sort();ids.forEach(slug);
+    const scopeDigest=digest({projects:ids,permissions:[...principal.permissions].sort(),expiresAt:principal.expiresAt});let after='';
+    if(cursor!==undefined){
+      string(cursor,2048);const[body,signature,extra]=cursor.split('.'),expected=createHmac('sha256',this.cursorKey).update(body).digest('base64url');
+      if(extra||!signature||! /^[A-Za-z0-9_-]+$/.test(body)||! /^[A-Za-z0-9_-]{43}$/.test(signature)||!timingSafeEqual(Buffer.from(signature),Buffer.from(expected)))reject('INVALID_CURSOR','Project cursor is invalid');
+      let data:Record<string,unknown>;try{data=record(JSON.parse(Buffer.from(body,'base64url').toString('utf8')));exact(data,['kind','serviceId','principalId','principalRevision','scopeDigest','after']);}catch{return reject('INVALID_CURSOR','Project cursor is invalid');}
+      if(data.kind!=='runtime-project-list/v1'||data.serviceId!==this.serviceId||data.principalId!==principal.id||data.principalRevision!==principal.revision||data.scopeDigest!==scopeDigest||typeof data.after!=='string'||!ids.includes(data.after))reject('INVALID_CURSOR','Project cursor belongs to a different current scope');
+      after=data.after;
+    }
+    const remaining=ids.filter(id=>id>after),selected=remaining.slice(0,limit),hasMore=remaining.length>selected.length;
+    const body=Buffer.from(canonical({kind:'runtime-project-list/v1',serviceId:this.serviceId,principalId:principal.id,principalRevision:principal.revision,scopeDigest,after:selected.at(-1)??after})).toString('base64url');
+    return{projects:selected.map(projectId=>({projectId,revision:this.revision(projectId)})),hasMore,nextCursor:hasMore?body+'.'+createHmac('sha256',this.cursorKey).update(body).digest('base64url'):null};
   }
   receipt(principal: Principal, projectId: string, requestId: string): Receipt {
     const saved=this.findReceipt(principal,projectId,requestId);
@@ -136,10 +149,9 @@ export class RuntimeStore {
     if (cursor) {
       string(cursor, 1024); const [body, signature, extra] = cursor.split('.');
       const expected = createHmac('sha256', this.cursorKey).update(body).digest('base64url');
-      if (extra || !signature || signature.length !== expected.length || !timingSafeEqual(Buffer.from(signature),Buffer.from(expected))) reject('INVALID_CURSOR', 'Cursor is invalid');
+      if (extra || !signature || !/^[A-Za-z0-9_-]+$/.test(body) || !/^[A-Za-z0-9_-]{43}$/.test(signature) || !timingSafeEqual(Buffer.from(signature),Buffer.from(expected))) reject('INVALID_CURSOR', 'Cursor is invalid');
       let decoded: Record<string, unknown>;
-      try { decoded = record(JSON.parse(Buffer.from(body,'base64url').toString('utf8'))); } catch { return reject('INVALID_CURSOR', 'Cursor is invalid'); }
-      exact(decoded, ['projectId','after','serviceId']);
+      try { decoded = record(JSON.parse(Buffer.from(body,'base64url').toString('utf8'))); exact(decoded, ['projectId','after','serviceId']); } catch { return reject('INVALID_CURSOR', 'Cursor is invalid'); }
       if (decoded.projectId !== projectId || decoded.serviceId !== this.serviceId || !Number.isSafeInteger(decoded.after) || Number(decoded.after) < 0) reject('INVALID_CURSOR', 'Cursor belongs to a different scope');
       after = Number(decoded.after);
     }

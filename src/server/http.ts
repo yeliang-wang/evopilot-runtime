@@ -46,7 +46,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     if(PREPARATION_READS.includes(operation as typeof PREPARATION_READS[number]))return preparations.read(actor,projectId,operation,input);
     switch (operation) {
       case 'runtime.status': exact(input,[]); return { ...status(), projectId, revision: store.revision(projectId),observationWorker:execution.health(projectId) };
-      case 'runtime.projects.list': exact(input,[]); return { projects: store.projects(actor) };
+      case 'runtime.projects.list': exact(input,[],['cursor','limit']); return store.projects(actor,input.cursor===undefined?undefined:string(input.cursor,2048),input.limit===undefined?50:input.limit as number);
       case 'runtime.events.read': exact(input,[],['cursor']); return store.events(actor,projectId,input.cursor === undefined ? undefined : string(input.cursor,1024));
       case 'runtime.receipt.read': exact(input,['requestId']); return store.receipt(actor,projectId,string(input.requestId));
       default: return reject('UNKNOWN_OPERATION','Unsupported Runtime operation',404);
