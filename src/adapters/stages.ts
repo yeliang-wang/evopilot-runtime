@@ -23,11 +23,12 @@ interface OwnerPin {ref:string;registrationDigest:string;scope:NativeScope;refer
 interface CiPlan {
   stageId:'candidate'|'verification'; binding:PlatformRegistration; commit:string; workflowDigest:string;
   expectedChecks:string[]; owners:Record<Owner,OwnerPin>; toolchainLockDigest:string;
+  toolchainManifestDigest?:string;
   effectiveConfigDigest:string; candidateDigest:string|null;
 }
 interface NativeAction {request:OwnerRequest;requestDigest:string;context:NativeValidationContext;observationDigest:string|null;digest:string;}
 interface OwnerResult {owner:Owner;status:'PASS'|'FAIL'|'UNKNOWN';receiptDigest:string|null;reportDigest:string|null;}
-export interface NativeStageConnections extends Pick<BindingConnections,'owner'|'platform'> {toolchainLockDigest:string;}
+export interface NativeStageConnections extends Pick<BindingConnections,'owner'|'platform'> {toolchainLockDigest:string;toolchainManifestDigest?:string;}
 const hash=(v:unknown):string=>{const s=string(v,71);if(!/^sha256:[a-f0-9]{64}$/.test(s))reject('STAGE_EVIDENCE_INVALID','Exact evidence digest is required');return s;};
 function packageJson(pkg:Record<string,unknown>,path:unknown):Record<string,unknown>{
   const text=record(pkg.files)[string(path,512)];if(typeof text!=='string'||Buffer.byteLength(text)>2097152)reject('OWNER_PACKAGE_INVALID','A bounded owner inventory is required');
@@ -56,6 +57,7 @@ function inventory(pkg:Record<string,unknown>,owner:Owner):Pair[]{
  * completion to run the already planned owner validations under current permits. */
 export function createCiStageAdapter(store:RuntimeStore,configPath:string,connections:NativeStageConnections):StageAdapter{
   hash(connections.toolchainLockDigest);
+  if(connections.toolchainManifestDigest!==undefined)hash(connections.toolchainManifestDigest);
   const system=(projectId:string):Principal=>({id:'runtime:stage-adapter',projects:[projectId],permissions:['read'],revision:1,expiresAt:new Date(Date.now()+60000).toISOString()});
   function retain(projectId:string,kind:string,id:string,value:unknown,immutable=false):void{
     const old=store.object(projectId,kind,id);if(old&&same(old,value))return;
@@ -106,11 +108,12 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
       }
     }
     signal.throwIfAborted();
-    const parameters:CiPlan={stageId,binding,commit:current.commit,workflowDigest:current.workflowDigest,expectedChecks:[...instance.definition.nodes.find(n=>n.id===stageId)!.checks],owners:pins,toolchainLockDigest:connections.toolchainLockDigest,effectiveConfigDigest,candidateDigest:instance.candidateDigest};
+    const parameters:CiPlan={stageId,binding,commit:current.commit,workflowDigest:current.workflowDigest,expectedChecks:[...instance.definition.nodes.find(n=>n.id===stageId)!.checks],owners:pins,toolchainLockDigest:connections.toolchainLockDigest,...(connections.toolchainManifestDigest?{toolchainManifestDigest:connections.toolchainManifestDigest}:{}),effectiveConfigDigest,candidateDigest:instance.candidateDigest};
     return{adapterId:ADAPTER_ID,adapterDigest:ADAPTER_DIGEST,action:'base.'+stageId,bindingDigest:valueDigest(parameters),parameters:parameters as unknown as Record<string,unknown>};
   }
   function plan(r:StageRequest,instance:LifecycleInstance,actor:Principal):{p:CiPlan;config:Readonly<IntegrationConfiguration>;client:PlatformClient;ci:PlatformRunRequest}{
     inspectInstance(instance);const p=r.plan.parameters as unknown as CiPlan,config=configuration(actor,r.projectId);
+    if(p.toolchainManifestDigest!==connections.toolchainManifestDigest)reject('TOOLCHAIN_CHANGED','Original native stage manifest cannot change across service restarts',409);
     if(r.workspaceId!==store.workspaceId||r.projectId!==instance.pins.projectId||r.instanceId!==instance.id||r.pinsDigest!==instance.pinsDigest||r.plan.adapterId!==ADAPTER_ID||r.plan.adapterDigest!==ADAPTER_DIGEST||r.plan.action!=='base.'+r.stageId||r.plan.bindingDigest!==valueDigest(p)||valueDigest(r.plan)!==r.planDigest||p.stageId!==r.stageId||!['candidate','verification'].includes(p.stageId)||p.toolchainLockDigest!==connections.toolchainLockDigest||p.candidateDigest!==instance.candidateDigest||!same(p.expectedChecks,instance.definition.nodes.find(n=>n.id===r.stageId)?.checks))reject('STAGE_PLAN_MISMATCH','CI execution differs from its original immutable stage plan');
     const current=configuredPlatform(config,actor,r.projectId,p.binding.ref);if(!same(current,p.binding))reject('PLATFORM_BINDING_CHANGED','Original stage platform registration changed');
     for(const kind of ['ontology','harness'] as const)owner(config,p.owners[kind],kind,r.projectId);

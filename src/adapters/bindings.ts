@@ -15,6 +15,10 @@ import { readPlatformToken } from './config.js';
 import { githubClient } from './github.js';
 import { gitlabClient } from './gitlab.js';
 import { inspectExternalAgent, type AgentIdentity } from './external-agent.js';
+import { readRegisteredNativeToolchain } from './config.js';
+import { createCiStageAdapter } from './stages.js';
+import type { RuntimeStore } from '../server/store.js';
+import type { StageAdapter } from '../lifecycle/execution.js';
 import type { ReadinessIntentRecord } from '../../vendor/compatibility/usability/v2/contract.mjs';
 
 export interface BindingConnections {
@@ -231,44 +235,66 @@ export function createRegisteredBindings(configPath:string,workspaceId:string,co
 /** Fixed local composition of published owner consumers, the existing Runtime
  * readiness API and registered HTTPS providers. No caller-selected imports,
  * owner authoring, raw database access or default external execution. */
-export async function openRegisteredBindings(configPath:string,workspaceId:string):Promise<{provider:DefinitionBindingProvider;close():void}>{
+export async function openRegisteredBindings(configPath:string,workspaceId:string):Promise<{provider:DefinitionBindingProvider;executor(store:RuntimeStore):StageAdapter;close():void}>{
   slug(workspaceId);string(configPath,4096);
   let legacy:ReturnType<typeof createRuntimeService>|undefined,opening:Promise<void>|null=null,connectedDigest:string|null=null,closed=false;
   const adapters=new Map<string,PublishedOwnerAdapter>();
   const disconnect=()=>{for(const a of [...adapters.values()].reverse())a.close();adapters.clear();legacy?.close();legacy=undefined;connectedDigest=null;};
+  const connectionDigest=(configuration:Readonly<IntegrationConfiguration>)=>valueDigest({owners:configuration.owners,nativeToolchain:configuration.nativeToolchain??null});
   async function connect(configuration:Readonly<IntegrationConfiguration>):Promise<void>{
     try{
+      const toolchain=readRegisteredNativeToolchain(configuration);
       if(!configuration.owners.length)reject('OWNER_NOT_REGISTERED','Register published Ontology and Harness connections before enabling a lifecycle');
       const roots=new Set(configuration.owners.map(o=>o.workspaceRoot));if(roots.size!==1)reject('OWNER_SCOPE','Current published owner composition requires one shared workspace identity/root');
       const workspaceRoot=[...roots][0];directory(workspaceRoot);
       const marker=workspaceRoot+'/state/runtime/runtime.db';if(realpathSync(marker)!==marker||!lstatSync(marker).isFile())reject('RUNTIME_INTENT_STORE_MISSING','Initialize modeling intent through the existing Runtime owner workflow first');
       legacy=createRuntimeService({workspaceRoot,workspaceId});legacy.initialize();
       for(const registered of configuration.owners.filter(o=>o.owner==='ontology')){
-        const{ref,...config}=registered;adapters.set(ref,await openPublishedOwner(config));if(closed)reject('CLOSED','Integration composition is closed',503);
+        const{ref,...config}=registered;adapters.set(ref,await openPublishedOwner(config,toolchain));if(closed)reject('CLOSED','Integration composition is closed',503);
       }
       for(const registered of configuration.owners.filter(o=>o.owner==='harness')){
         const possible=configuration.owners.filter(o=>o.owner==='ontology'&&registered.projects.every(p=>o.projects.includes(p)));
         if(possible.length!==1)reject('OWNER_BINDING_AMBIGUOUS','Harness needs one exact scoped Ontology connection');
         const{ref,...config}=registered;
-        adapters.set(ref,await openPublishedOwner(config,undefined,adapters.get(possible[0].ref),async(actor,projectId,request)=>{
+        adapters.set(ref,await openPublishedOwner(config,toolchain,adapters.get(possible[0].ref),async(actor,projectId,request)=>{
           authorize(actor,projectId,'read');if(!legacy)reject('OWNER_UNAVAILABLE','Runtime intent reader is unavailable');
           return await legacy.readiness({operation:'readiness.intent.read',scope:request.scope,input:{standardVersion:'v2',digest:request.digest}}) as ReadinessIntentRecord&{current:boolean};
         }));if(closed)reject('CLOSED','Integration composition is closed',503);
       }
-      connectedDigest=valueDigest(configuration.owners);
+      connectedDigest=connectionDigest(configuration);
     }catch(error){disconnect();throw error;}
   }
-  const registered=createRegisteredBindings(configPath,workspaceId,{
+  const connections:BindingConnections={
     owner(ref){if(closed)reject('CLOSED','Integration composition is closed',503);const adapter=adapters.get(ref);if(!adapter)reject('OWNER_NOT_REGISTERED','Restart with the reviewed changed owner configuration');return adapter;},
     platform(binding){const credentials=async(p:PlatformRegistration,actor:Principal)=>readPlatformToken(configPath,p,actor);return binding.provider==='github'?githubClient(binding,credentials):gitlabClient(binding,credentials);},
-  });
-  const provider:DefinitionBindingProvider=async(definition,actor,requirements,signal)=>{
+  };
+  async function ensure(signal:AbortSignal):Promise<Readonly<IntegrationConfiguration>>{
     if(closed)reject('CLOSED','Integration composition is closed',503);signal.throwIfAborted();
-    const config=readIntegrationConfiguration(configPath,workspaceId),expected=valueDigest(config.owners);
+    const config=readIntegrationConfiguration(configPath,workspaceId),expected=connectionDigest(config);
     if(connectedDigest&&connectedDigest!==expected)reject('OWNER_CONNECTION_CHANGED','Restart after reviewing a changed owner connection; original history remains readable',409);
+    readRegisteredNativeToolchain(config);
     if(!connectedDigest){opening??=connect(config).finally(()=>{opening=null;});await opening;}
-    signal.throwIfAborted();return registered(definition,actor,requirements,signal);
+    signal.throwIfAborted();if(closed)reject('CLOSED','Integration composition is closed',503);
+    if(connectedDigest!==expected||connectionDigest(readIntegrationConfiguration(configPath,workspaceId))!==expected)reject('OWNER_CONNECTION_CHANGED','Owner configuration changed while connecting',409);
+    return config;
+  }
+  const registered=createRegisteredBindings(configPath,workspaceId,connections);
+  const provider:DefinitionBindingProvider=async(definition,actor,requirements,signal)=>{
+    await ensure(signal);return registered(definition,actor,requirements,signal);
   };
   // Owner outages block dependent admission, never service/history availability.
-  return{provider,close(){if(!closed){closed=true;disconnect();}}};
+  return{provider,executor(store){
+    if(store.workspaceId!==workspaceId)reject('INTEGRATION_SCOPE','Stage executor must share the service workspace',403);
+    let adapter:StageAdapter|undefined;
+    async function current(signal:AbortSignal):Promise<StageAdapter>{
+      const config=await ensure(signal),toolchain=readRegisteredNativeToolchain(config);
+      adapter??=createCiStageAdapter(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest});return adapter;
+    }
+    return{
+      async prepare(instance,stage,actor,signal){return(await current(signal)).prepare(instance,stage,actor,signal);},
+      async dispatch(request,instance,permit,signal){return(await current(signal)).dispatch(request,instance,permit,signal);},
+      async inspect(request,instance,progress,actor,signal){return(await current(signal)).inspect(request,instance,progress,actor,signal);},
+      async advance(request,instance,progress,permit,signal){return(await current(signal)).advance!(request,instance,progress,permit,signal);},
+    };
+  },close(){if(!closed){closed=true;disconnect();}}};
 }

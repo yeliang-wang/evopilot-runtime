@@ -106,8 +106,9 @@ outcome reconciliation. It cannot manufacture owner evidence or release authorit
 The protected owner/platform binding composition, retained exact authority and
 durable stage execution core, fixed CI dispatch clients, artifact verifier and
 owner feedback delivery are implemented in development. Candidate/verification
-CI stages now compose these clients with exact native owner validation. The
-other native stages, Codex task handoff and default CLI wiring remain M3 work.
+CI stages now compose these clients with exact native owner validation through
+the standalone CLI's registered executor. The other native stages and Codex
+task handoff remain M3 work.
 Unconfigured adapters fail closed; synthetic regression adapters are test
 fixtures only and cannot certify real asset usability or final E2E. The two
 Dashboard pages, independent installed Expert/plugin, migration and complete
@@ -124,6 +125,27 @@ revision, expiry and typed definition: documents, locations, policies, workflows
 toolchains, delivery targets, required checks, standards and asset mappings.
 An absent registration or a document supplied in place of a workflow blocks
 admission. A valid configuration does not supply future candidate evidence.
+
+For native candidate/verification execution, register `nativeToolchain` in this
+same protected operator file as `{ "path": "<absolute manifest file>",
+"digest": "sha256:<file bytes>", "lockDigest": "sha256:<native lock>" }`.
+The manifest is a private regular owned file (0600), at most 2 MiB, with the
+existing `evopilot-native-toolchain/v1` schema and explicit host platform,
+architecture, four native tools and dependency pins. The published owners still
+verify their actual installed tools/dependency bytes and standard versions;
+reading this descriptor alone is not validator readiness. It registers no
+arbitrary module or command. Project YAML cannot supply the manifest or tools.
+Changing this descriptor changes the execution authority's bound context.
+Lifecycle admission and native execution require this operator registration.
+Drift blocks new work, while persisted history remains readable. Stage plans
+also pin the manifest file digest, so a changed manifest with the same declared
+lock cannot replace the original after restarting the service.
+
+The CLI's fixed executor shares the existing service store and lazy owner
+connections. It does not create a second writer or a separate execution engine.
+Connection/manifest changes require a reviewed registration and service restart;
+an in-flight original request cannot be retargeted to different owner packages or
+validator configuration. Startup performs no CI dispatch or native validation.
 
 Owner consumers verify the complete published 0.8.3 distributions and dependency
 files before importing their public APIs. They check exact scope, asset identity,
@@ -295,8 +317,8 @@ between local commit and external dispatch. Both crash boundaries are exercised
 with actual killed processes and clearly synthetic provider effects. Observation
 storage/index failures are visible in request inspection and the scoped worker
 health in `runtime.status`. Missing adapters leave historical state readable and
-new execution blocked. The ordinary development CLI still has no fixed native
-stage executor configured. Candidate/verification composition is implemented;
+new execution blocked. The ordinary development CLI wires the fixed native
+candidate/verification executor when `--integrations-ref` is supplied;
 the remaining actions and end-to-end closure are not yet complete. These regression results
 are not final candidate acceptance.
 

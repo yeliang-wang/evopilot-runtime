@@ -2,8 +2,9 @@ import { constants, closeSync, fstatSync, openSync, readFileSync, realpathSync }
 import { isAbsolute, resolve } from 'node:path';
 import { canonical, exact, record, reject, slug, string } from '../server/errors.js';
 import { authorize, privateFile, readPrivateJson, type Principal } from '../server/security.js';
-import { valueDigest } from '../lifecycle/base.js';
+import { byteDigest, valueDigest } from '../lifecycle/base.js';
 import type { OwnerConfiguration } from './published-owners.js';
+import type { NativeToolchain } from '../../vendor/compatibility/v1/native.mjs';
 import { containsInlineSecret } from '../lifecycle/compiler.js';
 
 export type Platform = 'github'|'gitlab';
@@ -18,6 +19,7 @@ export interface CredentialRegistration {
   tokenFile:string; revision:number; expiresAt:string;
 }
 export interface RegisteredOwner extends OwnerConfiguration { ref:string; }
+export interface NativeToolchainRegistration {path:string;digest:string;lockDigest:string;}
 export interface ResourceRegistration {
   ref:string; workspaceId:string; projectId:string; role:string; revision:number; expiresAt:string;
   definition:Record<string,unknown>;
@@ -25,6 +27,7 @@ export interface ResourceRegistration {
 export interface IntegrationConfiguration {
   schema:'runtime-integrations/v1'; workspaceId:string; revision:number;
   platforms:PlatformRegistration[]; credentials:CredentialRegistration[]; owners:RegisteredOwner[]; resources:ResourceRegistration[];
+  nativeToolchain?:NativeToolchainRegistration;
 }
 function immutable<T>(v:T):T{if(v&&typeof v==='object'){for(const item of Object.values(v))immutable(item);Object.freeze(v);}return v;}
 function reference(v:unknown,prefix:'binding'|'credential'):string{
@@ -33,6 +36,10 @@ function reference(v:unknown,prefix:'binding'|'credential'):string{
 function revision(v:unknown):void{if(!Number.isSafeInteger(v)||Number(v)<1)reject('INVALID_REGISTRATION','Registration revision must be positive');}
 function expiry(v:unknown):void{if(!Number.isFinite(Date.parse(string(v,128))))reject('INVALID_REGISTRATION','Registration expiry is required');}
 function absolute(v:unknown):string{const p=string(v,4096);if(!isAbsolute(p)||resolve(p)!==p)reject('INVALID_REGISTRATION','Canonical absolute operator path is required');return p;}
+function hash(v:unknown):string{const s=string(v,71);if(!/^sha256:[a-f0-9]{64}$/.test(s))reject('INVALID_REGISTRATION','Exact SHA256 digest is required');return s;}
+function nativeRegistration(value:unknown):NativeToolchainRegistration{
+  const r=record(value);exact(r,['path','digest','lockDigest']);absolute(r.path);hash(r.digest);hash(r.lockDigest);return r as unknown as NativeToolchainRegistration;
+}
 export function platformOrigin(v:unknown):string{
   const s=string(v,256);let url:URL;try{url=new URL(s);}catch{return reject('INVALID_REGISTRATION','Invalid platform origin');}
   if(url.protocol!=='https:'||url.origin!==s||url.username||url.password||url.hash||url.search||url.pathname!=='/')reject('INVALID_REGISTRATION','An exact HTTPS platform origin is required');return s;
@@ -63,7 +70,7 @@ export function validatePlatformRegistration(value:unknown):PlatformRegistration
 export function readIntegrationConfiguration(path:string,workspaceId:string):Readonly<IntegrationConfiguration>{
   try{
     absolute(path);if(realpathSync(path)!==path)reject('UNSAFE_INTEGRATION_CONFIG','Symlinked integration configuration is not allowed');
-    const config=record(readPrivateJson(path));exact(config,['schema','workspaceId','revision','platforms','credentials','owners'],['resources']);
+    const config=record(readPrivateJson(path));exact(config,['schema','workspaceId','revision','platforms','credentials','owners'],['resources','nativeToolchain']);
     if(config.schema!=='runtime-integrations/v1'||config.workspaceId!==workspaceId)reject('INTEGRATION_SCOPE','Integration configuration belongs to another workspace',403);
     slug(workspaceId);revision(config.revision);
     for(const key of ['platforms','credentials','owners'])if(!Array.isArray(config[key])||config[key].length>128)reject('INVALID_REGISTRATION','Integration collections must be bounded arrays');
@@ -85,8 +92,34 @@ export function readIntegrationConfiguration(path:string,workspaceId:string):Rea
       return r as unknown as ResourceRegistration;
     });
     for(const p of platforms){const c=credentials.find(c=>c.ref===p.credentialRef);if(!c||c.projectId!==p.projectId||c.provider!==p.provider||c.host!==p.host)reject('CREDENTIAL_SCOPE','Platform and credential registrations must have identical project/provider/host scope',403);}
-    return immutable({schema:'runtime-integrations/v1',workspaceId,revision:Number(config.revision),platforms,credentials,owners,resources});
+    const nativeToolchain=config.nativeToolchain===undefined?undefined:nativeRegistration(config.nativeToolchain);
+    return immutable({schema:'runtime-integrations/v1',workspaceId,revision:Number(config.revision),platforms,credentials,owners,resources,...(nativeToolchain?{nativeToolchain}:{})});
   }catch(e){if(e&&typeof e==='object'&&'code'in e&&typeof e.code==='string'&&!/^E[A-Z]+$/.test(e.code))throw e;return reject('UNSAFE_INTEGRATION_CONFIG','Protected integration configuration is unavailable',503);}
+}
+/** Read only the operator-pinned native validator manifest. The published
+ * owners remain responsible for checking installed executable/dependency bytes
+ * and their native standard versions before running validation. No module,
+ * command, model route or caller-supplied executable is registered here. */
+export function readRegisteredNativeToolchain(configuration:Readonly<IntegrationConfiguration>):Readonly<NativeToolchain>{
+  if(!configuration.nativeToolchain)reject('TOOLCHAIN_NOT_REGISTERED','Register the pinned native validator toolchain before requesting native stages',409);
+  const registration=nativeRegistration(configuration.nativeToolchain);let fd:number|undefined;
+  try{
+    if(realpathSync(registration.path)!==registration.path)reject('UNSAFE_TOOLCHAIN','Linked native toolchain configuration is forbidden');
+    privateFile(registration.path);fd=openSync(registration.path,constants.O_RDONLY|constants.O_NOFOLLOW);const stat=fstatSync(fd);
+    if(!stat.isFile()||stat.uid!==process.getuid?.()||stat.nlink!==1||(stat.mode&0o777)!==0o600||stat.size<1||stat.size>2097152)reject('UNSAFE_TOOLCHAIN','Native toolchain manifest must be a bounded protected file');
+    const bytes=readFileSync(fd);if(byteDigest(bytes)!==registration.digest)reject('TOOLCHAIN_CHANGED','Native toolchain manifest differs from its registered digest',409);
+    const t=record(JSON.parse(bytes.toString('utf8')));exact(t,['schema','lockDigest','platform','arch','tools','dependencyLockDigest','environmentRoot','dependencyFiles','timeoutMs','maxInputBytes','maxPackageBytes']);
+    if(t.schema!=='evopilot-native-toolchain/v1'||t.platform!==process.platform||t.arch!==process.arch||t.lockDigest!==registration.lockDigest)reject('TOOLCHAIN_MISMATCH','Native toolchain identity does not match this host and registration',409);
+    hash(t.lockDigest);hash(t.dependencyLockDigest);absolute(t.environmentRoot);
+    if(t.timeoutMs!==60000||[t.maxInputBytes,t.maxPackageBytes].some(v=>!Number.isSafeInteger(v)||Number(v)<1||Number(v)>134217728))reject('INVALID_TOOLCHAIN','Native validator limits do not match the published contract');
+    const tools=record(t.tools);exact(tools,['python','pyshacl','opa','conftest']);
+    const rawHash=(v:unknown)=>{if(!/^[a-f0-9]{64}$/.test(string(v,64)))reject('INVALID_TOOLCHAIN','Native file digest is required');};
+    for(const value of Object.values(tools)){const tool=record(value);exact(tool,['executable','version','sha256']);absolute(tool.executable);string(tool.version);rawHash(tool.sha256);}
+    if(!Array.isArray(t.dependencyFiles)||!t.dependencyFiles.length||t.dependencyFiles.length>16384)reject('INVALID_TOOLCHAIN','Native dependency manifest must be bounded and nonempty');
+    for(const value of t.dependencyFiles){const file=record(value);exact(file,['path','sha256']);absolute(file.path);rawHash(file.sha256);}
+    return immutable(t as unknown as NativeToolchain);
+  }catch(e){if(e&&typeof e==='object'&&'code'in e&&typeof e.code==='string'&&!/^E[A-Z]+$/.test(e.code))throw e;return reject('UNSAFE_TOOLCHAIN','Protected native toolchain manifest is unavailable',503);}
+  finally{if(fd!==undefined)closeSync(fd);}
 }
 export function configuredPlatform(configuration:Readonly<IntegrationConfiguration>,actor:Principal,projectId:string,ref:string,now=Date.now()):PlatformRegistration{
   authorize(actor,projectId,'read',now);const p=configuration.platforms.find(p=>p.ref===ref&&p.projectId===projectId);

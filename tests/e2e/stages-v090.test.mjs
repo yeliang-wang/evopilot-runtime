@@ -71,7 +71,7 @@ async function fixture(){
       return{provider:'github',repositoryId:'42',requestId:ci.requestId,inputDigest:ci.inputDigest,bindingDigest:ci.bindingDigest,commit:ci.commit,runId:controls.runId,runStatus:controls.status,artifactId:'99',jobId:null,name:'runtime-ci',archiveDigest:byteDigest(bytes),archiveBytes:bytes.length,bytes,evidenceRef:'https://github.com/synthetic/project/actions/runs/'+controls.runId};
     }};
   function run(ci){return{schema:'runtime-ci-observation/v1',requestId:ci.requestId,inputDigest:ci.inputDigest,provider:'github',repositoryId:'42',ref:'evopilot-runtime/'+ci.requestId,commit:ci.commit,runId:controls.runId,status:controls.status,jobs:[],evidenceRef:'synthetic:ci',observedAt:'2026-01-01T00:00:00Z',factsDigest:valueDigest('synthetic'),artifactsVerified:false,lifecycleAcceptance:false};}
-  const connect=()=>adapter=createCiStageAdapter(store,path,{platform:()=>platform,owner:ref=>ownerAdapters[ref],toolchainLockDigest});connect();
+  const connect=()=>adapter=createCiStageAdapter(store,path,{platform:()=>platform,owner:ref=>ownerAdapters[ref],toolchainLockDigest,...(controls.toolchainManifestDigest?{toolchainManifestDigest:controls.toolchainManifestDigest}:{})});connect();
   const signal=()=>AbortSignal.timeout(5000),permit=async()=>actor,progress={requestId:'unused',phase:'RUNNING',terminal:false,handle:null,observation:null,observationRef:null,reason:null,observedAt:new Date().toISOString()};
   async function prepare(stage='candidate'){
     const plan=await adapter.prepare(instance,stage,actor,signal()),id='request-'+stage,inputDigest=stageAdmission(instance,stage,admission).inputDigest,body={schema:'runtime-stage-request/v1',id,workspaceId,projectId,instanceId:instance.id,stageId:stage,pinsDigest:instance.pinsDigest,inputDigest,bindingStamp:valueDigest('synthetic'),authorityRef:authority.evidenceRef,releaseAuthorityRef:null,initiatedBy:{id:actor.id,revision:actor.revision},plan,planDigest:valueDigest(plan),requestedAt:new Date().toISOString(),deadlineAt:new Date(Date.now()+120000).toISOString()};
@@ -121,6 +121,15 @@ test('reconciliation cannot replace an original run, artifact or platform regist
   const f=await fixture();try{
     await f.prepare();await f.dispatch();f.controls.runId='24';await assert.rejects(()=>f.inspect(),{code:'STAGE_EVIDENCE_CHANGED'});f.controls.runId='23';f.controls.changedArchive=true;await assert.rejects(()=>f.inspect(),{code:'STAGE_EVIDENCE_CHANGED'});
     f.config.platforms[0].revision++;f.save();await assert.rejects(()=>f.inspect(),{code:'PLATFORM_BINDING_CHANGED'});
+  }finally{f.cleanup();}
+});
+test('registered native manifest remains pinned across restart even when the declared native lock stays the same',async()=>{
+  const f=await fixture();try{
+    f.controls.toolchainManifestDigest=valueDigest('original-manifest');f.restart();await f.prepare();await f.dispatch();
+    assert.equal(f.request.plan.parameters.toolchainManifestDigest,f.controls.toolchainManifestDigest);
+    f.controls.toolchainManifestDigest=valueDigest('changed-manifest');f.restart();await assert.rejects(()=>f.inspect(),{code:'TOOLCHAIN_CHANGED'});await assert.rejects(()=>f.advance(),{code:'TOOLCHAIN_CHANGED'});
+    assert.equal(f.calls.filter(x=>x.operation==='native.package.validate').length,0);assert.equal(f.calls.filter(x=>x.operation==='ci.dispatch').length,1);
+    f.controls.toolchainManifestDigest=valueDigest('original-manifest');f.restart();assert.equal((await f.advance()).phase,'COMPLETE');
   }finally{f.cleanup();}
 });
 test('a revoked continuation permit cannot mutate owners, and unrelated stages remain unavailable',async()=>{

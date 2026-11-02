@@ -224,3 +224,16 @@ test('independent CLI bootstraps protected reference, serves and reads real HTTP
     const repeat=run(['auth-init','--state-root',root,'--workspace-id','cli-test','--project','alpha','--principal','tester','--role','activator']);assert.equal(repeat.status,1);assert.equal(JSON.parse(readFileSync(output.tokenRef,'utf8')).token,credential.token);
   }finally{if(child?.exitCode===null && child?.signalCode===null){const ended=once(child,'exit');child.kill('SIGTERM');await ended;}rmSync(dir,{recursive:true,force:true});}
 });
+
+test('standalone registered executor leaves status/history available when owner or validator registration is unavailable',async()=>{
+  const f=fixture(),cli=new URL('../../dist/server/cli.js',import.meta.url).pathname,path=join(f.dir,'integrations.json');let child;
+  try{
+    writeFileSync(path,JSON.stringify({schema:'runtime-integrations/v1',workspaceId:'test',revision:1,owners:[],platforms:[],credentials:[],nativeToolchain:{path:join(f.dir,'missing-toolchain.json'),digest:'sha256:'+'a'.repeat(64),lockDigest:'sha256:'+'b'.repeat(64)}}),{mode:0o600});
+    child=spawn(process.execPath,[cli,'serve','--state-root',f.root,'--workspace-id','test','--integrations-ref',path],{stdio:['ignore','pipe','pipe']});
+    const [bytes]=await once(child.stdout,'data',{signal:AbortSignal.timeout(10000)}),ready=JSON.parse(bytes.toString());assert.equal(ready.ready,true);
+    const r=await request(ready,f.token);assert.equal(r.status,200);assert.equal(r.body.result.projectId,'alpha');
+    assert.equal((await request(ready,f.token,'lifecycle.instance.inspect','alpha',{instanceId:'absent'})).body.error.code,'NOT_FOUND');
+    const ended=once(child,'exit');child.kill('SIGTERM');assert.equal((await ended)[0],0);
+    const store=new RuntimeStore(f.root,'test');try{assert.equal(store.revision('alpha'),0);}finally{store.close();}
+  }finally{if(child?.exitCode===null&&child?.signalCode===null){const ended=once(child,'exit');child.kill('SIGTERM');await ended;}f.cleanup();}
+});

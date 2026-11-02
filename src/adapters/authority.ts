@@ -43,6 +43,9 @@ export function registeredAuthorityPolicy(configPath:string,workspaceId:string):
     const collect=(value:unknown):void=>{if(typeof value==='string'&&bindingPattern.test(value))refs.add(value);else if(Array.isArray(value))value.forEach(collect);else if(value&&typeof value==='object')Object.values(value).forEach(collect);};
     collect(definition.semantic);
     const selected:Record<string,unknown>[]=[];
+    // Shared native validators are part of execution scope, even though their
+    // protected manifest is operator configuration rather than project YAML.
+    if(config.nativeToolchain)selected.push({ref:'native-toolchain',...config.nativeToolchain});
     for(const ref of refs){
       const resource=config.resources.find(r=>r.ref===ref&&r.projectId===definition.projectId);
       const platform=config.platforms.find(p=>p.ref===ref&&p.projectId===definition.projectId);

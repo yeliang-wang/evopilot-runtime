@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ownerDistributionIdentity, verifyOwnerDistribution, openPublishedOwner, ownerRequestDigest, verifyReadinessView } from '../../dist/adapters/published-owners.js';
 import { createHash } from 'node:crypto';
-import { validatePlatformRegistration, readIntegrationConfiguration, configuredPlatform, readPlatformToken } from '../../dist/adapters/config.js';
+import { validatePlatformRegistration, readIntegrationConfiguration, configuredPlatform, readPlatformToken, readRegisteredNativeToolchain } from '../../dist/adapters/config.js';
 import { githubClient } from '../../dist/adapters/github.js';
 import { gitlabClient } from '../../dist/adapters/gitlab.js';
 import { ciInputs, ciRunTitle, ciSourceRef, fileBytes, platformReader } from '../../dist/adapters/platforms.js';
@@ -16,6 +16,7 @@ import { createRegisteredBindings, openRegisteredBindings } from '../../dist/ada
 import { compileLifecycle } from '../../dist/lifecycle/compiler.js';
 import { validateBindings } from '../../dist/lifecycle/bindings.js';
 import { valueDigest } from '../../dist/lifecycle/base.js';
+import { registeredAuthorityPolicy } from '../../dist/adapters/authority.js';
 import { yaml } from '../fixtures/lifecycle-v090.mjs';
 import { inspectExternalAgent } from '../../dist/adapters/external-agent.js';
 import { createOwnerFeedbackDelivery, verifyOwnerFeedbackInbox } from '../../dist/adapters/feedback.js';
@@ -413,6 +414,52 @@ test('unavailable owner composition is lazy and blocks validation without preven
   const f=bindingFixture(),connections=await openRegisteredBindings(join(f.dir,'missing-integrations.json'),'test');
   try{const result=await validateBindings(f.definition(),actor,connections.provider);assert.equal(result.ready,false);assert.equal(result.issues[0].code,'BINDINGS_UNKNOWN');}
   finally{connections.close();f.cleanup();}
+});
+function nativeManifest(f){
+  const tool={executable:process.execPath,version:'synthetic',sha256:'a'.repeat(64)},file=join(f.dir,'native-toolchain.json');
+  const value={schema:'evopilot-native-toolchain/v1',platform:process.platform,arch:process.arch,lockDigest:valueDigest('synthetic-native-lock'),tools:{python:tool,pyshacl:tool,opa:tool,conftest:tool},dependencyLockDigest:valueDigest('synthetic-dependencies'),environmentRoot:f.dir,dependencyFiles:[{path:process.execPath,sha256:'a'.repeat(64)}],timeoutMs:60000,maxInputBytes:1048576,maxPackageBytes:1048576};
+  const save=()=>{const bytes=JSON.stringify(value);writeFileSync(file,bytes,{mode:0o600});return{path:file,digest:'sha256:'+createHash('sha256').update(bytes).digest('hex'),lockDigest:value.lockDigest};};
+  return{file,value,save};
+}
+test('native stage toolchain requires a protected exact manifest; a descriptor never proves installed validator readiness',()=>{
+  const f=configFixture(),t=nativeManifest(f);try{
+    assert.throws(()=>readRegisteredNativeToolchain(readIntegrationConfiguration(f.path,'test')),{code:'TOOLCHAIN_NOT_REGISTERED'});
+    f.config.nativeToolchain=t.save();f.save();const config=readIntegrationConfiguration(f.path,'test'),result=readRegisteredNativeToolchain(config);
+    assert.equal(result.lockDigest,t.value.lockDigest);assert(Object.isFrozen(result.tools));
+    writeFileSync(t.file,'changed');assert.throws(()=>readRegisteredNativeToolchain(config),{code:'TOOLCHAIN_CHANGED'});t.save();
+    assert.throws(()=>readRegisteredNativeToolchain({...config,nativeToolchain:{...config.nativeToolchain,lockDigest:valueDigest('other')}}),{code:'TOOLCHAIN_MISMATCH'});
+    chmodSync(t.file,0o644);assert.throws(()=>readRegisteredNativeToolchain(config),{code:'UNSAFE_STATE'});chmodSync(t.file,0o600);
+    const link=join(f.dir,'linked');symlinkSync(t.file,link);assert.throws(()=>readRegisteredNativeToolchain({...config,nativeToolchain:{...config.nativeToolchain,path:link}}),{code:'UNSAFE_TOOLCHAIN'});
+    t.value.tools.custom={...t.value.tools.python};f.config.nativeToolchain=t.save();f.save();assert.throws(()=>readRegisteredNativeToolchain(readIntegrationConfiguration(f.path,'test')),{code:'INVALID_FIELDS'});
+    delete t.value.tools.custom;t.value.timeoutMs=0;f.config.nativeToolchain=t.save();f.save();assert.throws(()=>readRegisteredNativeToolchain(readIntegrationConfiguration(f.path,'test')),{code:'INVALID_TOOLCHAIN'});
+    f.config.nativeToolchain={...t.save(),command:['arbitrary']};f.save();assert.throws(()=>readIntegrationConfiguration(f.path,'test'),{code:'INVALID_FIELDS'});
+  }finally{f.cleanup();}
+});
+test('native manifest changes bind execution authority even when project YAML is unchanged',()=>{
+  const f=bindingFixture(),t=nativeManifest(f);try{
+    const policy=registeredAuthorityPolicy(f.path,'test'),original=policy(f.definition(),actor);
+    f.configuration.nativeToolchain=t.save();f.save();const pinned=policy(f.definition(),actor);
+    assert.equal(original.digest,pinned.digest);assert.notEqual(original.bindingContextDigest,pinned.bindingContextDigest);
+    f.configuration.nativeToolchain.digest=valueDigest('replacement-manifest');f.save();assert.notEqual(policy(f.definition(),actor).bindingContextDigest,pinned.bindingContextDigest);
+    f.configuration.nativeToolchain=t.save();f.configuration.credentials[0].revision++;f.save();assert.equal(policy(f.definition(),actor).bindingContextDigest,pinned.bindingContextDigest);
+  }finally{f.cleanup();}
+});
+test('registered executor is lazy, shares the service store, refuses wrong scope and cannot reopen after close',async()=>{
+  const f=fixture(),composition=await openRegisteredBindings(join(f.dir,'absent.json'),'test'),store=new RuntimeStore(join(f.dir,'state'),'test'),other=new RuntimeStore(join(f.dir,'other'),'other');
+  try{
+    assert.throws(()=>composition.executor(other),{code:'INTEGRATION_SCOPE'});const adapter=composition.executor(store);
+    await assert.rejects(()=>adapter.prepare({},'candidate',actor,AbortSignal.timeout(1000)),{code:'UNSAFE_INTEGRATION_CONFIG'});
+    composition.close();await assert.rejects(()=>adapter.prepare({},'candidate',actor,AbortSignal.timeout(1000)),{code:'CLOSED'});
+    assert.equal(store.revision('alpha'),0);assert.equal(existsSync(join(f.dir,'absent.json')),false);
+  }finally{composition.close();store.close();other.close();f.cleanup();}
+});
+test('ordinary service cannot activate a lifecycle or request a native stage with an omitted validator manifest',async()=>{
+  const f=bindingFixture(),composition=await openRegisteredBindings(f.path,'test'),store=new RuntimeStore(join(f.dir,'stage-state'),'test');
+  try{
+    const validation=await validateBindings(f.definition(),actor,composition.provider);assert.equal(validation.ready,false);
+    await assert.rejects(()=>composition.executor(store).prepare({},'candidate',actor,AbortSignal.timeout(1000)),{code:'TOOLCHAIN_NOT_REGISTERED'});
+    assert.equal(store.revision('alpha'),0);
+  }finally{composition.close();store.close();f.cleanup();}
 });
 test('GitHub runner binding rejects a wrong workflow label and mismatched completed job runner',()=>withNetwork('github',async f=>{
   const bytes=Buffer.from(content.toString().replace('ubuntu-latest','windows-latest')),file=f.routes.get(f.base+'/contents/'+f.p.workflowPath+'?ref='+commit);
