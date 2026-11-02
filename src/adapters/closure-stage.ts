@@ -1,11 +1,12 @@
 import {randomUUID} from 'node:crypto';
 import {constants,closeSync,existsSync,fsyncSync,lstatSync,mkdirSync,openSync,readFileSync,realpathSync,renameSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {canonical,record,reject,ServiceError,string} from '../server/errors.js';
 import {authorize,privateFile,type Principal} from '../server/security.js';
 import {RuntimeStore} from '../server/store.js';
 import {byteDigest,valueDigest} from '../lifecycle/base.js';
-import {atPath} from '../lifecycle/compiler.js';
+import {atPath,containsInlineSecret} from '../lifecycle/compiler.js';
 import type {LifecycleInstance} from '../lifecycle/instance.js';
 import type {StageAdapter,StageObservation,StagePlan,StageRequest} from '../lifecycle/execution.js';
 import {configuredPlatform,readIntegrationConfiguration,type PlatformRegistration} from './config.js';
@@ -110,30 +111,43 @@ export function createClosureStageAdapter(store:RuntimeStore,configPath:string,c
     add('definition',i.pins.definitionRevisionId,{pins:i.pins,pinsDigest:i.pinsDigest,definition:i.definition,candidate:i.candidate,candidateDigest:i.candidateDigest});
     addStored('definition-revision',i.pins.definitionRevisionId,true);add('closure-request',r.id,r);add('delivery',r.id,delivery);
     for(const kind of ['closure-harness-input','closure-harness-action','closure-harness-receipt','closure-ci-action','closure-ci-source'])addStored(kind,r.id,true);
-    const packet=readPreparationPacket(store,r.projectId,i.pins.targetRef);add('preparation',i.pins.targetRef,packet);
-    for(const[role,pin]of Object.entries(packet.input.documents)){
-      if(!pin)continue;const id=valueDigest(pin);let doc=store.object(r.projectId,'closure-preparation-document',id);
-      if(!doc){verifyResourceFile(pin);const raw=readFileSync(pin.path);if(raw.length>8388608||byteDigest(raw)!==pin.digest)reject('CLOSURE_ARCHIVE_INPUT','Exact original preparation document is unavailable',409);let text:string;try{text=new TextDecoder('utf-8',{fatal:true}).decode(raw);}catch{return reject('CLOSURE_ARCHIVE_INPUT','Preparation document must retain valid UTF-8 bytes',409);}verifyResourceFile(pin);doc={...pin,bytes:raw.length,text};retain(actor,r,'closure-preparation-document',id,doc);}
-      const d=record(doc);if(d.path!==pin.path||d.digest!==pin.digest||Buffer.byteLength(string(d.text,8388608))!==d.bytes||byteDigest(string(d.text,8388608))!==pin.digest)reject('CLOSURE_ARCHIVE_INPUT','Retained preparation bytes changed',409);add('preparation-document',role,doc);
+    function captureDocument(kind:string,documentId:string,pin:{path:string;digest:string}):Buffer{
+      const id=valueDigest(pin);let doc=store.object(r.projectId,'closure-archive-document',id);
+      if(!doc){
+        verifyResourceFile(pin);const raw=readFileSync(pin.path);if(raw.length>1048576||byteDigest(raw)!==pin.digest||containsInlineSecret(raw.toString('utf8')))reject('CLOSURE_ARCHIVE_INPUT','Exact original document is unavailable or contains credentials',409);verifyResourceFile(pin);
+        const parts=[];for(let offset=0;offset<raw.length;offset+=49152){const bytes=raw.subarray(offset,offset+49152),digest=byteDigest(bytes),part={digest,bytes:bytes.length,base64:bytes.toString('base64')};retain(actor,r,'closure-archive-document-part',digest,part);parts.push({digest,bytes:bytes.length});}
+        doc={...pin,bytes:raw.length,parts};retain(actor,r,'closure-archive-document',id,doc);
+      }
+      const d=record(doc);if(d.path!==pin.path||d.digest!==pin.digest||!Number.isSafeInteger(d.bytes)||Number(d.bytes)<1||Number(d.bytes)>1048576||!Array.isArray(d.parts)||!d.parts.length||d.parts.length>22)reject('CLOSURE_ARCHIVE_INPUT','Retained document inventory changed',409);
+      const chunks:Buffer[]=[];let total=0;for(const rawPart of d.parts){const part=record(rawPart),saved=required(store,r.projectId,'closure-archive-document-part',string(part.digest,71)),encoded=string(saved.base64,65536),bytes=Buffer.from(encoded,'base64');if(encoded!==bytes.toString('base64')||!bytes.length||bytes.length>49152||saved.digest!==part.digest||saved.bytes!==part.bytes||bytes.length!==part.bytes||byteDigest(bytes)!==part.digest||(total+=bytes.length)>1048576)reject('CLOSURE_ARCHIVE_INPUT','Original document chunk changed',409);chunks.push(bytes);add('original-document-part',string(part.digest,71),saved);}
+      const bytes=Buffer.concat(chunks);if(total!==d.bytes||byteDigest(bytes)!==pin.digest)reject('CLOSURE_ARCHIVE_INPUT','Original document bytes changed',409);add(kind,documentId,doc);return bytes;
     }
-    for(const owner of ['ontology','harness']){const id=p.feedbackEventId+':'+owner;addStored('owner-feedback-inbox',id,true);for(const kind of ['owner-feedback-delivery','owner-feedback-permit'])addStored(kind,id);}
+    function decisionDocument(kind:string,id:string,reference:unknown){
+      const pinned=(ref:unknown)=>{let url:URL;try{url=new URL(string(ref,8192));}catch{return reject('CLOSURE_ARCHIVE_INPUT','Original decision evidence requires its pinned local URL',409);}if(url.protocol!=='file:'||url.host||url.search||!/^#sha256=[a-f0-9]{64}$/.test(url.hash))reject('CLOSURE_ARCHIVE_INPUT','Decision source must remain a pinned local file',409);const digest='sha256:'+url.hash.slice(8);url.hash='';return{path:fileURLToPath(url),digest};};
+      const bytes=captureDocument(kind+'-attestation',id,pinned(reference));let attestation:Record<string,unknown>;try{attestation=record(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)));}catch{return reject('CLOSURE_ARCHIVE_INPUT','Original decision attestation must retain valid JSON',409);}if(attestation.schema!=='evopilot-decision-evidence/v1')reject('CLOSURE_ARCHIVE_INPUT','Original decision attestation schema differs',409);captureDocument(kind+'-source',id,pinned(record(attestation.source).reference));
+    }
+    const packet=readPreparationPacket(store,r.projectId,i.pins.targetRef);add('preparation',i.pins.targetRef,packet);
+    for(const[role,pin]of Object.entries(packet.input.documents))if(pin)captureDocument('preparation-document',role,pin);
+    for(const owner of ['ontology','harness']){const id=p.feedbackEventId+':'+owner,inbox=record(addStored('owner-feedback-inbox',id,true));decisionDocument('owner-decision',id,record(inbox.disposition).humanEvidenceRef);for(const kind of ['owner-feedback-delivery','owner-feedback-permit'])addStored(kind,id);}
     const evidenceKinds=['plan-stage-evidence','implementation-stage-evidence','ci-stage-evidence','publication-evidence'];
     for(const[stageId,stage]of Object.entries(i.stages)){
       if(stageId==='closure')continue;
       if(stage.status!=='PASSED'||!stage.requestId)reject('CLOSURE_ARCHIVE_INPUT','Every required stage must retain its completed original request',409);
       const sr=request(store,i,stageId),id=sr.id,progress=required(store,r.projectId,'stage-progress',id);
       add('stage-request',id,sr);add('stage-progress',id,progress);
-      if(typeof progress.observationRef==='string')addStored('stage-observation',progress.observationRef);
+      const observation=required(store,r.projectId,'stage-observation',string(progress.observationRef,71));if(valueDigest(observation)!==progress.observationRef||observation.requestId!==id||!same(observation.observation,progress.observation))reject('CLOSURE_ARCHIVE_INPUT','Original core observation is missing or changed',409);add('stage-observation',string(progress.observationRef,71),observation);
+      const mandatory:Record<string,string[]>={scope:['scope-stage-evidence'],plan:['plan-stage-input'],implementation:['implementation-ci-derivation'],candidate:['stage-candidate-source','ci-stage-artifact'],verification:['stage-evaluation-run','ci-stage-artifact'],'release-decision':['release-stage-material'],publication:['publication-harness-input','publication-harness-action','publication-harness-receipt','publication-ci-artifact']};for(const kind of mandatory[stageId]??[])addStored(kind,id,true);
+      if(['plan','candidate','verification'].includes(stageId))for(const owner of ['ontology','harness'])for(const suffix of ['action','receipt'])addStored((stageId==='plan'?'plan-stage-native-':'stage-native-')+suffix,id+':'+owner,true);
       for(const kind of ['scope-stage-evidence','plan-stage-input','implementation-ci-derivation','stage-evaluation-run','release-stage-material','publication-harness-input','publication-harness-action','publication-harness-receipt','stage-candidate-source','ci-stage-artifact','publication-ci-artifact'])addStored(kind,id);
       for(const kind of ['stage-native-action','stage-native-receipt','plan-stage-native-action','plan-stage-native-receipt'])for(const owner of ['ontology','harness'])addStored(kind,id+':'+owner);
-      for(const check of record(record(progress.observation).outcome).checks as Record<string,unknown>[])for(const kind of evidenceKinds)addStored(kind,string(check.evidenceRef));
+      for(const check of record(record(progress.observation).outcome).checks as Record<string,unknown>[]){const expected=({plan:'plan-stage-evidence',implementation:'implementation-stage-evidence',candidate:'ci-stage-evidence',verification:'ci-stage-evidence',publication:'publication-evidence'} as Record<string,string>)[stageId];if(expected){const evidence=required(store,r.projectId,expected,string(check.evidenceRef,71));if(valueDigest(evidence)!==check.evidenceRef)reject('CLOSURE_ARCHIVE_INPUT','Original stage evidence digest changed',409);add(expected,string(check.evidenceRef,71),evidence);}else for(const kind of evidenceKinds)addStored(kind,string(check.evidenceRef));}
       const artifact=store.object(r.projectId,'ci-stage-artifact',id);if(artifact)addZip(artifact);
-      for(const ref of [sr.authorityRef,sr.releaseAuthorityRef])if(ref?.startsWith('authority:'))addStored('authority-decision',ref,true);
+      for(const ref of [sr.authorityRef,sr.releaseAuthorityRef])if(ref?.startsWith('authority:')){const decision=record(addStored('authority-decision',ref,true));if(decision.evidenceRef!==undefined)decisionDocument('runtime-decision',ref,decision.evidenceRef);}
       if(stageId==='implementation'){
         add('agent-handoff',id,readAgentHandoff(store,r.projectId,id).handoff);add('agent-claim',id,readAgentClaim(store,r.projectId,id));
         let report=readAgentReport(store,r.projectId,id),count=0;while(report){if(++count>64)reject('CLOSURE_ARCHIVE_INPUT','Agent report chain exceeds the bounded archive',409);add('agent-report',report.digest,report);if(!report.previousReportDigest)break;const previous=required(store,r.projectId,'agent-report',report.previousReportDigest),{digest,...body}=previous;if(digest!==report.previousReportDigest||valueDigest(body)!==digest||previous.stageRequestId!==id)reject('CLOSURE_ARCHIVE_INPUT','Original Agent report chain changed',409);report=previous as unknown as typeof report;}
-        const review=required(store,r.projectId,'implementation-review-pointer',id);addStored('implementation-review',string(review.ref),true);
-        const evidence=readImplementationEvidence(store,sr);add('implementation-evidence',id,evidence);if(!evidence.derivation||!evidence.ci?.artifact)reject('CLOSURE_ARCHIVE_INPUT','Original implementation CI is missing',409);addZip(evidence.ci.artifact);
+        const review=required(store,r.projectId,'implementation-review-pointer',id),decision=record(addStored('implementation-review',string(review.ref),true));if(decision.evidenceRef!==undefined)decisionDocument('source-decision',string(review.ref),decision.evidenceRef);
+        const evidence=readImplementationEvidence(store,sr);if(!evidence.derivation||!evidence.ci?.artifact)reject('CLOSURE_ARCHIVE_INPUT','Original implementation CI is missing',409);addZip(evidence.ci.artifact);add('implementation-evidence',id,{derivationDigest:evidence.derivation.digest,childRequestId:evidence.derivation.request.id});const child=evidence.derivation.request.id;for(const kind of ['ci-stage-run','ci-stage-observation','ci-stage-artifact'])addStored(kind,child,true);for(const owner of ['ontology','harness'])for(const kind of ['stage-native-action','stage-native-receipt'])addStored(kind,child+':'+owner,true);
       }
     }
     add('release-material',p.publicationRequestId,readReleaseMaterial(store,i,false));addStored('publication-evidence',p.publicationEvidenceDigest,true);addZip(p.candidateInput.archive);addZip(required(store,r.projectId,'publication-ci-artifact',p.publicationRequestId));addZip(f.smoke!.ci);add('feedback-event',p.feedbackEventId,readVerificationFeedback(store,actor,r.projectId,p.feedbackEventId));
@@ -168,10 +182,10 @@ export function createClosureStageAdapter(store:RuntimeStore,configPath:string,c
     if(facts.feedback&&Object.values(facts.feedback).some(x=>x.status==='UNKNOWN'))facts.reasons.push('FEEDBACK_ACTION_OUTCOME_UNKNOWN');
     if(facts.distribution&&facts.distribution.status!=='PASSED')facts.reasons.push('DISTRIBUTION_'+facts.distribution.status);
     const body={schema:'runtime-closure-evidence/v1',requestDigest:r.digest,planDigest:r.planDigest,candidateDigest:i.candidateDigest,...facts},ref=valueDigest(body);retain(actor,r,'closure-evidence',ref,body);retain(actor,r,'closure-evidence-pointer',r.id,{ref},true);
-    const failed=facts.smoke?.status==='FAILED'||facts.harness?.status==='FAIL'||facts.feedback&&Object.values(facts.feedback).some(f=>['REJECTED','REBIND_REQUIRED'].includes(f.status))||facts.archive?.status==='MISMATCH'||facts.reasons.includes('SMOKE_CI_FAILED');
+    const failed=facts.smoke?.status==='FAILED'||facts.harness?.status==='FAIL'||facts.feedback&&Object.values(facts.feedback).some(f=>['REJECTED','REBIND_REQUIRED'].includes(f.status))||facts.archive?.status==='MISMATCH'||facts.distribution?.status==='MISMATCH'||facts.reasons.includes('SMOKE_CI_FAILED');
     const phase:StageObservation['phase']=failed?'FAILED':facts.reasons.length?'UNKNOWN':delivery&&owners&&facts.archive?.status==='COMPLETE'?'COMPLETE':facts.archive?.status==='PARTIAL'?'UNKNOWN':facts.ciPhase??'RUNNING';
     if(failed||facts.archive?.status==='PARTIAL')retain(actor,r,'closure-followup',r.id,{schema:'runtime-followup-target-candidate/v1',causeId:r.id,evidenceRef:ref,priorTargetRef:i.pins.targetRef,candidateDigest:i.candidateDigest,reasonCodes:facts.reasons,ownerStates:facts.feedback,archiveStatus:facts.archive?.status??null,requiresReview:true,executionAuthorized:false},true);
-    return observed(r,p,phase,ref,!!delivery,!!owners);
+    return observed(r,p,phase,ref,!!delivery&&facts.archive?.status==='COMPLETE',!!owners);
   }
   async function dispatch(r:StageRequest,i:LifecycleInstance,permit:()=>Promise<Principal>,signal:AbortSignal):Promise<StageObservation>{
     const actor=await permit(),{p,ci}=original(r,i,actor);signal.throwIfAborted();await feedback.retain(actor,r.projectId,p.feedbackEventId,signal);

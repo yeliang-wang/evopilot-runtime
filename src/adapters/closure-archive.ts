@@ -21,7 +21,7 @@ function safeDirectory(path:string,privateMode=false):void{
 function prepared(root:string,input:ClosureArchiveInput){
   string(root,4096);safeDirectory(root);for(const k of ['workspaceId','projectId','instanceId'] as const)string(input[k],256);hash(input.requestDigest);
   const content=Buffer.from(canonical(input.content)+'\n');if(content.length>16777216||containsInlineSecret(content.toString('utf8'))||!Array.isArray(input.artifacts)||input.artifacts.length>32)reject('CLOSURE_ARCHIVE_INPUT','Closure evidence exceeds its bounded private archive profile',409);
-  if(input.documents!==undefined&&(!Array.isArray(input.documents)||input.documents.length>128))reject('CLOSURE_ARCHIVE_INPUT','Archive document inventory exceeds its bound',409);
+  if(input.documents!==undefined&&(!Array.isArray(input.documents)||input.documents.length>512))reject('CLOSURE_ARCHIVE_INPUT','Archive document inventory exceeds its bound',409);
   const names=new Set<string>(['manifest.json','evidence.json','seal.json']);let total=content.length;
   const documents=(input.documents??[]).map(d=>{
     if(!/^[a-z0-9][a-z0-9._-]{0,100}\.json$/.test(d.name)||names.has(d.name))reject('CLOSURE_ARCHIVE_INPUT','Use unique exact archive document names',409);names.add(d.name);

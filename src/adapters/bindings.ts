@@ -24,6 +24,7 @@ import { createReleaseStageAdapter } from './release-stages.js';
 import { publicationTarget } from './distribution.js';
 import { createPublicationStageAdapter } from './publication-stage.js';
 import {readVerificationFeedback} from './stage-feedback.js';
+import {createClosureStageAdapter} from './closure-stage.js';
 import type { PreparationValidator } from '../lifecycle/preparation.js';
 import { createPlanStageAdapter, createScopeStageAdapter, registeredPreparation } from './preparation-stages.js';
 import { registeredImplementationReview, type ImplementationReviewBindings } from '../lifecycle/implementation-review.js';
@@ -299,7 +300,7 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
   return{provider,preparation:registeredPreparation(configPath,workspaceId),implementationReview:registeredImplementationReview(configPath,workspaceId,connections),executor(store,services){
     if(store.workspaceId!==workspaceId)reject('INTEGRATION_SCOPE','Stage executor must share the service workspace',403);
     if(serviceStore&&serviceStore!==store)reject('INTEGRATION_SCOPE','Owner feedback cannot switch to another service store',403);serviceStore=store;
-    let stages:ReturnType<typeof createImplementationStageAdapters>|undefined,scope:StageAdapter|undefined,plan:StageAdapter|undefined,release:StageAdapter|undefined,publication:StageAdapter|undefined;
+    let stages:ReturnType<typeof createImplementationStageAdapters>|undefined,scope:StageAdapter|undefined,plan:StageAdapter|undefined,release:StageAdapter|undefined,publication:StageAdapter|undefined,closure:StageAdapter|undefined;
     async function current(signal:AbortSignal,stageId:string):Promise<StageAdapter>{
       const config=await ensure(signal),toolchain=readRegisteredNativeToolchain(config);
       if(stageId==='scope'){scope??=createScopeStageAdapter(store,configPath,connections);return scope;}
@@ -310,6 +311,7 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
         release??=createReleaseStageAdapter(store,configPath,{platform:connections.platform,verification:stages.ci},services.releaseAuthority,services.authorityPolicy);return release;
       }
       if(stageId==='publication'){publication??=createPublicationStageAdapter(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest},services.releaseAuthority);return publication;}
+      if(stageId==='closure'){closure??=createClosureStageAdapter(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest});return closure;}
       return stageId==='implementation'?stages.implementation:stages.ci;
     }
     return{

@@ -747,8 +747,9 @@ and Generic Package readback. These are explicit synthetic test artifacts, not a
 product Release. An isolated real Harness 0.8.3 integration evaluated that channel
 readback using explicit synthetic rules: all 12 native criteria passed, and
 restart/continuation preserved its receipt without another owner mutation.
-Closure evidence, terminal owner-feedback integration and the complete registered
-journey remain required before final acceptance.
+The registered closure implementation below consumes terminal owner feedback.
+Actual complete CI/released-owner closure journeys remain required before final
+acceptance.
 
 ## Development installation readback
 
@@ -767,7 +768,8 @@ declared tree; dangling, cyclic and escaping links fail. Inventory, byte and tim
 bounds apply. The result distinguishes absent, partial, mismatching and matching
 installations. It neither extracts packages nor executes software, and a matching
 inventory alone cannot establish startup, deployment or lifecycle completion.
-The manifest verifier is not yet connected to the registered closure adapter.
+The manifest verifier is now connected to the registered closure adapter; actual
+selected-target delivery journeys remain required.
 
 Development validation includes exact-layout and fault tests plus independent
 readback of fresh copies of the published Ontology/Harness 0.8.3 package payloads.
@@ -857,8 +859,9 @@ own service store. It does not turn an arbitrary CI report or client-provided
 PASS into a registered Run. This internal component has no direct HTTP/YAML
 capture entry point. Published owner adapters now have a scoped callback to the
 registered verification event reader. The read endpoint does not deliver an
-event or approve an owner disposition; closure-stage delivery and final closure
-composition remain unfinished.
+event or approve an owner disposition. The registered closure stage now delivers
+that original event under its current execution permit and waits for both exact
+owner dispositions; final real-environment qualification remains unfinished.
 
 For each owner, Runtime first inspects the authoritative inbox. If delivery is
 needed, it records the exact owner connection digest, request ID, event digest,
@@ -892,11 +895,13 @@ do not satisfy the frozen final-candidate E2E instances.
 
 ## Development delivery smoke and closure evidence
 
-The delivery building blocks are implemented in development. A draft closure
-adapter composes them, but is not yet selected by `openRegisteredBindings` and
-has not passed a complete registered closure journey. The three selected delivery
-modes and both owner dispositions remain required; the regression results below
-are not final acceptance or a Runtime release claim.
+The registered closure adapter now composes delivery evidence, native Harness
+validation, both owner feedback dispositions and immutable archival. Isolated
+full-stage regression chains pass for distribution, local installation and
+approved deployment, including restart readback. Their external CI, native owner
+responses and decision attestations are explicitly synthetic. Actual registered
+CI/released-owner journeys and the final acceptance catalog remain required;
+these regressions are not final acceptance or a Runtime release claim.
 
 A closure CI request adds `runtime_delivery_input`, containing the fixed
 `runtime-delivery-input/v1` target and optional original candidate installation
@@ -929,7 +934,12 @@ bytes with a manifest and completion seal. It verifies ownership, file type,
 permissions, byte lengths and digests. Passive reads never create files. A partial,
 foreign or changed archive is retained and cannot be silently repaired by another
 write. Individual records are indexed separately rather than flattening a whole
-lifecycle into one unbounded JSON value. The delivery-ready archive precedes the
+lifecycle into one unbounded JSON value. Up to 512 original records and 32 ZIPs
+remain bounded by 1 GiB and a 30-second operation limit. Each original preparation
+or decision-source file retains the existing 1 MiB bound and is stored in exact
+48 KiB byte chunks, so multiline and full-size documents do not violate the
+service JSON envelope limit. The archive includes decision attestations and their
+pinned source bytes, not only references to mutable locations. The delivery-ready archive precedes the
 execution core's terminal commit; the marker
 `DELIVERY_VERIFIED_CORE_COMMIT_PENDING` explicitly describes that ordering. A
 sealed archive alone is not a completed lifecycle.
@@ -938,6 +948,17 @@ Development regressions cover all three smoke modes, target/candidate mismatch,
 missing evidence, fixed CI input, native success/failure and response loss,
 original receipt recovery, changed authority, archive readback, missing seal,
 changed bytes, links, unsafe permissions and immutable document inventory.
-Complete service wiring, the positive full-stage archival graph, actual CI smoke,
-released-owner feedback dispositions and the selected installation/deployment
-journeys remain to be exercised before these contracts can satisfy final checks.
+The full-stage graph checks now require original core observations, scope/plan
+records, Agent handoff and reports, source review, derived implementation CI,
+candidate and verification archives, publication quality, release material and
+both exact owner dispositions. Missing required records block archival. A failed
+archive cannot report all closure duties as PASS. Rejected owner decisions and
+required asset rebinding produce a reviewable followup with no execution grant.
+
+`lifecycle.closure.evidence.read` is a scoped historical read through HTTP,
+Streamable HTTP MCP and the common CLI request adapter. It exposes original CI,
+Harness, feedback, archive and followup evidence without dispatching work. Local
+HTTP/MCP regressions cover same-project access, cross-project denial and no new
+external effects. Actual CI smoke, released-owner feedback dispositions, current
+Host and selected installation/deployment journeys remain to be exercised before
+these contracts can satisfy final checks.
