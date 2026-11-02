@@ -750,6 +750,31 @@ restart/continuation preserved its receipt without another owner mutation.
 Closure evidence, terminal owner-feedback integration and the complete registered
 journey remain required before final acceptance.
 
+## Development installation readback
+
+Protected `local-install` and `approved-deployment` delivery resources require an
+existing canonical directory and a `manifestArtifact` name. Distribution resources
+continue to identify their publication platform. The selected manifest must be an
+exact artifact of the same candidate, use `runtime-installation-manifest/v1`, and
+bind that candidate's version and original package digests. Its inventory contains
+regular files (digest, size and executable flag) and exact relative symbolic links.
+This format does not grant installer or deployment execution authority.
+
+The read-only verifier inventories the actual directory before and after reading,
+checks ownership, permissions, file identity and contents, and rejects missing,
+extra, hard-linked, substituted or changed files. Links must resolve within the
+declared tree; dangling, cyclic and escaping links fail. Inventory, byte and time
+bounds apply. The result distinguishes absent, partial, mismatching and matching
+installations. It neither extracts packages nor executes software, and a matching
+inventory alone cannot establish startup, deployment or lifecycle completion.
+The manifest verifier is not yet connected to the registered closure adapter.
+
+Development validation includes exact-layout and fault tests plus independent
+readback of fresh copies of the published Ontology/Harness 0.8.3 package payloads.
+Those copies contain 312 and 260 regular payload files; deliberate same-length
+corruption fails, and restoring the original bytes passes. Dependencies, startup,
+the daily installation and the final delivery acceptance are outside that probe.
+
 ## Development plan execution
 
 The registered `base.plan` adapter requires the original completed scope
