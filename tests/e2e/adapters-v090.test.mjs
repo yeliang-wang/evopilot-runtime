@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { validatePlatformRegistration, readIntegrationConfiguration, configuredPlatform, readPlatformToken } from '../../dist/adapters/config.js';
 import { githubClient } from '../../dist/adapters/github.js';
 import { gitlabClient } from '../../dist/adapters/gitlab.js';
-import { fileBytes, platformReader } from '../../dist/adapters/platforms.js';
+import { ciInputs, ciRunTitle, ciSourceRef, fileBytes, platformReader } from '../../dist/adapters/platforms.js';
 import { syntheticReadinessMaterial, lifecycleBindingExample } from '../fixtures/adapters-v090.mjs';
 import { nativeSha256 } from '../../vendor/compatibility/v1/native.mjs';
 import { READINESS_STANDARD_DIGEST, noReconstruction } from '../../vendor/compatibility/usability/v2/contract.mjs';
@@ -182,6 +182,121 @@ test('platform transport bounds responses, denies arbitrary routes, and never ec
     let called=false;globalThis.fetch=async()=>{called=true;return json({});};const abort=new AbortController();abort.abort();
     await assert.rejects(()=>reader.get(actor,'',abort.signal),{code:'PLATFORM_UNAVAILABLE'});assert.equal(called,false);
   }finally{globalThis.fetch=old;}
+});
+
+// Stateful provider double: records each side effect independently from its
+// response, so timeout/recovery tests cannot pass by silently redispatching.
+const ciActor={...actor,permissions:['read','execution.request']};
+const ghContract='name: Synthetic\nrun-name: "evopilot:${{ inputs.runtime_request_id }}:${{ inputs.runtime_input_digest }}"\non:\n  workflow_dispatch:\n    inputs:\n'+['runtime_request_id','runtime_input_digest','runtime_source_commit','runtime_stage','runtime_candidate_digest'].map(k=>'      '+k+':\n        type: string\n        required: true\n').join('')+'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo synthetic\n';
+const glContract='workflow:\n  rules:\n    - if: \'$CI_COMMIT_TAG =~ /^evopilot-runtime\\// && $CI_PIPELINE_SOURCE != "api"\'\n      when: never\n    - if: \'$CI_PIPELINE_SOURCE == "api"\'\n      when: always\nfixture:\n  script: echo synthetic\n';
+async function withDispatch(provider,run){
+  const old=globalThis.fetch,f=responses(provider),calls=[],writes=[];
+  const bytes=Buffer.from(provider==='github'?ghContract:glContract),workflowDigest='sha256:'+createHash('sha256').update(bytes).digest('hex');
+  const request={schema:'runtime-ci-request/v1',requestId:'fixture-original-01',projectId:'alpha',bindingDigest:valueDigest(f.p),commit,workflowDigest,inputDigest:'sha256:'+'d'.repeat(64),stageId:'candidate',candidateDigest:null,requestedAt:new Date().toISOString(),deadlineAt:new Date(Date.now()+60000).toISOString()};
+  const sourceRef=ciSourceRef(request),state={ref:false,run:false,timeout:false,dispatch204:false};
+  const refPath=provider==='github'?'/git/ref/tags/'+sourceRef:'/repository/tags/'+encodeURIComponent(sourceRef);
+  const createPath=provider==='github'?'/git/refs':'/repository/tags',dispatchPath=provider==='github'?'/actions/workflows/test.yml/dispatches':'/pipeline';
+  const filePath=provider==='github'?'/contents/'+f.p.workflowPath+'?ref='+commit:'/repository/files/.gitlab-ci.yml?ref='+commit;
+  const file=f.routes.get(f.base+filePath);Object.assign(file,{content:bytes.toString('base64'),size:bytes.length,...(provider==='github'?{sha:createHash('sha1').update(Buffer.from('blob '+bytes.length+'\0')).update(bytes).digest('hex')}:{content_sha256:workflowDigest.slice(7)})});
+  const runPath=provider==='github'?'/actions/runs/23':'/pipelines/23',jobPath=provider==='github'?'/actions/jobs/24':'/jobs/24';
+  const providerRun=f.routes.get(f.base+runPath),providerJob=f.routes.get(f.base+jobPath);
+  const listPath=provider==='github'?'/actions/workflows/test.yml/runs?event=workflow_dispatch&head_sha='+commit+'&per_page=100&page=1':'/pipelines?ref='+encodeURIComponent(sourceRef)+'&sha='+commit+'&source=api&per_page=100&page=1';
+  const jobsPath=provider==='github'?'/actions/runs/23/jobs?filter=all&per_page=100&page=1':'/pipelines/23/jobs?include_retried=true&per_page=100&page=1';
+  if(provider==='github'){
+    Object.assign(providerRun,{head_branch:sourceRef,event:'workflow_dispatch',display_title:ciRunTitle(request),run_attempt:1,status:'completed',conclusion:'success'});providerJob.run_attempt=1;
+    f.routes.set(f.base+'/contents/.github/workflows?ref='+commit,[{type:'file',path:f.p.workflowPath}]);
+    f.routes.set(f.base+jobsPath,{jobs:[providerJob]});
+  }else{
+    Object.assign(providerRun,{ref:sourceRef,source:'api',status:'success'});Object.assign(providerJob,{name:'fixture',stage:'test'});
+    f.routes.set(f.base+'/pipelines/23/variables',Object.entries(ciInputs(request)).map(([key,value])=>({key,value,variable_type:'env_var'})));
+    f.routes.set(f.base+jobsPath,[providerJob]);f.routes.set(f.base+'/pipelines/23/bridges?per_page=100',[]);
+  }
+  globalThis.fetch=async(url,options)=>{
+    calls.push({url,options});assert.equal(options.redirect,'error');
+    if(options.method==='POST'){
+      const body=JSON.parse(options.body);writes.push({url,body});
+      if(url===f.base+createPath){assert.equal(state.ref,false);state.ref=true;assert.deepEqual(body,provider==='github'?{ref:'refs/tags/'+sourceRef,sha:commit}:{tag_name:sourceRef,ref:commit});return json({});}
+      assert.equal(url,f.base+dispatchPath);assert.equal(state.ref,true);assert.equal(state.run,false);state.run=true;
+      assert.deepEqual(body,provider==='github'?{ref:sourceRef,inputs:ciInputs(request),return_run_details:true}:{ref:sourceRef,variables:Object.entries(ciInputs(request)).map(([key,value])=>({key,value,variable_type:'env_var'}))});
+      if(state.timeout)throw Error('provider accepted then disconnected: sensitive');
+      return state.dispatch204?new Response(null,{status:204}):json(provider==='github'?{workflow_run_id:23}:{id:23});
+    }
+    assert.equal(options.method,undefined);
+    if(url===f.base+refPath)return state.ref?json(provider==='github'?{ref:'refs/tags/'+sourceRef,object:{type:'commit',sha:state.wrongRef?wrongCommit:commit}}:{name:sourceRef,target:state.wrongRef?wrongCommit:commit,commit:{id:commit}}):new Response('{}',{status:404});
+    if(url===f.base+listPath){const runs=state.run?[providerRun]:[];if(state.duplicate)runs.push({...providerRun});return json(provider==='github'?{workflow_runs:runs}:runs);}
+    const value=f.routes.get(url);assert.notEqual(value,undefined,'Unexpected CI URL '+url);return json(value);
+  };
+  const client=(provider==='github'?githubClient:gitlabClient)(f.p,async()=> 'synthetic-token-0123456789');
+  const permit=async r=>{assert.deepEqual(r,request);return ciActor;};
+  try{await run({...f,client,request,permit,state,writes,calls,providerRun,providerJob,file,jobsPath,sourceRef});}finally{globalThis.fetch=old;}
+}
+for(const provider of ['github','gitlab']){
+  test(provider+' dispatch pins source, checks current permits and recovers original run without repeating writes',()=>withDispatch(provider,async f=>{
+    let permits=0;const result=await f.client.dispatch(f.request,async r=>{permits++;return f.permit(r);},AbortSignal.timeout(5000));
+    assert.equal(result.runId,'23');assert.equal(result.status,'PASSED');assert.equal(result.ref,f.sourceRef);assert.equal(result.artifactsVerified,false);assert.equal(result.lifecycleAcceptance,false);assert.equal(f.writes.length,2);assert.equal(permits,3);
+    assert.equal(JSON.stringify(result).includes('synthetic-token'),false);
+    assert.equal((await f.client.run(actor,f.request,null,AbortSignal.timeout(5000))).runId,'23');
+    assert.equal((await f.client.dispatch(f.request,f.permit,AbortSignal.timeout(5000))).runId,'23');assert.equal(f.writes.length,2);
+  }));
+  test(provider+' rejects missing execution/release authority and mismatched requests before network',()=>withDispatch(provider,async f=>{
+    await assert.rejects(()=>f.client.dispatch(f.request,async()=>actor,AbortSignal.timeout(5000)),{code:'FORBIDDEN'});
+    await assert.rejects(()=>f.client.dispatch({...f.request,stageId:'publication'},async()=>ciActor,AbortSignal.timeout(5000)),{code:'FORBIDDEN'});
+    for(const changes of [{projectId:'beta'},{bindingDigest:'sha256:'+'e'.repeat(64)},{stageId:'arbitrary-code'},{requestId:'../escape'},{extra:'input'}])await assert.rejects(()=>f.client.dispatch({...f.request,...changes},f.permit,AbortSignal.timeout(5000)));
+    await assert.rejects(()=>f.client.dispatch({...f.request,requestedAt:'2020-01-01',deadlineAt:'2020-01-02'},f.permit,AbortSignal.timeout(5000)),{code:'CI_DISPATCH_EXPIRED'});assert.equal(f.calls.length,0);
+  }));
+  test(provider+' current source drift and tag-trigger unsafe contracts cannot start CI',()=>withDispatch(provider,async f=>{
+    await assert.rejects(()=>f.client.dispatch({...f.request,commit:wrongCommit},async()=>ciActor,AbortSignal.timeout(5000)),{code:'CI_SOURCE_CHANGED'});assert.equal(f.writes.length,0);
+    const bytes=Buffer.from(provider==='github'?ghContract.replace('  workflow_dispatch:','  push:\n  workflow_dispatch:'):glContract.replace('when: never','when: always'));
+    const digest=createHash('sha256').update(bytes).digest('hex');Object.assign(f.file,{content:bytes.toString('base64'),size:bytes.length,...(provider==='github'?{sha:createHash('sha1').update(Buffer.from('blob '+bytes.length+'\0')).update(bytes).digest('hex')}:{content_sha256:digest})});
+    await assert.rejects(()=>f.client.dispatch({...f.request,workflowDigest:'sha256:'+digest},async()=>ciActor,AbortSignal.timeout(5000)),{code:'CI_REF_AUTOTRIGGER'});assert.equal(f.writes.length,0);
+  }));
+  test(provider+' authority revoked after source pinning prevents dispatch and never blindly retries',()=>withDispatch(provider,async f=>{
+    let permits=0;await assert.rejects(()=>f.client.dispatch(f.request,async()=>++permits===3?actor:ciActor,AbortSignal.timeout(5000)),{code:'FORBIDDEN'});assert.equal(f.writes.length,1);assert.equal(f.state.run,false);
+    const result=await f.client.dispatch(f.request,f.permit,AbortSignal.timeout(5000));assert.equal(result.status,'UNKNOWN');assert.equal(result.runId,null);assert.equal(f.writes.length,1);
+  }));
+  test(provider+' ambiguous dispatch response is inspected using the original correlation without another POST',()=>withDispatch(provider,async f=>{
+    f.state.timeout=true;await assert.rejects(()=>f.client.dispatch(f.request,f.permit,AbortSignal.timeout(5000)),{code:'CI_DISPATCH_OUTCOME_UNKNOWN'});
+    const result=await f.client.run(actor,f.request,null,AbortSignal.timeout(5000));assert.equal(result.status,'PASSED');assert.equal(result.runId,'23');assert.equal(f.writes.length,2);
+  }));
+  test(provider+' rejects retargeted source, duplicate runs, wrong correlation and nonpassing jobs',()=>withDispatch(provider,async f=>{
+    f.state.ref=true;f.state.run=true;f.state.wrongRef=true;await assert.rejects(()=>f.client.run(actor,f.request,null,AbortSignal.timeout(5000)),{code:'CI_REF_CHANGED'});f.state.wrongRef=false;
+    f.state.duplicate=true;await assert.rejects(()=>f.client.run(actor,f.request,null,AbortSignal.timeout(5000)),{code:'CI_DUPLICATE_RUNS'});f.state.duplicate=false;
+    if(provider==='github')f.providerRun.display_title='wrong';else f.routes.get(f.base+'/pipelines/23/variables')[0].value='wrong';
+    await assert.rejects(()=>f.client.run(actor,f.request,'23',AbortSignal.timeout(5000)),{code:'CI_RUN_MISMATCH'});
+    if(provider==='github'){f.providerRun.display_title=ciRunTitle(f.request);f.providerJob.conclusion='skipped';}else{f.routes.get(f.base+'/pipelines/23/variables')[0].value=f.request.requestId;f.providerJob.status='skipped';}
+    assert.equal((await f.client.run(actor,f.request,'23',AbortSignal.timeout(5000))).status,'FAILED');assert.equal(f.writes.length,0);
+  }));
+  test(provider+' retries cannot overwrite original attempt evidence',()=>withDispatch(provider,async f=>{
+    f.state.ref=true;f.state.run=true;if(provider==='github')f.providerRun.run_attempt=2;else f.routes.get(f.base+f.jobsPath).push({...f.providerJob,id:25});
+    await assert.rejects(()=>f.client.run(actor,f.request,'23',AbortSignal.timeout(5000)),{code:'CI_RUN_MISMATCH'});assert.equal(f.writes.length,0);
+  }));
+  test(provider+' cancellation bounds a stalled execution permit without provider side effects',()=>withDispatch(provider,async f=>{
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10);
+    try{await assert.rejects(()=>f.client.dispatch(f.request,()=>new Promise(()=>{}),controller.signal),{code:'PLATFORM_UNAVAILABLE'});assert.equal(f.calls.length,0);}finally{clearTimeout(timer);}
+  }));
+}
+test('GitHub dispatch 204 is reconciled using exact run title rather than latest run',()=>withDispatch('github',async f=>{
+  f.state.dispatch204=true;assert.equal((await f.client.dispatch(f.request,f.permit,AbortSignal.timeout(5000))).runId,'23');assert.equal(f.writes.length,2);
+}));
+test('GitLab downstream pipelines cannot be treated as verified local jobs',()=>withDispatch('gitlab',async f=>{
+  f.state.ref=true;f.state.run=true;f.routes.set(f.base+'/pipelines/23/bridges?per_page=100',[{id:999}]);
+  await assert.rejects(()=>f.client.run(actor,f.request,'23',AbortSignal.timeout(5000)),{code:'CI_DOWNSTREAM_UNVERIFIED'});
+}));
+for(const provider of ['github','gitlab'])test(provider+' success with no executed runner or no job evidence remains unknown',()=>withDispatch(provider,async f=>{
+  f.state.ref=true;f.state.run=true;if(provider==='github')f.providerJob.runner_id=0;else f.providerJob.runner=null;
+  assert.equal((await f.client.run(actor,f.request,'23',AbortSignal.timeout(5000))).status,'UNKNOWN');
+  f.routes.set(f.base+f.jobsPath,provider==='github'?{jobs:[]}:[]);
+  assert.equal((await f.client.run(actor,f.request,'23',AbortSignal.timeout(5000))).status,'UNKNOWN');assert.equal(f.writes.length,0);
+}));
+test('GitHub rejects an additional automatic create workflow before source-ref creation',()=>withDispatch('github',async f=>{
+  const path='.github/workflows/other.yml',bytes=Buffer.from('on: create\njobs: {}\n');
+  f.routes.get(f.base+'/contents/.github/workflows?ref='+commit).push({type:'file',path});
+  f.routes.set(f.base+'/contents/'+path+'?ref='+commit,{type:'file',path,encoding:'base64',content:bytes.toString('base64'),size:bytes.length,sha:createHash('sha1').update(Buffer.from('blob '+bytes.length+'\0')).update(bytes).digest('hex')});
+  await assert.rejects(()=>f.client.dispatch(f.request,f.permit,AbortSignal.timeout(5000)),{code:'CI_REF_AUTOTRIGGER'});assert.equal(f.writes.length,0);
+}));
+test('CI write transport cannot be used for an arbitrary provider mutation',async()=>{
+  const old=globalThis.fetch;let called=false;globalThis.fetch=async()=>{called=true;return json({});};
+  try{await assert.rejects(()=>platformReader(platform(),async()=> 'synthetic-token-0123456789').post(ciActor,'/releases',{tag_name:'v9.0.0'},async()=>ciActor,AbortSignal.timeout(5000)),{code:'INVALID_PLATFORM_ROUTE'});assert.equal(called,false);}finally{globalThis.fetch=old;}
 });
 
 function readinessFixture(){

@@ -348,6 +348,17 @@ test('shutdown aborts observation waiting, preserves unknown request and exclude
   }finally{await f.server.close();f.cleanup();}
 });
 
+test('a multi-call dispatch may exceed ten seconds without renewing its original stage deadline or attempt',async()=>{
+  const {f,state,observe}=await executingFixture();try{
+    state.dispatch=async(r,i,signal)=>{await new Promise(resolve=>setTimeout(resolve,10500));signal.throwIfAborted();return observe(r,i,'complete');};
+    const sent=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=sent.result.result.stageRequestId;
+    const before=(await stageState(f,id)).result.request;
+    const finished=await until(()=>stageState(f,id),r=>r.result.progress.terminal,15000);
+    assert.equal(finished.result.progress.phase,'COMPLETE');assert.deepEqual(finished.result.request,before);assert.equal(state.dispatches,1);assert.equal(state.inspections,0);
+    const instance=(await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance;assert.equal(instance.stages.scope.attempts,1);
+  }finally{await f.server.close();f.cleanup();}
+});
+
 test('real process death before/after a synthetic provider side effect preserves original identity and never redispatches',async()=>{
   for(const mode of ['execution-crash-before-dispatch','execution-crash-after-dispatch']){
     const {f,state,observe}=await executingFixture();await f.server.close();let worker;

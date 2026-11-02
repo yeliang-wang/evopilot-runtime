@@ -129,7 +129,10 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
         const observed=await bounded(async signal=>{
           if(mode==='dispatch'){await permit(r);return deps.adapter!.dispatch(r,saved,()=>permit(r),signal);}
           return deps.adapter!.inspect(r,saved,progress(r),system(r.projectId),signal);
-        },controller.signal,mode==='dispatch'?Math.max(1,Math.min(10000,Date.parse(r.deadlineAt)-Date.now())):10000);
+        // Multi-request provider protocols include current permit checks and
+        // immutable ref creation. Keep their transport window bounded without
+        // replacing or extending the already approved original stage deadline.
+        },controller.signal,mode==='dispatch'?Math.max(1,Math.min(60000,Date.parse(r.deadlineAt)-Date.now())):30000);
         recordObservation(r,observed);
       }catch(e){unknown(r,e instanceof ServiceError?e.code:'ADAPTER_OUTCOME_UNKNOWN');}
     }).catch(e=>{

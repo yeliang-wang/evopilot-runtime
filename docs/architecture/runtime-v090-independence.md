@@ -104,8 +104,9 @@ checks all predecessors, candidate identities, bounded attempts and unknown
 outcome reconciliation. It cannot manufacture owner evidence or release authority.
 
 The protected owner/platform binding composition, retained exact authority and
-durable stage execution core are implemented in development. Fixed real CI/Agent
-dispatch adapters and their default CLI composition remain M3 work.
+durable stage execution core and fixed CI dispatch clients are implemented in
+development. Native stage composition, Agent dispatch and their default CLI
+wiring remain M3 work.
 Unconfigured adapters fail closed; synthetic regression adapters are test
 fixtures only and cannot certify real asset usability or final E2E. The two
 Dashboard pages, independent installed Expert/plugin, migration and complete
@@ -136,7 +137,46 @@ label; the adapter checks that label in the workflow and observed job. GitLab
 registrations include the pipeline path and a numeric project runner ID, checked
 for current availability. Both adapters pin repository identity, default branch,
 source commit and workflow bytes. Unknown, skipped and neutral job results cannot
-be treated as passing verification. These observations do not trigger CI.
+be treated as passing verification. Readiness and observation calls do not trigger CI.
+
+The separate fixed CI `dispatch` operation requires a retained request containing
+the exact platform registration, commit, workflow digest, stage input digest and
+original deadline, plus a fresh execution permit before each write. It creates a
+request-owned lightweight tag (`evopilot-runtime/<requestId>`) and dispatches only
+the registered workflow against that commit. These tags are CI source pins, not
+product releases; the client never force-updates or deletes them. GitHub workflows
+must expose the required string inputs `runtime_request_id`,
+`runtime_input_digest`, `runtime_source_commit`, `runtime_stage` and
+`runtime_candidate_digest`, and use the run title
+`evopilot:${{ inputs.runtime_request_id }}:${{ inputs.runtime_input_digest }}`;
+GitLab pipelines receive the same correlation through pipeline variables, using
+the v4 API compatible with the selected 15.0 test environment. Workflow trigger
+guards must prevent tag creation from starting an additional automatic pipeline.
+All GitHub workflows at the pinned commit are checked for `create` and tag-push
+triggers. A push workflow must select branches only or exclude
+`evopilot-runtime/**` through `tags-ignore`. GitLab's first two local workflow
+rules are fixed to suppress non-API request-tag events and then allow API runs:
+
+```yaml
+workflow:
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^evopilot-runtime\// && $CI_PIPELINE_SOURCE != "api"'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "api"'
+      when: always
+    # Existing project rules may follow these two guards.
+```
+
+An existing request tag causes inspection only, even when no matching run is
+found. An ambiguous response, duplicate matching runs, changed source tag,
+provider retry, incomplete bounded lookup or unverified downstream pipeline
+cannot authorize redispatch or establish a passing lifecycle stage. Original-run
+inspection uses the exact repository, workflow/ref, commit and correlation;
+known handles are checked again. A provider job's success remains
+`artifactsVerified: false` and `lifecycleAcceptance: false` until the separate
+candidate/owner acceptance collector verifies the required evidence. Dedicated
+test-project probes exercise actual GitHub and GitLab dispatch/recovery; they do
+not stand in for the frozen v0.9 final acceptance catalog.
 
 The Codex binding pins the selected local executable bytes, version, host
 identity and workspace. Admission issues only a fixed `--version` query. It does
@@ -205,6 +245,10 @@ reference. Later reconciliation does not erase an earlier receipt.
 
 The service worker only inspects already retained requests. It has at most four
 concurrent observation/dispatch calls, bounded provider calls and paged traversal.
+A dispatch protocol has at most 60 seconds and never exceeds its already pinned
+stage deadline; each read-only reconciliation has at most 30 seconds. Individual
+CI HTTP calls remain capped at 10 seconds. These transport limits do not renew
+stage attempts, execution authority or the instance's original budget.
 The instance budget additionally bounds new actions. Client disconnection does
 not cancel an already authorized external job. An explicit
 `lifecycle.stage.reconcile` requests read-only inspection of the original request;

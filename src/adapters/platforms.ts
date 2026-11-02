@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
-import { record, reject, ServiceError, string } from '../server/errors.js';
+import { canonical, exact, record, reject, ServiceError, string } from '../server/errors.js';
 import { authorize, type Principal } from '../server/security.js';
 import { valueDigest } from '../lifecycle/base.js';
 import { validatePlatformRegistration, type PlatformRegistration } from './config.js';
+import { containsInlineSecret } from '../lifecycle/compiler.js';
 
 /** Trusted process credential resolution; never provided by a lifecycle/API. */
 export type PlatformCredentialReader=(binding:PlatformRegistration,actor:Principal,signal:AbortSignal)=>Promise<string>;
@@ -23,7 +24,55 @@ export interface PlatformJobObservation {
 }
 export interface PlatformClient {
   readiness(actor:Principal,signal:AbortSignal):Promise<PlatformReadiness>;
-  job(actor:Principal,runId:string,jobId:string,commit:string,signal:AbortSignal):Promise<PlatformJobObservation>;
+  job(actor:Principal,runId:string,jobId:string,commit:string,signal:AbortSignal,sourceRef?:string):Promise<PlatformJobObservation>;
+  dispatch(request:PlatformRunRequest,permit:PlatformExecutionPermit,signal:AbortSignal):Promise<PlatformRunObservation>;
+  run(actor:Principal,request:PlatformRunRequest,runId:string|null,signal:AbortSignal):Promise<PlatformRunObservation>;
+}
+export interface PlatformRunRequest {
+  schema:'runtime-ci-request/v1'; requestId:string; projectId:string; bindingDigest:string;
+  commit:string; workflowDigest:string; inputDigest:string; stageId:string;
+  candidateDigest:string|null; requestedAt:string; deadlineAt:string;
+}
+export type PlatformExecutionPermit=(request:PlatformRunRequest)=>Promise<Principal>;
+export interface PlatformRunObservation {
+  schema:'runtime-ci-observation/v1'; requestId:string; inputDigest:string; provider:'github'|'gitlab';
+  repositoryId:string; ref:string; commit:string; runId:string|null;
+  status:PlatformJobObservation['status']; jobs:PlatformJobObservation[]; evidenceRef:string;
+  observedAt:string; factsDigest:string; artifactsVerified:false; lifecycleAcceptance:false;
+}
+export function validateRunRequest(value:PlatformRunRequest,binding:PlatformRegistration):PlatformRunRequest{
+  const r=record(value);exact(r,['schema','requestId','projectId','bindingDigest','commit','workflowDigest','inputDigest','stageId','candidateDigest','requestedAt','deadlineAt']);
+  if(r.schema!=='runtime-ci-request/v1'||r.projectId!==binding.projectId||r.bindingDigest!==valueDigest(binding)||!/^[-a-z0-9]{1,64}$/.test(string(r.requestId,64)))reject('CI_REQUEST_MISMATCH','CI request does not match this exact registered scope');
+  commitId(r.commit);for(const k of ['workflowDigest','inputDigest'])if(!/^sha256:[a-f0-9]{64}$/.test(string(r[k],71)))reject('CI_REQUEST_MISMATCH','CI request must pin exact workflow and stage input');
+  if(r.candidateDigest!==null&&!/^sha256:[a-f0-9]{64}$/.test(string(r.candidateDigest,71)))reject('CI_REQUEST_MISMATCH','CI candidate must be exact');
+  if(!/^(?:scope|plan|implementation|candidate|verification|release-decision|publication|closure|project\.[a-z][a-z0-9-]{0,62})$/.test(string(r.stageId,80))||!Number.isFinite(Date.parse(string(r.requestedAt,64)))||!Number.isFinite(Date.parse(string(r.deadlineAt,64)))||Date.parse(String(r.deadlineAt))<=Date.parse(String(r.requestedAt))||containsInlineSecret(canonical(r)))reject('CI_REQUEST_MISMATCH','Invalid exact CI stage/time metadata');
+  return Object.freeze({...value});
+}
+/** Request-owned tag: never a product version, force update, moving branch or
+ * release. Creation and dispatch are both covered by the retained action plan. */
+export const ciSourceRef=(r:PlatformRunRequest):string=>'evopilot-runtime/'+r.requestId;
+export const ciRunTitle=(r:PlatformRunRequest):string=>'evopilot:'+r.requestId+':'+r.inputDigest;
+export const ciInputs=(r:PlatformRunRequest):Record<string,string>=>({runtime_request_id:r.requestId,runtime_input_digest:r.inputDigest,runtime_source_commit:r.commit,runtime_stage:r.stageId,runtime_candidate_digest:r.candidateDigest??'none'});
+export function validateSourceRef(ref:string,binding:PlatformRegistration):void{if(ref!==binding.defaultBranch&&!/^evopilot-runtime\/[-a-z0-9]{1,64}$/.test(ref))reject('CI_REF_SCOPE','Only the registered branch or a request-owned source ref is supported');}
+export function aggregateJobs(jobs:PlatformJobObservation[],providerStatus:string):PlatformJobObservation['status']{
+  if(jobs.some(j=>j.status==='FAILED')||['failure','failed','cancelled','canceled','timed_out','skipped','neutral'].includes(providerStatus))return'FAILED';
+  if(providerStatus==='success')return jobs.length&&jobs.every(j=>j.status==='PASSED')?'PASSED':'UNKNOWN';
+  if(['in_progress','running'].includes(providerStatus)||jobs.some(j=>j.status==='RUNNING'))return'RUNNING';
+  return['queued','pending','created','waiting','waiting_for_resource','preparing','scheduled','manual','requested'].includes(providerStatus)?'PENDING':'UNKNOWN';
+}
+async function bounded<T>(work:()=>Promise<T>,signal:AbortSignal):Promise<T>{
+  signal.throwIfAborted();let onAbort:()=>void=()=>{};
+  try{return await Promise.race([work(),new Promise<never>((_resolve,reject)=>{onAbort=()=>reject(new Error('Platform operation expired'));signal.addEventListener('abort',onAbort,{once:true});if(signal.aborted)onAbort();})]);}finally{signal.removeEventListener('abort',onAbort);}
+}
+export async function executionPrincipal(r:PlatformRunRequest,binding:PlatformRegistration,permit:PlatformExecutionPermit,signal:AbortSignal):Promise<Principal>{
+  if(Date.parse(r.deadlineAt)<=Date.now())reject('CI_DISPATCH_EXPIRED','The original CI dispatch deadline expired',409);
+  let actor:Principal;try{actor=await bounded(()=>permit(r),AbortSignal.any([signal,AbortSignal.timeout(10000)]));}catch(error){return safePlatformError(error);}
+  authorize(actor,binding.projectId,'execution.request');if(r.stageId==='publication')authorize(actor,binding.projectId,'release.request');
+  if(Date.parse(r.deadlineAt)<=Date.now())reject('CI_DISPATCH_EXPIRED','The original CI dispatch deadline expired',409);return actor;
+}
+export function runResult(binding:PlatformRegistration,r:PlatformRunRequest,runId:string|null,status:PlatformRunObservation['status'],jobs:PlatformJobObservation[]=[]):PlatformRunObservation{
+  const facts={requestId:r.requestId,inputDigest:r.inputDigest,provider:binding.provider,repositoryId:binding.repositoryId,ref:ciSourceRef(r),commit:r.commit,runId,status,jobs};
+  return{schema:'runtime-ci-observation/v1',...facts,evidenceRef:binding.host+'/'+binding.repository+(runId?(binding.provider==='github'?'/actions/runs/':'/-/pipelines/')+runId:''),observedAt:new Date().toISOString(),factsDigest:valueDigest(facts),artifactsVerified:false,lifecycleAcceptance:false};
 }
 export function positiveId(value:unknown):string{
   const id=typeof value==='number'&&Number.isSafeInteger(value)?String(value):string(value,20);
@@ -43,26 +92,32 @@ export function safePlatformError(error:unknown):never{
   if(error instanceof ServiceError)throw error;
   return reject('PLATFORM_UNAVAILABLE','Platform observation did not complete; no execution or release authority is inferred',503);
 }
-/** Only fixed provider route builders call this reader. No redirects, remote
- * URL input, retries, writes, response-body error echo or credential logging. */
+/** Only fixed provider route builders call this transport. No redirects, remote
+ * URL input, automatic retries, error-body echo or credential logging. */
 export function platformReader(registration:PlatformRegistration,credentials:PlatformCredentialReader){
   const binding=validatePlatformRegistration(registration);
   const origin=binding.provider==='github'?'https://api.github.com':binding.host;
   const prefix=binding.provider==='github'?'/repos/'+binding.repository:'/api/v4/projects/'+binding.repositoryId;
-  async function get(actor:Principal,suffix:string,signal:AbortSignal):Promise<unknown>{
+  async function request(actor:Principal,suffix:string,signal:AbortSignal,payload?:Record<string,unknown>,permit?:()=>Promise<Principal>):Promise<unknown>{
     authorize(actor,binding.projectId,'read');if(Date.parse(binding.expiresAt)<=Date.now())reject('PLATFORM_NOT_REGISTERED','Platform registration has expired',409);
     if(suffix!==''&&!suffix.startsWith('/')||suffix.includes('..')||suffix.includes('#')||/[\u0000-\u0020\\]/.test(suffix))reject('INVALID_PLATFORM_ROUTE','Invalid fixed platform route');
     const controller=AbortSignal.any([signal,AbortSignal.timeout(10000)]);
     try{
       controller.throwIfAborted();
-      let onAbort:()=>void=()=>{};let token:string;
-      try{token=await Promise.race([credentials(binding,actor,controller),new Promise<never>((_resolve,reject)=>{onAbort=()=>reject(new Error('Credential lookup expired'));controller.addEventListener('abort',onAbort,{once:true});if(controller.aborted)onAbort();})]);}
-      finally{controller.removeEventListener('abort',onAbort);}
+      const token=await bounded(()=>credentials(binding,actor,controller),controller);
       controller.throwIfAborted();
       if(!/^[A-Za-z0-9_.-]{16,4096}$/.test(token))reject('UNSAFE_PLATFORM_CREDENTIAL','Invalid scoped credential',503);
       const headers:Record<string,string>=binding.provider==='github'?{authorization:'Bearer '+token,accept:'application/vnd.github+json','x-github-api-version':'2022-11-28'}:{'private-token':token,accept:'application/json'};
-      const response=await fetch(origin+prefix+suffix,{headers,redirect:'error',signal:controller});
+      if(payload!==undefined){
+        if(!permit)reject('CI_AUTHORITY_REQUIRED','Writes require an exact current execution permit',403);
+        const allowed=binding.provider==='github'?['/git/refs','/actions/workflows/'+encodeURIComponent(binding.workflowPath!.split('/').at(-1)!)+'/dispatches']:['/repository/tags','/pipeline'];
+        if(!allowed.includes(suffix)||containsInlineSecret(canonical(payload)))reject('INVALID_PLATFORM_ROUTE','Only fixed CI source-ref/dispatch writes are supported');
+        const fresh=await bounded(permit,controller);authorize(fresh,binding.projectId,'execution.request');if(fresh.id!==actor.id||fresh.revision!==actor.revision)reject('AUTHORITY_CHANGED','CI execution principal changed before dispatch',409);
+        headers['content-type']='application/json';controller.throwIfAborted();
+      }
+      const response=await fetch(origin+prefix+suffix,{headers,redirect:'error',signal:controller,...(payload===undefined?{}:{method:'POST',body:canonical(payload)})});
       if(!response.ok){await response.body?.cancel();reject(response.status===401||response.status===403?'PLATFORM_PERMISSION_DENIED':response.status===404?'PLATFORM_RESOURCE_MISSING':'PLATFORM_HTTP_FAILURE','Platform rejected the scoped observation',response.status===401||response.status===403?403:502);}
+      if(response.status===204&&payload!==undefined){await response.body?.cancel();return null;}
       if(!/^application\/json(?:;|$)/i.test(response.headers.get('content-type')??'')){await response.body?.cancel();reject('PLATFORM_RESPONSE_INVALID','Expected provider JSON',502);}
       const reader=response.body?.getReader();if(!reader)reject('PLATFORM_RESPONSE_INVALID','Missing platform response body',502);
       let length=0;const chunks:Buffer[]=[];
@@ -70,9 +125,9 @@ export function platformReader(registration:PlatformRegistration,credentials:Pla
       const value=JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
       // Return only to the fixed adapter. Public results are an explicit projection.
       authorize(actor,binding.projectId,'read');controller.throwIfAborted();return value;
-    }catch(error){return safePlatformError(error);}
+    }catch(error){if(payload!==undefined&&!(error instanceof ServiceError))reject('CI_DISPATCH_OUTCOME_UNKNOWN','Inspect the original CI request; do not dispatch it again',409);return safePlatformError(error);}
   }
-  return{binding,get};
+  return{binding,get:(actor:Principal,suffix:string,signal:AbortSignal)=>request(actor,suffix,signal),post:(actor:Principal,suffix:string,payload:Record<string,unknown>,permit:()=>Promise<Principal>,signal:AbortSignal)=>request(actor,suffix,signal,payload,permit)};
 }
 export function readinessResult(binding:PlatformRegistration,commit:string,path:string,workflowDigest:string,runner:PlatformReadiness['runner']):PlatformReadiness{
   const facts={provider:binding.provider,projectId:binding.projectId,bindingRef:binding.ref,bindingDigest:valueDigest(binding),repositoryId:binding.repositoryId,repository:binding.repository,branch:binding.defaultBranch,commit,workflowPath:path,workflowDigest,runner};
