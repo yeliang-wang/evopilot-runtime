@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { crc32, deflateRawSync } from 'node:zlib';
-import { readArtifactArchive, verifyCiArtifact, ciSourceDigest, ciBuildDigest } from '../../dist/adapters/artifacts.js';
+import { readArtifactArchive, verifyCiArtifact, validateCandidateInput, ciSourceDigest, ciBuildDigest } from '../../dist/adapters/artifacts.js';
 import { byteDigest, valueDigest } from '../../dist/lifecycle/base.js';
-import { platformReader } from '../../dist/adapters/platforms.js';
+import { platformReader, ciInputs, validateRunRequest } from '../../dist/adapters/platforms.js';
 
 // Small independent ZIP fixture writer; product parsing uses pinned yauzl.
 function zip(entries){
@@ -20,7 +20,13 @@ function fixture(stageId='candidate'){
   const h=byteDigest('fixed'),request={schema:'runtime-ci-request/v1',requestId:'fixture',projectId:'alpha',bindingDigest:h,commit:'a'.repeat(40),workflowDigest:h,inputDigest:h,stageId,candidateDigest:stageId==='candidate'?null:h,requestedAt:new Date().toISOString(),deadlineAt:new Date(Date.now()+60000).toISOString()};
   const content=Buffer.from('synthetic package bytes'),evidence=Buffer.from('synthetic check evidence'),result={schema:'runtime-ci/v1',requestId:request.requestId,inputDigest:h,provider:'github',repositoryId:'42',runId:'23',sourceCommit:request.commit,workflowDigest:h,stageId,candidateDigest:request.candidateDigest,checks:[{id:'required.check',status:'PASS',evidence:[{path:'evidence/check.txt',digest:byteDigest(evidence),bytes:evidence.length}]}]};
   if(stageId==='candidate')result.candidate={schema:'runtime-candidate/v1',version:'1.0.0-rc.1',profile:'candidate-verification',sourceDigest:ciSourceDigest(request,'github','42'),buildDigest:ciBuildDigest(request,'23'),artifacts:[{name:'package.tgz',digest:byteDigest(content),bytes:content.length}]};
-  const archive=(mutate=()=>{},extra=[])=>{const copy=structuredClone(result);mutate(copy);const bytes=zip([{name:'runtime-result.json',bytes:JSON.stringify(copy),deflate:true},{name:'evidence/check.txt',bytes:evidence},...(stageId==='candidate'?[{name:'artifacts/package.tgz',bytes:content}]:[]),...extra]);return{provider:'github',repositoryId:'42',requestId:request.requestId,inputDigest:h,bindingDigest:h,commit:request.commit,runId:'23',runStatus:'PASSED',artifactId:'99',jobId:null,name:'runtime-ci',archiveDigest:byteDigest(bytes),archiveBytes:bytes.length,bytes,evidenceRef:'https://github.com/synthetic/project/actions/runs/23/artifacts/99'};};
+  if(stageId==='verification'){
+    const manifest={schema:'runtime-candidate/v1',version:'1.0.0-rc.1',profile:'candidate-verification',sourceDigest:ciSourceDigest(request,'github','42'),buildDigest:ciBuildDigest(request,'22'),artifacts:[{name:'package.tgz',digest:byteDigest(content),bytes:content.length}]};
+    request.candidateDigest=valueDigest(manifest);result.candidateDigest=request.candidateDigest;
+    request.candidateInput={schema:'runtime-ci-candidate-input/v1',manifest,archive:{provider:'github',repositoryId:'42',runId:'22',artifactId:'98',jobId:null,archiveDigest:byteDigest('original archive'),archiveBytes:1000}};
+    result.candidateConsumption={inputDigest:valueDigest(request.candidateInput),artifacts:manifest.artifacts};
+  }
+  const archive=(mutate=()=>{},extra=[])=>{const copy=structuredClone(result);mutate(copy);const bytes=zip([{name:'runtime-result.json',bytes:JSON.stringify(copy),deflate:true},{name:'evidence/check.txt',bytes:evidence},...(stageId==='candidate'?[{name:'artifacts/package.tgz',bytes:content}]:[{name:'candidate/package.tgz',bytes:content}]),...extra]);return{provider:'github',repositoryId:'42',requestId:request.requestId,inputDigest:h,bindingDigest:h,commit:request.commit,runId:'23',runStatus:'PASSED',artifactId:'99',jobId:null,name:'runtime-ci',archiveDigest:byteDigest(bytes),archiveBytes:bytes.length,bytes,evidenceRef:'https://github.com/synthetic/project/actions/runs/23/artifacts/99'};};
   return{request,result,archive};
 }
 test('ZIP collector verifies stored/deflated regular files without extracting or executing paths',async()=>{
@@ -56,6 +62,31 @@ test('failed/unknown CI evidence remains nonpassing and verification cannot repl
   assert.equal((await verifyCiArtifact({...f.archive(),runStatus:'FAILED'},f.request,['required.check'],signal())).status,'FAILED');
   const verify=fixture('verification');assert.equal((await verifyCiArtifact(verify.archive(),verify.request,['required.check'],signal())).candidateDigest,verify.request.candidateDigest);
   await assert.rejects(()=>verifyCiArtifact(verify.archive(r=>r.candidate=f.result.candidate),verify.request,['required.check'],signal()),{code:'CI_CANDIDATE_MUTATION'});
+});
+test('verification requires original candidate input and exact consumed-artifact inventory',async()=>{
+  const f=fixture('verification'),missing={...f.request};delete missing.candidateInput;
+  await assert.rejects(()=>verifyCiArtifact(f.archive(),missing,['required.check'],signal()),{code:'CI_CANDIDATE_INPUT_REQUIRED'});
+  for(const change of [r=>delete r.candidateConsumption,r=>r.candidateConsumption.inputDigest=byteDigest('another archive'),r=>r.candidateConsumption.artifacts=[],r=>r.candidateConsumption.artifacts[0].digest=byteDigest('rebuilt')])await assert.rejects(()=>verifyCiArtifact(f.archive(change),f.request,['required.check'],signal()));
+  const files=await readArtifactArchive(f.archive().bytes,signal());
+  for(const altered of [null,Buffer.from('rebuilt bytes')]){
+    const entries=[...files].filter(([name])=>name!=='candidate/package.tgz').map(([name,bytes])=>({name,bytes}));if(altered)entries.push({name:'candidate/package.tgz',bytes:altered});
+    const bytes=zip(entries),archive={...f.archive(),bytes,archiveBytes:bytes.length,archiveDigest:byteDigest(bytes)};
+    await assert.rejects(()=>verifyCiArtifact(archive,f.request,['required.check'],signal()),{code:'CI_ARTIFACT_INTEGRITY'});
+  }
+});
+test('candidate delivery rejects different provider/repository/source, ambiguous IDs and arbitrary URLs',()=>{
+  const f=fixture('verification');
+  for(const change of [v=>v.archive.repositoryId='43',v=>v.archive.provider='gitlab',v=>v.archive.jobId='99',v=>v.archive.artifactId='../latest',v=>v.archive.archiveBytes=129*1024*1024,v=>v.archive.url='https://elsewhere.invalid/archive',v=>v.manifest.sourceDigest=byteDigest('another source')]){
+    const value=structuredClone(f.request.candidateInput);change(value);assert.throws(()=>validateCandidateInput(value,f.request,'github','42'));
+  }
+  const gl=structuredClone(f.request.candidateInput);Object.assign(gl.archive,{provider:'gitlab',artifactId:'98',jobId:'98'});gl.manifest.sourceDigest=ciSourceDigest(f.request,'gitlab','42');const request={...f.request,candidateDigest:valueDigest(gl.manifest)};assert.equal(validateCandidateInput(gl,request,'gitlab','42'),gl);
+  gl.archive.jobId='97';assert.throws(()=>validateCandidateInput(gl,request,'gitlab','42'),{code:'CI_CANDIDATE_INPUT_INVALID'});
+});
+test('CI dispatch correlates the bounded candidate input and rejects digest-only verification',()=>{
+  const f=fixture('verification'),p={ref:'binding:alpha/github',workspaceId:'test',projectId:'alpha',provider:'github',host:'https://github.com',repository:'synthetic/project',repositoryId:'42',defaultBranch:'main',credentialRef:'credential:alpha/github',workflowPath:'.github/workflows/test.yml',runner:'ubuntu-latest',revision:1,expiresAt:'2030-01-01T00:00:00Z'};
+  f.request.bindingDigest=valueDigest(p);assert.equal(validateRunRequest(f.request,p).candidateInput.archive.artifactId,'98');assert.deepEqual(JSON.parse(ciInputs(f.request).runtime_candidate_input),f.request.candidateInput);
+  const missing={...f.request};delete missing.candidateInput;assert.throws(()=>validateRunRequest(missing,p),{code:'CI_CANDIDATE_INPUT_REQUIRED'});
+  const candidate=fixture();assert.equal(ciInputs(candidate.request).runtime_candidate_input,'none');
 });
 
 const actor={id:'reader',projects:['alpha'],permissions:['read'],revision:1,expiresAt:'2030-01-01T00:00:00Z'};

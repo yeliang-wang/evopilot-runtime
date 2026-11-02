@@ -42,11 +42,23 @@ export async function readArtifactArchive(bytes:Buffer,signal:AbortSignal):Promi
   }catch(e){if(e instanceof ServiceError)throw e;return reject('CI_ARCHIVE_INVALID','Artifact archive could not be safely verified',409);}finally{zip?.close();}
 }
 export interface CiEvidenceFile { path:string; digest:string; bytes:number; }
+export interface CandidateArchiveIdentity {
+  provider:'github'|'gitlab';repositoryId:string;runId:string;artifactId:string;jobId:string|null;
+  archiveDigest:string;archiveBytes:number;
+}
+export interface CandidateInput {schema:'runtime-ci-candidate-input/v1';manifest:CandidateManifest;archive:CandidateArchiveIdentity;}
+/** An immutable provider identity, never an arbitrary download URL or token. */
+export function validateCandidateInput(value:CandidateInput,request:Pick<PlatformRunRequest,'candidateDigest'|'commit'>,provider:string,repositoryId:string):CandidateInput{
+  const v=record(value);exact(v,['schema','manifest','archive']);const a=record(v.archive);exact(a,['provider','repositoryId','runId','artifactId','jobId','archiveDigest','archiveBytes']);
+  if(v.schema!=='runtime-ci-candidate-input/v1'||candidateDigest(v.manifest as CandidateManifest)!==request.candidateDigest||record(v.manifest).sourceDigest!==ciSourceDigest(request as PlatformRunRequest,provider,repositoryId)||a.provider!==provider||a.repositoryId!==repositoryId||!['runId','artifactId','repositoryId'].every(k=>/^[1-9][0-9]{0,19}$/.test(string(a[k],20)))||provider==='github'&&a.jobId!==null||provider==='gitlab'&&(a.jobId!==a.artifactId)||!Number.isSafeInteger(a.archiveBytes)||Number(a.archiveBytes)<22||Number(a.archiveBytes)>MAX_ARCHIVE_BYTES||Buffer.byteLength(canonical(v))>49152)reject('CI_CANDIDATE_INPUT_INVALID','Candidate input must pin the original bounded archive and manifest',409);
+  hash(a.archiveDigest);return value;
+}
 export interface CiArtifactCheck { id:string; status:'PASS'|'FAIL'|'UNKNOWN'; evidence:CiEvidenceFile[]; }
 export interface CiArtifactResult {
   schema:'runtime-ci/v1'; requestId:string; inputDigest:string; provider:'github'|'gitlab';
   repositoryId:string; runId:string; sourceCommit:string; workflowDigest:string;
   stageId:string; candidateDigest:string|null; checks:CiArtifactCheck[]; candidate?:CandidateManifest;
+  candidateConsumption?:{inputDigest:string;artifacts:CandidateManifest['artifacts']};
 }
 export interface VerifiedCiArtifact {
   schema:'runtime-ci-verified-artifact/v1'; requestId:string; inputDigest:string;
@@ -54,6 +66,7 @@ export interface VerifiedCiArtifact {
   status:'PASSED'|'FAILED'|'UNKNOWN'; checks:CiArtifactCheck[]; candidate:CandidateManifest|null;
   candidateDigest:string|null; files:CiEvidenceFile[]; artifactsVerified:true;
   ownerEvaluationsVerified:false; lifecycleAcceptance:false;
+  sourceArchive:CandidateArchiveIdentity;
 }
 export const ciSourceDigest=(request:PlatformRunRequest,provider:string,repositoryId:string):string=>valueDigest({provider,repositoryId,commit:request.commit});
 export const ciBuildDigest=(request:PlatformRunRequest,runId:string):string=>valueDigest({requestId:request.requestId,inputDigest:request.inputDigest,bindingDigest:request.bindingDigest,workflowDigest:request.workflowDigest,runId});
@@ -65,7 +78,7 @@ export async function verifyCiArtifact(archive:PlatformArtifactArchive,request:P
   const files=await readArtifactArchive(archive.bytes,signal),resultBytes=files.get('runtime-result.json');
   if(!resultBytes||resultBytes.length>2097152)reject('CI_RESULT_MISSING','Bounded runtime-result.json is required at archive root',409);
   let result:Record<string,unknown>;try{result=record(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(resultBytes)));}catch{return reject('CI_RESULT_INVALID','CI result must be valid UTF-8 JSON',409);}
-  exact(result,['schema','requestId','inputDigest','provider','repositoryId','runId','sourceCommit','workflowDigest','stageId','candidateDigest','checks'],['candidate']);
+  exact(result,['schema','requestId','inputDigest','provider','repositoryId','runId','sourceCommit','workflowDigest','stageId','candidateDigest','checks'],['candidate','candidateConsumption']);
   if(result.schema!=='runtime-ci/v1'||result.requestId!==request.requestId||result.inputDigest!==request.inputDigest||result.provider!==archive.provider||result.repositoryId!==archive.repositoryId||result.runId!==archive.runId||result.sourceCommit!==request.commit||result.workflowDigest!==request.workflowDigest||result.stageId!==request.stageId||result.candidateDigest!==request.candidateDigest)reject('CI_RESULT_MISMATCH','CI evidence belongs to different request/source/stage/candidate pins',409);
   if(containsInlineSecret(canonical(result)))reject('CI_RESULT_INVALID','CI result metadata contains inline credentials',409);
   if(!Array.isArray(result.checks)||result.checks.length>128)reject('CI_CHECK_SCOPE','CI result check set must be bounded',409);
@@ -80,7 +93,15 @@ export async function verifyCiArtifact(archive:PlatformArtifactArchive,request:P
     if(candidate.sourceDigest!==ciSourceDigest(request,archive.provider,archive.repositoryId)||candidate.buildDigest!==ciBuildDigest(request,archive.runId))reject('CI_CANDIDATE_MISMATCH','Candidate source/build identities differ from the actual CI request',409);
     for(const item of candidate.artifacts)verifyFile({path:'artifacts/'+item.name,digest:item.digest,bytes:item.bytes});
   }else if(request.stageId==='candidate')reject('CI_CANDIDATE_MISSING','Candidate stage needs its exact built artifact manifest',409);
+  if(request.candidateDigest!==null){
+    if(!request.candidateInput)reject('CI_CANDIDATE_INPUT_REQUIRED','Verification needs the original candidate archive, not only its digest',409);
+    const input=validateCandidateInput(request.candidateInput,request,archive.provider,archive.repositoryId),consumed=record(result.candidateConsumption??{});
+    exact(consumed,['inputDigest','artifacts']);
+    if(consumed.inputDigest!==valueDigest(input)||canonical(consumed.artifacts)!==canonical(input.manifest.artifacts))reject('CI_CANDIDATE_CONSUMPTION','Evidence must identify every consumed artifact from the original candidate',409);
+    for(const item of input.manifest.artifacts)verifyFile({path:'candidate/'+item.name,digest:item.digest,bytes:item.bytes});
+  }else if(result.candidateConsumption!==undefined||request.candidateInput!==undefined)reject('CI_CANDIDATE_CONSUMPTION','A pre-candidate stage cannot claim candidate consumption',409);
   for(const path of files.keys())if(!declared.has(path))reject('CI_ARTIFACT_UNDECLARED','CI archive includes undeclared files',409);
   const status=archive.runStatus==='FAILED'||checks.some(c=>c.status==='FAIL')?'FAILED':archive.runStatus==='PASSED'&&checks.every(c=>c.status==='PASS')?'PASSED':'UNKNOWN';
-  return{schema:'runtime-ci-verified-artifact/v1',requestId:request.requestId,inputDigest:request.inputDigest,runId:archive.runId,archiveDigest:archive.archiveDigest,resultDigest:byteDigest(resultBytes),evidenceRef:archive.evidenceRef,status,checks,candidate,candidateDigest:newDigest,files:[...files].map(([path,bytes])=>({path,digest:byteDigest(bytes),bytes:bytes.length})),artifactsVerified:true,ownerEvaluationsVerified:false,lifecycleAcceptance:false};
+  const sourceArchive:CandidateArchiveIdentity={provider:archive.provider,repositoryId:archive.repositoryId,runId:archive.runId,artifactId:archive.artifactId,jobId:archive.jobId,archiveDigest:archive.archiveDigest,archiveBytes:archive.archiveBytes};
+  return{schema:'runtime-ci-verified-artifact/v1',requestId:request.requestId,inputDigest:request.inputDigest,runId:archive.runId,archiveDigest:archive.archiveDigest,resultDigest:byteDigest(resultBytes),evidenceRef:archive.evidenceRef,status,checks,candidate,candidateDigest:newDigest,files:[...files].map(([path,bytes])=>({path,digest:byteDigest(bytes),bytes:bytes.length})),artifactsVerified:true,ownerEvaluationsVerified:false,lifecycleAcceptance:false,sourceArchive};
 }

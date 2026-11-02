@@ -183,7 +183,7 @@ product releases; the client never force-updates or deletes them. GitHub workflo
 must expose the required string inputs `runtime_request_id`,
 `runtime_input_digest`, `runtime_source_commit`, `runtime_stage` and
 `runtime_candidate_digest`, `runtime_workflow_digest` and
-`runtime_binding_digest`, and use the run title
+`runtime_binding_digest` and `runtime_candidate_input`, and use the run title
 `evopilot:${{ inputs.runtime_request_id }}:${{ inputs.runtime_input_digest }}`;
 GitLab pipelines receive the same correlation through pipeline variables, using
 the v4 API compatible with the selected 15.0 test environment. Workflow trigger
@@ -236,6 +236,28 @@ is the canonical SHA-256 of `{requestId,inputDigest,bindingDigest,workflowDigest
 Each manifest artifact is read and hashed. Later stages keep the same candidate
 identity. Owner evaluations and publication authority remain independently
 required; a verified CI archive does not grant them.
+
+For verification, `runtime_candidate_input` is bounded canonical JSON using
+`runtime-ci-candidate-input/v1`: the original manifest and immutable archive
+identity (`provider`, `repositoryId`, `runId`, `artifactId`, `jobId`,
+`archiveDigest`, `archiveBytes`). It is at most 48 KiB, contains no credential or
+arbitrary URL, and is `none` before a candidate exists. Runtime derives it from
+the completed candidate's retained evidence, never from client-supplied metadata
+or a "latest" artifact. A digest without the original archive identity cannot
+start verification. Historical development workflows with seven inputs need this
+eighth required string input before new runs; old receipts stay unchanged.
+
+The registered verification workflow must download that exact provider artifact
+using its own scoped CI credentials, verify the archive and original manifest
+digests, and test the downloaded candidate. Its output includes
+`candidateConsumption: {inputDigest, artifacts}`, where `inputDigest` hashes the
+exact input and `artifacts` equals the original manifest's inventory. It retains
+the consumed files under `candidate/<name>`. Runtime independently hashes every
+file and rejects missing, rebuilt/different or substituted bytes. Matching bytes
+and workflow evidence remain distinct from an independent proof of arbitrary
+software behavior; full project checks and native owner results are still
+required. Runtime neither sends its platform token to the job nor downloads
+arbitrary URLs supplied by project YAML.
 
 The pinned ZIP reader validates in memory only, with 128 MiB compressed,
 256 MiB expanded and 512-entry bounds. Traversal, links, special/encrypted files,

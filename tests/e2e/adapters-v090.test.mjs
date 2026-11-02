@@ -208,7 +208,7 @@ test('platform transport bounds responses, denies arbitrary routes, and never ec
 // Stateful provider double: records each side effect independently from its
 // response, so timeout/recovery tests cannot pass by silently redispatching.
 const ciActor={...actor,permissions:['read','execution.request']};
-const ghContract='name: Synthetic\nrun-name: "evopilot:${{ inputs.runtime_request_id }}:${{ inputs.runtime_input_digest }}"\non:\n  workflow_dispatch:\n    inputs:\n'+['runtime_request_id','runtime_input_digest','runtime_source_commit','runtime_stage','runtime_candidate_digest','runtime_workflow_digest','runtime_binding_digest'].map(k=>'      '+k+':\n        type: string\n        required: true\n').join('')+'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo synthetic\n';
+const ghContract='name: Synthetic\nrun-name: "evopilot:${{ inputs.runtime_request_id }}:${{ inputs.runtime_input_digest }}"\non:\n  workflow_dispatch:\n    inputs:\n'+['runtime_request_id','runtime_input_digest','runtime_source_commit','runtime_stage','runtime_candidate_digest','runtime_workflow_digest','runtime_binding_digest','runtime_candidate_input'].map(k=>'      '+k+':\n        type: string\n        required: true\n').join('')+'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo synthetic\n';
 const glContract='workflow:\n  rules:\n    - if: \'$CI_COMMIT_TAG =~ /^evopilot-runtime\\// && $CI_PIPELINE_SOURCE != "api"\'\n      when: never\n    - if: \'$CI_PIPELINE_SOURCE == "api"\'\n      when: always\nfixture:\n  script: echo synthetic\n';
 async function withDispatch(provider,run){
   const old=globalThis.fetch,f=responses(provider),calls=[],writes=[];
