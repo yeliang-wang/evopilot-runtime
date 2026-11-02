@@ -8,6 +8,7 @@ import { authorize, type Principal } from '../server/security.js';
 import { valueDigest } from '../lifecycle/base.js';
 import { nativeSha256, nativeStableSerialize, referenceForPackage, validateNativeReference, type NativePackage, type NativeReference, type NativeScope, type NativeToolchain } from '../../vendor/compatibility/v1/native.mjs';
 import { READINESS_STANDARD_DIGEST, validateReadinessIntent, verifyReadinessProjection, type ReadinessIntentRecord, type ReadinessProjection } from '../../vendor/compatibility/usability/v2/contract.mjs';
+import { validateFeedbackEvent, type FeedbackEvent } from '../../vendor/compatibility/feedback/v1/feedback.mjs';
 
 export type Owner = 'ontology'|'harness';
 const MANIFESTS = {
@@ -27,11 +28,13 @@ interface OwnerService {
   readiness(request:unknown):Promise<unknown>; feedback(request:unknown):Promise<unknown>;
 }
 export type OwnerIntentReader=(actor:Principal,projectId:string,request:{workspaceId:string;scope:NativeScope;digest:string})=>Promise<ReadinessIntentRecord&{current:boolean}>;
+export type OwnerFeedbackReader=(actor:Principal,projectId:string,request:{workspaceId:string;scope:NativeScope;id:string})=>Promise<FeedbackEvent>;
 interface FactoryProviders {
   nativeToolchain?:NativeToolchain;
   resolveNativeDependency?:(request:{workspaceId:string;scope:NativeScope;reference:NativeReference})=>Promise<unknown>;
   readReadinessIntent?:(request:{workspaceId:string;scope:NativeScope;digest:string})=>Promise<ReadinessIntentRecord&{current:boolean}>;
   readReadinessProjection?:(request:{workspaceId:string;scope:NativeScope;reference:NativeReference})=>Promise<ReadinessProjection>;
+  readFeedback?:(request:{scope:NativeScope;id:string})=>Promise<FeedbackEvent>;
 }
 type Factory=(options:{workspaceRoot:string;workspaceId:string},providers:FactoryProviders)=>OwnerService;
 const sha=(value:Buffer)=>createHash('sha256').update(value).digest('hex');
@@ -91,11 +94,22 @@ export interface PublishedOwnerAdapter {
   mutate(actor:Principal,projectId:string,request:OwnerRequest,permit:OwnerMutationPermit):Promise<unknown>;
   close():void;
 }
-export async function openPublishedOwner(configuration:OwnerConfiguration,toolchain?:NativeToolchain,ontology?:PublishedOwnerAdapter,readIntent?:OwnerIntentReader):Promise<PublishedOwnerAdapter>{
+export async function openPublishedOwner(configuration:OwnerConfiguration,toolchain?:NativeToolchain,ontology?:PublishedOwnerAdapter,readIntent?:OwnerIntentReader,readFeedback?:OwnerFeedbackReader):Promise<PublishedOwnerAdapter>{
   const config=JSON.parse(canonical(configuration)) as OwnerConfiguration;
   validateConfiguration(config);const identity=verifyOwnerDistribution(config.owner,config.packageRoot);
   const calls=new AsyncLocalStorage<{actor:Principal;projectId:string}>();
   const providers:FactoryProviders=toolchain?{nativeToolchain:toolchain}:{};
+  if(readFeedback)providers.readFeedback=async request=>{
+    const context=calls.getStore();
+    if(!context||request.scope.projectId!==context.projectId)reject('OWNER_SCOPE','Feedback requires its current registered project call',403);
+    authorize(context.actor,context.projectId,'read');
+    const event=await readFeedback(context.actor,context.projectId,{workspaceId:config.workspaceId,...request});
+    validateFeedbackEvent(event);
+    if(event.workspaceId!==config.workspaceId||event.projectId!==context.projectId||event.id!==request.id||nativeStableSerialize(event.scope)!==nativeStableSerialize(request.scope))reject('OWNER_SCOPE','Feedback differs from the exact retained project event',403);
+    // No caller-controlled event is passed through feedback.ingest. The owner
+    // resolves its event ID against this scoped, trusted Runtime reader.
+    return JSON.parse(nativeStableSerialize(event)) as FeedbackEvent;
+  };
   if(config.owner==='harness'&&ontology){
     if(ontology.owner!=='ontology'||ontology.workspaceId!==config.workspaceId)reject('OWNER_SCOPE','Owner dependencies must share the configured workspace');
     providers.resolveNativeDependency=async request=>{

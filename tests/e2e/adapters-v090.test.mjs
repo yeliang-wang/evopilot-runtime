@@ -18,6 +18,11 @@ import { validateBindings } from '../../dist/lifecycle/bindings.js';
 import { valueDigest } from '../../dist/lifecycle/base.js';
 import { yaml } from '../fixtures/lifecycle-v090.mjs';
 import { inspectExternalAgent } from '../../dist/adapters/external-agent.js';
+import { createOwnerFeedbackDelivery, verifyOwnerFeedbackInbox } from '../../dist/adapters/feedback.js';
+import { RuntimeStore } from '../../dist/server/store.js';
+import { ServiceError } from '../../dist/server/errors.js';
+import { NATIVE_CONTRACT_DIGEST } from '../../vendor/compatibility/v1/native.mjs';
+import { syntheticDecisionEvidence } from '../fixtures/native/decision-evidence.mjs';
 
 function fixture(){const dir=mkdtempSync(join(realpathSync(tmpdir()),'runtime-owner-boundary-'));return{dir,cleanup:()=>rmSync(dir,{recursive:true,force:true})};}
 test('supported owner distribution metadata pins GitHub release packages and production dependency installations',()=>{
@@ -415,3 +420,121 @@ test('GitHub runner binding rejects a wrong workflow label and mismatched comple
   await assert.rejects(()=>f.client.readiness(actor,AbortSignal.timeout(5000)),{code:'RUNNER_NOT_READY'});
   f.routes.get(f.base+'/actions/jobs/24').labels=['windows-latest'];await assert.rejects(()=>f.client.job(actor,'23','24',commit,AbortSignal.timeout(5000)),{code:'PLATFORM_RECEIPT_MISMATCH'});
 }));
+
+// Synthetic owner responses exercise the delivery and decision trust boundary;
+// these tests are not actual project semantic review or final acceptance.
+function feedbackFixture(){
+  const f=fixture(),scope={visibility:'private',projectId:'alpha'},workspaceId='test';
+  const hash=nativeSha256,pin=owner=>({product:owner,id:'synthetic-'+owner,version:'1.0.0',specVersion:'v1',visibility:'private',digest:hash({owner,asset:true}),standardDigest:hash({owner,standard:true}),standardLockDigest:hash({owner,lock:true}),producer:{product:owner,version:'0.3.0'},contractDigest:NATIVE_CONTRACT_DIGEST});
+  const claimId=hash('synthetic-registered-claim'),body={schema:'evopilot-feedback-event/v1',id:hash({workspaceId,scope,claimId}),workspaceId,scope,projectId:'alpha',projectCandidateDigest:hash('candidate'),source:{direction:'reverse',locator:'synthetic:feedback-fixture',revision:'r1',treeDigest:hash('tree'),inventoryDigest:hash('inventory'),requirementsDigest:hash('requirements')},runId:'synthetic-run',runReviewDigest:hash('run-review'),claimId,inputDigest:hash('input'),receiptDigest:hash('receipt'),causeId:claimId,origin:'registered-runtime-run',stage:'SUCCEEDED',pins:{ontology:pin('ontology'),harness:pin('harness')},results:{ontology:{synthetic:true},harness:{synthetic:true}},collectionRefs:[],observation:{synthetic:true}};
+  const event={...body,digest:hash(body)},principal={...actor,permissions:['read','execution.request']};
+  const inboxes=new Map(),calls=[],controls={lost:false,unavailable:null,identity:1,source:event};
+  function inbox(owner){const receiptBody={eventId:event.id,eventDigest:event.digest,owner,workspaceId,scope,candidateId:event.id+':'+owner},receipt={...receiptBody,digest:hash(receiptBody)};return{event,receipt,candidate:{id:receipt.candidateId,kind:owner==='ontology'?'semantic-impact':'regression',evidenceDigest:event.receiptDigest,status:'REVIEW_REQUIRED'},review:null,disposition:null};}
+  function decide(owner,mode='REUSE',choice='APPROVE'){
+    const value=inbox(owner),reference=mode==='REUSE'?event.pins[owner]:{...event.pins[owner],version:'1.1.0',digest:hash('next')};
+    const body={mode,reference,rationale:'Synthetic owner review only',changes:mode==='REUSE'?[]:[{kind:'rule',identifiers:['rule'],sourcePaths:['source.md'],explanation:'Synthetic rule correction'}],eventId:event.id,eventDigest:event.digest,owner,workspaceId,scope,sourceDigest:hash(event.source),baseline:event.pins[owner],changedFiles:mode==='REUSE'?[]:['policy.rego'],dependentHarness:[]};
+    value.review={...body,reviewDigest:hash(body)};const d={review:value.review,decision:choice,humanEvidenceRef:syntheticDecisionEvidence(f.dir,{owner,operation:'feedback.decide',workspaceId,scope,reviewDigest:value.review.reviewDigest,decision:choice})};
+    value.disposition={...d,digest:hash(d)};return value;
+  }
+  const adapters=Object.fromEntries(['ontology','harness'].map(owner=>[owner,{owner,workspaceId,
+    capabilities:()=>({registrationDigest:hash({owner,revision:controls.identity})}),
+    read:async(_actor,_project,r)=>{calls.push({owner,operation:r.operation});if(controls.unavailable===owner)throw new ServiceError('OWNER_UNAVAILABLE','Synthetic outage',503);if(r.operation==='feedback.inspect')return{owner,workspaceId,scope,revision:0};const value=inboxes.get(owner);if(!value)throw new ServiceError('NOT_FOUND','Synthetic missing inbox',404);return structuredClone(value);},
+    mutate:async(_actor,_project,r,p)=>{calls.push({owner,operation:r.operation,request:r,permit:p});assert.equal(p.requestDigest,ownerRequestDigest(owner,r));assert.equal(r.input.digest,event.digest);inboxes.set(owner,inbox(owner));if(controls.lost)throw new ServiceError('SYNTHETIC_RESPONSE_LOSS','Response lost',503);return{claimedPass:true};},
+  }]));
+  let store=new RuntimeStore(join(f.dir,'state'),workspaceId),service;
+  const connect=()=>service=createOwnerFeedbackDelivery(store,{event:async()=>controls.source,owner:(_e,owner)=>adapters[owner]});connect();
+  const permit=async()=>({actor:principal,authorityRef:'authority:synthetic-fixture-only',expiresAt:'2030-01-01T00:00:00Z'});
+  const signal=()=>AbortSignal.timeout(5000),retain=()=>service.retain(principal,'alpha',event.id,signal());
+  const deliver=(owner='ontology',grant=permit,s=signal())=>service.deliver(principal,'alpha',event.id,owner,grant,s);
+  const inspect=(owner='ontology')=>service.inspect(actor,'alpha',event.id,owner,signal());
+  return{...f,event,principal,controls,calls,inboxes,adapters,inbox,decide,retain,deliver,inspect,signal,get service(){return service;},get store(){return store;},restart(){store.close();store=new RuntimeStore(join(f.dir,'state'),workspaceId);connect();},cleanup(){store.close();f.cleanup();}};
+}
+test('feedback consumes an exact registered event, independently reads inbox and leaves delivery at REVIEW_REQUIRED',async()=>{
+  const f=feedbackFixture();try{
+    await f.retain();const observation=await f.deliver();assert.equal(observation.status,'REVIEW_REQUIRED');assert.equal(observation.softwareRelease,false);
+    assert.equal(f.calls.filter(x=>x.operation==='feedback.ingest').length,1);assert.equal(f.calls.at(-1).operation,'feedback.read');
+    await f.deliver();assert.equal(f.calls.filter(x=>x.operation==='feedback.ingest').length,1);
+    const d=f.store.object('alpha','owner-feedback-delivery',f.event.id+':ontology');assert.equal(d.initiatedBy.id,'fixture');assert.equal(d.request.input.id,f.event.id);
+    assert.equal(f.store.object('alpha','owner-feedback-permit',f.event.id+':ontology').requestDigest,d.requestDigest);
+  }finally{f.cleanup();}
+});
+test('feedback response loss survives restart and reconciles original owner receipt without redispatch',async()=>{
+  const f=feedbackFixture();try{
+    await f.retain();f.controls.lost=true;assert.equal((await f.deliver()).status,'UNKNOWN');f.restart();
+    assert.equal((await f.inspect()).status,'REVIEW_REQUIRED');assert.equal((await f.deliver()).status,'REVIEW_REQUIRED');assert.equal(f.calls.filter(x=>x.operation==='feedback.ingest').length,1);
+  }finally{f.cleanup();}
+});
+test('feedback interrupted before dispatch keeps its original plan and never treats absence as permission to retry',async()=>{
+  const f=feedbackFixture();try{
+    await f.retain();assert.equal((await f.deliver('ontology',async()=>{throw new ServiceError('AUTHORITY_REVOKED','Synthetic revocation',403);})).status,'UNKNOWN');
+    f.restart();assert.equal((await f.inspect()).status,'UNKNOWN');assert.equal((await f.deliver()).status,'UNKNOWN');assert.equal(f.calls.filter(x=>x.operation==='feedback.ingest').length,0);
+  }finally{f.cleanup();}
+});
+test('feedback cancellation while permit is pending prevents late owner mutation',async()=>{
+  const f=feedbackFixture(),controller=new AbortController();let release,entered;
+  const waiting=new Promise(resolve=>entered=resolve);try{
+    await f.retain();const pending=f.deliver('ontology',()=>{entered();return new Promise(resolve=>release=resolve);},controller.signal);await waiting;controller.abort();
+    assert.equal((await pending).status,'UNKNOWN');release({actor:f.principal,authorityRef:'synthetic',expiresAt:'2030-01-01T00:00:00Z'});await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(f.calls.filter(x=>x.operation==='feedback.ingest').length,0);
+  }finally{f.cleanup();}
+});
+test('concurrent feedback delivery permits at most one owner write',async()=>{
+  const f=feedbackFixture();try{
+    await f.retain();await Promise.all([f.deliver(),f.deliver(),f.deliver()]);assert.equal(f.calls.filter(x=>x.operation==='feedback.ingest').length,1);
+  }finally{f.cleanup();}
+});
+test('partial owner delivery keeps the successful inbox and leaves the other owner pending',async()=>{
+  const f=feedbackFixture();try{
+    await f.retain();await f.deliver('ontology');f.controls.unavailable='harness';await assert.rejects(()=>f.deliver('harness'),{code:'OWNER_UNAVAILABLE'});
+    assert.equal((await f.inspect('ontology')).status,'REVIEW_REQUIRED');assert.equal(f.inboxes.has('harness'),false);
+    f.controls.unavailable=null;assert.equal((await f.deliver('harness')).status,'REVIEW_REQUIRED');assert.equal(f.calls.filter(x=>x.operation==='feedback.ingest').length,2);
+  }finally{f.cleanup();}
+});
+test('feedback scope, registration drift and current write permission are independently checked',async()=>{
+  const f=feedbackFixture();try{
+    await assert.rejects(()=>f.service.retain(actor,'alpha',f.event.id,f.signal()),{code:'FORBIDDEN'});
+    await f.retain();await assert.rejects(()=>f.service.inspect(actor,'beta',f.event.id,'ontology',f.signal()),{code:'FORBIDDEN'});
+    const source={...f.event,projectId:'beta'};delete source.digest;f.controls.source={...source,digest:nativeSha256(source)};await assert.rejects(()=>f.retain(),{code:'FEEDBACK_SCOPE'});
+    assert.equal((await f.deliver('ontology',async()=>{f.controls.identity++;return{actor:f.principal,authorityRef:'synthetic',expiresAt:'2030-01-01T00:00:00Z'};})).status,'UNKNOWN');assert.equal(f.calls.filter(x=>x.operation==='feedback.ingest').length,0);
+  }finally{f.cleanup();}
+});
+for(const owner of ['ontology','harness'])test(owner+' feedback distinguishes exact REUSE, rejection and DELIVER without granting software release',()=>{
+  const f=feedbackFixture();try{
+    assert.equal(verifyOwnerFeedbackInbox(f.inbox(owner),f.event,owner).status,'REVIEW_REQUIRED');
+    for(const [mode,decision,status] of [['REUSE','APPROVE','REUSE_APPROVED'],['REUSE','REJECT','REJECTED'],['DELIVER','APPROVE','REBIND_REQUIRED']]){
+      const result=verifyOwnerFeedbackInbox(f.decide(owner,mode,decision),f.event,owner);assert.equal(result.status,status);assert.equal(result.softwareRelease,false);assert(result.dispositionDigest);
+    }
+  }finally{f.cleanup();}
+});
+test('owner feedback validation rejects substituted events, receipts, candidates, review pins and unattested approval',()=>{
+  const f=feedbackFixture();try{
+    const mutations=[v=>v.event.projectId='beta',v=>v.receipt.owner='harness',v=>v.candidate.status='APPROVED',v=>v.review.baseline.version='9.0.0',v=>v.disposition.decision='PASS',v=>v.disposition.review.rationale='changed'];
+    for(const mutate of mutations){const value=structuredClone(f.decide('ontology'));mutate(value);assert.throws(()=>verifyOwnerFeedbackInbox(value,f.event,'ontology'));}
+    const value=f.decide('ontology');value.disposition.humanEvidenceRef='file:///unavailable';const {digest,...body}=value.disposition;value.disposition.digest=nativeSha256(body);
+    assert.throws(()=>verifyOwnerFeedbackInbox(value,f.event,'ontology'),{code:'FEEDBACK_DECISION_EVIDENCE'});
+    const missing=f.decide('ontology');missing.review=null;assert.throws(()=>verifyOwnerFeedbackInbox(missing,f.event,'ontology'),{code:'FEEDBACK_REVIEW_REQUIRED'});
+  }finally{f.cleanup();}
+});
+test('owner feedback approval ceases to verify when retained decision source bytes disappear',()=>{
+  const f=feedbackFixture();try{
+    const value=f.decide('ontology');assert.equal(verifyOwnerFeedbackInbox(value,f.event,'ontology').status,'REUSE_APPROVED');
+    rmSync(join(f.dir,'synthetic-decision-evidence'),{recursive:true});assert.throws(()=>verifyOwnerFeedbackInbox(value,f.event,'ontology'),{code:'FEEDBACK_DECISION_EVIDENCE'});
+  }finally{f.cleanup();}
+});
+test('feedback receipt recovery cannot silently move to a changed owner connection',async()=>{
+  const f=feedbackFixture();try{
+    await f.retain();await f.deliver();f.restart();f.controls.identity++;
+    await assert.rejects(()=>f.inspect(),{code:'FEEDBACK_CONNECTION_CHANGED'});
+    await assert.rejects(()=>f.deliver(),{code:'FEEDBACK_CONNECTION_CHANGED'});
+    assert.equal(f.calls.filter(x=>x.operation==='feedback.ingest').length,1);
+  }finally{f.cleanup();}
+});
+test('feedback refuses changed registered event content and raw credentials without overwriting history',async()=>{
+  const f=feedbackFixture();try{
+    await f.retain();const {digest,...body}=f.event,changed={...body,receiptDigest:nativeSha256('different-run-receipt')};f.controls.source={...changed,digest:nativeSha256(changed)};
+    await assert.rejects(()=>f.retain(),{code:'FEEDBACK_EVENT_CHANGED'});
+    assert.deepEqual(await f.service.readEvent(actor,'alpha',f.event.id),f.event);
+    const secret={...body,observation:{apiKey:'synthetic-key-never-send'}};f.controls.source={...secret,digest:nativeSha256(secret)};
+    await assert.rejects(()=>f.retain(),{code:'INLINE_SECRET'});assert.equal(f.calls.length,0);
+  }finally{f.cleanup();}
+});

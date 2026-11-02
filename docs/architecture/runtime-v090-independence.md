@@ -104,8 +104,9 @@ checks all predecessors, candidate identities, bounded attempts and unknown
 outcome reconciliation. It cannot manufacture owner evidence or release authority.
 
 The protected owner/platform binding composition, retained exact authority and
-durable stage execution core and fixed CI dispatch clients are implemented in
-development. Native stage composition, Agent dispatch and their default CLI
+durable stage execution core, fixed CI dispatch clients, artifact verifier and
+owner feedback delivery are implemented in development. Native stage composition,
+Codex task handoff and their default CLI
 wiring remain M3 work.
 Unconfigured adapters fail closed; synthetic regression adapters are test
 fixtures only and cannot certify real asset usability or final E2E. The two
@@ -298,3 +299,42 @@ new execution blocked. The ordinary development CLI still has no fixed native
 stage executor configured; the actual CI/Agent actions, artifact/owner result
 evaluation and end-to-end closure are not yet complete. These regression results
 are not final candidate acceptance.
+
+## Development owner feedback delivery
+
+The fixed internal feedback consumer accepts an event ID only from a trusted
+registered terminal Run reader. It checks the workspace, project, event digest,
+original claim/cause and exact asset pins, then retains the event in Runtime's
+own service store. It does not turn an arbitrary CI report or client-provided
+PASS into a registered Run. This internal component has no direct HTTP/YAML
+capture entry point; its native lifecycle composition remains unfinished.
+
+For each owner, Runtime first inspects the authoritative inbox. If delivery is
+needed, it records the exact owner connection digest, request ID, event digest,
+owner CAS revision and initiating principal before the external call. A fresh
+trusted execution permit is required immediately before `feedback.ingest` and
+is retained separately. Only the owner's public package API performs the write.
+The owner obtains the event through Runtime's scoped trusted callback, not an
+event supplied in the ingestion request. Neither `feedback.propose` nor
+`feedback.decide` is exposed by this consumer.
+
+Mutation responses are not completion evidence. Runtime independently reads
+`feedback.read`, verifies the original event, receipt, candidate, review and
+disposition digests, and checks the retained exact owner decision evidence.
+`REVIEW_REQUIRED`, `REJECTED`, `REBIND_REQUIRED` and `REUSE_APPROVED` remain
+distinct. An approved `DELIVER` requires a subsequent instance with the new asset
+pins; it cannot complete the original pins. An approved `REUSE` is an owner
+feedback result and never software release authority or full lifecycle acceptance.
+
+Response loss, cancellation, partial owner delivery and process restart retain
+the original request. Inspection cannot change the owner connection or repeat a
+write whose outcome is uncertain, including a crash between local persistence
+and dispatch. Late permit resolution after cancellation cannot start a write.
+Each external call has a five-second bound; owner-local work that has already
+started may still complete and must be reconciled through its original inbox.
+The two owner transactions are independent. No cross-store atomicity is claimed.
+
+Development validation uses actual published 0.8.3 owner services and independent
+inbox/disposition readback with explicitly synthetic project assets, events and
+owner decisions. Those observations and the durability/security regression tests
+do not satisfy the frozen final-candidate E2E instances.
