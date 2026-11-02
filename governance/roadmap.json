@@ -1,0 +1,74 @@
+{
+  "schema": "runtime-roadmap/v1",
+  "owner": "runtime",
+  "targetVersion": "0.9.0",
+  "milestones": [
+    {
+      "id": "M0",
+      "work": "确认方案；替代ADR/人读机读Roadmap/正式Target、源码/环境/协议版本/用例/权限预算冻结；冻结无Runtime LLM、Codex推进及同插件交付契约；冻结字段覆盖政策、四槽位和12扩展子用例；正式纳入同入口定义启用边界及六项必需闭环变体",
+      "exit": "适用门禁ALIGNED；64组、22主场景及固定变体有完整可执行映射；此前UNKNOWN不重写成PASS"
+    },
+    {
+      "id": "M1",
+      "work": "TypeScript独立服务、独立版本、HTTP/API状态和迁移基础",
+      "exit": "S01–S03、I01–I02/I04–I05、N01–N03/N06–N08/N13对应候选实例通过；没有模型凭据仍可启动/查询/校验/监控"
+    },
+    {
+      "id": "M2",
+      "work": "发布者Base、八阶段强制配置、项目继承及双方资产绑定；实现单层继承、字段策略、槽内DAG与强制AND汇合；统一精确修订启用、幂等和原子active切换",
+      "exit": "L01/L03–L06/L09–L11/L13/L16、X01–X02和N05相关拒绝/生效路径通过；EX01–EX07/EX11/EX12相关服务端实例通过"
+    },
+    {
+      "id": "M3",
+      "work": "一份Expert Skill+HTTP MCP Codex插件、统一安装器、stdio桥、两平台/双方组件接线；Codex提出受管执行请求",
+      "exit": "L02/L07–L08/L12/L14–L15、S04/S06–S08、I03、X01–X08、N03–N05/N08–N09/N12实际接线通过；实际Codex服务/Host/工具链路无Runtime LLM配置、Host离线等待及安装失败恢复通过；包含Dashboard的完整发行包E2E统一在M5验收"
+    },
+    {
+      "id": "M4",
+      "work": "两页SeeCode图形/YAML编辑和只读实时监控；编辑页保存并启用及原页错误恢复",
+      "exit": "D01–D08、S05、N06/N10–N11真实浏览器/事件/权限/性能实例通过；EX08/EX09图形源码来源、锁定和语义/展示分离通过"
+    },
+    {
+      "id": "M5",
+      "work": "准确发行候选全链路、兼容/迁移回退、独立CI及双语文档",
+      "exit": "62组发布前要求、E01–E20全部通过，N14核对分母；准备准确Release与安装审阅对象；准确候选EX01–EX12全通过（含EX10升级/回退）；六项最小闭环变体全部有准确候选证据"
+    },
+    {
+      "id": "M6",
+      "work": "适用授权后Runtime GitHub发布、当前Codex安装部署与最终复盘",
+      "exit": "P03–P04/E21–E22通过；64组无剩余必需缺口；父站只更新导航不新发父产品版本；服务、同插件Skill及HTTP连接三项真实回读，不以仅写入配置替代安装验收"
+    }
+  ],
+  "direction": "Independent deterministic lifecycle service; external Codex; publisher Base; two-page Dashboard; shared same-entry definition admission.",
+  "exclusions": [
+    "第三个及更多 Dashboard 管理页面",
+    "Dashboard中业务运行的启动/暂停/重试、业务审批/发布或配置凭据管理；已有编辑页的项目定义启用在范围内",
+    "本版完成 Ontology/Harness 全部 Expert/MCP/插件拆分",
+    "改变 L1/L2/L3 或自动升级两个真实项目全部资产",
+    "DataRig 数据库/SSH/生产 E2E 或性能测试",
+    "Prometheus 验收前置",
+    "多租户云平台/远程生产部署/任意 Agent兼容",
+    "新建可豁免基础门禁的风险发布模式",
+    "覆盖已发布 Base、业务回执、历史决定或旧 Release",
+    "远程公网MCP服务",
+    "通用OAuth/多租户云控制平面",
+    "Docker/Kubernetes强制依赖",
+    "远程生产部署",
+    "新Electron桌面壳",
+    "父项目新的产品版本或组合Release",
+    "全仓语言比例目标或批量重写无关owner实现",
+    "Runtime独立LLM Profile/Provider、模型路由或模型API Key管理",
+    "Runtime自主Agent引擎、自动生成方案/编码、服务内LLM聊天",
+    "HTTP MCP自动驱动或唤醒Codex会话",
+    "复制Codex模型登录凭据或绕过其审批",
+    "本轮推进Ontology/Harness下一版本及其独立Dashboard、MCP、Expert或插件实现/发行",
+    "将Ontology/Harness未来Dashboard并入Runtime两页或设为本版交付前置",
+    "项目继承项目/多Base继承/任意远程Base导入",
+    "项目配置注册新执行器/提供方或嵌入任意可执行代码",
+    "项目任意条件表达式、跨槽重排基础流程、非阻断自定义阶段",
+    "跨入口待办同步和通知编排",
+    "独立审批中心、多人会签、审批委托"
+  ],
+  "acceptanceDigest": "612f78eefdeae8af3f8170656cc6d31a7208ea91b7415a86ba49f2720091b023",
+  "historicalRecordsImmutable": true
+}

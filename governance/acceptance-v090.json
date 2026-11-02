@@ -1,0 +1,1993 @@
+{
+  "schema": "runtime-v090-acceptance-catalog/v1",
+  "requirements": [
+    {
+      "id": "L01",
+      "title": "L01",
+      "expected": "两个项目分别单层继承同一准确可信Base，保存项目差异并确定性解析为有效定义；图形/源码来源一致，不串配置；多Base、project继承project和latest不允许。"
+    },
+    {
+      "id": "L02",
+      "title": "L02",
+      "expected": "Expert 根据所选提供方逐步问答，仅追问缺项；中断恢复不丢答案，不强制填写未选提供方。"
+    },
+    {
+      "id": "L03",
+      "title": "L03",
+      "expected": "八阶段配置、Base字段策略、槽位和action/资产引用均校验；缺项/占位/未知字段/无效凭据/不支持提供方不能生效。Expert/API/CLI/MCP/图形/YAML不能绕过，错误指向具体字段或节点。"
+    },
+    {
+      "id": "L04",
+      "title": "L04",
+      "expected": "有权限的用户可在Codex对话完成初始化/启用，也可在Dashboard编辑页保存并启用准确修订，均无需另一入口重复确认。复用同一服务端门禁；生效不创建或启动Run，不授发布/部署权。"
+    },
+    {
+      "id": "L05",
+      "title": "L05",
+      "expected": "按CONFIGURABLE/CONSTRAINED/ADDITIVE/LOCKED策略允许开放配置、显式范围内参数、四槽位和开放check列表扩展；基础门禁不可弱化，未声明默认拒绝。新增阶段按DAG和AND汇合真正阻断后继，图形/YAML规则一致。"
+    },
+    {
+      "id": "L06",
+      "title": "L06",
+      "expected": "Base升级、项目语义变更/删除扩展和并发写入不修改已有实例pins；新修订重新校验。布局/注释与语义摘要区分；新Base移除槽位时明确冲突，不静默丢扩展，不减少既定验收分母。"
+    },
+    {
+      "id": "L07",
+      "title": "L07",
+      "expected": "从独立Runtime插件读取自己的Expert Skill，在真实Codex内完成隔离项目向导；Skill版本/服务版本可核对，过渡转交读取同一状态。Runtime不配置LLM账号，退出Host后服务与监控仍可读。"
+    },
+    {
+      "id": "L08",
+      "title": "L08",
+      "expected": "真实隔离实例从固定项目定义获取阶段事件；编辑草稿不影响监控，撤销必要配置阻止相关新执行，测试不依赖 DataRig 生产数据库或 SSH。"
+    },
+    {
+      "id": "L09",
+      "title": "L09",
+      "expected": "仅受控Runtime发布者发行可改变官方Base、锁定策略或新增槽位/提供方。项目/Expert/API/YAML不能自注册能力、伪造来源、替换Base路径或减弱门禁；篡改必须拒绝。"
+    },
+    {
+      "id": "L10",
+      "title": "L10",
+      "expected": "PR 阶段允许运行开发 E2E；准确且有效的非 RC 候选可按适用 profile 进入候选验收。只有 RC 名称但缺少真实制品/能力/证据的候选被拒绝；预发布渠道也不能绕过对应发布准入。"
+    },
+    {
+      "id": "L11",
+      "title": "L11",
+      "expected": "源码、构建配置或制品改变后旧验收不能直接授予新候选通过；符合输入等价及有效期规则的证据可复用。必需项缺失/失败不能在执行后改为可选。"
+    },
+    {
+      "id": "L12",
+      "title": "L12",
+      "expected": "在发行包的隔离测试项目中按基础阶段完成目标、计划、实现、候选、验证、发布准入、测试渠道回读及交付收口；验证未授权发布拒绝、渠道部分失败恢复及旧回执不重放。"
+    },
+    {
+      "id": "L13",
+      "title": "L13",
+      "expected": "八个基础阶段各自缺少任一项目级必需字段时都不能生效；通过 Expert、API/CLI、图形或 YAML 均无法强制跳过。全部补齐且校验有效后才可生效。"
+    },
+    {
+      "id": "L14",
+      "title": "L14",
+      "expected": "真实 Host 向导逐阶段恢复缺项；GitHub Actions/GitLab CI 每种支持分支分别验证完整配置。只填仓库 URL、不选 CI、空 workflow/jobs、无效权限/runner 不能冒充就绪；无需填写未选提供方。"
+    },
+    {
+      "id": "L15",
+      "title": "L15",
+      "expected": "未启用 EvoPilot 的普通聊天不启动初始化；启用后缺项不能静默退回普通 Agent 执行同一受管任务；明确退出保留历史和未决执行，再接入时重新读取真实状态。"
+    },
+    {
+      "id": "L16",
+      "title": "L16",
+      "expected": "初始化验证全部阶段的配置与输入/输出绑定，不要求或伪造尚未产生的候选、测试报告或发布决定。实例/阶段准入校验实际输入和产物，凭据引用更新后重新校验，秘密不出现在 YAML/对话/普通日志。"
+    },
+    {
+      "id": "D01",
+      "title": "项目与源码读取",
+      "expected": "只列出已接入且当前身份可访问的项目，读取对应 lifecycle YAML；项目切换不混淆定义、运行或草稿。"
+    },
+    {
+      "id": "D02",
+      "title": "YAML 编辑与保存",
+      "expected": "可查看、编辑、校验、保存草稿或同页保存并启用；重启读回准确草稿/active，注释和受支持字段保留。校验失败保留草稿且旧active不变；并发revision冲突拒绝覆盖。"
+    },
+    {
+      "id": "D03",
+      "title": "配置校验与流程图",
+      "expected": "真实SeeCode展示八基础阶段与合法项目扩展及来源；允许属性/同槽节点边/布局与YAML双向一致并保留注释。基础锁定、阈值越界、未知slot、重复ID、循环、孤立节点和非法依赖均明确报错；布局不改变执行顺序。"
+    },
+    {
+      "id": "D04",
+      "title": "运行版本绑定",
+      "expected": "两个独立页面。监控DOM/API不提供YAML源码、编辑/保存/启用或运行控制；编辑页支持草稿和定义启用。新草稿或新active均不改变已有运行固定版本及图形。"
+    },
+    {
+      "id": "D05",
+      "title": "真实实时监控",
+      "expected": "从实际 Runtime 事件/快照更新阶段状态、当前步骤、阻塞原因、最后更新时间。隔离测试运行由现有 CLI/Agent 启动；页面只观察，不用动画或模拟数据代替验收。"
+    },
+    {
+      "id": "D06",
+      "title": "断线恢复与一致性",
+      "expected": "断线明确标记陈旧，重连补读游标；重复/乱序事件不倒退状态、不串项目、不重放任务。无运行/未知状态可区分。"
+    },
+    {
+      "id": "D07",
+      "title": "最小写入边界",
+      "expected": "服务端分别检查项目scope、草稿写入和定义启用权限。编辑页只允许受控草稿写入及准确修订启用；拒绝越权/任意路径/注入/CSRF，监控身份不能启用。无业务运行控制、业务审批或发布操作。"
+    },
+    {
+      "id": "D08",
+      "title": "实际页面与交付",
+      "expected": "发行包真实浏览器完成两页、SeeCode双向编辑、保存与原页启用/失败修复、持久读回、真实事件监控及重连；Dashboard启用路径在Codex关闭时仍可完成。原型不是产品验收。"
+    },
+    {
+      "id": "S01",
+      "title": "独立服务与恢复",
+      "expected": "独立发行服务在关闭Codex后仍提供配置/状态/门禁/监控，已有明确授权的外部CI观察/回执核对可继续；唯一写入者和持久化恢复成立。需要Codex推理或编码的步骤等待，不启动服务内模型或无请求的新任务。"
+    },
+    {
+      "id": "S02",
+      "title": "统一入口与权限",
+      "expected": "CLI/API/MCP/Expert 通过同一服务端准入；本机身份认证、项目隔离、凭据引用、路径与脚本注入防护有效，跨项目和无权限调用被拒绝。"
+    },
+    {
+      "id": "S03",
+      "title": "实例与事件事实",
+      "expected": "Goal/Target/Loop、准确 Base/项目定义、阶段/Run/回执相互可追溯；验证、决定、发布、交付分别记录。重复或乱序事件不倒退状态，事务回放不制造完成或批准事实。 在授权的 DataRig/EvoPilot 历史只读副本中保留原 PENDING/NOT_RUN；以有来源的新观察关联可核对的实际发布事实，不倒填历史批准或测试结果。"
+    },
+    {
+      "id": "S04",
+      "title": "有界执行与不确定恢复",
+      "expected": "Codex在已授权范围内连续提出推进请求，Runtime执行确定性准入与受请求的适配；超时/预算耗尽停止相关新动作。未知结果查原回执，不换ID盲重试；服务不自行发起新目标或Agent循环，独立分支按实际依赖处理。"
+    },
+    {
+      "id": "S05",
+      "title": "摘要、分页与时效",
+      "expected": "以固定本机测试配置验证 1000 修订/10000 事件合成库存，分页最多 50 项且 256KiB。建议门槛：首摘要 p95≤2秒、事件落库至页面 p95≤5秒、断连15秒内显示陈旧；记录硬件与测量方法。查询不得携带全部历史大文本。"
+    },
+    {
+      "id": "S06",
+      "title": "GitHub 真实接线",
+      "expected": "在专用测试仓库以真实 GitHub Actions 完成必需检查、构建/测试制品、受控触发与回执回读，并通过事先审阅的发布 workflow 写入测试发布渠道再核对摘要；不以本地 mock 替代支持声明。"
+    },
+    {
+      "id": "S07",
+      "title": "GitLab 真实接线",
+      "expected": "在专用测试项目以真实 GitLab CI 和 runner 完成与 GitHub 路径等价的配置、pipeline、job/artifact、受控发布及回读；环境不可用则该必需组未通过，不静默降级为文档支持。"
+    },
+    {
+      "id": "S08",
+      "title": "实际编码 Agent",
+      "expected": "以真实Codex Host/adapter/能力/权限绑定完成隔离最小软件任务，记录请求、工作区、输出与回执；Runtime无LLM Profile/Provider/API Key也能工作。模型/费用/用量按可获得来源记录，未知不猜测或记零，依赖未知计量的硬预算不放行；Host不可用明确等待，不绕过Host权限。"
+    },
+    {
+      "id": "I01",
+      "title": "无父服务依赖的 Runtime",
+      "expected": "干净目录仅使用 Runtime 发行包、其声明的已发布依赖/端点及配置完成启动/查询/向导/监控；不需要父项目源码、父 daemon、父构建器或父插件才能运行。"
+    },
+    {
+      "id": "I02",
+      "title": "独立版本与兼容",
+      "expected": "Runtime 0.9.0 与拟支持的 Ontology/Harness 0.8.3 精确发行组合通过契约验证；不兼容组合拒绝并说明原因。无强制同版，无 sibling 源码导入。涉及不兼容修正时单列 owner 补丁 Target。"
+    },
+    {
+      "id": "I03",
+      "title": "自有 Expert、MCP 与插件",
+      "expected": "Runtime独立安装器编排服务和一份Codex插件；插件同时含Expert Skill与HTTP MCP配置，从自身发行渠道安装。与CLI/Dashboard共用状态；旧入口迁移去重，无两个Runtime写入者。"
+    },
+    {
+      "id": "I04",
+      "title": "备份、迁移与回退",
+      "expected": "在现有0.8.3的隔离副本上验证一致备份、配置/状态迁移、历史读取和失败回退；保留旧身份/摘要/证据，不允许旧二进制直接读取不兼容新状态或覆盖新产生证据。"
+    },
+    {
+      "id": "I05",
+      "title": "跨 owner 状态边界",
+      "expected": "Runtime 搬迁不改写 Ontology/Harness 私有记录、发布资产或凭据；旧组合流程所需接线有唯一归属和兼容测试，不把 owner 原生变更 API 收编到 Runtime。"
+    },
+    {
+      "id": "I06",
+      "title": "发行与父项目收敛",
+      "expected": "Runtime 自有 CI、构建、测试、安装器、Expert/MCP/plugin、文档、版本及兼容清单可独立维护；父站指向正确子项目入口，公开过渡清单标记剩余旧职责，未迁完不宣称父项目已经纯静态。"
+    },
+    {
+      "id": "P01",
+      "title": "准确候选与回归",
+      "expected": "同一源码/构建配置产生发行候选；全部发布前功能、兼容、真实 Host/浏览器/工具服务验收通过；CI和制品摘要一致，无跳过的必需用例。"
+    },
+    {
+      "id": "P02",
+      "title": "文档和发行准备",
+      "expected": "Runtime 中英文 README、架构/API/MCP/CLI/Base 配置/Expert 向导/安装升级恢复/能力矩阵/CHANGELOG 与行为一致；父首页/索引/导航更新，版权许可和 SeeCode 来源版本齐备。"
+    },
+    {
+      "id": "P03",
+      "title": "GitHub 实际发布与下载",
+      "expected": "在准确候选得到发布授权后，在 Runtime 仓库创建对应 Preview Release；下载所有声明的包、插件和清单并核对版本与摘要，回读发布说明/文档。公开发布后才能完成此项。"
+    },
+    {
+      "id": "P04",
+      "title": "当前 Codex 安装与最终验收",
+      "expected": "经一致备份与适用安装授权，用公开下载包统一安装独立服务及一份Skill+HTTP MCP插件；当前Codex实际回读版本/连接身份，验收无Runtime模型账号的向导、两页、门禁与隔离闭环，并核对旧owner入口/迁移回退和全部必需要求。"
+    },
+    {
+      "id": "X01",
+      "title": "初始化双方真实绑定",
+      "expected": "真实已发布 Ontology/Harness 与准确 scope/标准/依赖/要求映射可以激活；缺一方、未发布、过期、私有scope不符或假引用均拒绝。缺资产能够交接owner独立准备后返回，不用空包绕过。"
+    },
+    {
+      "id": "X02",
+      "title": "语义消费与编写权限",
+      "expected": "Agent读取固定本体规范并保留来源；Runtime不能以工具调用发布/改写模型或规则。需要变化由owner流程产生新版本，已有实例pins不变。"
+    },
+    {
+      "id": "X03",
+      "title": "真实证据评估",
+      "expected": "GitHub/GitLab真实CI观察经受信适配后调用真实Ontology验证和Harness评定，逐项回读。伪造PASS、缺失/重复/跳过variant、观察来源或摘要不符都不能完成。"
+    },
+    {
+      "id": "X04",
+      "title": "多门禁与等级隔离",
+      "expected": "Base门禁失败但Harness通过、Harness失败但CI绿色、Ontology不合规等都不能放行。v2 L3+NOT_REQUESTED合法但不表示软件E2E通过；E2E通过不授L3。"
+    },
+    {
+      "id": "X05",
+      "title": "资产演进与证据失效",
+      "expected": "新资产发布/已知语义缺陷触发明确影响分析；老实例历史保留，新修订重绑定并重验受影响项；禁止latest自动漂移或失败后降级规则。"
+    },
+    {
+      "id": "X06",
+      "title": "owner故障与跨域隔离",
+      "expected": "owner停机/超时/标准不兼容/撤权/跨project访问明确拒绝新依赖动作，历史可读但标新鲜度；恢复核对原回执，无三库双写或绕过scope。"
+    },
+    {
+      "id": "X07",
+      "title": "反馈闭环和恢复",
+      "expected": "真实Run事件送达双方，重复/响应丢失/一方不可用时保留outbox/inbox及稳定cause；原Run不重放，REUSE/DELIVER有真实owner决定，新pins按契约重验。"
+    },
+    {
+      "id": "X08",
+      "title": "独立组合和双平台全链路",
+      "expected": "无父源码/daemon条件下，Runtime0.9适配真实已发布owner包，两条平台E2E包含双方规范读取、原生校验、Harness报告、独立回读及反馈；每个owner用自己的API与状态，不以mock补足owner缺项。"
+    },
+    {
+      "id": "N01",
+      "title": "独立版本与父项目停止版本化",
+      "expected": "Runtime与不同版本owner发行包可组合；父站不出现新产品SemVer/组合Release；脱离父源码/构建/服务仍完整可用。"
+    },
+    {
+      "id": "N02",
+      "title": "TypeScript核心与发行包执行",
+      "expected": "核心源码语言/strict检查及边界schema通过；发行包无需开发源码/TS加载器即可启动并完成关键链路；工具脚本不能藏核心规则，vendor归属准确。"
+    },
+    {
+      "id": "N03",
+      "title": "标准HTTP MCP协议",
+      "expected": "每个声明协议版本的发现/适用握手、工具调用、JSON/流式响应、错误、元数据和取消符合该版本；不支持版本明确拒绝，不把自定义HTTP或Dashboard SSE当MCP。"
+    },
+    {
+      "id": "N04",
+      "title": "当前Codex真实HTTP接入",
+      "expected": "当前Codex从独立插件实际加载Expert Skill并经HTTP MCP完成向导/准入/工具调用，CLI与两页回读同一对象；刷新后版本/scope准确。Runtime不要求LLM账号，插件存在不等于服务/连接已验收。"
+    },
+    {
+      "id": "N05",
+      "title": "多客户端与启用隔离",
+      "expected": "两个项目/客户端并发，项目scope与任务启用不串用；协议连接/session不授执行权；断开一个客户端不终止服务或另一客户端，也不静默批准新Run。"
+    },
+    {
+      "id": "N06",
+      "title": "HTTP与浏览器边界",
+      "expected": "无效/撤销凭据、错误Host/Origin、跨项目/路径访问、CSRF、YAML/图形注入及超限请求被拒绝；错误和流不泄密，监控身份不能写入或发布。"
+    },
+    {
+      "id": "N07",
+      "title": "独立服务运维",
+      "expected": "统一安装器完成服务与一份Codex插件安装/配置/真实连接核验；launchd启停、端口/重复启动、插件或服务部分安装失败可恢复。服务不依赖Host存活，卸载保留数据、不损坏其他入口。"
+    },
+    {
+      "id": "N08",
+      "title": "请求取消与持久执行恢复",
+      "expected": "准入提交前后断连/超时/重启按稳定请求键核对，最多一个业务Run；查询中断不重派发布。Host离线时Agent等待与CI真实状态分开，服务不自动调用LLM或唤起Codex接替未知任务。"
+    },
+    {
+      "id": "N09",
+      "title": "旧stdio入口与过渡",
+      "expected": "旧支持调用经薄桥访问同一Runtime，无双写；旧Ontology/Harness入口仍可用；命名迁移有提示，不能靠发布父项目新版本完成兼容。"
+    },
+    {
+      "id": "N10",
+      "title": "图形源码编辑细节",
+      "expected": "真实浏览器完成图形↔YAML、草稿保存、同页差异预览/启用、重启读回；保留注释与受支持扩展，Base锁定/来源可见，非法修改不丢字段，冲突/未保存提示和键盘操作有效。"
+    },
+    {
+      "id": "N11",
+      "title": "事件游标与权限变化",
+      "expected": "游标过期触发可追溯快照恢复，事件缺口/重复/乱序和凭据撤销不伪造连续实时状态；切项目清理旧订阅，监控不获取YAML编辑payload。"
+    },
+    {
+      "id": "N12",
+      "title": "外部CI和发布证据可信",
+      "expected": "真实GitHub/GitLab验证准确repo/commit/pipeline/job/attempt/artifact和配置摘要；假名称成功、必需job跳过、fork越权、不明发布结果不能放行或重复发布。"
+    },
+    {
+      "id": "N13",
+      "title": "版本升级与生命周期迁移",
+      "expected": "Base/schema/API/存储/资产兼容分别判定；Base升级提供字段/槽位/阈值差异，不支持的扩展/未知schema阻止生效。迁移失败可回退，旧实例与新证据不被覆盖；不自动漂移或丢弃扩展。"
+    },
+    {
+      "id": "N14",
+      "title": "验收分母与交付一致",
+      "expected": "需求→固定用例→候选→原始证据完整；空测试集、缺variant、skip/xfail及mock冒充真实E2E不能通过；候选改动失效规则、双语文档/插件/制品一致与最终复盘可核验。"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "E01",
+      "title": "GitHub完整软件生命周期",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "REAL_E2E",
+      "groups": [
+        "L01",
+        "L02",
+        "L04",
+        "L07",
+        "L08",
+        "L10",
+        "L12",
+        "L14",
+        "L16",
+        "S03",
+        "S06",
+        "S08",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X07",
+        "X08",
+        "L13",
+        "S04",
+        "S07",
+        "N03",
+        "N14"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。 专用GitHub仓库、Actions runner和测试Release渠道。 Runtime侧不设置LLM Profile、Provider或模型API Key。",
+      "steps": [
+        "通过Runtime安装器安装独立服务与一份含Expert Skill/HTTP MCP配置的插件；Codex加载Skill并实际连接HTTP。",
+        "干净安装并由真实Expert逐阶段补齐八阶段配置和双方资产引用",
+        "生效后绑定Goal/Target，执行隔离最小软件任务并建立PR/检查",
+        "读取实际Actions构建/测试、固定候选与资产摘要，调用双方原生验证评估",
+        "按真实准入权限触发已审阅测试发布workflow，下载核对制品并收口反馈",
+        "在编辑页读定义，在独立监控页读同一实例状态",
+        "在每个基础阶段验证适用运行前置、输入、权限和完成证据；对冻结的未完成/缺失/失败/未知代表性组合拒绝后继，再恢复合法路径。"
+      ],
+      "expected": "完整链路均有实际外部回执；软件E2E、L3内容等级、发布权限分别记录。",
+      "requiredEvidence": [
+        "Host调用记录/服务requestId与Run回执",
+        "PR/commit/workflow/job/attempt及下载摘要",
+        "双方原生验证报告/独立回读/反馈回执",
+        "浏览器trace/实例状态摘要",
+        "服务侧无独立LLM配置及直接模型调用的执行证据",
+        "Skill/插件/服务版本、Codex实际调用与阶段准入关联",
+        "CV03: 阶段准入回执、预算账本、实际外部调用计数、计时依据和无额外任务的证据。",
+        "CV07: 冻结参数矩阵、测试收集清单及逐实例候选绑定结果；维持64组/22主场景不等于参数化用例总数已定。"
+      ],
+      "requiredVariants": [
+        "开发E2E不强制RC命名",
+        "候选改变后的受影响项重验",
+        "候选改变后重验受影响项",
+        "完整八阶段运行准入矩阵",
+        "双方反馈与发布回读"
+      ],
+      "requiredCoverageVariants": [
+        "CV03",
+        "CV07"
+      ],
+      "parameterMatrixRule": "平台使用各自准确repo/MR或PR/commit/workflow或pipeline/job/attempt/artifact/发布回执；不得引用另一平台报告补足。M0绑定稳定caseInstanceId。"
+    },
+    {
+      "id": "E02",
+      "title": "GitLab完整软件生命周期",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "REAL_E2E",
+      "groups": [
+        "L02",
+        "L04",
+        "L12",
+        "L14",
+        "S07",
+        "X03",
+        "X08",
+        "L13",
+        "L16",
+        "S04",
+        "S08",
+        "S06",
+        "N03",
+        "N14"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。 专用固定版本GitLab项目/CI runner和测试Release渠道。 Runtime侧不设置LLM Profile、Provider或模型API Key。",
+      "steps": [
+        "通过Runtime安装器安装独立服务与一份含Expert Skill/HTTP MCP配置的插件；Codex加载Skill并实际连接HTTP。",
+        "独立完成GitLab分支向导，不要求GitHub字段",
+        "按E01的范围经真实MR、pipeline、job/artifact、候选和双方验证",
+        "授权测试Release发布、下载回读、交付及反馈",
+        "在每个基础阶段验证适用运行前置、输入、权限和完成证据；对冻结的未完成/缺失/失败/未知代表性组合拒绝后继，再恢复合法路径。"
+      ],
+      "expected": "GitLab完整真实路径通过，不能复用GitHub或mock作为替代。",
+      "requiredEvidence": [
+        "GitLab版本/project/MR/commit/pipeline/job/attempt/artifact回执",
+        "双方报告和发布/下载证据",
+        "Host与浏览器trace",
+        "服务侧无独立LLM配置及直接模型调用的执行证据",
+        "Skill/插件/服务版本、Codex实际调用与阶段准入关联",
+        "CV03: 阶段准入回执、预算账本、实际外部调用计数、计时依据和无额外任务的证据。",
+        "CV07: 冻结参数矩阵、测试收集清单及逐实例候选绑定结果；维持64组/22主场景不等于参数化用例总数已定。"
+      ],
+      "requiredVariants": [
+        "开发E2E不强制RC命名",
+        "候选改变后重验受影响项",
+        "完整八阶段运行准入矩阵",
+        "双方反馈与发布回读"
+      ],
+      "requiredCoverageVariants": [
+        "CV03",
+        "CV07"
+      ],
+      "parameterMatrixRule": "平台使用各自准确repo/MR或PR/commit/workflow或pipeline/job/attempt/artifact/发布回执；不得引用另一平台报告补足。M0绑定稳定caseInstanceId。"
+    },
+    {
+      "id": "E03",
+      "title": "向导缺项和启用边界",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "REAL_E2E",
+      "groups": [
+        "L01",
+        "L02",
+        "L03",
+        "L04",
+        "L13",
+        "L14",
+        "L15",
+        "L16",
+        "X01",
+        "N05",
+        "N04",
+        "D02",
+        "D07",
+        "N06",
+        "N13",
+        "L08",
+        "S02",
+        "X06",
+        "L12",
+        "S04",
+        "S08",
+        "N08",
+        "S06",
+        "S07",
+        "X08",
+        "N03",
+        "N14"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。",
+      "steps": [
+        "按八阶段schema逐一移除/伪造必需配置，从Expert/API/CLI/MCP/图形/YAML尝试生效",
+        "中断重连向导，复用已有有效答案",
+        "缺资产交接owner准备，再绑定回Runtime",
+        "未启用聊天与启用后缺项两种路径分别验证",
+        "分别从Expert向导、已有YAML、发行包允许模板和已迁移缺项项目进入：补齐配置、校验/启用及新实例绑定，核对有效语义一致。",
+        "实际Host显式退出受管模式再接入：原CI/未决回执保留，不自动取消/重派；读取当前服务状态。适用授权复用，已变化的范围/修订/权限拒绝旧批准。"
+      ],
+      "expected": "缺项只能存草稿，不能生效/新执行；不用未来报告假装初始化完成；普通聊天不受强制接管。",
+      "requiredEvidence": [
+        "按字段和入口参数化结果",
+        "缺口及revision回执",
+        "真实Host问答与owner交接证据",
+        "EX01–EX12中本场景指定子用例的固定输入、真实结果与原始证据",
+        "所绑定MC变体的真实Host/浏览器trace、前后revision/active/实例pins、权限与准入/错误/幂等回执",
+        "CV01: 服务准入回执、入口来源、输入/有效定义摘要、启用版本与新实例pins；不能只以编辑器打开文件作为导入通过。",
+        "CV02: 权限/引用版本、预览与提交时序、拒绝回执、active和历史实例前后快照。",
+        "CV03: 阶段准入回执、预算账本、实际外部调用计数、计时依据和无额外任务的证据。",
+        "CV05: 实际对话/工具调用、退出前后服务状态、授权对象摘要、新旧修订及恢复请求回执。",
+        "CV07: 冻结参数矩阵、测试收集清单及逐实例候选绑定结果；维持64组/22主场景不等于参数化用例总数已定。"
+      ],
+      "requiredVariants": [
+        "GitHub",
+        "GitLab",
+        "缺Ontology",
+        "缺Harness",
+        "占位/过期/越权credentialRef",
+        "不要求Runtime模型账号/LLM Profile",
+        "Git/服务认证缺失仍拒绝，不因无LLM要求而免除其他配置",
+        "MC01: 真实Codex内完成八阶段向导、准确定义启用及读回，不要求打开Dashboard或重复确认已有适用授权。",
+        "MC03: 缺必填、非法扩展、失效引用、无启用权限及CSRF均拒绝；保留草稿和旧active，修复后可在原入口重提。"
+      ],
+      "requiredExtensionSubcases": [
+        "EX01",
+        "EX02",
+        "EX12"
+      ],
+      "requiredMinimalClosureVariants": [
+        "MC01",
+        "MC03"
+      ],
+      "requiredCoverageVariants": [
+        "CV01",
+        "CV02",
+        "CV03",
+        "CV05",
+        "CV07"
+      ]
+    },
+    {
+      "id": "E04",
+      "title": "Base发布者保护与服务端强制门禁",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "REAL_E2E",
+      "groups": [
+        "L03",
+        "L05",
+        "L09",
+        "L13",
+        "S02",
+        "X04"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。",
+      "steps": [
+        "修改允许配置与扩展并校验",
+        "分别篡改官方Base路径/字节/id/digest、删除必需阶段、伪造APPROVED/PASS",
+        "以项目管理员及不同入口请求生效和阶段准入"
+      ],
+      "expected": "只有受支持的项目扩展生效；受保护Base和所有必需门禁无法被项目配置或Agent声明削弱。",
+      "requiredEvidence": [
+        "Base安装来源清单/摘要",
+        "每入口拒绝回执",
+        "合法扩展保存回读",
+        "EX01–EX12中本场景指定子用例的固定输入、真实结果与原始证据"
+      ],
+      "requiredVariants": [
+        "图形",
+        "YAML",
+        "HTTP API",
+        "CLI",
+        "MCP"
+      ],
+      "requiredExtensionSubcases": [
+        "EX01",
+        "EX02",
+        "EX03",
+        "EX04",
+        "EX05",
+        "EX06",
+        "EX07",
+        "EX11",
+        "EX12"
+      ]
+    },
+    {
+      "id": "E05",
+      "title": "修订固定与候选漂移",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "REAL_E2E",
+      "groups": [
+        "L06",
+        "L10",
+        "L11",
+        "S03",
+        "X05",
+        "N13",
+        "L04",
+        "D04",
+        "X06",
+        "X07"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。",
+      "steps": [
+        "启动实例后编辑草稿/升级Base或owner资产",
+        "对旧实例核对原pins，对新实例重新校验",
+        "改变源码/构建配置/制品后重用旧验收尝试发布准入"
+      ],
+      "expected": "原实例不被重写；新候选的受影响证据必须重验，不能失败后缩减必需检查。",
+      "requiredEvidence": [
+        "旧新定义和资产摘要",
+        "候选清单/影响分析",
+        "拒绝与重验证回执",
+        "EX01–EX12中本场景指定子用例的固定输入、真实结果与原始证据",
+        "所绑定MC变体的真实Host/浏览器trace、前后revision/active/实例pins、权限与准入/错误/幂等回执",
+        "CV06: 复用依据/有效期、owner原生决定与回执、资产/要求摘要、关联新旧绑定和原Run执行次数。"
+      ],
+      "requiredVariants": [
+        "非RC有效候选",
+        "仅RC名无真实制品",
+        "资产latest漂移",
+        "MC05: 新定义启用不改变在途实例，后续获准创建的新实例明确绑定新修订；不自动创建/启动任务或批准发布。"
+      ],
+      "requiredExtensionSubcases": [
+        "EX09",
+        "EX10",
+        "EX11"
+      ],
+      "requiredMinimalClosureVariants": [
+        "MC05"
+      ],
+      "requiredCoverageVariants": [
+        "CV06"
+      ]
+    },
+    {
+      "id": "E06",
+      "title": "真实图形与YAML双向编辑",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "REAL_E2E",
+      "groups": [
+        "D01",
+        "D02",
+        "D03",
+        "D04",
+        "D08",
+        "N10",
+        "L04",
+        "L03",
+        "D07",
+        "N06",
+        "N08",
+        "L08",
+        "L16",
+        "S02",
+        "X06",
+        "S01"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。 发行包静态UI，真实浏览器。",
+      "steps": [
+        "上方SeeCode调整允许的属性/节点/边/布局，核对下方YAML",
+        "修改YAML核对图形，保存并重启服务后读回",
+        "同时打开两编辑客户端制造revision冲突",
+        "切项目/离开页面检查未保存草稿提示",
+        "关闭Codex，在编辑页预览准确差异并保存启用；检查失败/并发/重启读回及在途实例固定版本",
+        "分别用只读、草稿编辑但无启用权、具备启用权的身份执行正反路径；预览后撤权/换引用时启用拒绝。",
+        "在启用提交前、事务中、提交后响应前进行受控进程故障，恢复并核对active、决定/审计和请求回执一致。同键同内容重放结果，同键异内容拒绝。"
+      ],
+      "expected": "双向编辑保留注释/受支持字段，错误不丢数据；冲突不覆盖；监控页无编辑器或YAML源码。 定义启用在原页面完成，无Codex往返；失败旧active不变，成功不自动运行或授予发布权。",
+      "requiredEvidence": [
+        "Playwright trace/截图",
+        "前后YAML和语义摘要",
+        "保存/冲突回执",
+        "SeeCode准确版本与许可",
+        "EX01–EX12中本场景指定子用例的固定输入、真实结果与原始证据",
+        "所绑定MC变体的真实Host/浏览器trace、前后revision/active/实例pins、权限与准入/错误/幂等回执",
+        "CV02: 权限/引用版本、预览与提交时序、拒绝回执、active和历史实例前后快照。",
+        "CV04: 注入点、持久记录和服务重启轨迹、请求键/内容摘要、启用审计与active对应关系。"
+      ],
+      "requiredVariants": [
+        "锁定项",
+        "非法循环/重复ID",
+        "未知字段/扩展",
+        "HTML脚本注入",
+        "键盘访问",
+        "MC02: 已有项目在真实浏览器完成图形/YAML修改、差异预览、保存并启用及重启读回；关闭Codex仍成功，无回聊天确认要求。",
+        "MC03: 缺必填、非法扩展、失效引用、无启用权限及CSRF均拒绝；保留草稿和旧active，修复后可在原入口重提。",
+        "MC04: 两个客户端并发或校验后修改不能用旧revision启用；提交后断连按同请求键核对，最多一次启用事件，无额外Run。",
+        "MC05: 新定义启用不改变在途实例，后续获准创建的新实例明确绑定新修订；不自动创建/启动任务或批准发布。"
+      ],
+      "requiredExtensionSubcases": [
+        "EX04",
+        "EX05",
+        "EX08",
+        "EX09"
+      ],
+      "requiredMinimalClosureVariants": [
+        "MC02",
+        "MC03",
+        "MC04",
+        "MC05"
+      ],
+      "requiredCoverageVariants": [
+        "CV02",
+        "CV04"
+      ]
+    },
+    {
+      "id": "E07",
+      "title": "真实监控断线和游标恢复",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "REAL_E2E",
+      "groups": [
+        "D04",
+        "D05",
+        "D06",
+        "D08",
+        "N11",
+        "D07",
+        "L08",
+        "L16",
+        "S02",
+        "N06",
+        "X06"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。",
+      "steps": [
+        "从受控CLI启动真实隔离实例，监控实际事件",
+        "断开网络/服务重启，观察陈旧标记",
+        "制造重复/乱序/游标过期后重连；切换项目",
+        "撤销读权限并观察已打开事件流"
+      ],
+      "expected": "准确固定版本图只显示可信状态；过期游标用快照补齐并说明缺口；撤权停止读取，不倒退或串项目，不返回编辑payload。",
+      "requiredEvidence": [
+        "事件序号/快照摘要",
+        "浏览器trace与时序",
+        "撤权拒绝回执",
+        "所绑定MC变体的真实Host/浏览器trace、前后revision/active/实例pins、权限与准入/错误/幂等回执",
+        "CV02: 权限/引用版本、预览与提交时序、拒绝回执、active和历史实例前后快照。",
+        "CV08: 阶段一致的映射表、发布下载摘要、当前服务/Skill/HTTP身份、实际安装后的两条闭环回执。"
+      ],
+      "requiredVariants": [
+        "无运行",
+        "未知状态",
+        "保留窗口已过",
+        "MC06.PRE: 准确候选中验证监控只读和身份不能写/启用/运行；不计为P04当前安装终验。"
+      ],
+      "requiredMinimalClosureVariants": [
+        "MC06"
+      ],
+      "requiredCoverageVariants": [
+        "CV02",
+        "CV08"
+      ]
+    },
+    {
+      "id": "E08",
+      "title": "独立版本与TypeScript发行包",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "PACKAGE_E2E_WITH_STATIC_PREREQUISITES",
+      "groups": [
+        "I01",
+        "I02",
+        "I06",
+        "N01",
+        "N02"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。",
+      "steps": [
+        "检查第一方核心strict编译、边界schema和真实vendor分类",
+        "在无父源码/daemon/开发依赖的干净目录安装Runtime发行包",
+        "与声明的不同版本owner发行包执行读/校验/向导/查询",
+        "检查父站导航、子项目版本和独立发行工作流",
+        "在无Codex插件、无LLM配置的隔离目录启动服务并使用允许CLI/API查询/校验；不把未连接Agent的编码阶段标就绪。"
+      ],
+      "expected": "核心TS政策成立且构建JS可运行；兼容矩阵有证据，不依赖父版本、不新发父产品。",
+      "requiredEvidence": [
+        "编译/源码分类报告（单独标静态证据）",
+        "干净安装与执行记录",
+        "组件版本/摘要/契约矩阵",
+        "父站和CI配置检查"
+      ],
+      "requiredVariants": [
+        "声明兼容组合",
+        "明确不兼容组合拒绝"
+      ]
+    },
+    {
+      "id": "E09",
+      "title": "标准Streamable HTTP协议",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "PROTOCOL_E2E",
+      "groups": [
+        "N03",
+        "L14",
+        "S06",
+        "S07",
+        "X08",
+        "N14"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。 已冻结协议版本/官方SDK及独立协议客户端。",
+      "steps": [
+        "按每个声明版本执行发现、适用初始化及工具调用",
+        "核对JSON响应和该版本声明的流式/错误/取消行为",
+        "提交不支持版本、元数据冲突、错误Content-Type、无效JSON/参数/未知方法"
+      ],
+      "expected": "遵循所声明版本；不混淆2026无session协议与旧版握手；错误明确且不产生业务副作用。",
+      "requiredEvidence": [
+        "协议客户端原始脱敏请求/响应",
+        "协议/SDK版本锁",
+        "与官方规范的用例映射",
+        "CV07: 冻结参数矩阵、测试收集清单及逐实例候选绑定结果；维持64组/22主场景不等于参数化用例总数已定。"
+      ],
+      "requiredVariants": [
+        "每个声明协议版本",
+        "兼容版本如声明则单独运行"
+      ],
+      "requiredCoverageVariants": [
+        "CV07"
+      ]
+    },
+    {
+      "id": "E10",
+      "title": "当前Codex真实HTTP插件入口",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "REAL_E2E",
+      "groups": [
+        "L07",
+        "I03",
+        "N04",
+        "L04",
+        "L02",
+        "L15",
+        "N05",
+        "N08"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。",
+      "steps": [
+        "统一安装器安装独立服务及一份插件，验证其中Expert Skill和HTTP MCP配置同时就绪。",
+        "在当前Host使用HTTP MCP完成发现、向导与授权工具调用",
+        "同项目由CLI/浏览器读回",
+        "刷新插件连接/重新进入会话，核对服务与实例身份",
+        "Runtime不设LLM账号，Codex使用自身推理和工具能力完成推进；核对Skill只是指引，准入实际由服务端执行。"
+      ],
+      "expected": "HTTP主入口真实通过；薄stdio通过不能代替；无父插件也可完成，刷新不创建另一份状态。 不安装两份独立Skill/MCP插件，不要求Runtime模型账号，不复制Host模型凭据。",
+      "requiredEvidence": [
+        "当前Host版本/工具调用回执",
+        "插件和服务安装摘要",
+        "实际连接传输证据",
+        "三入口对象身份对照",
+        "所绑定MC变体的真实Host/浏览器trace、前后revision/active/实例pins、权限与准入/错误/幂等回执",
+        "CV05: 实际对话/工具调用、退出前后服务状态、授权对象摘要、新旧修订及恢复请求回执。"
+      ],
+      "requiredVariants": [
+        "MC01: 真实Codex内完成八阶段向导、准确定义启用及读回，不要求打开Dashboard或重复确认已有适用授权。"
+      ],
+      "requiredMinimalClosureVariants": [
+        "MC01"
+      ],
+      "requiredCoverageVariants": [
+        "CV05"
+      ]
+    },
+    {
+      "id": "E11",
+      "title": "多客户端和项目权限隔离",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "REAL_E2E",
+      "groups": [
+        "S02",
+        "N05",
+        "L02",
+        "L04",
+        "L15",
+        "N08"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。",
+      "steps": [
+        "两个客户端分别访问两个项目，同时编辑/查询",
+        "尝试跨scope工具调用/复用另一聊天的启用标识",
+        "退出一个客户端并从另一客户端读取",
+        "在仅连接但未授权项目执行时请求新Run"
+      ],
+      "expected": "项目权限与业务启用独立验证；无跨项目继承授权；服务继续运行。",
+      "requiredEvidence": [
+        "并发请求/拒绝回执",
+        "revision和scope对照",
+        "退出/重连记录",
+        "CV05: 实际对话/工具调用、退出前后服务状态、授权对象摘要、新旧修订及恢复请求回执。"
+      ],
+      "requiredVariants": [],
+      "requiredCoverageVariants": [
+        "CV05"
+      ]
+    },
+    {
+      "id": "E12",
+      "title": "HTTP与浏览器安全边界",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "REAL_E2E",
+      "groups": [
+        "D07",
+        "S02",
+        "N06",
+        "L03",
+        "D02",
+        "D04",
+        "L08",
+        "L16",
+        "X06"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。",
+      "steps": [
+        "从允许本机客户端和非法Origin/Host分别访问",
+        "用失效token、跨项目/path、恶意YAML/图形、CSRF请求和超限payload触发边界",
+        "撤权后查询及流式读取",
+        "审查可见日志/页面/错误体"
+      ],
+      "expected": "拒绝非法请求，token不进入URL/YAML/页面/普通日志；监控凭据不能写入，错误不泄露其他项目。",
+      "requiredEvidence": [
+        "负向响应/审计",
+        "浏览器trace",
+        "脱敏与日志扫描",
+        "scope和权限矩阵",
+        "所绑定MC变体的真实Host/浏览器trace、前后revision/active/实例pins、权限与准入/错误/幂等回执",
+        "CV02: 权限/引用版本、预览与提交时序、拒绝回执、active和历史实例前后快照。",
+        "CV08: 阶段一致的映射表、发布下载摘要、当前服务/Skill/HTTP身份、实际安装后的两条闭环回执。"
+      ],
+      "requiredVariants": [
+        "MC03: 缺必填、非法扩展、失效引用、无启用权限及CSRF均拒绝；保留草稿和旧active，修复后可在原入口重提。",
+        "MC06.PRE: 准确候选中验证监控只读和身份不能写/启用/运行；不计为P04当前安装终验。"
+      ],
+      "requiredMinimalClosureVariants": [
+        "MC03",
+        "MC06"
+      ],
+      "requiredCoverageVariants": [
+        "CV02",
+        "CV08"
+      ]
+    },
+    {
+      "id": "E13",
+      "title": "中断、取消和不确定业务结果",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "REAL_E2E",
+      "groups": [
+        "S01",
+        "S04",
+        "N08",
+        "D02",
+        "L12",
+        "L13",
+        "L16",
+        "S08",
+        "L04",
+        "L02",
+        "L15",
+        "N05"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。",
+      "steps": [
+        "在准入提交前、提交后响应前分别中断连接",
+        "用同一幂等键查原回执并恢复，不换键重派",
+        "CI/发布响应丢失时核对提供方实际状态",
+        "终止Host并观察Agent等待；中断查询流后再读实例",
+        "关闭Host后观察已运行CI与服务只读/校验能力；在Agent等待期间确认服务没有新模型调用、新Agent任务或自动唤起Codex。",
+        "用可计量的受管动作验证预算边界、耗尽、超时、重试及Loop上限；阻止新增动作但按契约核对已派发事实；记录真实调用次数。"
+      ],
+      "expected": "最多一个业务Run；不把传输取消当作已发生副作用回滚；必要时明确UNKNOWN等待核对。",
+      "requiredEvidence": [
+        "注入点/事务和Run记录",
+        "稳定请求键/提供方回执",
+        "服务重启和恢复轨迹",
+        "所绑定MC变体的真实Host/浏览器trace、前后revision/active/实例pins、权限与准入/错误/幂等回执",
+        "CV03: 阶段准入回执、预算账本、实际外部调用计数、计时依据和无额外任务的证据。",
+        "CV04: 注入点、持久记录和服务重启轨迹、请求键/内容摘要、启用审计与active对应关系。",
+        "CV05: 实际对话/工具调用、退出前后服务状态、授权对象摘要、新旧修订及恢复请求回执。"
+      ],
+      "requiredVariants": [
+        "提交前",
+        "提交后未知响应",
+        "owner单方成功",
+        "真实测试渠道响应丢失",
+        "模型/用量无法获取时明确未提供；不虚构或当零",
+        "需要精确用量上限但无计量时仅阻止相关任务",
+        "MC04: 两个客户端并发或校验后修改不能用旧revision启用；提交后断连按同请求键核对，最多一次启用事件，无额外Run。"
+      ],
+      "requiredMinimalClosureVariants": [
+        "MC04"
+      ],
+      "requiredCoverageVariants": [
+        "CV03",
+        "CV04",
+        "CV05"
+      ]
+    },
+    {
+      "id": "E14",
+      "title": "用户服务安装与维护",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "REAL_E2E",
+      "groups": [
+        "S01",
+        "N07"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。 隔离安装目录/自有launchd标签。",
+      "steps": [
+        "以统一安装器核验并安装独立服务和一份Skill+HTTP MCP插件，实际调用验证；退出Host后服务可用。",
+        "重复启动/占用端口/部分安装失败后诊断恢复",
+        "受控停止、重启、卸载并核对数据与其他服务"
+      ],
+      "expected": "唯一写入者；不误杀其他进程；部分安装可恢复；卸载保留用户数据和审计。 部分安装失败不能宣称全部成功；恢复后实际Host回读为准。",
+      "requiredEvidence": [
+        "安装/launchd/进程身份记录",
+        "端口冲突与锁回执",
+        "数据摘要和恢复报告"
+      ],
+      "requiredVariants": [
+        "服务已装但插件失败",
+        "插件已装但服务不可达",
+        "Skill版本/服务契约不匹配",
+        "Host需刷新连接，状态仍待验证"
+      ]
+    },
+    {
+      "id": "E15",
+      "title": "旧stdio入口与owner过渡",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "REAL_E2E",
+      "groups": [
+        "I03",
+        "I05",
+        "N09"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。 0.8.3隔离副本和声明兼容工具表。",
+      "steps": [
+        "旧支持调用经兼容桥转交新服务",
+        "新HTTP入口读取同一Run/project",
+        "执行双方历史组合入口的隔离验证/读取",
+        "检查新代码与发行归属、去重与退役提示"
+      ],
+      "expected": "无双写/第二状态机；owner路径可用；新增兼容代码归子项目，父项目不增加版本。",
+      "requiredEvidence": [
+        "两入口回执/版本",
+        "owner隔离读写证据",
+        "工具映射/弃用清单",
+        "发行归属"
+      ],
+      "requiredVariants": []
+    },
+    {
+      "id": "E16",
+      "title": "双方资产、失败恢复与反馈",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "REAL_E2E",
+      "groups": [
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08",
+        "I05",
+        "L08",
+        "L16",
+        "D07",
+        "S02",
+        "N06",
+        "L11"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。",
+      "steps": [
+        "缺/错/越权资产绑定与真实双方验证",
+        "CI绿但Harness失败、Ontology失败但其他通过时尝试准入",
+        "令一个owner超时/撤权，保留另一个已成功事实",
+        "恢复后按稳定事件身份送反馈并核对owner回执",
+        "分别验证合法证据复用和超期/上下文失配/已知缺陷拒绝；不可变材料缓存不能代替当前权限检查。",
+        "通过已发布owner既有能力执行REUSE和DELIVER反馈分支并核对实际决定、准确引用、新绑定/复验；不改变owner产品或重派原业务。"
+      ],
+      "expected": "不跨owner写库、不伪造PASS；真实L3内容评级不等于软件验收；反馈恢复不重跑原业务Run。",
+      "requiredEvidence": [
+        "双方原生报告/标准/资产摘要",
+        "独立回读和准入拒绝",
+        "outbox/inbox与owner回执",
+        "CV02: 权限/引用版本、预览与提交时序、拒绝回执、active和历史实例前后快照。",
+        "CV06: 复用依据/有效期、owner原生决定与回执、资产/要求摘要、关联新旧绑定和原Run执行次数。"
+      ],
+      "requiredVariants": [
+        "未知响应",
+        "重复反馈",
+        "scope错配",
+        "新资产与旧实例"
+      ],
+      "requiredCoverageVariants": [
+        "CV02",
+        "CV06"
+      ]
+    },
+    {
+      "id": "E17",
+      "title": "一致备份、迁移与回退",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "REAL_E2E",
+      "groups": [
+        "I04",
+        "S03",
+        "N13",
+        "L01",
+        "L03",
+        "L04",
+        "L13"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。 授权只读历史副本及一致备份。",
+      "steps": [
+        "核对旧安装/状态身份，验证一致备份",
+        "隔离迁移并读取历史PENDING/NOT_RUN和旧pins",
+        "注入迁移失败/未知schema/兼容不符",
+        "按回退计划恢复旧格式，保全迁移后新证据"
+      ],
+      "expected": "不覆盖私有资产或历史决定；未初始化项目不变ACTIVE；旧程序不读不兼容新库，新证据不丢。",
+      "requiredEvidence": [
+        "前后schema/数据摘要",
+        "备份一致性和迁移日志",
+        "失败/回退报告",
+        "旧新证据清单",
+        "EX01–EX12中本场景指定子用例的固定输入、真实结果与原始证据",
+        "CV01: 服务准入回执、入口来源、输入/有效定义摘要、启用版本与新实例pins；不能只以编辑器打开文件作为导入通过。"
+      ],
+      "requiredVariants": [],
+      "requiredExtensionSubcases": [
+        "EX10"
+      ],
+      "requiredCoverageVariants": [
+        "CV01"
+      ]
+    },
+    {
+      "id": "E18",
+      "title": "CI证据与发布权限失配",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "REAL_E2E",
+      "groups": [
+        "S04",
+        "S06",
+        "S07",
+        "L11",
+        "X03",
+        "N12",
+        "L12",
+        "L13",
+        "L16",
+        "S08",
+        "L14",
+        "X08",
+        "N03",
+        "N14"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。 两个真实专用平台。",
+      "steps": [
+        "制造同名成功check但错误commit/attempt，必需job被skip，fork凭据缺失",
+        "伪造报告来源/摘要或使用旧候选报告",
+        "无准确发布权限尝试准入",
+        "测试渠道发布部分成功/响应不明后对账"
+      ],
+      "expected": "不依靠名称/绿灯或自报PASS放行；不盲目重复发布；已发生事实可独立核对。",
+      "requiredEvidence": [
+        "真实平台回执/原始报告",
+        "准入拒绝与对账轨迹",
+        "测试发布制品摘要",
+        "CV03: 阶段准入回执、预算账本、实际外部调用计数、计时依据和无额外任务的证据。",
+        "CV07: 冻结参数矩阵、测试收集清单及逐实例候选绑定结果；维持64组/22主场景不等于参数化用例总数已定。"
+      ],
+      "requiredVariants": [
+        "GitHub",
+        "GitLab"
+      ],
+      "requiredCoverageVariants": [
+        "CV03",
+        "CV07"
+      ]
+    },
+    {
+      "id": "E19",
+      "title": "页面性能和可操作性",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "REAL_E2E",
+      "groups": [
+        "S05",
+        "D01",
+        "D08",
+        "N10",
+        "N11"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。 固定硬件/浏览器，标记合成1000修订/10000事件。",
+      "steps": [
+        "测量摘要分页、事件到页面延迟和断连提示",
+        "在约定桌面/窄屏视口与键盘路径使用两页",
+        "核对加载/空/错误/SeeCode失败/权限变化状态"
+      ],
+      "expected": "单页≤50项且≤256KiB；首摘要p95≤2秒，落库到页面p95≤5秒，断连15秒内提示；图失败仍可读状态，不能静默丢定义。",
+      "requiredEvidence": [
+        "固定测量配置/原始时序",
+        "浏览器trace/截图",
+        "分页payload统计"
+      ],
+      "requiredVariants": []
+    },
+    {
+      "id": "E20",
+      "title": "准确候选与验收分母检查",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "PRE_RELEASE",
+      "kind": "RELEASE_QUALIFICATION_WITH_E2E_EVIDENCE",
+      "groups": [
+        "P01",
+        "P02",
+        "I06",
+        "N14",
+        "L14",
+        "S06",
+        "S07",
+        "X08",
+        "N03"
+      ],
+      "preconditions": "准确Runtime候选发行包、隔离workspace、真实已发布Ontology/Harness与隔离测试资产；真实Codex Host及其已有推理/编码能力（Runtime无独立模型配置）和已冻结权限预算。",
+      "steps": [
+        "冻结candidate源码/构建/依赖/制品与用例集合，运行全部发布前场景",
+        "检查每条必需需求与变体都有准确原始证据",
+        "用空测试集/skip/缺variant/错误candidate报告验证发布检查会拒绝",
+        "对照双语README、技术文档、Base、插件、命令和能力矩阵",
+        "核对README/Skill/工具说明/配置schema均不要求Runtime LLM Profile，不宣称服务能自行推理编码或HTTP能自动驱动Codex。",
+        "逐caseInstanceId对比冻结参数清单与实际收集/结果，覆盖原声明的字段/入口/平台/协议版本；缺项/skip/xfail/空集/错候选均拒绝。",
+        "核对P04只能由POST_RELEASE的E22完成；CV01–CV08与MC06分阶段证据纳入报告，不把静态检查算作真实业务E2E。"
+      ],
+      "expected": "62组发布前要求可追溯且均通过；零用例/跳过/mocks不能填实测缺口；候选变更触发重验；形成准确发布审阅包。",
+      "requiredEvidence": [
+        "需求-用例-证据矩阵",
+        "完整CI/真实E2E报告",
+        "负向验收检查报告",
+        "文档链接/行为核对与候选清单",
+        "EX01–EX12中本场景指定子用例的固定输入、真实结果与原始证据",
+        "CV07: 冻结参数矩阵、测试收集清单及逐实例候选绑定结果；维持64组/22主场景不等于参数化用例总数已定。"
+      ],
+      "requiredVariants": [],
+      "requiredExtensionSubcases": [
+        "EX12"
+      ],
+      "requiredCoverageVariants": [
+        "CV07"
+      ]
+    },
+    {
+      "id": "E21",
+      "title": "Runtime公开发行和下载",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "POST_RELEASE",
+      "kind": "REAL_E2E",
+      "groups": [
+        "P03",
+        "N01",
+        "N14"
+      ],
+      "preconditions": "准确候选全部发布前门禁通过且拥有适用发布授权。",
+      "steps": [
+        "在Runtime仓库发布准确Preview Tag/Release及声明制品",
+        "从公开Release下载全部支持包/插件/清单并核对摘要",
+        "核对发行说明、README/技术文档和父导航"
+      ],
+      "expected": "Runtime独立发行完成；公开包与已测候选一致；父项目无新产品版本。",
+      "requiredEvidence": [
+        "GitHub Release/Tag/commit链接",
+        "下载摘要清单",
+        "文档与父导航证据"
+      ],
+      "requiredVariants": []
+    },
+    {
+      "id": "E22",
+      "title": "当前Codex安装部署与终验",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "phase": "POST_RELEASE",
+      "kind": "REAL_E2E",
+      "groups": [
+        "P04",
+        "N04",
+        "N07",
+        "N14",
+        "D04",
+        "D07"
+      ],
+      "preconditions": "E21通过，一致备份与适用安装授权；当前Host可刷新连接。",
+      "steps": [
+        "用公开下载包的统一安装器安装独立服务及一份Skill+HTTP MCP插件，受控切换旧入口，核对兼容及凭据引用。",
+        "回读真实安装版本/协议/服务身份，完成Expert向导、图形/YAML与只读监控",
+        "在约定隔离测试项目复核已授权闭环和迁移结果",
+        "逐组核对64组和固定变体/交付证据，保留失败修复历史",
+        "Runtime无模型账号完成当前Codex实测；若Host需刷新，等待真实版本与工具回读后才结束安装验收。",
+        "公开包安装后，当前Codex执行对话初始化/启用；随后关闭Codex，在同一服务的Dashboard编辑页独立修改/启用并核对准入回执。仅使用隔离测试项目。"
+      ],
+      "expected": "当前Codex实际使用正确发行包；无缓存旧版本假通过、无未完成必需项；既有owner入口及数据保持可用。",
+      "requiredEvidence": [
+        "安装/备份/服务身份报告",
+        "当前Host实际HTTP回执与浏览器trace",
+        "64组终验矩阵及未完成项清单应为空",
+        "所绑定MC变体的真实Host/浏览器trace、前后revision/active/实例pins、权限与准入/错误/幂等回执",
+        "CV08: 阶段一致的映射表、发布下载摘要、当前服务/Skill/HTTP身份、实际安装后的两条闭环回执。"
+      ],
+      "requiredVariants": [
+        "MC06.POST: 在公开发行安装后复核监控只读、两入口同一状态和定义启用/业务决定分离；完成P04。",
+        "MC01.POST: 公开下载包在当前安装中重走关键闭环；不以候选隔离环境的旧结果替代。",
+        "MC02.POST: 公开下载包在当前安装中重走关键闭环；不以候选隔离环境的旧结果替代。"
+      ],
+      "requiredMinimalClosureVariants": [
+        "MC06",
+        "MC01",
+        "MC02"
+      ],
+      "requiredCoverageVariants": [
+        "CV08"
+      ]
+    }
+  ],
+  "extensions": [
+    {
+      "id": "EX01",
+      "title": "准确单Base与项目隔离",
+      "mainCases": [
+        "E03",
+        "E04"
+      ],
+      "groups": [
+        "L01",
+        "L09"
+      ],
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "steps": "两个项目继承同一可信Base分别配置；尝试latest、多Base、project继承project和替代路径。",
+      "expected": "合法解析互不影响且Base字节不变；非法继承明确拒绝。",
+      "evidenceRequired": [
+        "准确Base/项目/候选版本与摘要",
+        "输入/错误路径或准入回执",
+        "适用的实际owner/工具及浏览器trace",
+        "原始失败/恢复记录"
+      ],
+      "actualEvidence": []
+    },
+    {
+      "id": "EX02",
+      "title": "字段分类与完整配置",
+      "mainCases": [
+        "E03",
+        "E04"
+      ],
+      "groups": [
+        "L03",
+        "L05"
+      ],
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "steps": "填写允许的GitHub/GitLab配置；提交未知字段/重复键/锁定路径覆盖；验证缺少所选分支必填项。",
+      "expected": "只接受schema开放字段，非法/缺项不能生效；合法分支无需另一提供方字段。",
+      "evidenceRequired": [
+        "准确Base/项目/候选版本与摘要",
+        "输入/错误路径或准入回执",
+        "适用的实际owner/工具及浏览器trace",
+        "原始失败/恢复记录"
+      ],
+      "actualEvidence": []
+    },
+    {
+      "id": "EX03",
+      "title": "阈值和预算约束",
+      "mainCases": [
+        "E04"
+      ],
+      "groups": [
+        "L05",
+        "L09"
+      ],
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "steps": "对min/max/enum/fixed四类规则分别提交边界内、边界值和越界值，并尝试扩大已冻结Run预算。",
+      "expected": "按显式方向与范围判定；不能凭直觉猜强化方向或增加既有Run额度。",
+      "evidenceRequired": [
+        "准确Base/项目/候选版本与摘要",
+        "输入/错误路径或准入回执",
+        "适用的实际owner/工具及浏览器trace",
+        "原始失败/恢复记录"
+      ],
+      "actualEvidence": []
+    },
+    {
+      "id": "EX04",
+      "title": "四槽位合法扩展和真实汇合",
+      "mainCases": [
+        "E04",
+        "E06"
+      ],
+      "groups": [
+        "L05",
+        "D03"
+      ],
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "steps": "在每个声明槽位增加合法project阶段；同槽并行两个检查，让一项失败/未知/未运行，再全部通过。",
+      "expected": "前驱未完成不得执行；所有附加项满足且原门禁满足才允许后继；并行不是旁路。",
+      "evidenceRequired": [
+        "准确Base/项目/候选版本与摘要",
+        "输入/错误路径或准入回执",
+        "适用的实际owner/工具及浏览器trace",
+        "原始失败/恢复记录"
+      ],
+      "actualEvidence": []
+    },
+    {
+      "id": "EX05",
+      "title": "图依赖攻击拒绝",
+      "mainCases": [
+        "E04",
+        "E06"
+      ],
+      "groups": [
+        "L05",
+        "D03"
+      ],
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "steps": "尝试删基础节点、跨槽连线、直接跳发布、循环、孤立节点、重复基础ID、OR/required:false/continue-on-error。",
+      "expected": "所有非法路径在定义校验或阶段准入中拒绝；不能仅前端隐藏按钮。",
+      "evidenceRequired": [
+        "准确Base/项目/候选版本与摘要",
+        "输入/错误路径或准入回执",
+        "适用的实际owner/工具及浏览器trace",
+        "原始失败/恢复记录"
+      ],
+      "actualEvidence": []
+    },
+    {
+      "id": "EX06",
+      "title": "受限动作与候选保护",
+      "mainCases": [
+        "E04"
+      ],
+      "groups": [
+        "L03",
+        "L05",
+        "L09"
+      ],
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "steps": "提交无注册action、错误scope、任意shell/JS、动态YAML标签、新提供方，以及candidate-checks中的候选修改/发布动作。",
+      "expected": "无权限/无能力不能运行；候选保护成立；已审阅CI引用不自动授权其他动作。",
+      "evidenceRequired": [
+        "准确Base/项目/候选版本与摘要",
+        "输入/错误路径或准入回执",
+        "适用的实际owner/工具及浏览器trace",
+        "原始失败/恢复记录"
+      ],
+      "actualEvidence": []
+    },
+    {
+      "id": "EX07",
+      "title": "基础条件与新增条件合并",
+      "mainCases": [
+        "E04"
+      ],
+      "groups": [
+        "L05",
+        "L09"
+      ],
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "steps": "分别制造Base失败扩展通过、Base通过扩展失败、全部通过但无发布权限。",
+      "expected": "原条件与附加条件按AND评估，前两种不能推进；技术通过仍不授发布权。",
+      "evidenceRequired": [
+        "准确Base/项目/候选版本与摘要",
+        "输入/错误路径或准入回执",
+        "适用的实际owner/工具及浏览器trace",
+        "原始失败/恢复记录"
+      ],
+      "actualEvidence": []
+    },
+    {
+      "id": "EX08",
+      "title": "图形源码与来源映射",
+      "mainCases": [
+        "E06"
+      ],
+      "groups": [
+        "D03",
+        "N10"
+      ],
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "steps": "从图形和YAML分别增加/编辑/删除草稿扩展，保存重启；查看基础/覆盖/新增来源及错误定位。",
+      "expected": "受支持语义和注释保留，非法字段不静默忽略；基础ID可识别，监控无编辑能力。",
+      "evidenceRequired": [
+        "准确Base/项目/候选版本与摘要",
+        "输入/错误路径或准入回执",
+        "适用的实际owner/工具及浏览器trace",
+        "原始失败/恢复记录"
+      ],
+      "actualEvidence": []
+    },
+    {
+      "id": "EX09",
+      "title": "实例固定与展示变更",
+      "mainCases": [
+        "E05",
+        "E06"
+      ],
+      "groups": [
+        "L06",
+        "N10"
+      ],
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "steps": "运行绑定后新增/删除检查，修改布局/注释，并并发提交草稿。",
+      "expected": "新语义形成新修订且不改变旧实例；展示变化不修改语义或要求无意义业务重验；冲突拒绝覆盖。",
+      "evidenceRequired": [
+        "准确Base/项目/候选版本与摘要",
+        "输入/错误路径或准入回执",
+        "适用的实际owner/工具及浏览器trace",
+        "原始失败/恢复记录"
+      ],
+      "actualEvidence": []
+    },
+    {
+      "id": "EX10",
+      "title": "Base升级与回退",
+      "mainCases": [
+        "E05",
+        "E17"
+      ],
+      "groups": [
+        "L06",
+        "N13"
+      ],
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "steps": "测试Base新增必填字段、移除槽位、收紧阈值和旧schema，随后演练回退。",
+      "expected": "升级先展示差异，缺项/不兼容阻止生效，不静默删扩展；旧实例和新证据保留。",
+      "evidenceRequired": [
+        "准确Base/项目/候选版本与摘要",
+        "输入/错误路径或准入回执",
+        "适用的实际owner/工具及浏览器trace",
+        "原始失败/恢复记录"
+      ],
+      "actualEvidence": []
+    },
+    {
+      "id": "EX11",
+      "title": "owner检查引用与当前义务",
+      "mainCases": [
+        "E04",
+        "E05"
+      ],
+      "groups": [
+        "L03",
+        "L05",
+        "L06"
+      ],
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "steps": "追加固定Harness要求/证据映射并验证真实报告；替换成latest/伪PASS，失败后删检查请求继续同一Target。",
+      "expected": "准确owner引用/真实结果才成立；删草稿扩展不能免除当前Target义务，Runtime不发布或改写owner资产。",
+      "evidenceRequired": [
+        "准确Base/项目/候选版本与摘要",
+        "输入/错误路径或准入回执",
+        "适用的实际owner/工具及浏览器trace",
+        "原始失败/恢复记录"
+      ],
+      "actualEvidence": []
+    },
+    {
+      "id": "EX12",
+      "title": "全入口一致与发行候选验收",
+      "mainCases": [
+        "E03",
+        "E04",
+        "E20"
+      ],
+      "groups": [
+        "L03",
+        "L05",
+        "L09"
+      ],
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "steps": "从Expert/MCP/HTTP API/CLI/图形/YAML提交同组合法与非法扩展；在准确发行候选重跑12子用例。",
+      "expected": "各入口共享服务端判定，缺任何必需变体不能以单元测试或图示代替完整通过。",
+      "evidenceRequired": [
+        "准确Base/项目/候选版本与摘要",
+        "输入/错误路径或准入回执",
+        "适用的实际owner/工具及浏览器trace",
+        "原始失败/恢复记录"
+      ],
+      "actualEvidence": []
+    }
+  ],
+  "closure": [
+    {
+      "id": "MC01",
+      "cases": [
+        "E03",
+        "E10",
+        "E22"
+      ],
+      "groups": [
+        "L04",
+        "N04"
+      ],
+      "requirement": "真实Codex内完成八阶段向导、准确定义启用及读回，不要求打开Dashboard或重复确认已有适用授权。",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "actualEvidence": []
+    },
+    {
+      "id": "MC02",
+      "cases": [
+        "E06",
+        "E22"
+      ],
+      "groups": [
+        "L04",
+        "D02",
+        "D08",
+        "N10"
+      ],
+      "requirement": "已有项目在真实浏览器完成图形/YAML修改、差异预览、保存并启用及重启读回；关闭Codex仍成功，无回聊天确认要求。",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "actualEvidence": []
+    },
+    {
+      "id": "MC03",
+      "cases": [
+        "E03",
+        "E06",
+        "E12"
+      ],
+      "groups": [
+        "L03",
+        "D02",
+        "D07",
+        "N06"
+      ],
+      "requirement": "缺必填、非法扩展、失效引用、无启用权限及CSRF均拒绝；保留草稿和旧active，修复后可在原入口重提。",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "actualEvidence": []
+    },
+    {
+      "id": "MC04",
+      "cases": [
+        "E06",
+        "E13"
+      ],
+      "groups": [
+        "D02",
+        "N08"
+      ],
+      "requirement": "两个客户端并发或校验后修改不能用旧revision启用；提交后断连按同请求键核对，最多一次启用事件，无额外Run。",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "actualEvidence": []
+    },
+    {
+      "id": "MC05",
+      "cases": [
+        "E05",
+        "E06"
+      ],
+      "groups": [
+        "L04",
+        "D04"
+      ],
+      "requirement": "新定义启用不改变在途实例，后续获准创建的新实例明确绑定新修订；不自动创建/启动任务或批准发布。",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "actualEvidence": []
+    },
+    {
+      "id": "MC06",
+      "cases": [
+        "E07",
+        "E12",
+        "E22"
+      ],
+      "groups": [
+        "D04",
+        "D07",
+        "P04"
+      ],
+      "requirement": "监控页及监控身份不能编辑/启用/控制运行；当前安装复核两入口同一权威状态，定义启用与业务决定分别留痕。",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "actualEvidence": [],
+      "phaseObligations": {
+        "PRE_RELEASE": {
+          "cases": [
+            "E07",
+            "E12"
+          ],
+          "requirements": [
+            "D04",
+            "D07"
+          ]
+        },
+        "POST_RELEASE": {
+          "cases": [
+            "E22"
+          ],
+          "requirements": [
+            "P04",
+            "D04",
+            "D07"
+          ]
+        }
+      }
+    }
+  ],
+  "coverage": [
+    {
+      "id": "CV01",
+      "auditFinding": "F01",
+      "title": "初始化入口的正向闭环未逐项展开",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "mainCases": [
+        "E03",
+        "E17"
+      ],
+      "groups": [
+        "L01",
+        "L03",
+        "L04",
+        "L13",
+        "N13"
+      ],
+      "steps": [
+        "对方案声明支持的每一种入口，分别验证合法输入→草稿→相同有效图/语义摘要→受控启用→新实例准确绑定。",
+        "保留缺项/非法输入拒绝；限定使用本版实际声明的模板，不引入模板商城。"
+      ],
+      "expected": "服务准入回执、入口来源、输入/有效定义摘要、启用版本与新实例pins；不能只以编辑器打开文件作为导入通过。",
+      "actualEvidence": [],
+      "evidenceKind": "REAL_PRODUCT_OR_EXPLICIT_FAULT_INJECTION_AS_APPLICABLE"
+    },
+    {
+      "id": "CV02",
+      "auditFinding": "F02",
+      "title": "权限分层及校验后的配置失效需要准确时序",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "mainCases": [
+        "E03",
+        "E06",
+        "E07",
+        "E12",
+        "E16"
+      ],
+      "groups": [
+        "L08",
+        "L16",
+        "D07",
+        "S02",
+        "N06",
+        "X06"
+      ],
+      "steps": [
+        "使用服务已有scope/能力建立三种测试身份或授权组合；验证每类允许和拒绝行为，不新增成员管理产品。",
+        "在校验后、提交前及定义启用后分别撤销必要权限或使依赖失效；相关新动作拒绝，旧事实仍按其权限可读，不改写成失败或重新执行。",
+        "恢复有效配置后在原入口重新校验；旧校验成功不能自动复活失效授权。"
+      ],
+      "expected": "权限/引用版本、预览与提交时序、拒绝回执、active和历史实例前后快照。",
+      "actualEvidence": [],
+      "evidenceKind": "REAL_PRODUCT_OR_EXPLICIT_FAULT_INJECTION_AS_APPLICABLE"
+    },
+    {
+      "id": "CV03",
+      "auditFinding": "F03",
+      "title": "八阶段运行准入及实际预算边界未形成完整矩阵",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "mainCases": [
+        "E01",
+        "E02",
+        "E03",
+        "E13",
+        "E18"
+      ],
+      "groups": [
+        "L12",
+        "L13",
+        "L16",
+        "S04",
+        "S08"
+      ],
+      "steps": [
+        "为每个基础阶段冻结前置/输入/适用权限和完成证据，分别覆盖允许与阻止推进的代表性组合。",
+        "通过受支持真实受管动作验证时间、次数及适用资源上限的边界内/达到上限/耗尽；计量不可得继续采用原有阻止策略。",
+        "耗尽时阻止新增动作，同时仍允许按契约查询和核对已派发任务，保留未知状态，不超额重试或强制宣称已取消。"
+      ],
+      "expected": "阶段准入回执、预算账本、实际外部调用计数、计时依据和无额外任务的证据。",
+      "actualEvidence": [],
+      "evidenceKind": "REAL_PRODUCT_OR_EXPLICIT_FAULT_INJECTION_AS_APPLICABLE"
+    },
+    {
+      "id": "CV04",
+      "auditFinding": "F04",
+      "title": "定义启用的持久化原子性缺少故障点断言",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "mainCases": [
+        "E06",
+        "E13"
+      ],
+      "groups": [
+        "L04",
+        "D02",
+        "S01",
+        "N08"
+      ],
+      "steps": [
+        "在提交前、事务中、提交后响应前设置可复现服务进程故障点；恢复后核对草稿、active、启用决定/审计一致。",
+        "同一请求键及同内容重试返回同结果；同键不同内容拒绝，不复用旧请求许可。",
+        "核对旧新客户端读到同一个结果，无多次启用、无重复业务Run；故障注入明确标识，真实发行服务执行恢复。"
+      ],
+      "expected": "注入点、持久记录和服务重启轨迹、请求键/内容摘要、启用审计与active对应关系。",
+      "actualEvidence": [],
+      "evidenceKind": "REAL_PRODUCT_OR_EXPLICIT_FAULT_INJECTION_AS_APPLICABLE"
+    },
+    {
+      "id": "CV05",
+      "auditFinding": "F05",
+      "title": "主动退出再接入及已有授权复用缺少完整对话轨迹",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "mainCases": [
+        "E03",
+        "E10",
+        "E11",
+        "E13"
+      ],
+      "groups": [
+        "L02",
+        "L04",
+        "L15",
+        "N05",
+        "N08"
+      ],
+      "steps": [
+        "真实Host中显式退出后保留历史与已派发CI，不自动取消、重放或将任务标完成。",
+        "重新接入读取服务器最新实例/定义，区别于旧聊天摘要；有适用授权时不重复要求相同确认。",
+        "范围、准确修订或权限变化时不得复用旧批准；真实缺失决定在当前入口处理，不强制往返Dashboard。"
+      ],
+      "expected": "实际对话/工具调用、退出前后服务状态、授权对象摘要、新旧修订及恢复请求回执。",
+      "actualEvidence": [],
+      "evidenceKind": "REAL_PRODUCT_OR_EXPLICIT_FAULT_INJECTION_AS_APPLICABLE"
+    },
+    {
+      "id": "CV06",
+      "auditFinding": "F06",
+      "title": "证据合法复用、缓存边界和反馈决定分支未展开",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "mainCases": [
+        "E05",
+        "E16"
+      ],
+      "groups": [
+        "L11",
+        "X05",
+        "X06",
+        "X07"
+      ],
+      "steps": [
+        "输入等价且仍有效时合法复用；超期、范围/候选失配、已知缺陷或权限失效时禁止拿缓存放行。",
+        "使用已发布owner既有能力分别走REUSE和DELIVER，核对真实决定、准确引用及所需重新绑定/受影响验证。",
+        "反馈单方成功、拒绝或恢复不得重跑原业务，不由Runtime越权发布owner资产；本项不授权owner产品升级。"
+      ],
+      "expected": "复用依据/有效期、owner原生决定与回执、资产/要求摘要、关联新旧绑定和原Run执行次数。",
+      "actualEvidence": [],
+      "evidenceKind": "REAL_PRODUCT_OR_EXPLICIT_FAULT_INJECTION_AS_APPLICABLE"
+    },
+    {
+      "id": "CV07",
+      "auditFinding": "F07",
+      "title": "GitHub/GitLab和必需变体尚不能形成准确验收分母",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "mainCases": [
+        "E01",
+        "E02",
+        "E03",
+        "E09",
+        "E18",
+        "E20"
+      ],
+      "groups": [
+        "L14",
+        "S06",
+        "S07",
+        "X08",
+        "N03",
+        "N14"
+      ],
+      "steps": [
+        "不机械增加所有组合；把原方案已承诺的工具分支、字段/入口、协议版本和失败变体展开为稳定caseInstanceId，分别绑定输入、预期、环境与证据。",
+        "GitLab须有自身MR/pipeline/job/attempt/artifact与反馈证据，E01的必需适用变体不能因文字引用而漏收集。",
+        "E20核对冻结实例清单与实际报告；漏项、空集合、skip/xfail及错误候选都阻止通过。版本、测试对象和预算在M0按真实环境确定，不在本审计中编造。"
+      ],
+      "expected": "冻结参数矩阵、测试收集清单及逐实例候选绑定结果；维持64组/22主场景不等于参数化用例总数已定。",
+      "actualEvidence": [],
+      "evidenceKind": "REAL_PRODUCT_OR_EXPLICIT_FAULT_INJECTION_AS_APPLICABLE"
+    },
+    {
+      "id": "CV08",
+      "auditFinding": "F08",
+      "title": "发布后P04混入发布前场景，安装终验需明确重走最小闭环",
+      "required": true,
+      "status": "NOT_EVALUATED",
+      "mainCases": [
+        "E07",
+        "E12",
+        "E22"
+      ],
+      "groups": [
+        "P04",
+        "D04",
+        "D07",
+        "N04",
+        "N07",
+        "N14"
+      ],
+      "steps": [
+        "从E07/E12的完成映射移除P04；其候选权限/监控验证保留在D04/D07/N06等发布前要求。P04由发布后的E22正式完成。",
+        "MC06按候选检查与日常安装复核两个执行阶段明确证据，不减少原要求。",
+        "E22用实际公开下载包及当前Codex，明确执行对话初始化/启用和Dashboard独立修改/启用的关键路径；不要求再次复制整套全量测试。",
+        "冻结Target内的要求到场景映射、TRACEABILITY和阶段过滤一致，禁止发布前凭候选结果提前标P04通过。"
+      ],
+      "expected": "阶段一致的映射表、发布下载摘要、当前服务/Skill/HTTP身份、实际安装后的两条闭环回执。",
+      "actualEvidence": [],
+      "evidenceKind": "REAL_PRODUCT_OR_EXPLICIT_FAULT_INJECTION_AS_APPLICABLE"
+    }
+  ],
+  "phasePolicy": {
+    "PRE_RELEASE": {
+      "requirements": 62,
+      "scenarios": 20
+    },
+    "POST_RELEASE": {
+      "requirements": [
+        "P03",
+        "P04"
+      ],
+      "scenarios": [
+        "E21",
+        "E22"
+      ]
+    }
+  },
+  "parameterMatrixStatus": "PENDING_M0_FREEZE",
+  "acceptanceStatus": "NOT_EVALUATED"
+}

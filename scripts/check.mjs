@@ -46,7 +46,7 @@ const expected = {
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "node scripts/check.mjs",
-    "test": "node --test tests/e2e/*.test.mjs"
+    "test": "node --test tests/e2e/*.test.mjs tests/governance.test.mjs"
   },
   "license": "Apache-2.0",
   "bin": {
@@ -58,6 +58,13 @@ const expected = {
   },
   "dependencies": {}
 };
+Object.assign(expected.scripts, {"roadmap:gate": "node scripts/roadmap.mjs --gate", "roadmap:check": "node scripts/roadmap.mjs --check", "roadmap:release": "node scripts/roadmap.mjs --release", "test:governance": "node --test tests/governance.test.mjs"});
+Object.assign(expected.devDependencies, {
+  '@playwright/test': '1.64.1', '@types/react': '19.3.0', '@types/react-dom': '19.3.0', vite: '8.3.5',
+});
+Object.assign(expected.dependencies, {
+  '@modelcontextprotocol/sdk': '1.32.2', yaml: '2.9.1', react: '19.3.1', 'react-dom': '19.3.1',
+});
 expected.exports['./workspace-migration'] = { types: './dist/workspace-migration.d.ts', import: './dist/workspace-migration.js' };
 expected.exports['./online'] = { types: './dist/online.d.ts', import: './dist/online.js' };
 const specifiers = source => [...source.matchAll(/^[\t ]*(?:import\s+(?:type\s+)?(?:(?:[\w$]+(?:\s*,\s*)?)?(?:\{[^}]*\}|\*\s+as\s+[\w$]+)?\s*from\s*)?|export\s+(?:type\s+)?(?:\{[^}]*\}|\*(?:\s+as\s+[\w$]+)?)\s+from\s*)['"]([^'"]+)['"]/gm)].map(match => match[1]);
@@ -91,8 +98,8 @@ export async function checkSource() {
   const lock = JSON.parse(await readFile(resolve(ROOT, 'package-lock.json'), 'utf8'));
   assert.equal(lock.name, pkg.name); assert.equal(lock.version, pkg.version);
   assert.equal(lock.lockfileVersion, 3); assert.equal(lock.requires, true);
-  assert.deepEqual(lock.packages[''], { name: pkg.name, version: pkg.version, license: pkg.license, bin: pkg.bin, engines: pkg.engines, devDependencies: pkg.devDependencies });
-  for (const [name, version] of Object.entries(pkg.devDependencies)) assert.equal(lock.packages['node_modules/' + name].version, version);
+  assert.deepEqual(lock.packages[''], { name: pkg.name, version: pkg.version, license: pkg.license, bin: pkg.bin, engines: pkg.engines, devDependencies: pkg.devDependencies, dependencies: pkg.dependencies });
+  for (const [name, version] of Object.entries({ ...pkg.devDependencies, ...pkg.dependencies })) assert.equal(lock.packages['node_modules/' + name].version, version);
   const adoption = JSON.parse(await readFile(resolve(ROOT, 'provenance/state-adoption.json'), 'utf8'));
   assert.deepEqual(adoption, {
     schema: 'runtime-state-adoption/v1',

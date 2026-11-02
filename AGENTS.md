@@ -50,3 +50,17 @@ The user corrected v0.7 scope: no Dashboard pages, web server or browser accepta
 ## Approved v0.8.1 asset readiness correction
 
 The current explicit user instruction authorizes the accepted parent `governance/asset-readiness-v081.json` plan through both full private project asset upgrades, conditional release and current Codex deployment. Follow its precise file binding and fixed acceptance; do not repeat routine confirmations. New shared v2 contracts are generated only by the parent. Preserve v1 behavior, historical bytes, native standards and private evidence. Content grades do not dispatch reconstruction or require business databases/SSH. Full acceptance and exact candidate evidence remain mandatory; no fabricated semantic decisions or PASS.
+
+## Runtime v0.9 approved independent evolution
+
+The current user-approved v0.9 plan and audit additions supersede the historical
+Dashboard exclusion and parent-owned integration boundary only for Runtime's
+independent lifecycle service and exactly two pages. Follow Runtime's
+`governance/roadmap.json`, `governance/target-v090.json`, acceptance catalog and
+`docs/architecture/runtime-v090-independence.md`; retain historical records.
+M0 formalizes governance and exact acceptance/environment bindings first. Product
+implementation requires its scoped work packet and prerequisites; all product
+results remain NOT_EVALUATED until actual evidence exists. No owner source or
+daily installation mutation is authorized by a scope check. Use the installed
+Runtime Expert/public planning workflow; absent retired orchestrator skills are
+not restored. Strict TypeScript remains required for new core logic.

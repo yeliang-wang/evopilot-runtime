@@ -127,3 +127,17 @@ This synchronized patch supports the parent transport guide and immutable conten
 ## v0.8.3 Preview documentation closure
 
 This synchronized maintenance release follows the accepted parent v0.8.1 plan and its 72 fixed variants. It corrects current-versus-historical guidance and installation routing, retains all original APIs and state semantics, and requires exact source, package, publication and installed readback evidence. No new product capability or execution authority is introduced.
+
+## Runtime v0.9 approved independent evolution
+
+The current user-approved v0.9 plan and audit additions supersede the historical
+Dashboard exclusion and parent-owned integration boundary only for Runtime's
+independent lifecycle service and exactly two pages. Follow Runtime's
+`governance/roadmap.json`, `governance/target-v090.json`, acceptance catalog and
+`docs/architecture/runtime-v090-independence.md`; retain historical records.
+M0 formalizes governance and exact acceptance/environment bindings first. Product
+implementation requires its scoped work packet and prerequisites; all product
+results remain NOT_EVALUATED until actual evidence exists. No owner source or
+daily installation mutation is authorized by a scope check. Use the installed
+Runtime Expert/public planning workflow; absent retired orchestrator skills are
+not restored. Strict TypeScript remains required for new core logic.

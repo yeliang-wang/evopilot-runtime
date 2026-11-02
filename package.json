@@ -41,14 +41,28 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "node scripts/check.mjs",
-    "test": "node --test tests/e2e/*.test.mjs"
+    "test": "node --test tests/e2e/*.test.mjs tests/governance.test.mjs",
+    "roadmap:gate": "node scripts/roadmap.mjs --gate",
+    "roadmap:check": "node scripts/roadmap.mjs --check",
+    "roadmap:release": "node scripts/roadmap.mjs --release",
+    "test:governance": "node --test tests/governance.test.mjs"
   },
   "license": "Apache-2.0",
   "bin": {
     "evopilot-next-runtime": "dist/cli.js"
   },
   "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "typescript": "5.9.3",
-    "@types/node": "24.19.2"
+    "vite": "8.3.5"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "yaml": "2.9.1"
   }
 }

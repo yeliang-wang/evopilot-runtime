@@ -1,0 +1,47 @@
+{
+  "schema": "evopilot-evolution-target/v1",
+  "id": "runtime-v090-independent-lifecycle",
+  "targetVersion": "0.9.0",
+  "roadmapDigest": "aeb36e9e9ee908bb74dcf0dee3712a12c2ab0d792f6e14216a46480d85469936",
+  "acceptanceDigest": "612f78eefdeae8af3f8170656cc6d31a7208ea91b7415a86ba49f2720091b023",
+  "sourceBaseline": "cbf46c713f5448a4feacf7990be09913c3fa4cf6",
+  "approvedPlanDigest": "6b7effbfbd3be312b50bcffef3cffc29b7d3ae2aa5b85cadccf8d86885cbadb3",
+  "status": "IMPLEMENTATION_AUTHORIZED_M0_IN_PROGRESS",
+  "milestones": [
+    "M0",
+    "M1",
+    "M2",
+    "M3",
+    "M4",
+    "M5",
+    "M6"
+  ],
+  "workPackets": {
+    "M0": {
+      "paths": [
+        "AGENTS.md",
+        "docs/roadmap.md",
+        "docs/architecture/runtime-v090-independence.md",
+        "governance/roadmap.json",
+        "governance/target-v090.json",
+        "governance/acceptance-v090.json",
+        "src/governance.ts",
+        "scripts/roadmap.mjs",
+        "scripts/check.mjs",
+        "tests/governance.test.mjs",
+        "package.json",
+        "package-lock.json"
+      ],
+      "purpose": "Formalize the approved architecture/Roadmap/Target and audit-complete acceptance; prepare environments and exact parameter bindings."
+    }
+  },
+  "beforeProductImplementation": [
+    "Pin current Host, HTTP MCP SDK/protocol compatibility and frontend dependencies",
+    "Freeze exact supported fields/entry/platform/phase test instances",
+    "Bind real dedicated GitHub/GitLab environments, scope, credentials references and resource budgets",
+    "Record applicable source paths and completed prerequisite evidence for M1 onward"
+  ],
+  "acceptanceStatus": "NOT_EVALUATED",
+  "releaseAuthorized": false,
+  "dailyInstallationAuthorized": false
+}
