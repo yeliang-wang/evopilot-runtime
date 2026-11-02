@@ -15,9 +15,13 @@ import { validateResourceDefinition, type BindingConnections } from './bindings.
 import { ciSourceRef, type PlatformArtifactArchive, type PlatformClient, type PlatformRunObservation, type PlatformRunRequest } from './platforms.js';
 import { MAX_ARCHIVE_BYTES, ciSourceDigest, readArtifactArchive, verifyCiArtifact, validateCandidateInput, type CandidateInput, type VerifiedCiArtifact } from './artifacts.js';
 import { ownerRequestDigest, type Owner, type OwnerRequest, type PublishedOwnerAdapter } from './published-owners.js';
+import type {SourceTreeObservation} from './source-tree.js';
+import type {NativeSourceScope} from '../native-types.js';
 
-const ADAPTER_ID='runtime-ci-owner-stage-v1';
-const ADAPTER_DIGEST=valueDigest({id:ADAPTER_ID,stages:['implementation','candidate','verification'],source:'verified-exact-commit/v1',candidate:'immutable-archive-consumption/v1',workflow:'runtime-ci/v1',owners:'native/v1',observation:'runtime-ci-owner-values/v1',continuation:'explicit-original-request/v1'});
+const LEGACY_ID='runtime-ci-owner-stage-v1';
+const LEGACY_DIGEST=valueDigest({id:LEGACY_ID,stages:['implementation','candidate','verification'],source:'verified-exact-commit/v1',candidate:'immutable-archive-consumption/v1',workflow:'runtime-ci/v1',owners:'native/v1',observation:'runtime-ci-owner-values/v1',continuation:'explicit-original-request/v1'});
+const ADAPTER_ID='runtime-ci-owner-stage-v2';
+const ADAPTER_DIGEST=valueDigest({id:ADAPTER_ID,previous:LEGACY_DIGEST,source:'complete-git-tree-and-native-source-scope/v1'});
 const same=(a:unknown,b:unknown)=>canonical(a)===canonical(b);
 type Pair={criterionId:string;variantId:string};
 export interface OwnerPin {ref:string;registrationDigest:string;scope:NativeScope;reference:NativeReference;criteria:Pair[];}
@@ -27,12 +31,19 @@ interface CiPlan {
   toolchainManifestDigest?:string;
   effectiveConfigDigest:string; candidateDigest:string|null;
   candidateInput?:CandidateInput;
+  sourceTree?:SourceTreeObservation;sourceScope?:NativeSourceScope;
 }
 export interface NativeAction {request:OwnerRequest;requestDigest:string;context:NativeValidationContext;observationDigest:string|null;digest:string;}
 export interface OwnerResult {owner:Owner;status:'PASS'|'FAIL'|'UNKNOWN';receiptDigest:string|null;reportDigest:string|null;}
 export interface VerifiedStageSource {commit:string;evidenceRef:string;}
 export interface NativeStageConnections extends Pick<BindingConnections,'owner'|'platform'> {toolchainLockDigest:string;toolchainManifestDigest?:string;source?:(instance:LifecycleInstance,stageId:string,actor:Principal,signal:AbortSignal)=>Promise<VerifiedStageSource>;}
 const hash=(v:unknown):string=>{const s=string(v,71);if(!/^sha256:[a-f0-9]{64}$/.test(s))reject('STAGE_EVIDENCE_INVALID','Exact evidence digest is required');return s;};
+function sourceScope(binding:PlatformRegistration,tree:SourceTreeObservation,commit:string,requirementsDigest:string):NativeSourceScope{
+  if(!tree)reject('SOURCE_TREE_REQUIRED','New native evaluations require the complete exact source inventory',409);
+  const{schema,factsDigest,observedAt,contentRead,linksFollowed,sourceApproved,...facts}=tree;
+  if(schema!=='runtime-source-tree/v1'||factsDigest!==valueDigest(facts)||tree.provider!==binding.provider||tree.projectId!==binding.projectId||tree.repositoryId!==binding.repositoryId||tree.bindingDigest!==valueDigest(binding)||tree.commit!==commit||!Array.isArray(tree.entries)||tree.inventoryDigest!==valueDigest(tree.entries)||tree.treeDigest!==valueDigest({schema:'runtime-git-tree-identity/v1',rootTreeId:tree.rootTreeId,inventoryDigest:tree.inventoryDigest})||contentRead!==false||linksFollowed!==false||sourceApproved!==false)reject('SOURCE_TREE_CHANGED','Native source inventory differs from its registered exact commit',409);
+  return{direction:'reverse',locator:binding.host+'/'+binding.repository,revision:commit,treeDigest:tree.treeDigest,inventoryDigest:tree.inventoryDigest,requirementsDigest};
+}
 function packageJson(pkg:Record<string,unknown>,path:unknown):Record<string,unknown>{
   const text=record(pkg.files)[string(path,512)];if(typeof text!=='string'||Buffer.byteLength(text)>2097152)reject('OWNER_PACKAGE_INVALID','A bounded owner inventory is required');
   try{return record(JSON.parse(text));}catch{return reject('OWNER_PACKAGE_INVALID','Owner inventory is not valid JSON');}
@@ -157,14 +168,18 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
     }
     signal.throwIfAborted();
     const originalCandidate=candidateInput(instance,binding,current.commit);
-    const parameters:CiPlan={stageId,binding,commit:current.commit,workflowDigest:current.workflowDigest,source:selected,...(originalCandidate?{candidateInput:originalCandidate}:{}),expectedChecks:[...instance.definition.nodes.find(n=>n.id===stageId)!.checks],owners:pins,toolchainLockDigest:connections.toolchainLockDigest,...(connections.toolchainManifestDigest?{toolchainManifestDigest:connections.toolchainManifestDigest}:{}),effectiveConfigDigest,candidateDigest:instance.candidateDigest};
+    const tree=await connections.platform(binding).sourceTree(actor,{commit:current.commit},signal),scope=sourceScope(binding,tree,current.commit,instance.pins.requirementsDigest);signal.throwIfAborted();
+    const parameters:CiPlan={stageId,binding,commit:current.commit,workflowDigest:current.workflowDigest,source:selected,sourceTree:tree,sourceScope:scope,...(originalCandidate?{candidateInput:originalCandidate}:{}),expectedChecks:[...instance.definition.nodes.find(n=>n.id===stageId)!.checks],owners:pins,toolchainLockDigest:connections.toolchainLockDigest,...(connections.toolchainManifestDigest?{toolchainManifestDigest:connections.toolchainManifestDigest}:{}),effectiveConfigDigest,candidateDigest:instance.candidateDigest};
     return{adapterId:ADAPTER_ID,adapterDigest:ADAPTER_DIGEST,action:'base.'+stageId,bindingDigest:valueDigest(parameters),parameters:parameters as unknown as Record<string,unknown>};
   }
   function plan(r:StageRequest,instance:LifecycleInstance,actor:Principal):{p:CiPlan;config:Readonly<IntegrationConfiguration>;client:PlatformClient;ci:PlatformRunRequest}{
     inspectInstance(instance);const p=r.plan.parameters as unknown as CiPlan,config=configuration(actor,r.projectId);
+    const legacy=r.plan.adapterId===LEGACY_ID&&r.plan.adapterDigest===LEGACY_DIGEST&&!p.sourceTree&&!p.sourceScope;
+    const currentAdapter=r.plan.adapterId===ADAPTER_ID&&r.plan.adapterDigest===ADAPTER_DIGEST;
+    if(currentAdapter&&(!p.sourceTree||!same(p.sourceScope,sourceScope(p.binding,p.sourceTree,p.commit,instance.pins.requirementsDigest))))reject('SOURCE_TREE_CHANGED','Original native source scope differs from its pinned inventory',409);
     const version=targetVersion(instance);if(version&&instance.candidate&&instance.candidate.version!==version)reject('CANDIDATE_VERSION_MISMATCH','Existing candidate differs from the reviewed target version',409);
     if(p.toolchainManifestDigest!==connections.toolchainManifestDigest)reject('TOOLCHAIN_CHANGED','Original native stage manifest cannot change across service restarts',409);
-    if(r.workspaceId!==store.workspaceId||r.projectId!==instance.pins.projectId||r.instanceId!==instance.id||r.pinsDigest!==instance.pinsDigest||r.plan.adapterId!==ADAPTER_ID||r.plan.adapterDigest!==ADAPTER_DIGEST||r.plan.action!=='base.'+r.stageId||r.plan.bindingDigest!==valueDigest(p)||valueDigest(r.plan)!==r.planDigest||p.stageId!==r.stageId||!['implementation','candidate','verification'].includes(p.stageId)||p.source.commit!==p.commit||p.toolchainLockDigest!==connections.toolchainLockDigest||p.candidateDigest!==instance.candidateDigest||!same(p.expectedChecks,instance.definition.nodes.find(n=>n.id===r.stageId)?.checks))reject('STAGE_PLAN_MISMATCH','CI execution differs from its original immutable stage plan');
+    if(r.workspaceId!==store.workspaceId||r.projectId!==instance.pins.projectId||r.instanceId!==instance.id||r.pinsDigest!==instance.pinsDigest||!legacy&&!currentAdapter||r.plan.action!=='base.'+r.stageId||r.plan.bindingDigest!==valueDigest(p)||valueDigest(r.plan)!==r.planDigest||p.stageId!==r.stageId||!['implementation','candidate','verification'].includes(p.stageId)||p.source.commit!==p.commit||p.toolchainLockDigest!==connections.toolchainLockDigest||p.candidateDigest!==instance.candidateDigest||!same(p.expectedChecks,instance.definition.nodes.find(n=>n.id===r.stageId)?.checks))reject('STAGE_PLAN_MISMATCH','CI execution differs from its original immutable stage plan');
     const current=configuredPlatform(config,actor,r.projectId,p.binding.ref);if(!same(current,p.binding))reject('PLATFORM_BINDING_CHANGED','Original stage platform registration changed');
     if(!same(p.candidateInput??null,candidateInput(instance,p.binding,p.commit)??null))reject('CI_CANDIDATE_INPUT_INVALID','Original candidate delivery identity cannot change',409);
     for(const kind of ['ontology','harness'] as const)owner(config,p.owners[kind],kind,r.projectId);
@@ -172,7 +187,7 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
     return{p,config,client:connections.platform(p.binding),ci};
   }
   function observation(r:StageRequest,p:CiPlan,ci:PlatformRunRequest,phase:StageObservation['phase'],checks:StageObservation['outcome']['checks']=[],candidate?:NonNullable<LifecycleInstance['candidate']>):StageObservation{
-    return{requestId:r.id,inputDigest:r.inputDigest,adapterDigest:ADAPTER_DIGEST,phase,handle:{provider:p.binding.provider,repositoryId:p.binding.repositoryId,requestId:ci.requestId,ref:ciSourceRef(ci)},outcome:{requestId:r.id,inputDigest:r.inputDigest,receiptRef:'runtime:ci-stage/'+r.id,status:phase==='COMPLETE'?'COMPLETE':phase==='FAILED'?'FAILED':phase==='UNKNOWN'?'UNKNOWN':'RUNNING',expiresAt:r.deadlineAt,checks,...(candidate?{candidate}:{})}};
+    return{requestId:r.id,inputDigest:r.inputDigest,adapterDigest:r.plan.adapterDigest,phase,handle:{provider:p.binding.provider,repositoryId:p.binding.repositoryId,requestId:ci.requestId,ref:ciSourceRef(ci)},outcome:{requestId:r.id,inputDigest:r.inputDigest,receiptRef:'runtime:ci-stage/'+r.id,status:phase==='COMPLETE'?'COMPLETE':phase==='FAILED'?'FAILED':phase==='UNKNOWN'?'UNKNOWN':'RUNNING',expiresAt:r.deadlineAt,checks,...(candidate?{candidate}:{})}};
   }
   function pinRun(r:StageRequest,value:PlatformRunObservation):void{
     if(value.runId)retain(r.projectId,'ci-stage-run',r.id,{requestId:value.requestId,runId:value.runId},true);
@@ -226,8 +241,8 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
     const files=await readArtifactArchive(bytes,signal),raw=files.get('evidence/owner-values.json');if(!raw||raw.length>1048576)reject('OWNER_OBSERVATION_MISSING','CI must retain its rule input values as declared evidence/owner-values.json');
     let values:Record<string,unknown>;try{values=record(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(raw)));}catch{return reject('OWNER_OBSERVATION_INVALID','CI owner values must be bounded UTF-8 JSON');}
     exact(values,['schema','values']);if(values.schema!=='runtime-ci-owner-values/v1')reject('OWNER_OBSERVATION_INVALID','CI owner values use a fixed input contract');record(values.values);
-    const context:NativeValidationContext={workspaceId:r.workspaceId,scope:{visibility:'private',projectId:r.projectId},projectCandidateDigest:verified.candidateDigest??instance.pinsDigest,claimId:valueDigest({stageRequestDigest:r.digest}),inputDigest:r.inputDigest,effectiveConfigDigest:p.effectiveConfigDigest,sourceScopeDigest:ciSourceDigest(ci,p.binding.provider,p.binding.repositoryId),requirementSetDigest:instance.pins.requirementsDigest};
-    const observationInput={schema:'evopilot-observation/v1',origin:'execution-result',source:{revision:p.commit,digest:context.sourceScopeDigest},values:values.values,collectionReceiptRef:{id:'ci-stage:'+r.id,digest:verified.resultDigest,claimId:context.claimId},sourceScopeDigest:context.sourceScopeDigest};
+    const context:NativeValidationContext={workspaceId:r.workspaceId,scope:{visibility:'private',projectId:r.projectId},projectCandidateDigest:verified.candidateDigest??instance.pinsDigest,claimId:valueDigest({stageRequestDigest:r.digest}),inputDigest:r.inputDigest,effectiveConfigDigest:p.effectiveConfigDigest,sourceScopeDigest:p.sourceScope?nativeSha256(p.sourceScope):ciSourceDigest(ci,p.binding.provider,p.binding.repositoryId),requirementSetDigest:instance.pins.requirementsDigest};
+    const observationInput={schema:'evopilot-observation/v1',origin:'execution-result',source:{revision:p.commit,digest:p.sourceScope?.treeDigest??context.sourceScopeDigest},values:values.values,collectionReceiptRef:{id:'ci-stage:'+r.id,digest:verified.resultDigest,claimId:context.claimId},sourceScopeDigest:context.sourceScopeDigest};
     for(const kind of ['ontology','harness'] as const){
       signal.throwIfAborted();if(action(r,kind))continue;
       const a=owner(config,p.owners[kind],kind,r.projectId),scope=p.owners[kind].scope,state=record(await a.read(actor,r.projectId,{operation:'workspace.inspect',scope,input:{}}));

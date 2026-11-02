@@ -824,9 +824,16 @@ a partial inventory as complete. The result has separate inventory, tree and
 observed-facts digests. It is provenance evidence, not source approval.
 
 Both existing dedicated test repositories passed actual read-only inventory
-readback and stable repeated observation. Connecting this inventory to the
-registered terminal Run remains required; metadata readback by itself does not
-create a Run, feedback event or semantic decision.
+readback and stable repeated observation. New `runtime-ci-owner-stage-v2`
+requests retain that complete inventory and a native source scope with exact
+repository, commit, tree, inventory and requirements digests. Both original owner
+validation contexts bind the source-scope digest; the Harness observation binds
+the tree identity and its original CI collection receipt. Candidate manifests
+continue to use their existing separate provider/repository/commit identity.
+Historical v1 requests preserve their original adapter digest, context and
+receipts; inspection does not add a missing inventory or promote their evidence.
+The registered terminal Run producer remains required; source readback and
+context binding by themselves do not create feedback or a semantic decision.
 
 The fixed internal feedback consumer accepts an event ID only from a trusted
 registered terminal Run reader. It checks the workspace, project, event digest,

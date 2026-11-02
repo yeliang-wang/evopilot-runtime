@@ -16,7 +16,7 @@ import { pinInstance, requiredChecksDigest, requestStage, recordStageOutcome, st
 import { createCiStageAdapter } from '../../dist/adapters/stages.js';
 import { ciSourceDigest, ciBuildDigest } from '../../dist/adapters/artifacts.js';
 import { nativeSha256, NATIVE_CONTRACT_DIGEST } from '../../vendor/compatibility/v1/native.mjs';
-import { lifecycle, yaml, syntheticBindings } from '../fixtures/lifecycle-v090.mjs';
+import { lifecycle, yaml, syntheticBindings, syntheticSourceTree } from '../fixtures/lifecycle-v090.mjs';
 function zip(entries){
   const local=[],central=[];let offset=0;
   for(const [path,value] of entries){const name=Buffer.from(path),data=Buffer.from(value),crc=crc32(data),l=Buffer.alloc(30),c=Buffer.alloc(46);
@@ -65,6 +65,7 @@ async function fixture({targetVersion}={}){
     },
   }]));
   const platform={revision:async(_actor,selected)=>({bindingDigest:valueDigest(binding),projectId,repositoryId:'42',commit:selected,workflowDigest:valueDigest('workflow'),expiresAt:actor.expiresAt,sourceSelection:'exact-commit',branchHeadCommit:controls.commit}),readiness:async()=>({bindingDigest:valueDigest(binding),projectId,repositoryId:'42',commit:controls.commit,workflowDigest:valueDigest('workflow'),expiresAt:actor.expiresAt}),
+    sourceTree:async(_actor,{commit})=>{calls.push({operation:'source.tree',commit});const tree=syntheticSourceTree(binding,commit);if(controls.invalidTree)tree.commit='f'.repeat(40);return tree;},
     dispatch:async(ci,permit)=>{await permit(ci);request??=store.object(projectId,'stage-request',store.object(projectId,'lifecycle-instance',instance.id).stages[ci.stageId].requestId);calls.push({operation:'ci.dispatch',ci});return run(ci);},run:async(_a,ci)=>{calls.push({operation:'ci.inspect',ci});return run(ci);},
     artifact:async(_a,ci)=>{
       calls.push({operation:'ci.artifact'});const values=JSON.stringify({schema:'runtime-ci-owner-values/v1',values:{healthy:!controls.changedArchive}}),content='synthetic software bytes',path=controls.observationMissing?'evidence/other.json':'evidence/owner-values.json';
@@ -163,4 +164,17 @@ test('HTTP service owns the native CI adapter store and completes the same origi
     const advanced=await call('lifecycle.stage.advance',{stageRequestId:id},true);assert.equal(advanced.result.newAttempt,false);await wait('COMPLETE');
     const saved=await call('lifecycle.instance.inspect',{instanceId:'instance'});assert.equal(saved.instance.stages.candidate.attempts,1);assert(saved.instance.candidateDigest);assert.equal(f.calls.filter(x=>x.operation==='ci.dispatch').length,1);assert.equal(f.calls.filter(x=>x.operation==='native.package.validate').length,2);
   }finally{await server?.close();f.cleanup();}
+});
+
+test('new native CI requests bind complete source scope and preserve the original collected observation',async()=>{
+  const f=await fixture();try{await f.prepare();assert.equal(f.request.plan.adapterId,'runtime-ci-owner-stage-v2');const p=f.request.plan.parameters;assert.equal(p.sourceScope.treeDigest,p.sourceTree.treeDigest);assert.equal(p.sourceScope.inventoryDigest,p.sourceTree.inventoryDigest);assert.equal(p.sourceScope.requirementsDigest,f.instance.pins.requirementsDigest);await f.dispatch();await f.advance();const a=f.store.object('alpha','stage-native-action',f.request.id+':harness');assert.equal(a.context.sourceScopeDigest,nativeSha256(p.sourceScope));assert.equal(a.request.input.observation.source.digest,p.sourceTree.treeDigest);assert.equal(a.request.input.observation.source.revision,p.commit);assert.equal(a.request.input.observation.collectionReceiptRef.claimId,a.context.claimId);f.restart();assert.equal((await f.inspect()).phase,'COMPLETE');assert.equal(f.calls.filter(x=>x.operation==='source.tree').length,1);}finally{f.cleanup();}
+});
+test('wrong source inventory blocks new CI preparation without dispatch or owner mutation',async()=>{
+  const f=await fixture();try{f.controls.invalidTree=true;await assert.rejects(()=>f.prepare(),{code:'SOURCE_TREE_CHANGED'});assert.equal(f.calls.filter(x=>x.operation==='ci.dispatch'||x.operation==='native.package.validate').length,0);}finally{f.cleanup();}
+});
+test('retained source scope cannot change even if outer plan digests are recomputed',async()=>{
+  const f=await fixture();try{await f.prepare();const r=f.request;r.plan.parameters.sourceScope.treeDigest=valueDigest('foreign-tree');r.plan.bindingDigest=valueDigest(r.plan.parameters);r.planDigest=valueDigest(r.plan);const{digest,...body}=r;r.digest=valueDigest(body);await assert.rejects(()=>f.dispatch(),{code:'SOURCE_TREE_CHANGED'});assert.equal(f.calls.filter(x=>x.operation==='ci.dispatch').length,0);}finally{f.cleanup();}
+});
+test('historical v1 CI request readback preserves its original context and does not gain source inventory',async()=>{
+  const f=await fixture();try{await f.prepare();const r=f.request;delete r.plan.parameters.sourceScope;delete r.plan.parameters.sourceTree;r.plan.adapterId='runtime-ci-owner-stage-v1';r.plan.adapterDigest=valueDigest({id:r.plan.adapterId,stages:['implementation','candidate','verification'],source:'verified-exact-commit/v1',candidate:'immutable-archive-consumption/v1',workflow:'runtime-ci/v1',owners:'native/v1',observation:'runtime-ci-owner-values/v1',continuation:'explicit-original-request/v1'});r.plan.bindingDigest=valueDigest(r.plan.parameters);r.planDigest=valueDigest(r.plan);const{digest,...body}=r;r.digest=valueDigest(body);await f.dispatch();const result=await f.advance();assert.equal(result.phase,'COMPLETE');assert.equal(result.adapterDigest,r.plan.adapterDigest);const a=f.store.object('alpha','stage-native-action',r.id+':harness');assert.equal(a.context.sourceScopeDigest,ciSourceDigest({commit:r.plan.parameters.commit},'github','42'));assert.equal(a.request.input.observation.source.digest,a.context.sourceScopeDigest);f.restart();assert.equal((await f.inspect()).phase,'COMPLETE');assert.equal(f.request.plan.parameters.sourceTree,undefined);assert.equal(f.calls.filter(x=>x.operation==='native.package.validate').length,2);}finally{f.cleanup();}
 });

@@ -3,6 +3,14 @@
 import { stringify } from 'yaml';
 import { loadPublisherBase, valueDigest } from '../../dist/lifecycle/base.js';
 
+// Deliberately synthetic empty Git tree; source-reader tests independently use
+// real Git objects. This only supplies typed provenance to lifecycle fixtures.
+export function syntheticSourceTree(binding,commit){
+  const entries=[],rootTreeId='4b825dc642cb6eb9a060e54bf8d69288fbee4904',inventoryDigest=valueDigest(entries),treeDigest=valueDigest({schema:'runtime-git-tree-identity/v1',rootTreeId,inventoryDigest});
+  const facts={provider:binding.provider,projectId:binding.projectId,repositoryId:binding.repositoryId,bindingDigest:valueDigest(binding),commit,rootTreeId,entries,inventoryDigest,treeDigest};
+  return{schema:'runtime-source-tree/v1',...facts,factsDigest:valueDigest(facts),observedAt:new Date().toISOString(),contentRead:false,linksFollowed:false,sourceApproved:false};
+}
+
 export function setPath(object,path,value){const parts=path.split('.');let at=object;for(const p of parts.slice(0,-1))at=at[p]??={};if(value===undefined)delete at[parts.at(-1)];else at[parts.at(-1)]=value;return object;}
 export function lifecycle(provider='github',projectId='alpha'){
   const {base,pin}=loadPublisherBase(),data={};
