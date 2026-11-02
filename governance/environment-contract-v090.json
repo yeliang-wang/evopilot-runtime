@@ -9,7 +9,7 @@
     "2025-11-25"
   ],
   "sdk": "@modelcontextprotocol/sdk@1.32.2",
-  "packageLockDigest": "a22bc0792dbf947fc1357f3d97ff0799ddd13ae14850d5096bc3f1e6a3139d71",
+  "packageLockDigest": "0bc2d2598fe70271a93e870ad7d0a60745c97e80ba88cd7d290c85600eb9c312",
   "platformBranches": [
     "github-actions",
     "gitlab-ci"
@@ -53,5 +53,10 @@
   "executionAuthority": "Separate exact Target/Run/release decisions, not implied by a role or definition activation.",
   "scope": "Every credential/principal/binding belongs to an explicit workspace and project.",
   "privateEnvironmentDigest": "8fde2a52575fdf214265c5fb7a5fc82db817d728d3c9dda4255f4f6cdd19d1a9",
-  "productAcceptance": "NOT_EVALUATED"
+  "productAcceptance": "NOT_EVALUATED",
+  "artifactReader": {
+    "package": "yauzl@3.4.0",
+    "types": "@types/yauzl@3.4.0",
+    "scope": "Bounded in-memory CI ZIP evidence inspection; no extraction, scripts or new provider authority"
+  }
 }

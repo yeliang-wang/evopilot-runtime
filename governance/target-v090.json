@@ -134,7 +134,12 @@
         "tests/fixtures/service-v090-worker.mjs",
         "tests/fixtures/adapters-v090.mjs",
         "provenance/published-owners/ontology-0.8.3.json",
-        "provenance/published-owners/harness-0.8.3.json"
+        "provenance/published-owners/harness-0.8.3.json",
+        "src/adapters/artifacts.ts",
+        "src/adapters/stages.ts",
+        "tests/e2e/artifacts-v090.test.mjs",
+        "tests/e2e/stages-v090.test.mjs",
+        "NOTICE"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",
@@ -164,6 +169,6 @@
   "implementationBindings": {
     "governance/lifecycle-contract-v090.json": "5b18d80a73ec6ce249254aef2f78318aaac3c797d9b39d113993a4a66de966a1",
     "governance/parameter-matrix-v090.json": "27e01ab86483a5adf379f15c8987a4ba40017b222a5b31b699a5246143d43367",
-    "governance/environment-contract-v090.json": "82e6c0568614b09e2e77e518df06499c91292f2812062b26fd9772a217aef4b0"
+    "governance/environment-contract-v090.json": "8f36a63233974f1f6996c0bcdafbb34713081c4b7911f85499ab430ef20c7a66"
   }
 }

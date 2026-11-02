@@ -7,7 +7,7 @@ import { aggregateJobs, ciInputs, ciSourceRef, commitId, executionPrincipal, fil
 /** GitLab v4 API, including the accepted self-managed 15.0 test instance. Only
  * explicit registered project/runner IDs are used; no admin runner discovery. */
 export function gitlabClient(configuration:PlatformRegistration,credentials:PlatformCredentialReader):PlatformClient{
-  const{binding,get,post}=platformReader(configuration,credentials);if(binding.provider!=='gitlab')reject('PLATFORM_MISMATCH','Expected GitLab registration');
+  const{binding,get,post,download}=platformReader(configuration,credentials);if(binding.provider!=='gitlab')reject('PLATFORM_MISMATCH','Expected GitLab registration');
   function observedJob(raw:unknown,runId:string,jobId:string,commit:string):PlatformJobObservation{
     const job=record(raw);if(positiveId(job.id)!==jobId||positiveId(record(job.pipeline).id)!==runId||record(job.commit).id!==commit)reject('PLATFORM_RECEIPT_MISMATCH','GitLab job identity or source differs',409);
     const runner=job.runner===null?null:record(job.runner),runnerId=runner?positiveId(runner.id):null;
@@ -74,6 +74,20 @@ export function gitlabClient(configuration:PlatformRegistration,credentials:Plat
       if(!await ownedRef(actor,r,signal))reject('CI_REF_UNKNOWN','Inspect the original source-ref creation',409);
       const result=record(await post(actor,'/pipeline',{ref:ciSourceRef(r),variables:Object.entries(ciInputs(r)).map(([key,value])=>({key,value,variable_type:'env_var'}))},current,signal));
       return client.run(actor,r,positiveId(result.id),signal);
+    },
+    async artifact(actor,input,runId,signal){
+      const r=validateRunRequest(input,binding),run=await client.run(actor,r,runId,signal);
+      if(!['PASSED','FAILED'].includes(run.status))reject('CI_ARTIFACT_NOT_READY','Original pipeline must have a terminal observed result',409);
+      const matches:Record<string,unknown>[]=[];
+      for(const observed of run.jobs){const job=record(await get(actor,'/jobs/'+observed.jobId,signal));if(job.artifacts_file&&record(job.artifacts_file).filename==='runtime-ci.zip')matches.push(job);}
+      if(matches.length!==1)reject('CI_ARTIFACT_AMBIGUOUS','Exactly one current runtime-ci archive is required',409);
+      const job=matches[0]!,id=positiveId(job.id);observedJob(job,runId,id,r.commit);
+      if(!Number.isFinite(Date.parse(String(job.artifacts_expire_at)))||Date.parse(String(job.artifacts_expire_at))<=Date.now())reject('CI_ARTIFACT_MISMATCH','Job artifact has no current retained expiry',409);
+      const bytes=await download(actor,'/jobs/'+id+'/artifacts',signal);if(record(job.artifacts_file).size!==bytes.length)reject('CI_ARTIFACT_INTEGRITY','Downloaded archive differs from provider length',409);
+      const current=record(await get(actor,'/jobs/'+id,signal));observedJob(current,runId,id,r.commit);
+      if(record(current.artifacts_file).filename!=='runtime-ci.zip'||record(current.artifacts_file).size!==bytes.length||current.artifacts_expire_at!==job.artifacts_expire_at)reject('CI_ARTIFACT_MISMATCH','Job archive identity changed during download',409);
+      await client.run(actor,r,runId,signal);
+      return{provider:binding.provider,repositoryId:binding.repositoryId,requestId:r.requestId,inputDigest:r.inputDigest,bindingDigest:r.bindingDigest,commit:r.commit,runId,runStatus:run.status,artifactId:id,jobId:id,name:'runtime-ci',archiveDigest:sha256(bytes),archiveBytes:bytes.length,bytes,evidenceRef:binding.host+'/'+binding.repository+'/-/jobs/'+id+'/artifacts/download'};
     },
     async run(actor,input,knownRunId,signal){
       const r=validateRunRequest(input,binding);matchRepository(await get(actor,'',signal),binding);

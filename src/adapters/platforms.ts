@@ -4,6 +4,7 @@ import { authorize, type Principal } from '../server/security.js';
 import { valueDigest } from '../lifecycle/base.js';
 import { validatePlatformRegistration, type PlatformRegistration } from './config.js';
 import { containsInlineSecret } from '../lifecycle/compiler.js';
+import { MAX_ARCHIVE_BYTES } from './artifacts.js';
 
 /** Trusted process credential resolution; never provided by a lifecycle/API. */
 export type PlatformCredentialReader=(binding:PlatformRegistration,actor:Principal,signal:AbortSignal)=>Promise<string>;
@@ -27,6 +28,13 @@ export interface PlatformClient {
   job(actor:Principal,runId:string,jobId:string,commit:string,signal:AbortSignal,sourceRef?:string):Promise<PlatformJobObservation>;
   dispatch(request:PlatformRunRequest,permit:PlatformExecutionPermit,signal:AbortSignal):Promise<PlatformRunObservation>;
   run(actor:Principal,request:PlatformRunRequest,runId:string|null,signal:AbortSignal):Promise<PlatformRunObservation>;
+  artifact(actor:Principal,request:PlatformRunRequest,runId:string,signal:AbortSignal):Promise<PlatformArtifactArchive>;
+}
+export interface PlatformArtifactArchive {
+  provider:'github'|'gitlab'; repositoryId:string; requestId:string; inputDigest:string; bindingDigest:string;
+  commit:string; runId:string; runStatus:PlatformJobObservation['status'];
+  artifactId:string; jobId:string|null; name:'runtime-ci'; archiveDigest:string;
+  archiveBytes:number; bytes:Buffer; evidenceRef:string;
 }
 export interface PlatformRunRequest {
   schema:'runtime-ci-request/v1'; requestId:string; projectId:string; bindingDigest:string;
@@ -52,7 +60,7 @@ export function validateRunRequest(value:PlatformRunRequest,binding:PlatformRegi
  * release. Creation and dispatch are both covered by the retained action plan. */
 export const ciSourceRef=(r:PlatformRunRequest):string=>'evopilot-runtime/'+r.requestId;
 export const ciRunTitle=(r:PlatformRunRequest):string=>'evopilot:'+r.requestId+':'+r.inputDigest;
-export const ciInputs=(r:PlatformRunRequest):Record<string,string>=>({runtime_request_id:r.requestId,runtime_input_digest:r.inputDigest,runtime_source_commit:r.commit,runtime_stage:r.stageId,runtime_candidate_digest:r.candidateDigest??'none'});
+export const ciInputs=(r:PlatformRunRequest):Record<string,string>=>({runtime_request_id:r.requestId,runtime_input_digest:r.inputDigest,runtime_source_commit:r.commit,runtime_stage:r.stageId,runtime_candidate_digest:r.candidateDigest??'none',runtime_workflow_digest:r.workflowDigest,runtime_binding_digest:r.bindingDigest});
 export function validateSourceRef(ref:string,binding:PlatformRegistration):void{if(ref!==binding.defaultBranch&&!/^evopilot-runtime\/[-a-z0-9]{1,64}$/.test(ref))reject('CI_REF_SCOPE','Only the registered branch or a request-owned source ref is supported');}
 export function aggregateJobs(jobs:PlatformJobObservation[],providerStatus:string):PlatformJobObservation['status']{
   if(jobs.some(j=>j.status==='FAILED')||['failure','failed','cancelled','canceled','timed_out','skipped','neutral'].includes(providerStatus))return'FAILED';
@@ -127,7 +135,31 @@ export function platformReader(registration:PlatformRegistration,credentials:Pla
       authorize(actor,binding.projectId,'read');controller.throwIfAborted();return value;
     }catch(error){if(payload!==undefined&&!(error instanceof ServiceError))reject('CI_DISPATCH_OUTCOME_UNKNOWN','Inspect the original CI request; do not dispatch it again',409);return safePlatformError(error);}
   }
-  return{binding,get:(actor:Principal,suffix:string,signal:AbortSignal)=>request(actor,suffix,signal),post:(actor:Principal,suffix:string,payload:Record<string,unknown>,permit:()=>Promise<Principal>,signal:AbortSignal)=>request(actor,suffix,signal,payload,permit)};
+  async function download(actor:Principal,suffix:string,signal:AbortSignal):Promise<Buffer>{
+    authorize(actor,binding.projectId,'read');if(Date.parse(binding.expiresAt)<=Date.now())reject('PLATFORM_NOT_REGISTERED','Platform registration has expired',409);
+    if(!(binding.provider==='github'?/^\/actions\/artifacts\/[1-9][0-9]{0,19}\/zip$/:/^\/jobs\/[1-9][0-9]{0,19}\/artifacts$/).test(suffix))reject('INVALID_PLATFORM_ROUTE','Only an exact artifact identity can be downloaded');
+    const controller=AbortSignal.any([signal,AbortSignal.timeout(30000)]);
+    try{
+      const token=await bounded(()=>credentials(binding,actor,controller),AbortSignal.any([controller,AbortSignal.timeout(10000)]));
+      if(!/^[A-Za-z0-9_.-]{16,4096}$/.test(token))reject('UNSAFE_PLATFORM_CREDENTIAL','Invalid scoped credential',503);
+      const headers:Record<string,string>=binding.provider==='github'?{authorization:'Bearer '+token,'x-github-api-version':'2022-11-28'}:{'private-token':token};
+      controller.throwIfAborted();let response=await fetch(origin+prefix+suffix,{headers,redirect:'manual',signal:controller});
+      if(response.status===302){
+        const location=response.headers.get('location')??'';await response.body?.cancel();let url:URL;try{url=new URL(location);}catch{return reject('CI_ARTIFACT_REDIRECT','Artifact redirect is not a valid provider location',502);}
+        // GitHub's authenticated API returns a short-lived signed blob URL.
+        // Never forward a credential, echo that URL or follow another redirect.
+        if(binding.provider!=='github'||location.length>16384||url.protocol!=='https:'||url.port||url.username||url.password||url.hash||!(/^[a-z0-9-]+\.blob\.core\.windows\.net$/.test(url.hostname)||/^(?:[a-z0-9-]+\.)?actions\.githubusercontent\.com$/.test(url.hostname)))reject('CI_ARTIFACT_REDIRECT','Artifact redirect leaves the supported provider storage boundary',502);
+        controller.throwIfAborted();response=await fetch(url,{redirect:'error',signal:controller});
+      }
+      if(response.status!==200){await response.body?.cancel();reject('CI_ARTIFACT_UNAVAILABLE','Exact artifact download did not succeed',409);}
+      const declared=response.headers.get('content-length');if(declared!==null&&(!/^[0-9]+$/.test(declared)||Number(declared)>MAX_ARCHIVE_BYTES)){await response.body?.cancel();reject('CI_ARCHIVE_LIMIT','Artifact transfer exceeds the bounded profile',409);}
+      const reader=response.body?.getReader();if(!reader)reject('CI_ARTIFACT_UNAVAILABLE','Artifact download has no body',502);
+      const chunks:Buffer[]=[];let length=0;try{for(;;){const part=await reader.read();if(part.done)break;length+=part.value.length;if(length>MAX_ARCHIVE_BYTES){await reader.cancel();reject('CI_ARCHIVE_LIMIT','Artifact transfer exceeds the bounded profile',409);}chunks.push(Buffer.from(part.value));}}finally{reader.releaseLock();}
+      if(declared!==null&&Number(declared)!==length)reject('CI_ARTIFACT_INTEGRITY','Artifact transfer length differs from its response',409);
+      controller.throwIfAborted();authorize(actor,binding.projectId,'read');return Buffer.concat(chunks);
+    }catch(e){if(e instanceof ServiceError)throw e;return reject('CI_ARTIFACT_UNAVAILABLE','Exact artifact transfer did not complete',503);}
+  }
+  return{binding,get:(actor:Principal,suffix:string,signal:AbortSignal)=>request(actor,suffix,signal),post:(actor:Principal,suffix:string,payload:Record<string,unknown>,permit:()=>Promise<Principal>,signal:AbortSignal)=>request(actor,suffix,signal,payload,permit),download};
 }
 export function readinessResult(binding:PlatformRegistration,commit:string,path:string,workflowDigest:string,runner:PlatformReadiness['runner']):PlatformReadiness{
   const facts={provider:binding.provider,projectId:binding.projectId,bindingRef:binding.ref,bindingDigest:valueDigest(binding),repositoryId:binding.repositoryId,repository:binding.repository,branch:binding.defaultBranch,commit,workflowPath:path,workflowDigest,runner};

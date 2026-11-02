@@ -12,3 +12,8 @@ The public documentation layout draws inspiration from OpenHands:
 https://github.com/All-Hands-AI/OpenHands
 The documentation content is independently written for EvoPilot Runtime.
 This reference does not imply affiliation with or endorsement by OpenHands.
+
+CI archive inspection uses yauzl 3.4.0 (MIT), by Josh Wolfe and contributors,
+and pend 1.2.0 (MIT), by Andrew Kelley. Their original licenses are retained
+in the installed dependency packages. Development types use @types/yauzl
+3.4.0 (MIT). Runtime adds its own bounded extraction and evidence checks.

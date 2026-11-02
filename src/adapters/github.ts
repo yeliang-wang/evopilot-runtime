@@ -8,7 +8,7 @@ import type { Principal } from '../server/security.js';
 /** GitHub.com REST observations. A successful old job is not evidence for a new
  * candidate or authority to dispatch another workflow. */
 export function githubClient(configuration:PlatformRegistration,credentials:PlatformCredentialReader):PlatformClient{
-  const{binding,get,post}=platformReader(configuration,credentials);if(binding.provider!=='github')reject('PLATFORM_MISMATCH','Expected GitHub registration');
+  const{binding,get,post,download}=platformReader(configuration,credentials);if(binding.provider!=='github')reject('PLATFORM_MISMATCH','Expected GitHub registration');
   const workflowRoute='/actions/workflows/'+encodeURIComponent(binding.workflowPath!.split('/').at(-1)!);
   function observedJob(raw:unknown,runId:string,jobId:string,commit:string,originalAttempt:boolean):PlatformJobObservation{
     const job=record(raw);
@@ -87,6 +87,20 @@ export function githubClient(configuration:PlatformRegistration,credentials:Plat
       const result=await post(actor,workflowRoute+'/dispatches',{ref:ciSourceRef(r),inputs:ciInputs(r),return_run_details:true},current,signal);
       const runId=result===null?null:positiveId(record(result).workflow_run_id);
       return client.run(actor,r,runId,signal);
+    },
+    async artifact(actor,input,runId,signal){
+      const r=validateRunRequest(input,binding),run=await client.run(actor,r,runId,signal);
+      if(!['PASSED','FAILED'].includes(run.status))reject('CI_ARTIFACT_NOT_READY','Original workflow must have a terminal observed result',409);
+      const matches:Record<string,unknown>[]=[];let complete=false;
+      for(let page=1;page<=10;page++){const value=record(await get(actor,'/actions/runs/'+runId+'/artifacts?per_page=100&page='+page,signal));if(!Array.isArray(value.artifacts)||value.artifacts.length>100)reject('PLATFORM_RESPONSE_INVALID','Invalid bounded artifact inventory',502);for(const raw of value.artifacts){const a=record(raw);if(a.name==='runtime-ci')matches.push(a);}if(value.artifacts.length<100){complete=true;break;}}
+      if(!complete||matches.length!==1)reject('CI_ARTIFACT_AMBIGUOUS','Exactly one current runtime-ci archive is required',409);
+      const a=matches[0]!,workflow=record(a.workflow_run),id=positiveId(a.id);
+      if(a.expired!==false||!Number.isFinite(Date.parse(String(a.expires_at)))||Date.parse(String(a.expires_at))<=Date.now()||positiveId(workflow.id)!==runId||positiveId(workflow.repository_id)!==binding.repositoryId||workflow.head_sha!==r.commit||workflow.head_branch!==ciSourceRef(r)||!/^sha256:[a-f0-9]{64}$/.test(String(a.digest)))reject('CI_ARTIFACT_MISMATCH','Artifact metadata is stale or belongs to another workflow/source',409);
+      const bytes=await download(actor,'/actions/artifacts/'+id+'/zip',signal),digest=sha256(bytes);
+      if(digest!==a.digest||a.size_in_bytes!==bytes.length)reject('CI_ARTIFACT_INTEGRITY','Downloaded archive differs from provider digest/length',409);
+      const current=record(await get(actor,'/actions/artifacts/'+id,signal));if(current.expired!==false||current.digest!==a.digest||current.size_in_bytes!==a.size_in_bytes||current.name!==a.name||positiveId(record(current.workflow_run).id)!==runId)reject('CI_ARTIFACT_MISMATCH','Artifact identity changed during download',409);
+      await client.run(actor,r,runId,signal);
+      return{provider:binding.provider,repositoryId:binding.repositoryId,requestId:r.requestId,inputDigest:r.inputDigest,bindingDigest:r.bindingDigest,commit:r.commit,runId,runStatus:run.status,artifactId:id,jobId:null,name:'runtime-ci',archiveDigest:digest,archiveBytes:bytes.length,bytes,evidenceRef:binding.host+'/'+binding.repository+'/actions/runs/'+runId+'/artifacts/'+id};
     },
     async run(actor,input,knownRunId,signal){
       const r=validateRunRequest(input,binding);matchRepository(await get(actor,'',signal),binding);

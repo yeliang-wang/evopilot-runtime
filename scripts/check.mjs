@@ -63,9 +63,11 @@ const expected = {
 Object.assign(expected.scripts, {"roadmap:gate": "node scripts/roadmap.mjs --gate", "roadmap:check": "node scripts/roadmap.mjs --check", "roadmap:release": "node scripts/roadmap.mjs --release", "test:governance": "node --test tests/governance.test.mjs"});
 Object.assign(expected.devDependencies, {
   '@playwright/test': '1.64.1', '@types/react': '19.3.0', '@types/react-dom': '19.3.0', vite: '8.3.5',
+  '@types/yauzl': '3.4.0',
 });
 Object.assign(expected.dependencies, {
   '@modelcontextprotocol/sdk': '1.32.2', yaml: '2.9.1', react: '19.3.1', 'react-dom': '19.3.1',
+  yauzl: '3.4.0',
 });
 expected.exports['./workspace-migration'] = { types: './dist/workspace-migration.d.ts', import: './dist/workspace-migration.js' };
 expected.exports['./online'] = { types: './dist/online.d.ts', import: './dist/online.js' };
@@ -187,6 +189,7 @@ export async function checkSource() {
     for (const specifier of specifiers(source)) {
       if (isBuiltin(specifier)) continue;
       if((path.endsWith('/src/lifecycle/compiler.ts')||path.endsWith('/src/adapters/github.ts')||path.endsWith('/src/adapters/gitlab.ts'))&&specifier==='yaml')continue;
+      if(path.endsWith('/src/adapters/artifacts.ts')&&specifier==='yauzl')continue;
       if (path.endsWith('/src/server/mcp.ts') && ['@modelcontextprotocol/sdk/server/index.js','@modelcontextprotocol/sdk/server/streamableHttp.js','@modelcontextprotocol/sdk/types.js'].includes(specifier)) continue;
       if (specifier === 'yaml' && (path.endsWith('/src/asset-sources.mjs') || PRODUCT === 'ontology' && path.includes('/src/compat/'))) continue;
       if (PRODUCT === 'ontology' && path.includes('/src/compat/') && specifier === 'ajv/dist/2020.js') continue;

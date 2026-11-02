@@ -187,7 +187,7 @@ test('platform transport bounds responses, denies arbitrary routes, and never ec
 // Stateful provider double: records each side effect independently from its
 // response, so timeout/recovery tests cannot pass by silently redispatching.
 const ciActor={...actor,permissions:['read','execution.request']};
-const ghContract='name: Synthetic\nrun-name: "evopilot:${{ inputs.runtime_request_id }}:${{ inputs.runtime_input_digest }}"\non:\n  workflow_dispatch:\n    inputs:\n'+['runtime_request_id','runtime_input_digest','runtime_source_commit','runtime_stage','runtime_candidate_digest'].map(k=>'      '+k+':\n        type: string\n        required: true\n').join('')+'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo synthetic\n';
+const ghContract='name: Synthetic\nrun-name: "evopilot:${{ inputs.runtime_request_id }}:${{ inputs.runtime_input_digest }}"\non:\n  workflow_dispatch:\n    inputs:\n'+['runtime_request_id','runtime_input_digest','runtime_source_commit','runtime_stage','runtime_candidate_digest','runtime_workflow_digest','runtime_binding_digest'].map(k=>'      '+k+':\n        type: string\n        required: true\n').join('')+'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo synthetic\n';
 const glContract='workflow:\n  rules:\n    - if: \'$CI_COMMIT_TAG =~ /^evopilot-runtime\\// && $CI_PIPELINE_SOURCE != "api"\'\n      when: never\n    - if: \'$CI_PIPELINE_SOURCE == "api"\'\n      when: always\nfixture:\n  script: echo synthetic\n';
 async function withDispatch(provider,run){
   const old=globalThis.fetch,f=responses(provider),calls=[],writes=[];
@@ -298,6 +298,24 @@ test('CI write transport cannot be used for an arbitrary provider mutation',asyn
   const old=globalThis.fetch;let called=false;globalThis.fetch=async()=>{called=true;return json({});};
   try{await assert.rejects(()=>platformReader(platform(),async()=> 'synthetic-token-0123456789').post(ciActor,'/releases',{tag_name:'v9.0.0'},async()=>ciActor,AbortSignal.timeout(5000)),{code:'INVALID_PLATFORM_ROUTE'});assert.equal(called,false);}finally{globalThis.fetch=old;}
 });
+for(const provider of ['github','gitlab'])test(provider+' exact artifact download rejects stale, ambiguous and tampered provider metadata',()=>withDispatch(provider,async f=>{
+  f.state.ref=true;f.state.run=true;const bytes=Buffer.from('synthetic archive transport bytes'),digest='sha256:'+createHash('sha256').update(bytes).digest('hex'),expires='2030-01-01T00:00:00Z';
+  let metadata;
+  if(provider==='github'){
+    metadata={id:99,name:'runtime-ci',expired:false,expires_at:expires,digest,size_in_bytes:bytes.length,workflow_run:{id:23,repository_id:42,head_sha:commit,head_branch:f.sourceRef}};
+    f.routes.set(f.base+'/actions/runs/23/artifacts?per_page=100&page=1',{artifacts:[metadata]});f.routes.set(f.base+'/actions/artifacts/99',metadata);
+  }else{metadata=f.providerJob;metadata.artifacts_file={filename:'runtime-ci.zip',size:bytes.length};metadata.artifacts_expire_at=expires;}
+  const priorFetch=globalThis.fetch;let downloads=0;
+  globalThis.fetch=async(url,options)=>{if(url===f.base+(provider==='github'?'/actions/artifacts/99/zip':'/jobs/24/artifacts')){downloads++;assert.equal(options.redirect,'manual');assert.equal(options.method,undefined);return new Response(bytes,{headers:{'content-length':String(bytes.length)}});}return priorFetch(url,options);};
+  const archive=await f.client.artifact(actor,f.request,'23',AbortSignal.timeout(5000));assert.equal(archive.archiveDigest,digest);assert.deepEqual(archive.bytes,bytes);assert.equal(archive.bindingDigest,f.request.bindingDigest);assert.equal(f.writes.length,0);assert.equal(downloads,1);
+  if(provider==='github')metadata.digest='sha256:'+'c'.repeat(64);else metadata.artifacts_file.size++;
+  await assert.rejects(()=>f.client.artifact(actor,f.request,'23',AbortSignal.timeout(5000)),{code:'CI_ARTIFACT_INTEGRITY'});
+  if(provider==='github'){metadata.digest=digest;metadata.expired=true;}else{metadata.artifacts_file.size=bytes.length;metadata.artifacts_expire_at='2020-01-01T00:00:00Z';}
+  await assert.rejects(()=>f.client.artifact(actor,f.request,'23',AbortSignal.timeout(5000)),{code:'CI_ARTIFACT_MISMATCH'});
+  if(provider==='github'){metadata.expired=false;f.routes.get(f.base+'/actions/runs/23/artifacts?per_page=100&page=1').artifacts.push({...metadata});}
+  else{metadata.artifacts_expire_at=expires;const second={...metadata,id:25,name:'another',artifacts_file:{...metadata.artifacts_file}};f.routes.get(f.base+f.jobsPath).push(second);f.routes.set(f.base+'/jobs/25',second);}
+  await assert.rejects(()=>f.client.artifact(actor,f.request,'23',AbortSignal.timeout(5000)),{code:'CI_ARTIFACT_AMBIGUOUS'});assert.equal(f.writes.length,0);
+}));
 
 function readinessFixture(){
   const m=syntheticReadinessMaterial('test','alpha'),h='sha256:'+'a'.repeat(64);

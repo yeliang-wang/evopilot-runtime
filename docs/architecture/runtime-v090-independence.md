@@ -147,7 +147,8 @@ the registered workflow against that commit. These tags are CI source pins, not
 product releases; the client never force-updates or deletes them. GitHub workflows
 must expose the required string inputs `runtime_request_id`,
 `runtime_input_digest`, `runtime_source_commit`, `runtime_stage` and
-`runtime_candidate_digest`, and use the run title
+`runtime_candidate_digest`, `runtime_workflow_digest` and
+`runtime_binding_digest`, and use the run title
 `evopilot:${{ inputs.runtime_request_id }}:${{ inputs.runtime_input_digest }}`;
 GitLab pipelines receive the same correlation through pipeline variables, using
 the v4 API compatible with the selected 15.0 test environment. Workflow trigger
@@ -177,6 +178,35 @@ known handles are checked again. A provider job's success remains
 candidate/owner acceptance collector verifies the required evidence. Dedicated
 test-project probes exercise actual GitHub and GitLab dispatch/recovery; they do
 not stand in for the frozen v0.9 final acceptance catalog.
+
+The CI output contract is a single artifact named `runtime-ci` (GitLab archive
+filename `runtime-ci.zip`). The collector observes the exact terminal run first,
+downloads by immutable artifact/job ID, checks current metadata again and
+rechecks the original run. GitHub's published archive SHA-256 and byte length
+must match; GitLab binds the original non-retried job and archive byte length,
+then computes a local archive digest. No "latest successful" artifact is used.
+GitHub's authenticated API may redirect once to its signed Actions/Azure storage
+URL; Runtime follows it without forwarding credentials. Other redirects fail
+closed. Signed URLs and provider error bodies never enter receipts.
+
+An archive contains `runtime-result.json`, declared check evidence and, for the
+candidate stage, `artifacts/<manifest name>` files. `runtime-ci/v1` results pin
+request/input, provider/repository/run, source commit, workflow digest, stage and
+existing candidate digest. Checks contain exact required IDs, PASS/FAIL/UNKNOWN
+and nonempty `{path,digest,bytes}` evidence lists. Every evidence byte is verified;
+missing, skipped, duplicate or extra checks and undeclared files are rejected.
+A candidate manifest may appear only during candidate creation. Its source
+digest is the canonical SHA-256 of `{provider,repositoryId,commit}`; build digest
+is the canonical SHA-256 of `{requestId,inputDigest,bindingDigest,workflowDigest,runId}`.
+Each manifest artifact is read and hashed. Later stages keep the same candidate
+identity. Owner evaluations and publication authority remain independently
+required; a verified CI archive does not grant them.
+
+The pinned ZIP reader validates in memory only, with 128 MiB compressed,
+256 MiB expanded and 512-entry bounds. Traversal, links, special/encrypted files,
+case collisions, inconsistent sizes and corrupt CRCs fail closed. It never
+extracts or executes archive contents. These are transport/evidence checks,
+not evidence that the project's software requirements have passed.
 
 The Codex binding pins the selected local executable bytes, version, host
 identity and workspace. Admission issues only a fixed `--version` query. It does
