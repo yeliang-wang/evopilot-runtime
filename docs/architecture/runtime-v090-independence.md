@@ -66,11 +66,46 @@ starts a loopback listener. `status --url <origin> --token-ref <file>
 command arguments, URLs or YAML. These development commands do not modify the
 current Codex installation or migrate an existing workspace.
 
-The initial `/api/v1/request` and `/mcp` surfaces share the same scoped read
-dispatcher. `/api/v1/events` streams bounded, persistent project events and
+The `/api/v1/request` and `/mcp` surfaces share one scoped dispatcher.
+`runtime_read` only accepts read operations; `runtime_write` requires the
+corresponding current role, project revision and idempotency key.
+`/api/v1/events` streams bounded, persistent project events and
 closes on revoked credentials. An OS-managed exclusive SQLite lock prevents a
 second writer; object changes, receipts, audit and events commit together.
 Restart rejects incompatible schemas and inconsistent receipt/event digests.
-Lifecycle definition authoring/admission, instance execution, owner/platform
-adapters, the two Dashboard pages and installed-plugin delivery are subsequent
-implementation work, not completed by this foundation.
+
+## Development lifecycle definitions and instances
+
+The package includes a publisher-pinned Base manifest under `lifecycle/base`.
+The compiler enforces all 84 declared fields, the chosen provider branch, four
+extension slots and mandatory AND joins. Unknown fields, duplicate YAML keys,
+dynamic tags/aliases, inline secrets and mutable Base identities are rejected.
+Comments and supported presentation fields have separate source/presentation
+digests; they do not alter the execution-semantic digest.
+
+`lifecycle.draft.save` preserves the original non-secret YAML, including an
+incomplete draft. `lifecycle.definition.validate` returns field-level diagnostics
+and an exact preview digest only when current trusted references pass.
+`lifecycle.definition.activate` and `lifecycle.definition.save-and-activate`
+require that exact preview and existing activation permission. Failed admission
+keeps the draft and old active pointer; an exact replay returns its original
+receipt. `lifecycle.definition.source.read` retrieves bounded source chunks.
+The CLI `request --url <origin> --token-ref <file> --project <id>
+--request-ref <protected-json-envelope>` uses the same HTTP checks and never
+retries an uncertain write automatically.
+
+`lifecycle.instance.create` additionally requires `execution.request` permission
+and a separately resolved exact authority record. It persists an inert instance
+with its definition, Base, requirements, goal/target/loop references and budget
+pinned. Definition activation alone creates no instance. The development
+`lifecycle.instance.inspect` and `lifecycle.stage.admission` operations read this
+state; admission itself dispatches no work. The deterministic stage reducer
+checks all predecessors, candidate identities, bounded attempts and unknown
+outcome reconciliation. It cannot manufacture owner evidence or release authority.
+
+Real owner/platform authority adapters and external stage dispatch remain M3
+work. Unconfigured adapters fail closed; synthetic regression adapters are test
+fixtures only and cannot certify real asset usability or final E2E. The two
+Dashboard pages, independent installed Expert/plugin, migration and complete
+candidate acceptance remain unfinished. These development features do not claim
+that the frozen 664 acceptance instances have passed.

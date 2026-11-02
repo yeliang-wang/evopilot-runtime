@@ -10,6 +10,7 @@
     "dist",
     "src",
     "vendor",
+    "lifecycle",
     "README.md",
     "README_CN.md",
     "CONTRIBUTING.md",

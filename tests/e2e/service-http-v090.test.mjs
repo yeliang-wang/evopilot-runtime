@@ -168,7 +168,7 @@ test('official SDK client uses the same dispatcher and cannot read a project out
   const transport=new StreamableHTTPClientTransport(new URL(server.url+'/mcp'),{requestInit:{headers:{authorization:'Bearer '+f.other}}});
   try{
     await client.connect(transport);
-    assert.deepEqual((await client.listTools()).tools.map(t=>t.name),['runtime_read']);
+    assert.deepEqual((await client.listTools()).tools.map(t=>t.name),['runtime_read','runtime_write']);
     const ok=await client.callTool({name:'runtime_read',arguments:{operation:'runtime.status',projectId:'beta',input:{}}});
     assert.equal(JSON.parse(ok.content[0].text).result.projectId,'beta');
     const bad=await client.callTool({name:'runtime_read',arguments:{operation:'runtime.status',projectId:'alpha',input:{}}});

@@ -6,7 +6,7 @@
   "acceptanceDigest": "612f78eefdeae8af3f8170656cc6d31a7208ea91b7415a86ba49f2720091b023",
   "sourceBaseline": "cbf46c713f5448a4feacf7990be09913c3fa4cf6",
   "approvedPlanDigest": "6b7effbfbd3be312b50bcffef3cffc29b7d3ae2aa5b85cadccf8d86885cbadb3",
-  "status": "IMPLEMENTATION_AUTHORIZED_M1_BOUND",
+  "status": "IMPLEMENTATION_AUTHORIZED_M2_BOUND",
   "milestones": [
     "M0",
     "M1",
@@ -61,6 +61,42 @@
       "laterAcceptanceObligations": [
         "Actual product Host/plugin and full cross-component/CI/browser E2E are still required under M3-M6; readiness probes do not satisfy them."
       ]
+    },
+    "M2": {
+      "purpose": "Implement the approved trusted single-Base compiler, immutable project YAML revisions, guarded same-entry definition activation and pinned instance/AND stage admission. Published owner/platform adapters remain required in M3; unavailable real bindings fail closed.",
+      "paths": [
+        "src/lifecycle/base.ts",
+        "src/lifecycle/compiler.ts",
+        "src/lifecycle/bindings.ts",
+        "src/lifecycle/service.ts",
+        "src/lifecycle/instance.ts",
+        "lifecycle/base/software-release-0.9.0.json",
+        "lifecycle/base/manifest.json",
+        "src/server/http.ts",
+        "src/server/mcp.ts",
+        "src/server/cli.ts",
+        "src/server/store.ts",
+        "src/server/security.ts",
+        "src/server/errors.ts",
+        "scripts/check.mjs",
+        "scripts/build.mjs",
+        "package.json",
+        "package-lock.json",
+        "tests/e2e/lifecycle-v090.test.mjs",
+        "tests/e2e/service-http-v090.test.mjs",
+        "tests/fixtures/lifecycle-v090.mjs",
+        "tests/fixtures/service-v090-worker.mjs"
+      ],
+      "prerequisiteBindings": [
+        "governance/lifecycle-contract-v090.json",
+        "governance/parameter-matrix-v090.json",
+        "governance/environment-contract-v090.json"
+      ],
+      "evidencePrerequisites": [
+        "M1 transactional/HTTP/CLI regression evidence",
+        "M1 actual Codex scoped HTTP read evidence"
+      ],
+      "productAcceptance": "NOT_EVALUATED"
     }
   },
   "beforeProductImplementation": [

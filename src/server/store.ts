@@ -78,10 +78,14 @@ export class RuntimeStore {
     return principal.projects.filter(p => principal.permissions.includes('read')).slice(0,50).map(projectId => ({ projectId, revision: this.revision(projectId) }));
   }
   receipt(principal: Principal, projectId: string, requestId: string): Receipt {
+    const saved=this.findReceipt(principal,projectId,requestId);
+    if(!saved)return reject('NOT_FOUND','Receipt not found',404);
+    return saved;
+  }
+  findReceipt(principal: Principal, projectId: string, requestId: string): Receipt|null {
     this.guard(); authorize(principal, projectId, 'read'); string(requestId);
     const row = this.db.prepare('SELECT data FROM receipts WHERE project_id=? AND principal_id=? AND request_id=?').get(projectId, principal.id, requestId);
-    if (!row) return reject('NOT_FOUND', 'Receipt not found', 404);
-    return JSON.parse(String(row.data)) as Receipt;
+    return row?JSON.parse(String(row.data)) as Receipt:null;
   }
   mutate(principal: Principal, request: Mutation, operation: () => MutationResult, reauthorize?: () => Principal): Receipt {
     this.guard(); authorize(principal, request.projectId, request.permission);

@@ -3,21 +3,28 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { record, ServiceError } from './errors.js';
+import { DEFINITION_READS, DEFINITION_WRITES } from '../lifecycle/service.js';
 
 export const HTTP_PROTOCOLS = ['2025-06-18','2025-11-25'] as const;
-export const READ_OPERATIONS = ['runtime.status','runtime.projects.list','runtime.events.read','runtime.receipt.read'] as const;
+export const READ_OPERATIONS = ['runtime.status','runtime.projects.list','runtime.events.read','runtime.receipt.read',...DEFINITION_READS] as const;
+export const WRITE_OPERATIONS=DEFINITION_WRITES;
 /** The same scoped dispatcher serves HTTP and MCP; the transport never opens state itself. */
-export async function handleMcp(req: IncomingMessage, res: ServerResponse, body: unknown, version: string, dispatch: (value: unknown) => unknown, requestId: string): Promise<void> {
+export async function handleMcp(req: IncomingMessage, res: ServerResponse, body: unknown, version: string, dispatch: (value: unknown) => unknown|Promise<unknown>, requestId: string): Promise<void> {
   const server = new Server({ name: 'evopilot-runtime', version }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [{
     name: 'runtime_read', description: 'Read authenticated project lifecycle service state. This operation cannot activate definitions, execute work, or authorize a release.',
     inputSchema: { type: 'object', properties: { operation: { type: 'string', enum: [...READ_OPERATIONS] }, projectId: { type: 'string' }, input: { type: 'object' } }, required: ['operation','projectId','input'], additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },{
+    name:'runtime_write',description:'Save/activate an exact project definition or create an inert instance with separate current execution authority. Does not dispatch a Run or authorize a software release.',
+    inputSchema:{type:'object',properties:{operation:{type:'string',enum:[...WRITE_OPERATIONS]},projectId:{type:'string'},input:{type:'object'},requestId:{type:'string'},expectedRevision:{type:'integer',minimum:0}},required:['operation','projectId','input','requestId','expectedRevision'],additionalProperties:false},
+    annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true},
   }] }));
   server.setRequestHandler(CallToolRequestSchema, async request => {
     try {
-      if (request.params.name !== 'runtime_read') throw new ServiceError('UNKNOWN_TOOL', 'Unsupported Runtime tool', 404);
-      const result = dispatch(request.params.arguments);
+      const argumentsValue=record(request.params.arguments),operation=argumentsValue.operation;
+      if(request.params.name==='runtime_read'&&!READ_OPERATIONS.includes(operation as typeof READ_OPERATIONS[number])||request.params.name==='runtime_write'&&!WRITE_OPERATIONS.includes(operation as typeof WRITE_OPERATIONS[number])||!['runtime_read','runtime_write'].includes(request.params.name))throw new ServiceError('UNKNOWN_TOOL','Tool does not permit this operation',404);
+      const result = await dispatch(argumentsValue);
       return { content: [{ type: 'text', text: JSON.stringify({ requestId, result }) }] };
     } catch (e) {
       const error = e instanceof ServiceError ? e : new ServiceError('INTERNAL', 'Request could not be completed', 500);

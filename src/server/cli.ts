@@ -12,7 +12,7 @@ export async function serviceMain(argv: string[], output: { write(value: string)
   try {
     const [command,...args]=argv, flags: Record<string,string>=Object.create(null);
     for(let i=0;i<args.length;i+=2){const name=args[i];if(!/^--[a-z-]+$/.test(name)||!args[i+1]||args[i+1].startsWith('--')||Object.hasOwn(flags,name.slice(2)))reject('INVALID_ARGUMENT','Expected unique named arguments');flags[name.slice(2)]=args[i+1];}
-    if(command==='help' || !command){exact(flags,[]);print({commands:['auth-init','serve','status'],developmentTarget:'0.9.0',releaseReady:false,credentials:'Use protected credential files; do not pass raw tokens on the command line.'});return 0;}
+    if(command==='help' || !command){exact(flags,[]);print({commands:['auth-init','serve','status','request'],developmentTarget:'0.9.0',releaseReady:false,credentials:'Use protected credential files; do not pass raw tokens on the command line.',request:'request --url <origin> --token-ref <protected file> --project <id> --request-ref <protected JSON envelope>; no automatic retry after uncertain transport results.'});return 0;}
     if(command==='auth-init'){
       exact(flags,['state-root','workspace-id','project','principal','role']);
       const root=flags['state-root'],workspaceId=slug(flags['workspace-id']),projectId=slug(flags.project),id=slug(flags.principal);
@@ -34,8 +34,8 @@ export async function serviceMain(argv: string[], output: { write(value: string)
         process.once('SIGINT',stop);process.once('SIGTERM',stop);
       });return 0;
     }
-    if(command==='status'){
-      exact(flags,['url','token-ref','project']);
+    if(command==='status'||command==='request'){
+      exact(flags,command==='status'?['url','token-ref','project']:['url','token-ref','project','request-ref']);
       const url=new URL(flags.url);
       if(url.protocol!=='http:' || !['127.0.0.1','localhost'].includes(url.hostname) || url.username || url.password || url.search || url.hash || url.pathname!=='/')reject('INVALID_URL','Use the exact local Runtime HTTP origin');
       const credential=record(readPrivateJson(flags['token-ref']));exact(credential,['schema','workspaceId','principalId','projectId','token']);
@@ -44,7 +44,19 @@ export async function serviceMain(argv: string[], output: { write(value: string)
       const response=await fetch(new URL('/api/v1/status?projectId='+encodeURIComponent(slug(flags.project)),url),{headers:{authorization:'Bearer '+token},signal:AbortSignal.timeout(10000),redirect:'error'});
       const value=record(await response.json());
       if(response.ok && record(value.result).workspaceId!==credential.workspaceId)reject('WRONG_WORKSPACE','Runtime identity differs from the selected credential');
-      print(value);return response.ok?0:1;
+      if(command==='status'||!response.ok){print(value);return response.ok?0:1;}
+      const envelope=record(readPrivateJson(flags['request-ref']));
+      exact(envelope,['operation','projectId','input'],['requestId','expectedRevision']);
+      if(envelope.projectId!==flags.project)reject('CREDENTIAL_SCOPE','Request belongs to a different project');
+      const operation=string(envelope.operation);record(envelope.input);
+      // No source/store bypass: all request validation, CAS, roles and admission
+      // remain in the same HTTP dispatcher used by MCP and the Dashboard.
+      try{
+        const result=await fetch(new URL('/api/v1/request',url),{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:canonical(envelope),signal:AbortSignal.timeout(15000),redirect:'error'});
+        print(await result.json());return result.ok?0:1;
+      }catch{
+        print({error:{code:'REQUEST_OUTCOME_UNKNOWN',message:'Inspect the original request receipt before any further mutation.'},operation,requestId:envelope.requestId??null,automaticRetry:false});return 1;
+      }
     }
     reject('UNKNOWN_COMMAND','Unsupported Runtime service command');
   }catch(e){const error=e instanceof ServiceError?e:new ServiceError('OPERATION_FAILED','Local service operation failed',500);print({error:{code:error.code,message:error.message}});return 1;}

@@ -23,6 +23,7 @@ const expected = {
     "dist",
     "src",
     "vendor",
+    "lifecycle",
     "README.md",
     "README_CN.md",
     "CONTRIBUTING.md",
@@ -84,6 +85,8 @@ async function files(directory) {
 
 export async function checkSource() {
   await checkDocumentation();
+  const { loadPublisherBase } = await import('../dist/lifecycle/base.js');
+  assert.equal(loadPublisherBase().base.fields.length,84);
   for (const args of [['--noEmit'], ['--noEmit','--strict','--target','ES2023','--module','NodeNext','tests/types/contracts.ts']]) {
     const checked = spawnSync(process.execPath, [resolve(ROOT, 'node_modules/typescript/bin/tsc'), ...args], {cwd: ROOT, encoding: 'utf8'});
     assert.ifError(checked.error); assert.equal(checked.status, 0, checked.stdout + checked.stderr);
@@ -180,6 +183,7 @@ export async function checkSource() {
     assert.doesNotMatch(source, /\bimport\s*\(|\brequire\s*\(|\beval\s*\(|\/Users\/|\/home\/|EVOPILOT_HARNESS_HOME|defaultHarnessHome|\.evopilot-harness|\bprocess\s*(?:\.\s*(?:env|cwd|chdir)|\[)|\bglobalThis\s*(?:\.|\[)|\bm0\//);
     for (const specifier of specifiers(source)) {
       if (isBuiltin(specifier)) continue;
+      if(path.endsWith('/src/lifecycle/compiler.ts')&&specifier==='yaml')continue;
       if (path.endsWith('/src/server/mcp.ts') && ['@modelcontextprotocol/sdk/server/index.js','@modelcontextprotocol/sdk/server/streamableHttp.js','@modelcontextprotocol/sdk/types.js'].includes(specifier)) continue;
       if (specifier === 'yaml' && (path.endsWith('/src/asset-sources.mjs') || PRODUCT === 'ontology' && path.includes('/src/compat/'))) continue;
       if (PRODUCT === 'ontology' && path.includes('/src/compat/') && specifier === 'ajv/dist/2020.js') continue;

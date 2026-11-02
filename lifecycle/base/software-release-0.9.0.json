@@ -1,0 +1,1695 @@
+{
+  "schema": "runtime-base-lifecycle/v1",
+  "id": "software-release",
+  "version": "0.9.0",
+  "publisher": "evopilot-runtime",
+  "profile": "software-release",
+  "fields": [
+    {
+      "id": "schema",
+      "path": "schema",
+      "stage": "scope",
+      "type": "string",
+      "policy": "LOCKED",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 schema；已有且仍有效的值会直接复用。",
+      "rules": {
+        "fixed": "runtime-project-lifecycle/v1"
+      },
+      "secret": false
+    },
+    {
+      "id": "projectId",
+      "path": "projectId",
+      "stage": "scope",
+      "type": "slug",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 projectId；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "extends-id",
+      "path": "extends.id",
+      "stage": "scope",
+      "type": "slug",
+      "policy": "CONSTRAINED",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 extends.id；已有且仍有效的值会直接复用。",
+      "rules": {
+        "source": "trusted-installed-base-manifest"
+      },
+      "secret": false
+    },
+    {
+      "id": "extends-version",
+      "path": "extends.version",
+      "stage": "scope",
+      "type": "version",
+      "policy": "CONSTRAINED",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 extends.version；已有且仍有效的值会直接复用。",
+      "rules": {
+        "source": "trusted-installed-base-manifest"
+      },
+      "secret": false
+    },
+    {
+      "id": "extends-digest",
+      "path": "extends.digest",
+      "stage": "scope",
+      "type": "digest",
+      "policy": "CONSTRAINED",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 extends.digest；已有且仍有效的值会直接复用。",
+      "rules": {
+        "source": "trusted-installed-base-manifest"
+      },
+      "secret": false
+    },
+    {
+      "id": "extends-schemaVersion",
+      "path": "extends.schemaVersion",
+      "stage": "scope",
+      "type": "string",
+      "policy": "CONSTRAINED",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 extends.schemaVersion；已有且仍有效的值会直接复用。",
+      "rules": {
+        "source": "trusted-installed-base-manifest"
+      },
+      "secret": false
+    },
+    {
+      "id": "config-scope-targetInputRef",
+      "path": "config.scope.targetInputRef",
+      "stage": "scope",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.scope.targetInputRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-scope-baselineRuleRef",
+      "path": "config.scope.baselineRuleRef",
+      "stage": "scope",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.scope.baselineRuleRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-scope-requirementsMappingRef",
+      "path": "config.scope.requirementsMappingRef",
+      "stage": "scope",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.scope.requirementsMappingRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-scope-deliveryTargetRef",
+      "path": "config.scope.deliveryTargetRef",
+      "stage": "scope",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.scope.deliveryTargetRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-plan-planLocationRef",
+      "path": "config.plan.planLocationRef",
+      "stage": "plan",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.plan.planLocationRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-plan-adrLocationRef",
+      "path": "config.plan.adrLocationRef",
+      "stage": "plan",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.plan.adrLocationRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-plan-compatibilityPolicyRef",
+      "path": "config.plan.compatibilityPolicyRef",
+      "stage": "plan",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.plan.compatibilityPolicyRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-plan-reviewPolicyRef",
+      "path": "config.plan.reviewPolicyRef",
+      "stage": "plan",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.plan.reviewPolicyRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-plan-recoveryPolicyRef",
+      "path": "config.plan.recoveryPolicyRef",
+      "stage": "plan",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.plan.recoveryPolicyRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-implementation-credentialRef",
+      "path": "config.implementation.credentialRef",
+      "stage": "implementation",
+      "type": "credentialRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.implementation.credentialRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-implementation-reviewPolicyRef",
+      "path": "config.implementation.reviewPolicyRef",
+      "stage": "implementation",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.implementation.reviewPolicyRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-implementation-agentBindingRef",
+      "path": "config.implementation.agentBindingRef",
+      "stage": "implementation",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.implementation.agentBindingRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-candidate-buildWorkflowRef",
+      "path": "config.candidate.buildWorkflowRef",
+      "stage": "candidate",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.candidate.buildWorkflowRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-candidate-toolchainRef",
+      "path": "config.candidate.toolchainRef",
+      "stage": "candidate",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.candidate.toolchainRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-candidate-artifactLocationRef",
+      "path": "config.candidate.artifactLocationRef",
+      "stage": "candidate",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.candidate.artifactLocationRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-candidate-manifestActionRef",
+      "path": "config.candidate.manifestActionRef",
+      "stage": "candidate",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.candidate.manifestActionRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-verification-environmentRef",
+      "path": "config.verification.environmentRef",
+      "stage": "verification",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.verification.environmentRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-verification-verifyWorkflowRef",
+      "path": "config.verification.verifyWorkflowRef",
+      "stage": "verification",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.verification.verifyWorkflowRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-verification-evidenceMappingRef",
+      "path": "config.verification.evidenceMappingRef",
+      "stage": "verification",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.verification.evidenceMappingRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-verification-failurePolicyRef",
+      "path": "config.verification.failurePolicyRef",
+      "stage": "verification",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.verification.failurePolicyRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-release-decision-authorityPolicyRef",
+      "path": "config.release-decision.authorityPolicyRef",
+      "stage": "release-decision",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.release-decision.authorityPolicyRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-release-decision-decisionSourceRef",
+      "path": "config.release-decision.decisionSourceRef",
+      "stage": "release-decision",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.release-decision.decisionSourceRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-release-decision-evidencePolicyRef",
+      "path": "config.release-decision.evidencePolicyRef",
+      "stage": "release-decision",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.release-decision.evidencePolicyRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-publication-channelTargetRef",
+      "path": "config.publication.channelTargetRef",
+      "stage": "publication",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.publication.channelTargetRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-publication-publishWorkflowRef",
+      "path": "config.publication.publishWorkflowRef",
+      "stage": "publication",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.publication.publishWorkflowRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-publication-credentialRef",
+      "path": "config.publication.credentialRef",
+      "stage": "publication",
+      "type": "credentialRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.publication.credentialRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-publication-readbackPolicyRef",
+      "path": "config.publication.readbackPolicyRef",
+      "stage": "publication",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.publication.readbackPolicyRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-publication-recoveryPolicyRef",
+      "path": "config.publication.recoveryPolicyRef",
+      "stage": "publication",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.publication.recoveryPolicyRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-closure-deliveryTargetRef",
+      "path": "config.closure.deliveryTargetRef",
+      "stage": "closure",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.closure.deliveryTargetRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-closure-smokeWorkflowRef",
+      "path": "config.closure.smokeWorkflowRef",
+      "stage": "closure",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.closure.smokeWorkflowRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-closure-archiveRef",
+      "path": "config.closure.archiveRef",
+      "stage": "closure",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.closure.archiveRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-closure-followupPolicyRef",
+      "path": "config.closure.followupPolicyRef",
+      "stage": "closure",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.closure.followupPolicyRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-implementation-provider",
+      "path": "config.implementation.provider",
+      "stage": "implementation",
+      "type": "enum",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.implementation.provider；已有且仍有效的值会直接复用。",
+      "rules": {
+        "values": [
+          "github",
+          "gitlab"
+        ]
+      },
+      "secret": false
+    },
+    {
+      "id": "config-implementation-host",
+      "path": "config.implementation.host",
+      "stage": "implementation",
+      "type": "httpsOrigin",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.implementation.host；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-implementation-repository",
+      "path": "config.implementation.repository",
+      "stage": "implementation",
+      "type": "string",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.implementation.repository；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-implementation-repositoryId",
+      "path": "config.implementation.repositoryId",
+      "stage": "implementation",
+      "type": "string",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.implementation.repositoryId；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-implementation-defaultBranch",
+      "path": "config.implementation.defaultBranch",
+      "stage": "implementation",
+      "type": "string",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.implementation.defaultBranch；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-implementation-workflowPath",
+      "path": "config.implementation.workflowPath",
+      "stage": "implementation",
+      "type": "repositoryPath",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.implementation.workflowPath；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-implementation-pipelinePath",
+      "path": "config.implementation.pipelinePath",
+      "stage": "implementation",
+      "type": "repositoryPath",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.implementation.pipelinePath；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-implementation-runner",
+      "path": "config.implementation.runner",
+      "stage": "implementation",
+      "type": "string",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.implementation.runner；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "config-candidate-versionRule",
+      "path": "config.candidate.versionRule",
+      "stage": "candidate",
+      "type": "enum",
+      "policy": "CONSTRAINED",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.candidate.versionRule；已有且仍有效的值会直接复用。",
+      "rules": {
+        "values": [
+          "semver",
+          "immutable-build"
+        ]
+      },
+      "secret": false
+    },
+    {
+      "id": "config-candidate-artifactFormats",
+      "path": "config.candidate.artifactFormats",
+      "stage": "candidate",
+      "type": "stringList",
+      "policy": "CONSTRAINED",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.candidate.artifactFormats；已有且仍有效的值会直接复用。",
+      "rules": {
+        "values": [
+          "tar.gz",
+          "tgz",
+          "zip"
+        ],
+        "minItems": 1
+      },
+      "secret": false
+    },
+    {
+      "id": "config-candidate-retentionDays",
+      "path": "config.candidate.retentionDays",
+      "stage": "candidate",
+      "type": "integer",
+      "policy": "CONSTRAINED",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.candidate.retentionDays；已有且仍有效的值会直接复用。",
+      "rules": {
+        "minimum": 1,
+        "maximum": 365
+      },
+      "secret": false
+    },
+    {
+      "id": "config-publication-channel",
+      "path": "config.publication.channel",
+      "stage": "publication",
+      "type": "enum",
+      "policy": "CONSTRAINED",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.publication.channel；已有且仍有效的值会直接复用。",
+      "rules": {
+        "values": [
+          "github-release",
+          "gitlab-release"
+        ]
+      },
+      "secret": false
+    },
+    {
+      "id": "config-closure-deliveryMode",
+      "path": "config.closure.deliveryMode",
+      "stage": "closure",
+      "type": "enum",
+      "policy": "CONSTRAINED",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.closure.deliveryMode；已有且仍有效的值会直接复用。",
+      "rules": {
+        "values": [
+          "distribution",
+          "local-install",
+          "approved-deployment"
+        ]
+      },
+      "secret": false
+    },
+    {
+      "id": "config-plan-requiredChecks",
+      "path": "config.plan.requiredChecks",
+      "stage": "plan",
+      "type": "bindingList",
+      "policy": "ADDITIVE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.plan.requiredChecks；已有且仍有效的值会直接复用。",
+      "rules": {
+        "minItems": 1
+      },
+      "secret": false
+    },
+    {
+      "id": "config-implementation-requiredChecks",
+      "path": "config.implementation.requiredChecks",
+      "stage": "implementation",
+      "type": "bindingList",
+      "policy": "ADDITIVE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.implementation.requiredChecks；已有且仍有效的值会直接复用。",
+      "rules": {
+        "minItems": 1
+      },
+      "secret": false
+    },
+    {
+      "id": "config-verification-requiredChecks",
+      "path": "config.verification.requiredChecks",
+      "stage": "verification",
+      "type": "bindingList",
+      "policy": "ADDITIVE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.verification.requiredChecks；已有且仍有效的值会直接复用。",
+      "rules": {
+        "minItems": 1
+      },
+      "secret": false
+    },
+    {
+      "id": "config-release-decision-requiredChecks",
+      "path": "config.release-decision.requiredChecks",
+      "stage": "release-decision",
+      "type": "bindingList",
+      "policy": "ADDITIVE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.release-decision.requiredChecks；已有且仍有效的值会直接复用。",
+      "rules": {
+        "minItems": 1
+      },
+      "secret": false
+    },
+    {
+      "id": "config-closure-requiredChecks",
+      "path": "config.closure.requiredChecks",
+      "stage": "closure",
+      "type": "bindingList",
+      "policy": "ADDITIVE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.closure.requiredChecks；已有且仍有效的值会直接复用。",
+      "rules": {
+        "minItems": 1
+      },
+      "secret": false
+    },
+    {
+      "id": "config-release-decision-documentationPaths",
+      "path": "config.release-decision.documentationPaths",
+      "stage": "release-decision",
+      "type": "pathList",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.release-decision.documentationPaths；已有且仍有效的值会直接复用。",
+      "rules": {
+        "minItems": 1
+      },
+      "secret": false
+    },
+    {
+      "id": "config-closure-feedbackOwners",
+      "path": "config.closure.feedbackOwners",
+      "stage": "closure",
+      "type": "stringList",
+      "policy": "ADDITIVE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.closure.feedbackOwners；已有且仍有效的值会直接复用。",
+      "rules": {
+        "contains": [
+          "ontology",
+          "harness"
+        ],
+        "values": [
+          "ontology",
+          "harness"
+        ]
+      },
+      "secret": false
+    },
+    {
+      "id": "config-plan-budget-timeoutSeconds",
+      "path": "config.plan.budget.timeoutSeconds",
+      "stage": "plan",
+      "type": "integer",
+      "policy": "CONSTRAINED",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.plan.budget.timeoutSeconds；已有且仍有效的值会直接复用。",
+      "rules": {
+        "minimum": 1,
+        "maximum": 3600,
+        "authority": "Must also fit the exact instance authority and remaining budget; definition changes do not replenish a Run."
+      },
+      "secret": false
+    },
+    {
+      "id": "config-plan-budget-maxAttempts",
+      "path": "config.plan.budget.maxAttempts",
+      "stage": "plan",
+      "type": "integer",
+      "policy": "CONSTRAINED",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.plan.budget.maxAttempts；已有且仍有效的值会直接复用。",
+      "rules": {
+        "minimum": 1,
+        "maximum": 4,
+        "authority": "Must also fit the exact instance authority and remaining budget; definition changes do not replenish a Run."
+      },
+      "secret": false
+    },
+    {
+      "id": "config-plan-budget-maxConcurrency",
+      "path": "config.plan.budget.maxConcurrency",
+      "stage": "plan",
+      "type": "integer",
+      "policy": "CONSTRAINED",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.plan.budget.maxConcurrency；已有且仍有效的值会直接复用。",
+      "rules": {
+        "minimum": 1,
+        "maximum": 4,
+        "authority": "Must also fit the exact instance authority and remaining budget; definition changes do not replenish a Run."
+      },
+      "secret": false
+    },
+    {
+      "id": "config-plan-budget-maxLoops",
+      "path": "config.plan.budget.maxLoops",
+      "stage": "plan",
+      "type": "integer",
+      "policy": "CONSTRAINED",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.plan.budget.maxLoops；已有且仍有效的值会直接复用。",
+      "rules": {
+        "minimum": 1,
+        "maximum": 4,
+        "authority": "Must also fit the exact instance authority and remaining budget; definition changes do not replenish a Run."
+      },
+      "secret": false
+    },
+    {
+      "id": "config-verification-budget-timeoutSeconds",
+      "path": "config.verification.budget.timeoutSeconds",
+      "stage": "verification",
+      "type": "integer",
+      "policy": "CONSTRAINED",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.verification.budget.timeoutSeconds；已有且仍有效的值会直接复用。",
+      "rules": {
+        "minimum": 1,
+        "maximum": 3600,
+        "authority": "Must also fit the exact instance authority and remaining budget; definition changes do not replenish a Run."
+      },
+      "secret": false
+    },
+    {
+      "id": "config-verification-budget-maxAttempts",
+      "path": "config.verification.budget.maxAttempts",
+      "stage": "verification",
+      "type": "integer",
+      "policy": "CONSTRAINED",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.verification.budget.maxAttempts；已有且仍有效的值会直接复用。",
+      "rules": {
+        "minimum": 1,
+        "maximum": 4,
+        "authority": "Must also fit the exact instance authority and remaining budget; definition changes do not replenish a Run."
+      },
+      "secret": false
+    },
+    {
+      "id": "config-verification-budget-maxConcurrency",
+      "path": "config.verification.budget.maxConcurrency",
+      "stage": "verification",
+      "type": "integer",
+      "policy": "CONSTRAINED",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.verification.budget.maxConcurrency；已有且仍有效的值会直接复用。",
+      "rules": {
+        "minimum": 1,
+        "maximum": 4,
+        "authority": "Must also fit the exact instance authority and remaining budget; definition changes do not replenish a Run."
+      },
+      "secret": false
+    },
+    {
+      "id": "config-verification-budget-maxLoops",
+      "path": "config.verification.budget.maxLoops",
+      "stage": "verification",
+      "type": "integer",
+      "policy": "CONSTRAINED",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 config.verification.budget.maxLoops；已有且仍有效的值会直接复用。",
+      "rules": {
+        "minimum": 1,
+        "maximum": 4,
+        "authority": "Must also fit the exact instance authority and remaining budget; definition changes do not replenish a Run."
+      },
+      "secret": false
+    },
+    {
+      "id": "assets-ontology-adapterRef",
+      "path": "assets.ontology.adapterRef",
+      "stage": "scope",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 assets.ontology.adapterRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "assets-ontology-projectId",
+      "path": "assets.ontology.projectId",
+      "stage": "scope",
+      "type": "slug",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 assets.ontology.projectId；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "assets-ontology-visibility",
+      "path": "assets.ontology.visibility",
+      "stage": "scope",
+      "type": "enum",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 assets.ontology.visibility；已有且仍有效的值会直接复用。",
+      "rules": {
+        "values": [
+          "private",
+          "public"
+        ]
+      },
+      "secret": false
+    },
+    {
+      "id": "assets-ontology-id",
+      "path": "assets.ontology.id",
+      "stage": "scope",
+      "type": "slug",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 assets.ontology.id；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "assets-ontology-version",
+      "path": "assets.ontology.version",
+      "stage": "scope",
+      "type": "version",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 assets.ontology.version；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "assets-ontology-digest",
+      "path": "assets.ontology.digest",
+      "stage": "scope",
+      "type": "digest",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 assets.ontology.digest；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "assets-ontology-standardRef",
+      "path": "assets.ontology.standardRef",
+      "stage": "scope",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 assets.ontology.standardRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "assets-ontology-mappingRef",
+      "path": "assets.ontology.mappingRef",
+      "stage": "scope",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 assets.ontology.mappingRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "assets-ontology-targetLevel",
+      "path": "assets.ontology.targetLevel",
+      "stage": "scope",
+      "type": "enum",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 assets.ontology.targetLevel；已有且仍有效的值会直接复用。",
+      "rules": {
+        "values": [
+          "L1",
+          "L2",
+          "L3"
+        ]
+      },
+      "secret": false
+    },
+    {
+      "id": "assets-harness-adapterRef",
+      "path": "assets.harness.adapterRef",
+      "stage": "scope",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 assets.harness.adapterRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "assets-harness-projectId",
+      "path": "assets.harness.projectId",
+      "stage": "scope",
+      "type": "slug",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 assets.harness.projectId；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "assets-harness-visibility",
+      "path": "assets.harness.visibility",
+      "stage": "scope",
+      "type": "enum",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 assets.harness.visibility；已有且仍有效的值会直接复用。",
+      "rules": {
+        "values": [
+          "private",
+          "public"
+        ]
+      },
+      "secret": false
+    },
+    {
+      "id": "assets-harness-id",
+      "path": "assets.harness.id",
+      "stage": "scope",
+      "type": "slug",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 assets.harness.id；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "assets-harness-version",
+      "path": "assets.harness.version",
+      "stage": "scope",
+      "type": "version",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 assets.harness.version；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "assets-harness-digest",
+      "path": "assets.harness.digest",
+      "stage": "scope",
+      "type": "digest",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 assets.harness.digest；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "assets-harness-standardRef",
+      "path": "assets.harness.standardRef",
+      "stage": "scope",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 assets.harness.standardRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "assets-harness-mappingRef",
+      "path": "assets.harness.mappingRef",
+      "stage": "scope",
+      "type": "bindingRef",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 assets.harness.mappingRef；已有且仍有效的值会直接复用。",
+      "rules": {},
+      "secret": false
+    },
+    {
+      "id": "assets-harness-targetLevel",
+      "path": "assets.harness.targetLevel",
+      "stage": "scope",
+      "type": "enum",
+      "policy": "CONFIGURABLE",
+      "required": true,
+      "providers": [
+        "github",
+        "gitlab"
+      ],
+      "timing": "PROJECT_CONFIGURATION",
+      "question": "请配置 assets.harness.targetLevel；已有且仍有效的值会直接复用。",
+      "rules": {
+        "values": [
+          "L1",
+          "L2",
+          "L3"
+        ]
+      },
+      "secret": false
+    }
+  ],
+  "stages": [
+    {
+      "id": "scope",
+      "requires": [],
+      "checks": [
+        "base.scope.target-scope",
+        "base.scope.requirements-mapping"
+      ],
+      "required": true,
+      "policy": "LOCKED"
+    },
+    {
+      "id": "plan",
+      "requires": [
+        "scope"
+      ],
+      "checks": [
+        "base.plan.accepted-plan",
+        "base.plan.fixed-verification",
+        "base.plan.bounded-authority"
+      ],
+      "required": true,
+      "policy": "LOCKED"
+    },
+    {
+      "id": "implementation",
+      "requires": [
+        "plan"
+      ],
+      "checks": [
+        "base.implementation.source-review",
+        "base.implementation.ci-evidence"
+      ],
+      "required": true,
+      "policy": "LOCKED"
+    },
+    {
+      "id": "candidate",
+      "requires": [
+        "implementation"
+      ],
+      "checks": [
+        "base.candidate.immutable-manifest",
+        "base.candidate.artifact-digests"
+      ],
+      "required": true,
+      "policy": "LOCKED"
+    },
+    {
+      "id": "verification",
+      "requires": [
+        "candidate"
+      ],
+      "checks": [
+        "base.verification.required-checks",
+        "base.verification.owner-evaluations"
+      ],
+      "required": true,
+      "policy": "LOCKED"
+    },
+    {
+      "id": "release-decision",
+      "requires": [
+        "verification"
+      ],
+      "checks": [
+        "base.release-decision.exact-release-authority",
+        "base.release-decision.documentation"
+      ],
+      "required": true,
+      "policy": "LOCKED"
+    },
+    {
+      "id": "publication",
+      "requires": [
+        "release-decision"
+      ],
+      "checks": [
+        "base.publication.channel-readback",
+        "base.publication.delivery-digests"
+      ],
+      "required": true,
+      "policy": "LOCKED"
+    },
+    {
+      "id": "closure",
+      "requires": [
+        "publication"
+      ],
+      "checks": [
+        "base.closure.delivery-acceptance",
+        "base.closure.owner-feedback"
+      ],
+      "required": true,
+      "policy": "LOCKED"
+    }
+  ],
+  "slots": {
+    "after-plan": {
+      "predecessor": "plan",
+      "successor": "implementation",
+      "types": [
+        "review",
+        "check"
+      ]
+    },
+    "before-candidate": {
+      "predecessor": "implementation",
+      "successor": "candidate",
+      "types": [
+        "operation",
+        "review",
+        "check"
+      ]
+    },
+    "candidate-checks": {
+      "predecessor": "candidate",
+      "successor": "verification",
+      "types": [
+        "review",
+        "check"
+      ]
+    },
+    "before-release-decision": {
+      "predecessor": "verification",
+      "successor": "release-decision",
+      "types": [
+        "review",
+        "check"
+      ]
+    }
+  },
+  "actions": [
+    {
+      "id": "runtime.check.harness",
+      "version": "1",
+      "type": "check",
+      "parameterSchema": {
+        "checkRef": "bindingRef"
+      },
+      "candidateReadOnly": true,
+      "permission": "execution.request"
+    },
+    {
+      "id": "runtime.check.ontology",
+      "version": "1",
+      "type": "check",
+      "parameterSchema": {
+        "checkRef": "bindingRef"
+      },
+      "candidateReadOnly": true,
+      "permission": "execution.request"
+    },
+    {
+      "id": "runtime.check.artifact",
+      "version": "1",
+      "type": "check",
+      "parameterSchema": {
+        "checkRef": "bindingRef"
+      },
+      "candidateReadOnly": true,
+      "permission": "execution.request"
+    },
+    {
+      "id": "runtime.review.scope",
+      "version": "1",
+      "type": "review",
+      "parameterSchema": {
+        "reviewRef": "bindingRef"
+      },
+      "candidateReadOnly": true,
+      "permission": "execution.request"
+    },
+    {
+      "id": "runtime.operation.ci-prepare",
+      "version": "1",
+      "type": "operation",
+      "parameterSchema": {
+        "workflowRef": "bindingRef"
+      },
+      "candidateReadOnly": false,
+      "permission": "execution.request"
+    }
+  ],
+  "yamlPolicy": {
+    "duplicateKeys": "REJECT",
+    "customTags": "REJECT",
+    "aliases": "REJECT",
+    "maxBytes": 262144,
+    "maxDepth": 32
+  },
+  "extensionRequiredFields": [
+    "id",
+    "slot",
+    "type",
+    "actionRef",
+    "actionVersion",
+    "actionDigest",
+    "parameters",
+    "requirementRefs",
+    "evidenceMappingRef",
+    "scopeRef",
+    "budget",
+    "dependsOn"
+  ],
+  "extensionPolicy": {
+    "idPrefix": "project.",
+    "sameSlotDependenciesOnly": true,
+    "required": true,
+    "join": "AND",
+    "arbitraryCode": false,
+    "arbitraryProviders": false
+  },
+  "presentation": {
+    "fields": [
+      "label",
+      "notes",
+      "layout"
+    ],
+    "semanticDigest": false,
+    "cannotChangeBaseStageMeaning": true
+  },
+  "optionalTopLevel": [
+    "extensions",
+    "presentation"
+  ],
+  "unknownFieldPolicy": "REJECT",
+  "baseMutationAllowed": false
+}

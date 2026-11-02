@@ -4,24 +4,31 @@ import { readFileSync } from 'node:fs';
 import { canonical, exact, record, reject, ServiceError, slug, string } from './errors.js';
 import { authenticate, authorize, assertCredentials } from './security.js';
 import { RuntimeStore } from './store.js';
-import { handleMcp, HTTP_PROTOCOLS, READ_OPERATIONS } from './mcp.js';
+import { handleMcp, HTTP_PROTOCOLS, READ_OPERATIONS, WRITE_OPERATIONS } from './mcp.js';
+import { createDefinitionService, DEFINITION_READS, DEFINITION_WRITES } from '../lifecycle/service.js';
+import type { DefinitionBindingProvider } from '../lifecycle/bindings.js';
+import type { AuthorityResolver } from '../lifecycle/instance.js';
 
 const VERSION = String(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version);
 export interface ServerOptions { stateRoot: string; workspaceId: string; port?: number; }
-export async function startRuntimeServer(options: ServerOptions) {
+export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver) {
   const config = record(options); exact(config,['stateRoot','workspaceId'],['port']);
   string(options.stateRoot,4096); slug(options.workspaceId);
   if (options.port !== undefined && (!Number.isSafeInteger(options.port) || options.port < 0 || options.port > 65535)) reject('INVALID_PORT','Invalid loopback port');
   assertCredentials(options.stateRoot,options.workspaceId);
   const store = new RuntimeStore(options.stateRoot, options.workspaceId);
+  const definitions=createDefinitionService(store,trustedBindings,trustedAuthorities);
   const streams = new Set<ServerResponse>();
   let port = 0, closing = false;
-  const status = () => ({ product: 'evopilot-runtime', version: VERSION, developmentTarget: '0.9.0', contract: 'runtime-service/v1', workspaceId: options.workspaceId, serviceId: store.serviceId, transport: 'streamable-http', protocols: HTTP_PROTOCOLS, operations: READ_OPERATIONS, independentLlm: false, productAcceptance: 'NOT_EVALUATED' });
+  const status = () => ({ product: 'evopilot-runtime', version: VERSION, developmentTarget: '0.9.0', contract: 'runtime-service/v1', workspaceId: options.workspaceId, serviceId: store.serviceId, transport: 'streamable-http', protocols: HTTP_PROTOCOLS, operations: [...READ_OPERATIONS,...WRITE_OPERATIONS], independentLlm: false, productAcceptance: 'NOT_EVALUATED' });
   function principal(req: IncomingMessage) { return authenticate(options.stateRoot,options.workspaceId,req.headers.authorization); }
-  function dispatch(req: IncomingMessage, value: unknown): unknown {
-    const envelope = record(value); exact(envelope,['operation','projectId','input']);
+  async function dispatch(req: IncomingMessage, value: unknown): Promise<unknown> {
+    const envelope = record(value); exact(envelope,['operation','projectId','input'],['requestId','expectedRevision']);
     const projectId = slug(envelope.projectId), operation = string(envelope.operation), input = record(envelope.input);
     const actor = principal(req); authorize(actor,projectId,'read');
+    if(DEFINITION_WRITES.includes(operation as typeof DEFINITION_WRITES[number])){exact(envelope,['operation','projectId','input','requestId','expectedRevision']);if(!Number.isSafeInteger(envelope.expectedRevision)||Number(envelope.expectedRevision)<0)reject('INVALID_REVISION','Expected a nonnegative revision');return definitions.write(actor,projectId,operation,input,string(envelope.requestId),Number(envelope.expectedRevision),()=>principal(req));}
+    exact(envelope,['operation','projectId','input']);
+    if(DEFINITION_READS.includes(operation as typeof DEFINITION_READS[number]))return definitions.read(actor,projectId,operation,input);
     switch (operation) {
       case 'runtime.status': exact(input,[]); return { ...status(), projectId, revision: store.revision(projectId) };
       case 'runtime.projects.list': exact(input,[]); return { projects: store.projects(actor) };
@@ -93,8 +100,8 @@ export async function startRuntimeServer(options: ServerOptions) {
         if (protocol === undefined && (!message || typeof message !== 'object' || Array.isArray(message) || record(message).method !== 'initialize')) reject('UNSUPPORTED_PROTOCOL','MCP protocol header is required after initialization');
         await handleMcp(req,res,message,VERSION,v=>dispatch(req,v),requestId); return;
       }
-      if (req.method === 'POST' && url.pathname === '/api/v1/request') { json(res,200,{ requestId,result:dispatch(req,await body(req)) }); return; }
-      if (req.method === 'GET' && url.pathname === '/api/v1/status') { json(res,200,{requestId,result:dispatch(req,{operation:'runtime.status',projectId:url.searchParams.get('projectId'),input:{}})});return; }
+      if (req.method === 'POST' && url.pathname === '/api/v1/request') { json(res,200,{ requestId,result:await dispatch(req,await body(req)) }); return; }
+      if (req.method === 'GET' && url.pathname === '/api/v1/status') { json(res,200,{requestId,result:await dispatch(req,{operation:'runtime.status',projectId:url.searchParams.get('projectId'),input:{}})});return; }
       if (req.method === 'GET' && url.pathname === '/api/v1/events') {
         const projectId=slug(url.searchParams.get('projectId')); stream(req,res,projectId,url.searchParams.get('cursor') ?? undefined);return;
       }

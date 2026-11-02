@@ -1,0 +1,13 @@
+{
+  "schema": "runtime-base-distribution/v1",
+  "publisher": "evopilot-runtime",
+  "bases": [
+    {
+      "id": "software-release",
+      "version": "0.9.0",
+      "schemaVersion": "runtime-base-lifecycle/v1",
+      "file": "software-release-0.9.0.json",
+      "digest": "sha256:727d93a792f60ce9561b4bc3a96473f05d28e5b1bf16abbb0476c5fb500e5207"
+    }
+  ]
+}
