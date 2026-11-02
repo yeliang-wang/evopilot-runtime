@@ -5,6 +5,7 @@ import {githubClient} from '../../dist/adapters/github.js';
 import {gitlabClient} from '../../dist/adapters/gitlab.js';
 import {releaseDocuments} from '../../dist/adapters/documents.js';
 import {valueDigest,byteDigest} from '../../dist/lifecycle/base.js';
+import {evidenceValueDigest} from '../../dist/server/errors.js';
 
 const actor={id:'reader',projects:['alpha'],permissions:['read'],revision:1,expiresAt:'2030-01-01T00:00:00Z'};
 const commit='b'.repeat(40),root='c'.repeat(40),subtree='d'.repeat(40);
@@ -35,6 +36,26 @@ function fixture(provider){
   return{binding,repo,files,trees,control,calls,content,read:(input={commit,documents:mapping},who=actor,signal=AbortSignal.timeout(3000))=>client.documents(who,input,signal),restore:()=>globalThis.fetch=original};
 }
 for(const provider of ['github','gitlab']){
+  test(provider+' retains four complete maximum-sized documents and hashes all original bytes',async()=>{
+    const f=fixture(provider);try{
+      const text=('# Synthetic document\n'+'x'.repeat(1048576)).slice(0,1048576);
+      for(const d of mapping)f.content(d.path,Buffer.from(text));
+      const v=await f.read(),{schema,factsDigest,observedAt,releaseAuthorized,...facts}=v;
+      assert.equal(factsDigest,evidenceValueDigest(facts));assert.equal(v.documents.length,4);
+      for(const d of v.documents){assert.equal(d.text,text);assert.equal(d.bytes,1048576);assert.equal(d.digest,byteDigest(text));}
+      assert.equal(releaseAuthorized,false);
+    }finally{f.restore();}
+  });
+  test(provider+' rejects an expanded document mapping exceeding the evidence profile without returning truncated text',async()=>{
+    const f=fixture(provider);try{
+      f.content('README.md',Buffer.from('x'.repeat(1048576)));
+      // Six unique MiB fit the transfer bound; duplicate roles still count in
+      // the encoded evidence profile, so this nine-row result must not escape it.
+      const docs=[...mapping.map(d=>({...d,path:'README.md'}))];
+      for(let i=0;i<5;i++){const path='extra-'+i+'.md';f.content(path,Buffer.from('x'.repeat(1048576)));docs.push({role:'technical',path});}
+      await assert.rejects(()=>f.read({commit,documents:docs}),{code:'INPUT_LIMIT'});
+    }finally{f.restore();}
+  });
   test(provider+' release documents bind exact source, full text and independent hashes without reading HEAD or granting approval',async()=>{
     const f=fixture(provider);try{const v=await f.read(),{schema,factsDigest,observedAt,releaseAuthorized,...facts}=v;assert.equal(factsDigest,valueDigest(facts));assert.equal(v.commit,commit);assert.equal(v.bindingDigest,valueDigest(f.binding));assert.equal(releaseAuthorized,false);assert.equal(v.documents.length,4);for(const d of v.documents){assert.equal(d.digest,byteDigest(d.text));assert.equal(d.bytes,Buffer.byteLength(d.text));}assert(!f.calls.some(x=>x.includes('/branches/')));assert.equal((await f.read()).factsDigest,factsDigest);}finally{f.restore();}
   });

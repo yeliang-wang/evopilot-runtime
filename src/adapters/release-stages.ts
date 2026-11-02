@@ -1,8 +1,7 @@
 import {randomUUID} from 'node:crypto';
-import {canonical,record,reject} from '../server/errors.js';
+import {canonicalEvidence as canonical,evidenceValueDigest as valueDigest,record,reject} from '../server/errors.js';
 import {authorize,type Principal} from '../server/security.js';
 import {RuntimeStore} from '../server/store.js';
-import {valueDigest} from '../lifecycle/base.js';
 import {atPath} from '../lifecycle/compiler.js';
 import {inspectInstance,type LifecycleInstance,type ReleaseAuthority} from '../lifecycle/instance.js';
 import type {StageAdapter,StageObservation,StagePlan,StageProgress,StageRequest} from '../lifecycle/execution.js';

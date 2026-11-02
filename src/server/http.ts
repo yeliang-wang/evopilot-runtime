@@ -64,7 +64,9 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
   async function body(req: IncomingMessage): Promise<unknown> {
     if (!/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(req.headers['content-type'] ?? '')) return reject('CONTENT_TYPE','JSON content type required',415);
     let size = 0; const chunks: Buffer[] = [];
-    for await (const chunk of req) {
+    // Keep the response socket alive long enough to deliver a bounded rejection.
+    // The default async iterator destroys IncomingMessage when the loop throws.
+    for await (const chunk of req.iterator({destroyOnReturn:false})) {
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk); size += bytes.length;
       if (size > 262144) return reject('INPUT_LIMIT','Request exceeds 256 KiB',413);
       chunks.push(bytes);
@@ -129,6 +131,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
       reject('NOT_FOUND','Endpoint not found',404);
     } catch (e) {
       const error=e instanceof ServiceError?e:new ServiceError('INTERNAL','Request could not be completed',500);
+      if(error.status===413){res.shouldKeepAlive=false;req.resume();}
       if(!res.headersSent)json(res,error.status,{requestId,error:{code:error.code,message:error.message}});else res.end();
     }
   });

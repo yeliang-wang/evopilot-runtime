@@ -1,10 +1,11 @@
 # Runtime v0.9 independence and lifecycle boundary
 
-Original native evidence has a separate bounded serialization profile: 8 MiB,
+Original native evidence and release material have a bounded serialization profile: 8 MiB,
 200,000 JSON nodes and depth 32. It applies only to fixed native-receipt,
-verification-run and owner-feedback record kinds and the six explicit plan,
+verification-run, owner-feedback and release-material record kinds and the six explicit plan,
 implementation, release, publication, closure and verification-feedback evidence
-read operations. HTTP and Streamable MCP apply the same response bound. Ordinary
+read operations, plus the full `lifecycle.authority.preview` review. HTTP and
+Streamable MCP apply the same response bound. Ordinary
 requests, YAML, other responses and monitor pages retain their 256 KiB limit;
 the event payload limit remains 64 KiB. No caller selects the larger profile or
 supplies a record kind. Original receipts retain their complete command output,
@@ -12,6 +13,9 @@ canonical digests and scope; no truncation creates a PASS. Exceeding the evidenc
 profile still blocks retention/readback and requires inspection of the original
 owner receipt, without redispatch. Private archival uses the same bounded JSON
 profile for each original receipt document, within its existing total bound.
+An oversized HTTP or MCP request receives `413 INPUT_LIMIT` and closes its
+connection without dispatch, including an unfinished chunked upload. Reading
+the bounded body must not destroy the response socket before sending this error.
 
 An explicit stage continuation checks worker availability again after asynchronous
 permission verification. If an original observation acquired the worker in that
@@ -668,6 +672,12 @@ registered GitHub/GitLab provider. It verifies complete bounded Git trees,
 regular-file modes, Git blob identity, content hashes, nonempty UTF-8 text and
 transfer limits (1 MiB per file, 8 MiB total). Links, submodules, incomplete trees,
 missing files, mismatched bytes and detected inline credentials fail closed.
+Full document observations, retained release material and authority reviews also
+fit the 8 MiB encoded evidence profile, including JSON escaping and repeated
+role mappings. Transfer capacity does not exempt an encoded result from that
+bound. Runtime rejects an oversized result; it never truncates document text or
+substitutes a digest-only preview. Requests and decision records remain small
+references, and the review digest binds every original document byte.
 The independently re-observed original verification must still match its complete
 CI/native outcome, including consumption of the original candidate archive.
 

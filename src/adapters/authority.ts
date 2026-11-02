@@ -1,5 +1,5 @@
 import { verifyDecisionEvidence, type DecisionSubject } from '../../vendor/compatibility/v1/decision-evidence.mjs';
-import { canonical, exact, record, reject, slug, string } from '../server/errors.js';
+import { canonical, evidenceValueDigest, exact, record, reject, slug, string } from '../server/errors.js';
 import { authorize, type Principal } from '../server/security.js';
 import { RuntimeStore, type Receipt, type StoredObject } from '../server/store.js';
 import { valueDigest } from '../lifecycle/base.js';
@@ -169,7 +169,7 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
     if(Date.parse(String(subject.expiresAt))>Math.min(Date.parse(p.expiresAt),Date.parse(actor.expiresAt)))reject('AUTHORITY_EXPIRY_BOUND','Decision expiry must fit the current policy and deciding credential');
     const preparation=type==='execution'?prepared(subject,effective,actor,actor.id):null;
     const review={schema:'runtime-authority-review/v1',workspaceId:store.workspaceId,projectId,kind:type,subject,policyDigest:p.digest,bindingContextDigest:p.bindingContextDigest,principalId:actor.id,principalRevision:actor.revision,...(preparation?{preparation}:{}),...(releaseMaterial?{releaseMaterial}:{})};
-    return{...review,reviewDigest:valueDigest(review)};
+    return{...review,reviewDigest:evidenceValueDigest(review)};
   }
   const resolveExecution:AuthorityResolver=async(ref,effective,actor,signal)=>{
     signal.throwIfAborted();const d=savedDecision(effective.projectId,ref);current(d,actor);

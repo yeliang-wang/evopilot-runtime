@@ -16,6 +16,7 @@ import { startRuntimeServer } from '../../dist/server/http.js';
 import { serviceMain } from '../../dist/server/cli.js';
 import { RuntimeStore } from '../../dist/server/store.js';
 import { valueDigest, byteDigest } from '../../dist/lifecycle/base.js';
+import { evidenceValueDigest } from '../../dist/server/errors.js';
 import { requestStage, recordStageOutcome, stageAdmission } from '../../dist/lifecycle/instance.js';
 import { createAuthorityService, registeredAuthorityPolicy } from '../../dist/adapters/authority.js';
 import { createReleaseStageAdapter } from '../../dist/adapters/release-stages.js';
@@ -181,7 +182,7 @@ async function syntheticVerification(f,g,collect=true){
     objects.push({kind:'lifecycle-instance',id:'one',value:instance});
     store.mutate(actor,{projectId:'alpha',operation:'synthetic-test-stage-fixture',requestId:'synthetic-fixture',expectedRevision:store.revision('alpha'),input:{pins:instance.pinsDigest},permission:'execution.request'},()=>({objects,value:{fixtureOnly:true},event:{type:'synthetic-fixture',data:{fixtureOnly:true}}}));
     f.releaseControls={documentReads:0,verificationReads:0,failVerification:false,failDocuments:false};
-    f.releaseFactory=(s,services)=>createReleaseStageAdapter(s,f.configPath,{verification:{async inspect(r){f.releaseControls.verificationReads++;const p=s.object('alpha','stage-progress',r.id);return f.releaseControls.failVerification?{...p.observation,phase:'UNKNOWN'}:p.observation;}},platform:()=>({async documents(_a,input){f.releaseControls.documentReads++;if(f.releaseControls.failDocuments)throw Error('Synthetic document interruption');const documents=releaseDocuments(input.documents).map(d=>{const text='# Synthetic '+d.role+'\nDocumentation fixture, not release approval.\n';return{...d,text,digest:byteDigest(text),bytes:Buffer.byteLength(text)};}),facts={provider:binding.provider,projectId:'alpha',repositoryId:binding.repositoryId,bindingDigest:valueDigest(binding),commit:input.commit,documents};return{schema:'runtime-release-documents/v1',...facts,factsDigest:valueDigest(facts),observedAt:new Date().toISOString(),releaseAuthorized:false};}})},services.releaseAuthority,services.authorityPolicy);
+    f.releaseFactory=(s,services)=>createReleaseStageAdapter(s,f.configPath,{verification:{async inspect(r){f.releaseControls.verificationReads++;const p=s.object('alpha','stage-progress',r.id);return f.releaseControls.failVerification?{...p.observation,phase:'UNKNOWN'}:p.observation;}},platform:()=>({async documents(_a,input){f.releaseControls.documentReads++;if(f.releaseControls.failDocuments)throw Error('Synthetic document interruption');const documents=releaseDocuments(input.documents).map(d=>{const text=f.releaseControls.documentText??('# Synthetic '+d.role+'\nDocumentation fixture, not release approval.\n');return{...d,text,digest:byteDigest(text),bytes:Buffer.byteLength(text)};}),facts={provider:binding.provider,projectId:'alpha',repositoryId:binding.repositoryId,bindingDigest:valueDigest(binding),commit:input.commit,documents};return{schema:'runtime-release-documents/v1',...facts,factsDigest:evidenceValueDigest(facts),observedAt:new Date().toISOString(),releaseAuthorized:false};}})},services.releaseAuthority,services.authorityPolicy);
     if(collect){
       const adapter=f.releaseFactory(store,{releaseAuthority:svc.resolveRelease,authorityPolicy:f.policy}),plan=await adapter.prepare(instance,'release-decision',actor,new AbortController().signal);instance=requestStage(instance,'release-decision','synthetic-release',{authority,bindingsCurrent:true});
       const body={schema:'runtime-stage-request/v1',id:'synthetic-release',workspaceId:'synthetic',projectId:'alpha',instanceId:'one',stageId:'release-decision',pinsDigest:instance.pinsDigest,inputDigest:instance.stages['release-decision'].inputDigest,bindingStamp:valueDigest('synthetic'),authorityRef:g.ref,releaseAuthorityRef:null,initiatedBy:{id:actor.id,revision:actor.revision},plan,planDigest:valueDigest(plan),requestedAt:new Date().toISOString(),deadlineAt:g.input.subject.expiresAt},r={...body,digest:valueDigest(body)};
@@ -268,6 +269,34 @@ async function releaseFixture(){
 }
 async function releaseRequest(f){const r=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'release-decision'});assert.equal(r.status,200,JSON.stringify(r));return r.result.result.stageRequestId;}
 const releaseMaterial=(f,id)=>request(f,'lifecycle.release.evidence.read',{stageRequestId:id},'reader');
+
+test('full large release documents survive HTTP, MCP, restart and exact review without enlarging mutation requests',async()=>{
+  const{f,subject}=await releaseFixture(),client=new Client({name:'synthetic-large-release-review',version:'1.0.0'});
+  try{
+    const text=('# Synthetic complete document\n'+'x'.repeat(1048576)).slice(0,1048576);f.releaseControls.documentText=text;
+    const id=await releaseRequest(f),material=(await until(()=>releaseMaterial(f,id),v=>v.status===200)).result.material;
+    await until(()=>request(f,'lifecycle.stage.request.inspect',{stageRequestId:id}),v=>v.result.progress.phase==='RUNNING');
+    assert(Buffer.byteLength(JSON.stringify(material))>4194304);
+    for(const d of material.documents.documents){assert.equal(d.text,text);assert.equal(d.bytes,1048576);assert.equal(d.digest,byteDigest(text));}
+    const response=await request(f,'lifecycle.authority.preview',{kind:'release',subject},'decider');assert.equal(response.status,200);
+    const preview=response.result,{reviewDigest,authorityGranted,executionDispatched,...review}=preview;
+    assert.equal(reviewDigest,evidenceValueDigest(review));assert.deepEqual(preview.releaseMaterial,material);assert.equal(authorityGranted,false);
+    const changed=structuredClone(review);changed.releaseMaterial.documents.documents[2].text+='!';assert.notEqual(evidenceValueDigest(changed),reviewDigest);
+    await client.connect(new StreamableHTTPClientTransport(new URL(f.server.url+'/mcp'),{requestInit:{headers:{authorization:'Bearer '+f.tokens.decider}}}));
+    const mcp=await client.callTool({name:'runtime_read',arguments:{operation:'lifecycle.authority.preview',projectId:'alpha',input:{kind:'release',subject}}});assert.notEqual(mcp.isError,true);assert.deepEqual(JSON.parse(mcp.content[0].text).result,preview);
+    await client.close();await f.server.close();await f.open();
+    assert.deepEqual((await releaseMaterial(f,id)).result.material,material);
+    assert.deepEqual((await request(f,'lifecycle.authority.preview',{kind:'release',subject},'decider')).result,preview);assert.equal(f.releaseControls.documentReads,1);
+    const proof=evidence(f,preview),input={kind:'release',subject,reviewDigest,decision:'APPROVE',evidenceRef:proof.ref};
+    const oversized=await write(f,'lifecycle.authority.record',{...input,extra:text});assert.equal(oversized.status,413);
+    const stale=await execWrite(f,'lifecycle.authority.record',{...input,reviewDigest:evidenceValueDigest(changed)},'decider');assert.equal(stale.error.code,'AUTHORITY_REVIEW_STALE');
+    const recorded=await execWrite(f,'lifecycle.authority.record',input,'decider');assert.equal(recorded.status,200,JSON.stringify(recorded));
+    assert.equal(recorded.result.result.reviewDigest,reviewDigest);
+    await execWrite(f,'lifecycle.stage.reconcile',{stageRequestId:id},'reader');
+    await until(()=>request(f,'lifecycle.stage.request.inspect',{stageRequestId:id}),v=>v.result.progress.phase==='COMPLETE');
+    assert.equal(f.releaseControls.documentReads,1);assert.equal((await inspect(f,recorded.result.result.authorityRef)).result.usable,true);
+  }finally{await client.close();await f.server.close();f.cleanup();}
+});
 
 test('same release stage collects reviewable documents, survives restart and completes only after the separate exact decision',async()=>{
   const{f,subject}=await releaseFixture();const client=new Client({name:'synthetic-release-read',version:'1.0.0'});try{

@@ -76,6 +76,27 @@ function rawStatus(url,headers) { return new Promise((resolve,reject)=>{
   const req=httpRequest(url,{headers},res=>{res.resume();res.once('end',()=>resolve(res.statusCode));});req.once('error',reject);req.end();
 }); }
 
+test('oversized fixed and unfinished chunked requests receive explicit rejection before dispatch and do not poison the service',async()=>{
+  const f=fixture(),server=await startRuntimeServer({stateRoot:f.root,workspaceId:'test'});
+  try{
+    const before=(await request(server,f.token)).body.result.revision;
+    for(const endpoint of ['/api/v1/request','/mcp']){
+      const full=await fetch(server.url+endpoint,{method:'POST',headers:{authorization:'Bearer '+f.token,'content-type':'application/json'},body:JSON.stringify({extra:'x'.repeat(1048576)})});
+      assert.equal(full.status,413);assert.equal((await full.json()).error.code,'INPUT_LIMIT');
+      const chunked=await new Promise((resolve,reject)=>{
+        const req=httpRequest(server.url+endpoint,{method:'POST',headers:{authorization:'Bearer '+f.token,'content-type':'application/json','transfer-encoding':'chunked'}},res=>{
+          let text='';res.setEncoding('utf8');res.on('data',chunk=>text+=chunk);res.on('error',reject);res.on('end',()=>{req.destroy();resolve({status:res.statusCode,body:JSON.parse(text)});});
+        });req.on('error',reject);req.setTimeout(3000,()=>req.destroy(Error('Oversized request did not receive a bounded response')));
+        // Leave the upload unfinished: the server must reject without waiting
+        // for EOF or using the iterator's destructive cancellation behavior.
+        req.write('{"extra":"'+'x'.repeat(300000));
+      });
+      assert.equal(chunked.status,413);assert.equal(chunked.body.error.code,'INPUT_LIMIT');
+    }
+    assert.equal((await request(server,f.token)).body.result.revision,before);
+  }finally{await server.close();f.cleanup();}
+});
+
 test('service store atomically retains object, audit, receipt, events and exact replay across restart',()=>{
   const f=fixture();let s=new RuntimeStore(f.root,'test');
   try {

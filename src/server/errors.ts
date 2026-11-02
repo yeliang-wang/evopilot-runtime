@@ -42,11 +42,11 @@ function serialize(value: unknown, maxBytes: number, maxNodes: number): string {
 export const digest = (value: unknown): string => createHash('sha256').update(canonical(value)).digest('hex');
 
 /** Public requests, definitions and monitor pages retain the 256 KiB profile.
- * Original native receipts include bounded OPA AST/command output; their trusted
- * retention/readback uses a separate 8 MiB profile, never the request parser. */
+ * Original native receipts and release reviews include bounded original text;
+ * their trusted retention/readback uses an 8 MiB profile, never the request parser. */
 export const canonical=(value:unknown):string=>serialize(value,262144,20000);
 export const EVIDENCE_MAX_BYTES=8388608;
 export const canonicalEvidence=(value:unknown):string=>serialize(value,EVIDENCE_MAX_BYTES,200000);
 export const evidenceValueDigest=(value:unknown):string=>'sha256:'+createHash('sha256').update(canonicalEvidence(value)).digest('hex');
-const EVIDENCE_READS=new Set(['lifecycle.plan.evidence.read','lifecycle.implementation.evidence.read','lifecycle.release.evidence.read','lifecycle.publication.evidence.read','lifecycle.closure.evidence.read','lifecycle.verification.feedback.read']);
+const EVIDENCE_READS=new Set(['lifecycle.plan.evidence.read','lifecycle.implementation.evidence.read','lifecycle.release.evidence.read','lifecycle.publication.evidence.read','lifecycle.closure.evidence.read','lifecycle.verification.feedback.read','lifecycle.authority.preview']);
 export const canonicalReadback=(operation:unknown,value:unknown):string=>EVIDENCE_READS.has(String(operation))?canonicalEvidence(value):canonical(value);

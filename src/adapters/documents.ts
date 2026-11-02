@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { exact, record, reject, string } from '../server/errors.js';
+import { evidenceValueDigest, exact, record, reject, string } from '../server/errors.js';
 import { authorize, type Principal } from '../server/security.js';
 import { valueDigest } from '../lifecycle/base.js';
 import { containsInlineSecret } from '../lifecycle/compiler.js';
@@ -67,6 +67,6 @@ export function documentReader(binding:PlatformRegistration,get:Get){
       contents.set(d.path,{text,bytes:bytes.length,digest:sha256(bytes)});
     }
     signal.throwIfAborted();const facts={provider:binding.provider,projectId:binding.projectId,repositoryId:binding.repositoryId,bindingDigest:valueDigest(binding),commit,documents:documents.map(d=>({...d,...contents.get(d.path)!}))};
-    return{schema:'runtime-release-documents/v1',...facts,factsDigest:valueDigest(facts),observedAt:new Date().toISOString(),releaseAuthorized:false};
+    return{schema:'runtime-release-documents/v1',...facts,factsDigest:evidenceValueDigest(facts),observedAt:new Date().toISOString(),releaseAuthorized:false};
   };
 }
