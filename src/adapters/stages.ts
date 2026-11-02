@@ -20,22 +20,22 @@ const ADAPTER_ID='runtime-ci-owner-stage-v1';
 const ADAPTER_DIGEST=valueDigest({id:ADAPTER_ID,stages:['candidate','verification'],workflow:'runtime-ci/v1',owners:'native/v1',observation:'runtime-ci-owner-values/v1',continuation:'explicit-original-request/v1'});
 const same=(a:unknown,b:unknown)=>canonical(a)===canonical(b);
 type Pair={criterionId:string;variantId:string};
-interface OwnerPin {ref:string;registrationDigest:string;scope:NativeScope;reference:NativeReference;criteria:Pair[];}
+export interface OwnerPin {ref:string;registrationDigest:string;scope:NativeScope;reference:NativeReference;criteria:Pair[];}
 interface CiPlan {
   stageId:'candidate'|'verification'; binding:PlatformRegistration; commit:string; workflowDigest:string;
   expectedChecks:string[]; owners:Record<Owner,OwnerPin>; toolchainLockDigest:string;
   toolchainManifestDigest?:string;
   effectiveConfigDigest:string; candidateDigest:string|null;
 }
-interface NativeAction {request:OwnerRequest;requestDigest:string;context:NativeValidationContext;observationDigest:string|null;digest:string;}
-interface OwnerResult {owner:Owner;status:'PASS'|'FAIL'|'UNKNOWN';receiptDigest:string|null;reportDigest:string|null;}
+export interface NativeAction {request:OwnerRequest;requestDigest:string;context:NativeValidationContext;observationDigest:string|null;digest:string;}
+export interface OwnerResult {owner:Owner;status:'PASS'|'FAIL'|'UNKNOWN';receiptDigest:string|null;reportDigest:string|null;}
 export interface NativeStageConnections extends Pick<BindingConnections,'owner'|'platform'> {toolchainLockDigest:string;toolchainManifestDigest?:string;}
 const hash=(v:unknown):string=>{const s=string(v,71);if(!/^sha256:[a-f0-9]{64}$/.test(s))reject('STAGE_EVIDENCE_INVALID','Exact evidence digest is required');return s;};
 function packageJson(pkg:Record<string,unknown>,path:unknown):Record<string,unknown>{
   const text=record(pkg.files)[string(path,512)];if(typeof text!=='string'||Buffer.byteLength(text)>2097152)reject('OWNER_PACKAGE_INVALID','A bounded owner inventory is required');
   try{return record(JSON.parse(text));}catch{return reject('OWNER_PACKAGE_INVALID','Owner inventory is not valid JSON');}
 }
-function inventory(pkg:Record<string,unknown>,owner:Owner):Pair[]{
+export function nativeInventory(pkg:Record<string,unknown>,owner:Owner):Pair[]{
   const entry=record(record(pkg.manifest).entrypoints),result:Pair[]=[];
   const pairs=(ids:unknown,variants:unknown)=>{
     if(!Array.isArray(ids)||!ids.length||!Array.isArray(variants)||!variants.length)reject('OWNER_INVENTORY_INVALID','Native criterion and variant inventory is required');
@@ -50,6 +50,28 @@ function inventory(pkg:Record<string,unknown>,owner:Owner):Pair[]{
   }
   if(!result.length||result.length>4096||new Set(result.map(p=>p.criterionId+'\0'+p.variantId)).size!==result.length)reject('OWNER_INVENTORY_INVALID','Native inventory is empty, duplicated or too large');
   return result.sort((a,b)=>(a.criterionId+'\0'+a.variantId).localeCompare(b.criterionId+'\0'+b.variantId));
+}
+
+/** Shared exact native receipt verifier. Consumers retain the original receipt;
+ * neither a declared PASS nor an incomplete criterion set is sufficient. */
+export function verifyNativeStageResult(receipt:Record<string,unknown>,kind:Owner,pin:OwnerPin,a:NativeAction,toolchainLockDigest:string,effectiveConfigDigest:string):OwnerResult{
+    const result:OwnerResult={owner:kind,status:'UNKNOWN',receiptDigest:null,reportDigest:null};
+    if(receipt.requestId!==a.request.requestId||receipt.operation!==a.request.operation||!same(receipt.scope,a.request.scope)||receipt.requestDigest!==nativeSha256({operation:a.request.operation,scope:a.request.scope,input:a.request.input}))reject('OWNER_RECEIPT_MISMATCH','Native receipt differs from the exact original validation request');
+    if(receipt.status==='RUNNING'||record(receipt.result??{}).status==='RUNNING'||receipt.status==='UNKNOWN')return result;
+    if(receipt.status==='FAILED')return{...result,status:'FAIL',receiptDigest:nativeSha256(receipt)};
+    const report=record(receipt.result),{reportDigest,...body}=report;
+    if(reportDigest!==nativeSha256(body)||!same(report.context,a.context)||report.toolchainLockDigest!==toolchainLockDigest)reject('OWNER_REPORT_MISMATCH','Native report context, toolchain or content differs');
+    const status=kind==='ontology'?report.status:report.qualityStatus;
+    if(kind==='ontology'?(report.packageDigest!==pin.reference.digest||!same(report.standardPins,{standardDigest:pin.reference.standardDigest,standardLockDigest:pin.reference.standardLockDigest})):
+      (!same(report.reference,pin.reference)||report.observationDigest!==a.observationDigest||report.effectiveConfigDigest!==effectiveConfigDigest))reject('OWNER_REPORT_MISMATCH','Native report asset, configuration or observation differs');
+    if(!Array.isArray(report.criteria))reject('OWNER_REPORT_INCOMPLETE','Native report has no fixed criterion results');
+    const criteria=report.criteria.map(raw=>{const c=record(raw);exact(c,['criterionId','variantId','status','evidenceDigest']);hash(c.evidenceDigest);if(!['PASS','FAIL','ERROR','UNKNOWN','SKIPPED'].includes(String(c.status)))reject('OWNER_REPORT_INCOMPLETE','Unknown native criterion status');return c;});
+    const pairs=criteria.map(c=>({criterionId:string(c.criterionId),variantId:string(c.variantId)})).sort((a,b)=>(a.criterionId+'\0'+a.variantId).localeCompare(b.criterionId+'\0'+b.variantId));
+    if(!same(pairs,pin.criteria))reject('OWNER_REPORT_INCOMPLETE','Native report omits or changes a fixed criterion/variant');
+    const passed=(kind==='ontology'?status==='CONFORMS':status==='PASS'&&report.executionStatus==='SUCCEEDED')&&criteria.every(c=>c.status==='PASS');
+    const failed=['NONCONFORMING','FAIL','ERROR','UNSUPPORTED'].includes(String(status))||criteria.some(c=>['FAIL','ERROR','SKIPPED'].includes(String(c.status)));
+    const output:OwnerResult={owner:kind,status:passed?'PASS':failed?'FAIL':'UNKNOWN',receiptDigest:nativeSha256(receipt),reportDigest:String(reportDigest)};
+    return output;
 }
 
 /** CI-backed candidate and verification composition. Other base/extension
@@ -108,7 +130,7 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
       validateNativeReference(reference,{product:kind});if(reference.id!==selected.id||reference.version!==selected.version||reference.digest!==selected.digest||reference.visibility!==selected.visibility)reject('OWNER_SCOPE','Stage mapping differs from the selected immutable asset');const adapter=connections.owner(string(selected.adapterRef),config),scope={visibility:reference.visibility,projectId:string(selected.projectId)};
       if(adapter.workspaceId!==store.workspaceId||adapter.owner!==kind)reject('OWNER_SCOPE','Selected owner scope differs');
       const material=await adapter.readPackage(actor,instance.pins.projectId,scope,reference),pkg=record(material.package);
-      pins[kind]={ref:string(selected.adapterRef),registrationDigest:hash(record(adapter.capabilities()).registrationDigest),scope,reference,criteria:inventory(pkg,kind)};
+      pins[kind]={ref:string(selected.adapterRef),registrationDigest:hash(record(adapter.capabilities()).registrationDigest),scope,reference,criteria:nativeInventory(pkg,kind)};
       if(kind==='harness'){const validation=record(material.validation),{reportDigest,...body}=validation;
         if(reportDigest!==nativeSha256(body)||!same(validation.reference,reference)||validation.qualityStatus!=='PASS')reject('OWNER_BASELINE_INVALID','Published Harness configuration validation is unavailable');
         effectiveConfigDigest=hash(validation.effectiveConfigDigest);
@@ -143,21 +165,7 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
     const a=action(r,kind),result:OwnerResult={owner:kind,status:'UNKNOWN',receiptDigest:null,reportDigest:null};if(!a)return result;
     let receipt:Record<string,unknown>;try{receipt=record(await owner(config,p.owners[kind],kind,r.projectId).read(actor,r.projectId,{operation:'native.receipt.inspect',scope:a.request.scope,input:{requestId:a.request.requestId}}));}
     catch(error){if(error instanceof ServiceError&&error.code==='NOT_FOUND')return result;throw error;}
-    if(receipt.requestId!==a.request.requestId||receipt.operation!==a.request.operation||!same(receipt.scope,a.request.scope)||receipt.requestDigest!==nativeSha256({operation:a.request.operation,scope:a.request.scope,input:a.request.input}))reject('OWNER_RECEIPT_MISMATCH','Native receipt differs from the exact original validation request');
-    if(receipt.status==='RUNNING'||record(receipt.result??{}).status==='RUNNING'||receipt.status==='UNKNOWN')return result;
-    if(kind==='harness'&&receipt.status==='FAILED'){retain(r.projectId,'stage-native-receipt',r.id+':'+kind,receipt);return{...result,status:'FAIL',receiptDigest:nativeSha256(receipt)};}
-    const report=record(receipt.result),{reportDigest,...body}=report;
-    if(reportDigest!==nativeSha256(body)||!same(report.context,a.context)||report.toolchainLockDigest!==p.toolchainLockDigest)reject('OWNER_REPORT_MISMATCH','Native report context, toolchain or content differs');
-    const status=kind==='ontology'?report.status:report.qualityStatus;
-    if(kind==='ontology'?(report.packageDigest!==p.owners.ontology.reference.digest||!same(report.standardPins,{standardDigest:p.owners.ontology.reference.standardDigest,standardLockDigest:p.owners.ontology.reference.standardLockDigest})):
-      (!same(report.reference,p.owners.harness.reference)||report.observationDigest!==a.observationDigest||report.effectiveConfigDigest!==p.effectiveConfigDigest))reject('OWNER_REPORT_MISMATCH','Native report asset, configuration or observation differs');
-    if(!Array.isArray(report.criteria))reject('OWNER_REPORT_INCOMPLETE','Native report has no fixed criterion results');
-    const criteria=report.criteria.map(raw=>{const c=record(raw);exact(c,['criterionId','variantId','status','evidenceDigest']);hash(c.evidenceDigest);if(!['PASS','FAIL','ERROR','UNKNOWN','SKIPPED'].includes(String(c.status)))reject('OWNER_REPORT_INCOMPLETE','Unknown native criterion status');return c;});
-    const pairs=criteria.map(c=>({criterionId:string(c.criterionId),variantId:string(c.variantId)})).sort((a,b)=>(a.criterionId+'\0'+a.variantId).localeCompare(b.criterionId+'\0'+b.variantId));
-    if(!same(pairs,p.owners[kind].criteria))reject('OWNER_REPORT_INCOMPLETE','Native report omits or changes a fixed criterion/variant');
-    const passed=(kind==='ontology'?status==='CONFORMS':status==='PASS'&&report.executionStatus==='SUCCEEDED')&&criteria.every(c=>c.status==='PASS');
-    const failed=['NONCONFORMING','FAIL','ERROR','UNSUPPORTED'].includes(String(status))||criteria.some(c=>['FAIL','ERROR','SKIPPED'].includes(String(c.status)));
-    const output:OwnerResult={owner:kind,status:passed?'PASS':failed?'FAIL':'UNKNOWN',receiptDigest:nativeSha256(receipt),reportDigest:String(reportDigest)};
+    const output=verifyNativeStageResult(receipt,kind,p.owners[kind],a,p.toolchainLockDigest,p.effectiveConfigDigest);
     retain(r.projectId,'stage-native-receipt',r.id+':'+kind,receipt);return output;
   }
   async function inspect(r:StageRequest,instance:LifecycleInstance,_progress:StageProgress,actor:Principal,signal:AbortSignal):Promise<StageObservation>{

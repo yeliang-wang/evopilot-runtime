@@ -96,7 +96,7 @@ export function syntheticOntologyPackage(root,standard){
   return{manifest:{schema:'evopilot-native-package/v1',specVersion:'v1',owner:'ontology',id:'runtime-synthetic-model',version:'1.0.0',visibility:'private',standardPins:{standardDigest:standard.standardDigest,standardLockDigest:standard.standardLockDigest},contractDigest:standard.contractDigest,producer:{product:'ontology',version:'0.3.0'},entrypoints:{model:'model.ttl',shapes:['shapes/domain.ttl'],instances:['instances/current.ttl'],coverage:'scope/coverage.json',cases:'tests/cases.json'},files:Object.entries(files).sort(([a],[b])=>a.localeCompare(b,'en')).map(([path,text])=>({path,mediaType:path.endsWith('.ttl')?'text/turtle':path.endsWith('.txt')?'text/plain':'application/json',sha256:digest(text).slice(7)})),dependencies:[],sourceBindingRef:'sources/bindings.json'},files};
 }
 
-export async function preparePublishedOwnerFixtures({packageRoots,evidenceRoot,workspaceId='runtime-adapter-fixture',projectId='synthetic',toolchain,withReadiness=false}){
+export async function preparePublishedOwnerFixtures({packageRoots,evidenceRoot,workspaceId='runtime-adapter-fixture',projectId='synthetic',toolchain,withReadiness=false,createHarnessFixture}){
   assert(toolchain,'An explicitly selected verified native toolchain is required; no skipped owner validation');
   assert(!existsSync(evidenceRoot),'Fixture preparation must preserve existing attempts; choose a new isolated root');
   for(const owner of ['ontology','harness'])verifyOwnerDistribution(owner,packageRoots[owner]);
@@ -126,7 +126,7 @@ export async function preparePublishedOwnerFixtures({packageRoots,evidenceRoot,w
         writeFileSync(join(evidenceRoot,owner+'-'+requestId+'.json'),JSON.stringify(receipt,null,2)+'\n',{mode:0o600});
         if(owner==='harness')assert.equal(receipt.status,'SUCCEEDED');return receipt.result;
       };
-      const pkg=owner==='ontology'?syntheticOntologyPackage(packageRoots.ontology,ontologyPure.inspectOntologyStandard()):harnessExamples.syntheticHarnessPackage({id:'runtime-synthetic-quality'});
+      const pkg=owner==='ontology'?syntheticOntologyPackage(packageRoots.ontology,ontologyPure.inspectOntologyStandard()):createHarnessFixture?createHarnessFixture(harnessExamples):harnessExamples.syntheticHarnessPackage({id:'runtime-synthetic-quality'});
       if(owner==='ontology'&&material){Object.assign(pkg.files,material.files);pkg.manifest.files=Object.entries(pkg.files).sort(([a],[b])=>a.localeCompare(b,'en')).map(([path,text])=>({path,mediaType:path.endsWith('.ttl')?'text/turtle':path.endsWith('.json')?'application/json':path.endsWith('.md')?'text/markdown':'text/plain',sha256:digest(text).slice(7)}));}
       if(owner==='harness')pkg.manifest.dependencies=[references.ontology];
       const identity={id:pkg.manifest.id,version:pkg.manifest.version};

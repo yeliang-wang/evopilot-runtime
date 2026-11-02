@@ -20,7 +20,7 @@ import { createCiStageAdapter } from './stages.js';
 import type { RuntimeStore } from '../server/store.js';
 import type { StageAdapter } from '../lifecycle/execution.js';
 import type { PreparationValidator } from '../lifecycle/preparation.js';
-import { createScopeStageAdapter, registeredPreparation } from './preparation-stages.js';
+import { createPlanStageAdapter, createScopeStageAdapter, registeredPreparation } from './preparation-stages.js';
 import type { ReadinessIntentRecord } from '../../vendor/compatibility/usability/v2/contract.mjs';
 
 export interface BindingConnections {
@@ -287,10 +287,11 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
   // Owner outages block dependent admission, never service/history availability.
   return{provider,preparation:registeredPreparation(configPath,workspaceId),executor(store){
     if(store.workspaceId!==workspaceId)reject('INTEGRATION_SCOPE','Stage executor must share the service workspace',403);
-    let adapter:StageAdapter|undefined,scope:StageAdapter|undefined;
+    let adapter:StageAdapter|undefined,scope:StageAdapter|undefined,plan:StageAdapter|undefined;
     async function current(signal:AbortSignal,stageId:string):Promise<StageAdapter>{
       const config=await ensure(signal),toolchain=readRegisteredNativeToolchain(config);
       if(stageId==='scope'){scope??=createScopeStageAdapter(store,configPath,connections);return scope;}
+      if(stageId==='plan'){plan??=createPlanStageAdapter(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest});return plan;}
       adapter??=createCiStageAdapter(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest});return adapter;
     }
     return{

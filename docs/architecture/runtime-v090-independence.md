@@ -108,7 +108,7 @@ durable stage execution core, fixed CI dispatch clients, artifact verifier and
 owner feedback delivery are implemented in development. Candidate/verification
 CI stages now compose these clients with exact native owner validation through
 the standalone CLI's registered executor. Immutable target/plan preparation and
-the fixed scope stage are also implemented. The other native stages and Codex
+the fixed scope and plan stages are also implemented. The other native stages and Codex
 task handoff remain M3 work.
 Unconfigured adapters fail closed; synthetic regression adapters are test
 fixtures only and cannot certify real asset usability or final E2E. The two
@@ -321,9 +321,9 @@ evidence; it cannot turn an absent action into PASS. Explicit continuation may
 complete an interrupted local evidence commit under the same current authority
 and deadline. Scope completion does not run CI or prefill later stage states.
 
-The plan's attached material and review are now bound, but executing its
-additional Harness checks remains a separate implementation obligation. The
-service does not mark them PASS merely because documents exist. Candidate
+The plan's attached material and review are bound; its fixed adapter executes
+the configured native checks described below. The service does not mark them
+PASS merely because documents exist. Candidate
 collection also checks its version against the retained preparation; a valid CI
 archive for a different version is retained as a known failure before native
 owner validation. These are development behaviors, not final release evidence.
@@ -417,6 +417,41 @@ The development probe exercises real GitHub/GitLab CI and published 0.8.3 native
 validators with synthetic assets and explicitly synthetic predecessor evidence.
 It does not establish full eight-stage admission, actual project semantic
 approval, publication, closure or any of the frozen final acceptance instances.
+
+## Development plan execution
+
+The registered `base.plan` adapter requires the original completed scope
+receipt and the exact preparation already included in the authenticated execution
+review. It rechecks document bytes, fixed verification coverage, compatibility
+material, configured reviewer policy and current execution budget before native
+validation. Saving documents or declaring a status cannot complete this stage.
+
+Harness receives `values.runtimePlan` with schema `runtime-plan-observation/v1`:
+the target, compatibility classification, verified document paths/digests/sizes,
+verification rows and requirement digest, pinned budget, preparation digest,
+authority reference and original scope evidence digest. These are observed
+materials and traceability facts, not invented test results or semantic approval.
+The selected published Harness must contain rules appropriate to these plan
+inputs. A software-test-only Harness does not automatically certify a plan;
+missing inputs or failing rules remain failures. Ontology's native validation
+checks the selected model/constraints. Both owners must return their full exact
+criterion inventories under the pinned validator manifest and validation context.
+
+Runtime retains the plan input and each native action before dispatch, checks
+current permission and unchanged material before every owner mutation, and reads
+the original owner receipts independently. `lifecycle.plan.evidence.read` exposes
+the retained input, native requests and receipts to an authorized project reader.
+An uncertain action is inspected without redispatch. After an independently
+verified first result, an explicit `lifecycle.stage.advance` may execute the
+remaining action under the original budget; the observation worker cannot do so.
+Failed checks block implementation. Restart retains the original identities and
+does not reset the attempt, authority or time budget.
+
+The isolated development CLI probe completes scope and plan through real GitLab
+source readback and released 0.8.3 native validators, with newly created synthetic
+assets and synthetic decisions. It seeds no predecessor outcomes and starts no
+implementation, CI, publication or daily installation. It is not final lifecycle
+acceptance or a new grade for the original projects.
 
 ## Development owner feedback delivery
 

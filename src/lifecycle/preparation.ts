@@ -5,7 +5,7 @@ import { valueDigest } from './base.js';
 import { containsInlineSecret, type EffectiveDefinition } from './compiler.js';
 import { requiredChecksDigest } from './instance.js';
 
-export const PREPARATION_READS=['lifecycle.preparation.read','lifecycle.scope.evidence.read'] as const;
+export const PREPARATION_READS=['lifecycle.preparation.read','lifecycle.scope.evidence.read','lifecycle.plan.evidence.read'] as const;
 export const PREPARATION_WRITES=['lifecycle.preparation.save'] as const;
 export interface DocumentPin {path:string;digest:string;}
 export interface PreparationInput {
@@ -79,6 +79,18 @@ export function createPreparationService(store:RuntimeStore,validator?:Preparati
   };
   function read(actor:Principal,projectId:string,operation:string,request:Record<string,unknown>):unknown{
     authorize(actor,projectId,'read');
+    if(operation==='lifecycle.plan.evidence.read'){
+      exact(request,['stageRequestId']);const id=string(request.stageRequestId),raw=store.object(projectId,'plan-stage-input',id),original=store.object(projectId,'stage-request',id);
+      if(!raw||!original)reject('NOT_FOUND','Original plan input is unavailable',404);
+      const evidence=record(raw),r=record(original),{digest,...body}=evidence;
+      if(digest!==valueDigest(body)||r.projectId!==projectId||r.workspaceId!==store.workspaceId||r.stageId!=='plan'||evidence.requestDigest!==r.digest||evidence.planDigest!==r.planDigest)reject('CORRUPT_STAGE_EVIDENCE','Plan evidence does not match its retained request',503);
+      const owners=Object.fromEntries(['ontology','harness'].map(kind=>{
+        const action=store.object(projectId,'plan-stage-native-action',id+':'+kind),receipt=store.object(projectId,'plan-stage-native-receipt',id+':'+kind);
+        if(action){const a=record(action),{digest,...body}=a;if(digest!==valueDigest(body))reject('CORRUPT_STAGE_ACTION','Original plan action changed',503);}
+        return[kind,{action,receipt}];
+      }));
+      return{stageRequestId:id,evidence,owners,historical:true,authorityGranted:false};
+    }
     if(operation==='lifecycle.scope.evidence.read'){
       exact(request,['stageRequestId']);const id=string(request.stageRequestId),raw=store.object(projectId,'scope-stage-evidence',id),original=store.object(projectId,'stage-request',id);
       if(!raw||!original)reject('NOT_FOUND','Original scope evidence is unavailable',404);

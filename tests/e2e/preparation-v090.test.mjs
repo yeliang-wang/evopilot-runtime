@@ -12,28 +12,47 @@ import {byteDigest,valueDigest} from '../../dist/lifecycle/base.js';
 import {requiredChecksDigest} from '../../dist/lifecycle/instance.js';
 import {compileLifecycle} from '../../dist/lifecycle/compiler.js';
 import {registeredAuthorityPolicy} from '../../dist/adapters/authority.js';
-import {registeredPreparation,createScopeStageAdapter} from '../../dist/adapters/preparation-stages.js';
+import {registeredPreparation,createScopeStageAdapter,createPlanStageAdapter} from '../../dist/adapters/preparation-stages.js';
 import {lifecycleBindingExample} from '../fixtures/adapters-v090.mjs';
 import {syntheticBindings,yaml} from '../fixtures/lifecycle-v090.mjs';
 import {syntheticDecisionEvidence} from '../fixtures/native/decision-evidence.mjs';
-import {NATIVE_CONTRACT_DIGEST} from '../../vendor/compatibility/v1/native.mjs';
+import {ServiceError} from '../../dist/server/errors.js';
+import {nativeSha256,NATIVE_CONTRACT_DIGEST} from '../../vendor/compatibility/v1/native.mjs';
 
 // The actual HTTP/store/policy/scope adapters are exercised with explicit
 // synthetic asset admission and a read-only synthetic source platform.
-async function fixture(){
+async function fixture({plan=false}={}){
   const dir=mkdtempSync(join(realpathSync(tmpdir()),'runtime-preparation-')),root=join(dir,'state'),workspaceId='synthetic',projectId='alpha',path=join(dir,'integrations.json'),expiry='2030-01-01T00:00:00Z';
   const pin=owner=>({product:owner,id:'synthetic-'+owner,version:'1.0.0',specVersion:'v1',visibility:'private',digest:valueDigest(owner),standardDigest:valueDigest(owner+'-standard'),standardLockDigest:valueDigest(owner+'-lock'),producer:{product:owner,version:'0.3.0'},contractDigest:NATIVE_CONTRACT_DIGEST});
   const platform={ref:'binding:alpha/platform',workspaceId,projectId,provider:'github',host:'https://github.com',repository:'synthetic/project',repositoryId:'42',defaultBranch:'main',credentialRef:'credential:alpha/platform',revision:1,expiresAt:expiry,workflowPath:'.github/workflows/build.yml',runner:'ubuntu-latest'};
   const credentials={ref:platform.credentialRef,workspaceId,projectId,provider:platform.provider,host:platform.host,tokenFile:join(dir,'unused-token'),revision:1,expiresAt:expiry},owners=['ontology','harness'].map(owner=>({ref:'binding:alpha/'+owner,owner,packageRoot:dir,workspaceRoot:dir,workspaceId,projects:[projectId]}));
   const {configuration:config,data}=lifecycleBindingExample({root:dir,workspaceId,projectId,platform,credential:credentials,ownerRegistrations:owners,references:{ontology:pin('ontology'),harness:pin('harness')},assessmentId:'synthetic'});
+  if(plan)data.config.plan.budget.timeoutSeconds=60; // Explicit synthetic recovery budget; no production grant is changed.
   config.resources.find(r=>r.role==='config.release-decision.authorityPolicyRef').definition.principalIds.push('other-decider');
   const save=()=>writeFileSync(path,JSON.stringify(config),{mode:0o600});save();
   const tokens=Object.fromEntries(['fixture','reader','other-decider','foreign'].map(id=>[id,randomBytes(32).toString('hex')]));
   const all=['read','draft.write','definition.activate','decision.record','execution.request'];
   initializeCredentials(root,workspaceId,Object.entries(tokens).map(([id,token])=>({id,projects:[id==='foreign'?'beta':projectId],permissions:id==='reader'||id==='foreign'?['read']:all,revision:1,expiresAt:expiry,tokenDigest:tokenDigest(token)})));
-  const state={commit:'a'.repeat(40),reads:0},bindings=syntheticBindings(),validator=registeredPreparation(path,workspaceId),policy=registeredAuthorityPolicy(path,workspaceId);
+  const state={commit:'a'.repeat(40),reads:0,fail:null,missing:false,context:false,lost:null,beforeWrite:false,afterWrite:null,manifest:valueDigest('toolchain-manifest')},calls=[],receipts=new Map(),toolchainLockDigest=valueDigest('toolchain-lock'),effectiveConfigDigest=valueDigest('native-config'),bindings=syntheticBindings(),validator=registeredPreparation(path,workspaceId),policy=registeredAuthorityPolicy(path,workspaceId);
   const client={readiness:async()=>{state.reads++;return{provider:platform.provider,projectId,repositoryId:platform.repositoryId,bindingDigest:valueDigest(platform),commit:state.commit,factsDigest:valueDigest({commit:state.commit}),expiresAt:new Date(Date.now()+60000).toISOString()};}};
-  let server,sequence=0;const start=async()=>server=await startRuntimeServer({stateRoot:root,workspaceId},bindings.provider,undefined,policy,store=>createScopeStageAdapter(store,path,{platform:()=>client}),validator);await start();
+  const ownerAdapters=Object.fromEntries(['ontology','harness'].map(kind=>['binding:alpha/'+kind,{owner:kind,workspaceId,capabilities:()=>({registrationDigest:valueDigest(kind+'registration')}),
+    readPackage:async()=>{const body={reference:pin('harness'),qualityStatus:'PASS',effectiveConfigDigest};return kind==='ontology'?{package:{manifest:{entrypoints:{cases:'cases.json'}},files:{'cases.json':JSON.stringify({cases:[{id:'positive',requirementIds:['scope']}]})}}}:{validation:{...body,reportDigest:nativeSha256(body)},package:{manifest:{entrypoints:{coverage:'coverage.json'}},files:{'coverage.json':JSON.stringify({requirements:[{id:'requirement-H001',caseIds:['positive']}]})}}};},
+    read:async(_a,_p,r)=>{if(r.operation==='workspace.inspect')return{revision:0};const receipt=receipts.get(r.input.requestId);if(!receipt)throw new ServiceError('NOT_FOUND','Synthetic missing native receipt',404);return structuredClone(receipt);},
+    mutate:async(_a,_p,r)=>{
+      calls.push({kind,request:r});const stored=activeStore.object(projectId,'plan-stage-native-action',activeRequest+':'+kind);assert(stored,'native action must be durable before any effect');
+      if(state.lost===kind&&state.beforeWrite)throw new ServiceError('SYNTHETIC_RESPONSE_LOST','Synthetic loss before owner result',503);
+      const criteria=(kind==='ontology'?[{criterionId:'scope',variantId:'positive'}]:[{criterionId:'requirement-H001',variantId:'positive'},{criterionId:'requirement-H001',variantId:'actual-observation'}]).map(x=>({...x,status:state.fail===kind?'FAIL':'PASS',evidenceDigest:valueDigest(x)}));if(state.missing)criteria.pop();
+      const context=state.context?{...r.input.context,inputDigest:valueDigest('wrong')}:r.input.context;
+      const body={context,toolchainLockDigest,criteria,...(kind==='ontology'?{status:state.fail===kind?'NONCONFORMING':'CONFORMS',packageDigest:pin(kind).digest,standardPins:{standardDigest:pin(kind).standardDigest,standardLockDigest:pin(kind).standardLockDigest}}:{reference:pin(kind),qualityStatus:state.fail===kind?'FAIL':'PASS',executionStatus:'SUCCEEDED',effectiveConfigDigest,observationDigest:nativeSha256(r.input.observation)})};
+      receipts.set(r.requestId,{requestId:r.requestId,operation:r.operation,scope:r.scope,requestDigest:nativeSha256({operation:r.operation,scope:r.scope,input:r.input}),result:{...body,reportDigest:nativeSha256(body)}});
+      state.afterWrite?.(kind);if(state.lost===kind)throw new ServiceError('SYNTHETIC_RESPONSE_LOST','Synthetic lost response after persisted owner result',503);
+    },
+  }]));
+  let server,sequence=0,activeStore,activeRequest;const start=async()=>server=await startRuntimeServer({stateRoot:root,workspaceId},bindings.provider,undefined,policy,store=>{
+    activeStore=store;const scope=createScopeStageAdapter(store,path,{platform:()=>client});if(!plan)return scope;
+    const adapter=createPlanStageAdapter(store,path,{platform:()=>client,owner:ref=>ownerAdapters[ref],toolchainLockDigest,toolchainManifestDigest:state.manifest});
+    return{prepare:(i,s,...a)=>(s==='scope'?scope:adapter).prepare(i,s,...a),dispatch:(r,...a)=>{activeRequest=r.id;return(r.stageId==='scope'?scope:adapter).dispatch(r,...a);},inspect:(r,...a)=>(r.stageId==='scope'?scope:adapter).inspect(r,...a),advance:(r,...a)=>{activeRequest=r.id;return(r.stageId==='scope'?scope:adapter).advance(r,...a);}};
+  },validator);await start();
   async function request(operation,input={},write=false,actor='fixture',meta){
     if(write&&!meta){const status=await request('runtime.status',{},false,actor);meta={requestId:'prep-'+(++sequence),expectedRevision:status.result.revision};}
     const envelope={operation,projectId,input,...(meta??{})},response=await fetch(server.url+'/api/v1/request',{method:'POST',headers:{authorization:'Bearer '+tokens[actor],'content-type':'application/json'},body:JSON.stringify(envelope)});
@@ -51,7 +70,7 @@ async function fixture(){
     const g=await request('lifecycle.authority.record',{kind:'execution',subject:s,reviewDigest:preview.result.reviewDigest,decision:'APPROVE',evidenceRef},true);assert.equal(g.status,200,JSON.stringify(g));return{ref:g.result.result.authorityRef,preview,subject:s};
   }
   async function instance(ref){const g=await grant(ref),r=await request('lifecycle.instance.create',{instanceId:g.subject.instanceId,definitionRevisionId,authorityRef:g.ref},true);assert.equal(r.status,200,JSON.stringify(r));return g;}
-  return{dir,root,path,config,data,input,definition,definitionRevisionId,tokens,state,request,retain,subject,grant,instance,save,get server(){return server;},async restart(){await server.close();await start();},async cleanup(){await server.close();rmSync(dir,{recursive:true,force:true});}};
+  return{dir,root,path,config,data,input,definition,definitionRevisionId,tokens,state,calls,receipts,request,retain,subject,grant,instance,save,get server(){return server;},async restart(){await server.close();await start();},async cleanup(){await server.close();rmSync(dir,{recursive:true,force:true});}};
 }
 test('preparation is immutable per-instance material, not an activation, decision, Run or asserted PASS',async()=>{
   const f=await fixture();try{
@@ -124,4 +143,52 @@ test('MCP uses the same preparation writer and cannot grant execution by submitt
     const changed=await client.callTool({name:'runtime_write',arguments:{operation:'lifecycle.preparation.save',projectId:'alpha',input:{...f.input,approved:true},requestId:'mcp-fake-approval',expectedRevision:status.result.revision+1}});assert.equal(changed.isError,true);
     const read=await f.request('lifecycle.preparation.read',{preparationRef:value.preparationRef});assert.equal(read.result.current,true);
   }finally{await client.close();await f.cleanup();}
+});
+
+async function waitStage(f,id,phase){
+  let r;for(let i=0;i<180;i++){r=await f.request('lifecycle.stage.request.inspect',{stageRequestId:id});if(r.result.progress.phase===phase)return r.result;await new Promise(resolve=>setTimeout(resolve,20));}assert.fail('Expected '+phase+': '+JSON.stringify(r));
+}
+async function planStart(f){
+  const ref=(await f.retain()).result.result.preparationRef;await f.instance(ref);
+  const scope=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:'scope'},true);assert.equal(scope.status,200,JSON.stringify(scope));await waitStage(f,scope.result.result.stageRequestId,'COMPLETE');
+  const plan=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:'plan'},true);assert.equal(plan.status,200,JSON.stringify(plan));return plan.result.result.stageRequestId;
+}
+test('plan uses exact material and native rules; scope and plan complete without seeded predecessors',async()=>{
+  const f=await fixture({plan:true});try{
+    const id=await planStart(f);await waitStage(f,id,'COMPLETE');assert.equal(f.calls.length,2);
+    const observation=f.calls.find(c=>c.kind==='harness').request.input.observation;
+    assert.deepEqual(observation.values.runtimePlan.target,f.input.target);assert.deepEqual(observation.values.runtimePlan.verification,f.input.verification);assert.equal(observation.values.tests,undefined,'never invent a test exit code');
+    assert.equal(observation.values.runtimePlan.schema,'runtime-plan-observation/v1');assert(observation.collectionReceiptRef.digest);
+    const evidence=await f.request('lifecycle.plan.evidence.read',{stageRequestId:id});assert.equal(evidence.status,200,JSON.stringify(evidence));assert(evidence.result.owners.harness.receipt);assert.equal(evidence.result.authorityGranted,false);assert.equal((await f.request('lifecycle.plan.evidence.read',{stageRequestId:id},false,'foreign')).status,403);
+    const saved=await f.request('lifecycle.instance.inspect',{instanceId:'scope-instance'});assert.equal(saved.result.instance.stages.plan.status,'PASSED');assert.equal(saved.result.instance.stages.implementation.status,'PENDING');
+    await f.restart();assert.deepEqual((await f.request('lifecycle.instance.inspect',{instanceId:'scope-instance'})).result.instance,saved.result.instance);assert.equal(f.calls.length,2);
+    assert.equal((await f.request('lifecycle.stage.advance',{stageRequestId:id},true)).result.result.status,'TERMINAL');assert.equal(f.calls.length,2);
+  }finally{await f.cleanup();}
+});
+test('failed plan owner rules cannot be hidden by accepted documents or a successful other owner',async()=>{
+  const f=await fixture({plan:true});try{f.state.fail='harness';const id=await planStart(f),r=await waitStage(f,id,'FAILED');assert(r.progress.observation.outcome.checks.some(c=>c.status==='FAIL'));const saved=await f.request('lifecycle.instance.inspect',{instanceId:'scope-instance'});assert.equal(saved.result.instance.stages.plan.status,'FAILED');assert.equal((await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:'implementation'},true)).error.code,'STAGE_BLOCKED');}finally{await f.cleanup();}
+});
+for(const [control,reason] of [['missing','OWNER_REPORT_INCOMPLETE'],['context','OWNER_REPORT_MISMATCH']])test('plan rejects '+control+' native evidence without accepting a declared PASS',async()=>{
+  const f=await fixture({plan:true});try{f.state[control]=true;const id=await planStart(f),r=await waitStage(f,id,'UNKNOWN');assert.equal(r.progress.reason,reason);assert.equal(f.calls.length,1);assert.notEqual((await f.request('lifecycle.instance.inspect',{instanceId:'scope-instance'})).result.instance.stages.plan.status,'PASSED');}finally{await f.cleanup();}
+});
+test('plan reconciles an original lost owner response and explicitly continues only the remaining action',async()=>{
+  const f=await fixture({plan:true});try{
+    f.state.lost='ontology';const id=await planStart(f);await waitStage(f,id,'UNKNOWN');assert.equal(f.calls.length,1);f.state.lost=null;await f.restart();await waitStage(f,id,'RUNNING');assert.equal(f.calls.length,1,'observer never dispatches next owner');
+    const advanced=await f.request('lifecycle.stage.advance',{stageRequestId:id},true);assert.equal(advanced.status,200,JSON.stringify(advanced));await waitStage(f,id,'COMPLETE');assert.equal(f.calls.length,2);
+  }finally{await f.cleanup();}
+});
+test('plan with an unknown owner outcome never blindly validates again',async()=>{
+  const f=await fixture({plan:true});try{
+    f.state.lost='ontology';f.state.beforeWrite=true;const id=await planStart(f);await waitStage(f,id,'UNKNOWN');f.state.lost=null;await f.restart();assert.equal((await f.request('lifecycle.stage.advance',{stageRequestId:id},true)).status,200);await waitStage(f,id,'UNKNOWN');assert.equal(f.calls.length,1);assert.equal((await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:'plan'},true)).error.code,'STAGE_BLOCKED');
+  }finally{await f.cleanup();}
+});
+test('plan rechecks exact reviewed files between native actions; drift blocks subsequent writes',async()=>{
+  const f=await fixture({plan:true});try{
+    f.state.afterWrite=kind=>{if(kind==='ontology')writeFileSync(f.input.documents.plan.path,'Unreviewed plan bytes');};const id=await planStart(f),r=await waitStage(f,id,'UNKNOWN');assert.equal(r.progress.reason,'RESOURCE_CHANGED');assert.equal(f.calls.length,1);assert.equal((await f.request('lifecycle.stage.advance',{stageRequestId:id},true)).error.code,'RESOURCE_CHANGED');
+  }finally{await f.cleanup();}
+});
+test('pending plan pins the actual validator manifest across service restart',async()=>{
+  const f=await fixture({plan:true});try{
+    f.state.lost='ontology';const id=await planStart(f);await waitStage(f,id,'UNKNOWN');f.state.lost=null;f.state.manifest=valueDigest('changed-tools');await f.restart();const r=await waitStage(f,id,'UNKNOWN');await new Promise(resolve=>setTimeout(resolve,1200));const current=await f.request('lifecycle.stage.request.inspect',{stageRequestId:id});assert.equal(current.result.progress.reason,'TOOLCHAIN_CHANGED');assert.equal(f.calls.length,1);
+  }finally{await f.cleanup();}
 });
