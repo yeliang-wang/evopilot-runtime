@@ -24,9 +24,11 @@ export interface PlatformJobObservation {
   runnerId:string|null; evidenceRef:string; observedAt:string; factsDigest:string;
   artifactsVerified:false; lifecycleAcceptance:false;
 }
+export interface PlatformRevisionReadiness extends PlatformReadiness {sourceSelection:'exact-commit';branchHeadCommit:string;}
 export interface PlatformClient {
   source(actor:Principal,request:SourceRequest,signal:AbortSignal):Promise<SourceObservation>;
   readiness(actor:Principal,signal:AbortSignal):Promise<PlatformReadiness>;
+  revision(actor:Principal,commit:string,signal:AbortSignal):Promise<PlatformRevisionReadiness>;
   job(actor:Principal,runId:string,jobId:string,commit:string,signal:AbortSignal,sourceRef?:string):Promise<PlatformJobObservation>;
   dispatch(request:PlatformRunRequest,permit:PlatformExecutionPermit,signal:AbortSignal):Promise<PlatformRunObservation>;
   run(actor:Principal,request:PlatformRunRequest,runId:string|null,signal:AbortSignal):Promise<PlatformRunObservation>;
@@ -167,6 +169,11 @@ export function platformReader(registration:PlatformRegistration,credentials:Pla
 export function readinessResult(binding:PlatformRegistration,commit:string,path:string,workflowDigest:string,runner:PlatformReadiness['runner']):PlatformReadiness{
   const facts={provider:binding.provider,projectId:binding.projectId,bindingRef:binding.ref,bindingDigest:valueDigest(binding),repositoryId:binding.repositoryId,repository:binding.repository,branch:binding.defaultBranch,commit,workflowPath:path,workflowDigest,runner};
   const now=Date.now();return{schema:'runtime-platform-readiness/v1',...facts,evidenceRef:binding.host+'/'+binding.repository,observedAt:new Date(now).toISOString(),expiresAt:new Date(Math.min(now+60000,Date.parse(binding.expiresAt))).toISOString(),factsDigest:valueDigest(facts),executionAuthorized:false,workflowExecuted:false};
+}
+export function revisionReadinessResult(observation:PlatformReadiness,branchHeadCommit:string):PlatformRevisionReadiness{
+  commitId(branchHeadCommit);const{schema,observedAt,expiresAt,evidenceRef,executionAuthorized,workflowExecuted,factsDigest,...facts}=observation;
+  const selected={...facts,sourceSelection:'exact-commit' as const,branchHeadCommit};
+  return{...observation,...selected,factsDigest:valueDigest(selected)};
 }
 export function jobResult(binding:PlatformRegistration,runId:string,jobId:string,commit:string,status:PlatformJobObservation['status'],providerStatus:string,runnerId:string|null):PlatformJobObservation{
   string(providerStatus,128);const facts={provider:binding.provider,projectId:binding.projectId,repositoryId:binding.repositoryId,runId,jobId,commit,status,providerStatus,runnerId};

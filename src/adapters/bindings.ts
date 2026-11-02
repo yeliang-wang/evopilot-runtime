@@ -14,9 +14,9 @@ import { createRuntimeService } from '../service.js';
 import { readPlatformToken } from './config.js';
 import { githubClient } from './github.js';
 import { gitlabClient } from './gitlab.js';
-import { createCodexStageAdapter, inspectExternalAgent, type AgentIdentity } from './external-agent.js';
+import { inspectExternalAgent, type AgentIdentity } from './external-agent.js';
 import { readRegisteredNativeToolchain } from './config.js';
-import { createCiStageAdapter } from './stages.js';
+import { createImplementationStageAdapters } from './implementation-stages.js';
 import type { RuntimeStore } from '../server/store.js';
 import type { StageAdapter } from '../lifecycle/execution.js';
 import type { PreparationValidator } from '../lifecycle/preparation.js';
@@ -288,13 +288,12 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
   // Owner outages block dependent admission, never service/history availability.
   return{provider,preparation:registeredPreparation(configPath,workspaceId),implementationReview:registeredImplementationReview(configPath,workspaceId,connections),executor(store){
     if(store.workspaceId!==workspaceId)reject('INTEGRATION_SCOPE','Stage executor must share the service workspace',403);
-    let adapter:StageAdapter|undefined,scope:StageAdapter|undefined,plan:StageAdapter|undefined,agent:StageAdapter|undefined;
+    let stages:ReturnType<typeof createImplementationStageAdapters>|undefined,scope:StageAdapter|undefined,plan:StageAdapter|undefined;
     async function current(signal:AbortSignal,stageId:string):Promise<StageAdapter>{
       const config=await ensure(signal),toolchain=readRegisteredNativeToolchain(config);
       if(stageId==='scope'){scope??=createScopeStageAdapter(store,configPath,connections);return scope;}
       if(stageId==='plan'){plan??=createPlanStageAdapter(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest});return plan;}
-      if(stageId==='implementation'){agent??=createCodexStageAdapter(store,configPath);return agent;}
-      adapter??=createCiStageAdapter(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest});return adapter;
+      stages??=createImplementationStageAdapters(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest});return stageId==='implementation'?stages.implementation:stages.ci;
     }
     return{
       async prepare(instance,stage,actor,signal){return(await current(signal,stage)).prepare(instance,stage,actor,signal);},

@@ -47,7 +47,7 @@ async function fixture({targetVersion}={}){
   let instance=pinInstance('instance',authority.definitionRevisionId,definition,authority),store=new RuntimeStore(stateRoot,workspaceId),adapter,request;
   if(targetVersion)store.mutate(actor,{projectId,operation:'synthetic.fixture',requestId:'synthetic-preparation',expectedRevision:0,input:{synthetic:true},permission:'read'},()=>({objects:[{kind:'lifecycle-preparation',id:authority.targetRef,value:prep}],value:{synthetic:true},event:{type:'synthetic-preparation-fixture',data:{synthetic:true}}}));
   for(const id of ['scope','plan','implementation']){instance=requestStage(instance,id,'synthetic-'+id,admission);instance=recordStageOutcome(instance,id,{requestId:'synthetic-'+id,inputDigest:instance.stages[id].inputDigest,receiptRef:'synthetic:predecessor',status:'COMPLETE',expiresAt:new Date(Date.now()+600000).toISOString(),checks:definition.nodes.find(n=>n.id===id).checks.map(id=>({id,status:'PASS',evidenceRef:'synthetic:check'}))});}
-  const controls={status:'PASSED',ownerFail:null,ownerLost:null,missingCriterion:false,wrongContext:false,observationMissing:false,commit:'a'.repeat(40),runId:'23',changedArchive:false},calls=[],receipts=new Map(),toolchainLockDigest=valueDigest('synthetic-toolchain'),effectiveConfigDigest=valueDigest({params:{}});
+  const controls={status:'PASSED',ownerFail:null,ownerLost:null,missingCriterion:false,wrongContext:false,observationMissing:false,commit:'a'.repeat(40),sourceCommit:'a'.repeat(40),sourceRef:'synthetic:verified-implementation',runId:'23',changedArchive:false},calls=[],receipts=new Map(),toolchainLockDigest=valueDigest('synthetic-toolchain'),effectiveConfigDigest=valueDigest({params:{}});
   const ownerAdapters=Object.fromEntries(['ontology','harness'].map(kind=>[owners.find(o=>o.owner===kind).ref,{owner:kind,workspaceId,
     capabilities:()=>({registrationDigest:valueDigest({kind,synthetic:true})}),
     readPackage:async()=>{
@@ -64,7 +64,7 @@ async function fixture({targetVersion}={}){
       if(controls.ownerLost===kind)throw new ServiceError('SYNTHETIC_RESPONSE_LOST','Synthetic loss',503);return receipt;
     },
   }]));
-  const platform={readiness:async()=>({bindingDigest:valueDigest(binding),projectId,repositoryId:'42',commit:controls.commit,workflowDigest:valueDigest('workflow'),expiresAt:actor.expiresAt}),
+  const platform={revision:async(_actor,selected)=>({bindingDigest:valueDigest(binding),projectId,repositoryId:'42',commit:selected,workflowDigest:valueDigest('workflow'),expiresAt:actor.expiresAt,sourceSelection:'exact-commit',branchHeadCommit:controls.commit}),readiness:async()=>({bindingDigest:valueDigest(binding),projectId,repositoryId:'42',commit:controls.commit,workflowDigest:valueDigest('workflow'),expiresAt:actor.expiresAt}),
     dispatch:async(ci,permit)=>{await permit(ci);request??=store.object(projectId,'stage-request',store.object(projectId,'lifecycle-instance',instance.id).stages[ci.stageId].requestId);calls.push({operation:'ci.dispatch',ci});return run(ci);},run:async(_a,ci)=>{calls.push({operation:'ci.inspect',ci});return run(ci);},
     artifact:async(_a,ci)=>{
       calls.push({operation:'ci.artifact'});const values=JSON.stringify({schema:'runtime-ci-owner-values/v1',values:{healthy:!controls.changedArchive}}),content='synthetic software bytes',path=controls.observationMissing?'evidence/other.json':'evidence/owner-values.json';
@@ -74,7 +74,7 @@ async function fixture({targetVersion}={}){
       return{provider:'github',repositoryId:'42',requestId:ci.requestId,inputDigest:ci.inputDigest,bindingDigest:ci.bindingDigest,commit:ci.commit,runId:controls.runId,runStatus:controls.status,artifactId:'99',jobId:null,name:'runtime-ci',archiveDigest:byteDigest(bytes),archiveBytes:bytes.length,bytes,evidenceRef:'https://github.com/synthetic/project/actions/runs/'+controls.runId};
     }};
   function run(ci){return{schema:'runtime-ci-observation/v1',requestId:ci.requestId,inputDigest:ci.inputDigest,provider:'github',repositoryId:'42',ref:'evopilot-runtime/'+ci.requestId,commit:ci.commit,runId:controls.runId,status:controls.status,jobs:[],evidenceRef:'synthetic:ci',observedAt:'2026-01-01T00:00:00Z',factsDigest:valueDigest('synthetic'),artifactsVerified:false,lifecycleAcceptance:false};}
-  const connect=()=>adapter=createCiStageAdapter(store,path,{platform:()=>platform,owner:ref=>ownerAdapters[ref],toolchainLockDigest,...(controls.toolchainManifestDigest?{toolchainManifestDigest:controls.toolchainManifestDigest}:{})});connect();
+  const connect=()=>adapter=createCiStageAdapter(store,path,{platform:()=>platform,owner:ref=>ownerAdapters[ref],source:async()=>({commit:controls.sourceCommit,evidenceRef:controls.sourceRef}),toolchainLockDigest,...(controls.toolchainManifestDigest?{toolchainManifestDigest:controls.toolchainManifestDigest}:{})});connect();
   const signal=()=>AbortSignal.timeout(5000),permit=async()=>actor,progress={requestId:'unused',phase:'RUNNING',terminal:false,handle:null,observation:null,observationRef:null,reason:null,observedAt:new Date().toISOString()};
   async function prepare(stage='candidate'){
     const plan=await adapter.prepare(instance,stage,actor,signal()),id='request-'+stage,inputDigest=stageAdmission(instance,stage,admission).inputDigest,body={schema:'runtime-stage-request/v1',id,workspaceId,projectId,instanceId:instance.id,stageId:stage,pinsDigest:instance.pinsDigest,inputDigest,bindingStamp:valueDigest('synthetic'),authorityRef:authority.evidenceRef,releaseAuthorityRef:null,initiatedBy:{id:actor.id,revision:actor.revision},plan,planDigest:valueDigest(plan),requestedAt:new Date().toISOString(),deadlineAt:new Date(Date.now()+120000).toISOString()};
@@ -145,7 +145,7 @@ test('a revoked continuation permit cannot mutate owners, and unrelated stages r
 test('verification pins the prior candidate and cannot rebuild or follow another source commit',async()=>{
   const f=await fixture();try{
     await f.prepare();await f.dispatch();f.complete(await f.advance());const digest=f.instance.candidateDigest;
-    f.controls.commit='b'.repeat(40);await assert.rejects(()=>f.adapter.prepare(f.instance,'verification',f.actor,f.signal()),{code:'CANDIDATE_SOURCE_CHANGED'});f.controls.commit='a'.repeat(40);
+    f.controls.sourceCommit='b'.repeat(40);await assert.rejects(()=>f.adapter.prepare(f.instance,'verification',f.actor,f.signal()),{code:'CANDIDATE_SOURCE_CHANGED'});f.controls.sourceCommit='a'.repeat(40);f.controls.commit='c'.repeat(40);
     await f.prepare('verification');await f.dispatch();const o=await f.advance();assert.equal(o.phase,'COMPLETE');assert.equal(o.outcome.candidate,undefined);f.complete(o);assert.equal(f.instance.candidateDigest,digest);
   }finally{f.cleanup();}
 });

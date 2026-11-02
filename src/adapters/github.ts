@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { parseDocument } from 'yaml';
 import { record, reject, ServiceError, string } from '../server/errors.js';
 import type { PlatformRegistration } from './config.js';
-import { aggregateJobs, ciInputs, ciRunTitle, ciSourceRef, commitId, executionPrincipal, fileBytes, jobResult, matchRepository, platformReader, positiveId, readinessResult, runResult, safePlatformError, sha256, validateRunRequest, validateSourceRef, type PlatformClient, type PlatformCredentialReader, type PlatformJobObservation, type PlatformRunRequest } from './platforms.js';
+import { aggregateJobs, ciInputs, ciRunTitle, ciSourceRef, commitId, executionPrincipal, fileBytes, jobResult, matchRepository, platformReader, positiveId, readinessResult, revisionReadinessResult, runResult, safePlatformError, sha256, validateRunRequest, validateSourceRef, type PlatformClient, type PlatformCredentialReader, type PlatformJobObservation, type PlatformRunRequest } from './platforms.js';
 import type { Principal } from '../server/security.js';
 import { sourceReader } from './source.js';
 
@@ -51,13 +51,12 @@ export function githubClient(configuration:PlatformRegistration,credentials:Plat
     }
     if(!selected)reject('CI_CONTRACT_REQUIRED','Registered workflow is missing from the fixed inventory',409);
   }
-  const client:PlatformClient={
-    source:sourceReader(binding,get),
-    async readiness(actor,signal){try{
+  async function ready(actor:Principal,signal:AbortSignal,requestedCommit?:string){try{
       matchRepository(await get(actor,'',signal),binding);
       const branch=record(await get(actor,'/branches/'+encodeURIComponent(binding.defaultBranch),signal));
       if(branch.name!==binding.defaultBranch)reject('PLATFORM_IDENTITY_CHANGED','Branch readback differs',409);
-      const commit=commitId(record(branch.commit).sha),path=binding.workflowPath!;
+      const branchHeadCommit=commitId(record(branch.commit).sha),commit=requestedCommit===undefined?branchHeadCommit:commitId(requestedCommit),path=binding.workflowPath!;
+      if(requestedCommit!==undefined&&record(await get(actor,'/commits/'+commit,signal)).sha!==commit)reject('CI_SOURCE_CHANGED','Exact source commit is unavailable in the registered repository',409);
       const workflow=record(await get(actor,'/actions/workflows/'+encodeURIComponent(path.split('/').at(-1)!),signal));
       if(workflow.path!==path||workflow.state!=='active')reject('WORKFLOW_NOT_READY','Registered workflow is absent or disabled',409);
       const file=record(await get(actor,'/contents/'+path+'?ref='+commit,signal));
@@ -69,8 +68,12 @@ export function githubClient(configuration:PlatformRegistration,credentials:Plat
       const matches=Object.values(jobs).some(raw=>{const job=record(raw),labels=job['runs-on'];return labels===binding.runner||Array.isArray(labels)&&labels.includes(binding.runner);});
       if(!matches)reject('RUNNER_NOT_READY','Registered runner label is not present in a concrete workflow job',409);
       // Hosted capacity is established by an actual job, not by configuration.
-      return readinessResult(binding,commit,path,sha256(bytes),{id:'label:'+binding.runner,online:null});
-    }catch(error){return safePlatformError(error);}},
+      return{observation:readinessResult(binding,commit,path,sha256(bytes),{id:'label:'+binding.runner,online:null}),branchHeadCommit};
+    }catch(error){return safePlatformError(error);}}
+  const client:PlatformClient={
+    source:sourceReader(binding,get),
+    async readiness(actor,signal){return(await ready(actor,signal)).observation;},
+    async revision(actor,commit,signal){commitId(commit);const r=await ready(actor,signal,commit);return revisionReadinessResult(r.observation,r.branchHeadCommit);},
     async job(actor,runId,jobId,commit,signal,sourceRef=binding.defaultBranch){try{
       positiveId(runId);positiveId(jobId);commitId(commit);validateSourceRef(sourceRef,binding);
       matchRepository(await get(actor,'',signal),binding);
@@ -81,7 +84,7 @@ export function githubClient(configuration:PlatformRegistration,credentials:Plat
     async dispatch(input,permit,signal){
       const r=validateRunRequest(input,binding),actor=await executionPrincipal(r,binding,permit,signal);
       if(await ownedRef(actor,r,signal))return client.run(actor,r,null,signal);
-      const ready=await client.readiness(actor,signal);if(ready.commit!==r.commit||ready.workflowDigest!==r.workflowDigest)reject('CI_SOURCE_CHANGED','Prepare the exact current source/workflow before requesting CI',409);
+      const ready=await client.revision(actor,r.commit,signal);if(ready.commit!==r.commit||ready.workflowDigest!==r.workflowDigest||ready.bindingDigest!==r.bindingDigest)reject('CI_SOURCE_CHANGED','Exact requested source/workflow differs from its retained plan',409);
       await contract(actor,r,signal);
       const current=()=>executionPrincipal(r,binding,permit,signal);
       await post(actor,'/git/refs',{ref:'refs/tags/'+ciSourceRef(r),sha:r.commit},current,signal);

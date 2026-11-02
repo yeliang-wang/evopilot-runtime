@@ -115,12 +115,14 @@ function responses(provider){
   const repository={id:42,default_branch:'main',archived:false,...(provider==='github'?{full_name:p.repository}:{path_with_namespace:p.repository,jobs_enabled:true,ci_config_path:null})};
   const routes=new Map([[base,repository]]);
   if(provider==='github'){
+    routes.set(base+'/commits/'+commit,{sha:commit});
     routes.set(base+'/branches/main',{name:'main',commit:{sha:commit}});
     routes.set(base+'/actions/workflows/test.yml',{id:11,path:p.workflowPath,state:'active'});
     routes.set(base+'/contents/'+p.workflowPath+'?ref='+commit,{type:'file',path:p.workflowPath,encoding:'base64',content:content.toString('base64').match(/.{1,20}/g).join('\n')+'\n',size:content.length,sha:blob});
     routes.set(base+'/actions/runs/23',{id:23,repository:{id:42},head_sha:commit,head_branch:'main',path:p.workflowPath});
     routes.set(base+'/actions/jobs/24',{id:24,run_id:23,head_sha:commit,status:'completed',conclusion:'success',runner_id:25,labels:['ubuntu-latest']});
   }else{
+    routes.set(base+'/repository/commits/'+commit,{id:commit});
     routes.set(base+'/repository/branches/main',{name:'main',commit:{id:commit}});
     routes.set(base+'/repository/files/.gitlab-ci.yml?ref='+commit,{file_path:p.pipelinePath,encoding:'base64',content:content.toString('base64'),size:content.length,commit_id:commit,content_sha256:contentDigest});
     routes.set(base+'/runners?per_page=100&page=1',[{id:56,active:true,paused:false,online:true,status:'online'}]);
@@ -141,6 +143,19 @@ for(const provider of ['github','gitlab']){
     assert.equal(result.commit,commit);assert.equal(result.workflowDigest,'sha256:'+contentDigest);assert.equal(result.executionAuthorized,false);assert.equal(result.workflowExecuted,false);
     assert.equal(JSON.stringify(result).includes('synthetic-token'),false);
     f.routes.get(f.base).id=43;await assert.rejects(()=>f.client.readiness(actor,AbortSignal.timeout(5000)),{code:'PLATFORM_IDENTITY_CHANGED'});
+  }));
+  test(provider+' exact revision readiness preserves its source selection independently of branch HEAD',()=>withNetwork(provider,async f=>{
+    const branch=f.routes.get(f.base+(provider==='github'?'/branches/main':'/repository/branches/main'));branch.commit[provider==='github'?'sha':'id']=wrongCommit;
+    const r=await f.client.revision(actor,commit,AbortSignal.timeout(5000));assert.equal(r.sourceSelection,'exact-commit');assert.equal(r.branchHeadCommit,wrongCommit);assert.equal(r.commit,commit);assert.equal(r.workflowDigest,'sha256:'+contentDigest);assert.equal(r.executionAuthorized,false);
+    const{schema,observedAt,expiresAt,evidenceRef,executionAuthorized,workflowExecuted,factsDigest,...facts}=r;assert.equal(factsDigest,valueDigest(facts));assert(!f.calls.some(c=>c.url.endsWith('?ref='+wrongCommit)));
+    const route=f.base+(provider==='github'?'/contents/'+f.p.workflowPath:'/repository/files/'+f.p.pipelinePath)+'?ref=';f.routes.set(route+wrongCommit,{...f.routes.get(route+commit),...(provider==='gitlab'?{commit_id:wrongCommit}:{})});
+    const current=await f.client.readiness(actor,AbortSignal.timeout(5000));assert.equal(current.commit,wrongCommit);assert.equal(current.sourceSelection,undefined);
+  }));
+  test(provider+' exact revision cannot invent a missing commit or substitute workflow bytes',()=>withNetwork(provider,async f=>{
+    const source=f.base+(provider==='github'?'/commits/':'/repository/commits/')+commit;
+    f.routes.set(source,new Response('{}',{status:404}));await assert.rejects(()=>f.client.revision(actor,commit,AbortSignal.timeout(5000)),{code:'PLATFORM_RESOURCE_MISSING'});
+    f.routes.set(source,provider==='github'?{sha:commit}:{id:commit});const file=f.routes.get(f.base+(provider==='github'?'/contents/'+f.p.workflowPath:'/repository/files/'+f.p.pipelinePath)+'?ref='+commit);file.content=Buffer.from('changed').toString('base64');file.size=7;
+    await assert.rejects(()=>f.client.revision(actor,commit,AbortSignal.timeout(5000)),{code:'WORKFLOW_CONTENT_CHANGED'});assert(f.calls.every(c=>c.options.method===undefined));
   }));
   test(provider+' job observations bind exact run/job/source and treat skipped, unknown and pending as non-passing',()=>withNetwork(provider,async f=>{
     const signal=()=>AbortSignal.timeout(5000),path=f.base+(provider==='github'?'/actions/jobs/24':'/jobs/24'),job=f.routes.get(path);
@@ -250,11 +265,18 @@ for(const provider of ['github','gitlab']){
     for(const changes of [{projectId:'beta'},{bindingDigest:'sha256:'+'e'.repeat(64)},{stageId:'arbitrary-code'},{requestId:'../escape'},{extra:'input'}])await assert.rejects(()=>f.client.dispatch({...f.request,...changes},f.permit,AbortSignal.timeout(5000)));
     await assert.rejects(()=>f.client.dispatch({...f.request,requestedAt:'2020-01-01',deadlineAt:'2020-01-02'},f.permit,AbortSignal.timeout(5000)),{code:'CI_DISPATCH_EXPIRED'});assert.equal(f.calls.length,0);
   }));
-  test(provider+' current source drift and tag-trigger unsafe contracts cannot start CI',()=>withDispatch(provider,async f=>{
+  test(provider+' mismatched exact source and tag-trigger unsafe contracts cannot start CI',()=>withDispatch(provider,async f=>{
+    f.routes.set(f.base+(provider==='github'?'/commits/':'/repository/commits/')+wrongCommit,provider==='github'?{sha:commit}:{id:commit});
     await assert.rejects(()=>f.client.dispatch({...f.request,commit:wrongCommit},async()=>ciActor,AbortSignal.timeout(5000)),{code:'CI_SOURCE_CHANGED'});assert.equal(f.writes.length,0);
     const bytes=Buffer.from(provider==='github'?ghContract.replace('  workflow_dispatch:','  push:\n  workflow_dispatch:'):glContract.replace('when: never','when: always'));
     const digest=createHash('sha256').update(bytes).digest('hex');Object.assign(f.file,{content:bytes.toString('base64'),size:bytes.length,...(provider==='github'?{sha:createHash('sha1').update(Buffer.from('blob '+bytes.length+'\0')).update(bytes).digest('hex')}:{content_sha256:digest})});
     await assert.rejects(()=>f.client.dispatch({...f.request,workflowDigest:'sha256:'+digest},async()=>ciActor,AbortSignal.timeout(5000)),{code:'CI_REF_AUTOTRIGGER'});assert.equal(f.writes.length,0);
+  }));
+  test(provider+' dispatch retains its reviewed commit when the default branch advances',()=>withDispatch(provider,async f=>{
+    const branch=f.routes.get(f.base+(provider==='github'?'/branches/main':'/repository/branches/main'));branch.commit[provider==='github'?'sha':'id']=wrongCommit;
+    const result=await f.client.dispatch(f.request,f.permit,AbortSignal.timeout(5000));assert.equal(result.commit,commit);assert.equal(result.status,'PASSED');assert.equal(f.writes.length,2);
+    assert(f.calls.some(c=>c.url===f.base+(provider==='github'?'/commits/':'/repository/commits/')+commit));
+    assert(!f.calls.some(c=>c.url.endsWith('?ref='+wrongCommit)));
   }));
   test(provider+' authority revoked after source pinning prevents dispatch and never blindly retries',()=>withDispatch(provider,async f=>{
     let permits=0;await assert.rejects(()=>f.client.dispatch(f.request,async()=>++permits===3?actor:ciActor,AbortSignal.timeout(5000)),{code:'FORBIDDEN'});assert.equal(f.writes.length,1);assert.equal(f.state.run,false);

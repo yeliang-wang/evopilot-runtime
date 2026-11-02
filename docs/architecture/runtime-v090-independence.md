@@ -117,8 +117,10 @@ owner feedback delivery are implemented in development. Candidate/verification
 CI stages now compose these clients with exact native owner validation through
 the standalone CLI's registered executor. Immutable target/plan preparation and
 the fixed scope and plan stages and external Codex task handoff are also
-implemented. Independent implementation verification and the remaining native
-stages remain M3 work.
+implemented. Reviewed implementation CI now composes the same native validators
+and supplies its verified source to candidate and verification stages. Actual
+end-to-end execution of this composed chain and the remaining native stages
+remain M3 work.
 Unconfigured adapters fail closed; synthetic regression adapters are test
 fixtures only and cannot certify real asset usability or final E2E. The two
 Dashboard pages, independent installed Expert/plugin, migration and complete
@@ -466,8 +468,8 @@ Usage is `null` when unavailable. Optional provider/model/token/cost measurement
 need a source reference and digest and remain Host-reported. Runtime neither
 fetches an arbitrary evidence URL nor invents zero usage. Every report is
 `independentlyVerified:false`; the current implementation deliberately cannot
-complete the stage from a report alone. Exact source review is described below;
-independent CI/native verification remains an implementation obligation.
+complete the stage from a report alone. Exact source review and the independently
+observed CI/native verification described below are also required.
 
 The development probe used the actual standalone CLI, published native owners
 and current Codex to write two isolated files, pass three local tests and create
@@ -536,14 +538,55 @@ changed policy/source, rejection, supersession or an exhausted task block reuse.
 revocation under the configured review authority. Historical decisions remain
 unchanged; an exact replay returns its old receipt without re-deciding or dispatch.
 Neither approval nor revocation renews execution authority, completes a stage,
-starts CI or grants publication. CI/native composition and binding the resulting
-verified source into candidate creation remain pending work.
+starts CI or grants publication. Explicit stage continuation is required to
+begin the separately observed CI/native work described below.
 
 The development CLI/HTTP/MCP probe read the same real GitLab MR and produced the
 same review digest from both transports. It reused the original isolated state,
 with its execution authority already revoked, and recorded no review decision.
 Separate regression tests use explicitly synthetic decisions to exercise write,
 replay, current permission, drift, revocation and recovery boundaries.
+
+## Development implementation CI and verified source
+
+After a submitted Codex result has an exact current source approval,
+`lifecycle.stage.advance` may continue its original implementation request.
+Runtime retains an immutable derived CI request before dispatch. It binds the
+original report, review, source facts, principal, authority, input and deadline;
+it is not a new stage attempt or renewed budget. Restart and lost responses
+inspect that same CI request. Even an interrupted dispatch with no discoverable
+provider run remains unknown and cannot be automatically sent again.
+
+Both platform clients verify the workflow at the selected exact commit. They
+retain the current branch head separately and never replace the selected commit
+with that head. The implementation stage uses its configured implementation
+workflow; candidate and verification use their own configured workflows with
+the completed implementation's source. Current execution bindings and permissions
+are still checked: independently selecting an exact revision does not exempt a
+stage from those gates.
+
+The implementation stage completes only when independently observed CI,
+verified artifact/check evidence and both native owner reports pass the complete
+fixed criteria. Before each new owner action, Runtime rechecks the exact source
+approval and current execution permit. A lost owner response is reconciled from
+its original receipt; explicit continuation may start only the remaining action.
+`lifecycle.implementation.evidence.read {stageRequestId}` exposes the derived
+request, original CI observation/artifact and owner actions/receipts to a scoped
+reader. Reading evidence cannot dispatch work or grant authority.
+
+Candidate and verification stages require the persisted passing implementation
+outcome and content-addressed source proof. They recheck the retained review,
+current reviewer permission and policy, and reject revocation or changed proof.
+They do not require an already completed coding task to receive a fresh deadline
+or silently select new source. This does not yet implement source changes from
+the separately planned before-candidate extensions.
+
+Development regressions cover the composed implementation/candidate/verification
+chain, restart, changed branch head, missing review, response loss, revoked review
+and failed CI/native validation. Their assets, decisions and external effects are
+explicitly synthetic. A real GitLab read independently verified an older exact
+commit and its workflow while retaining the newer branch head; it dispatched no
+CI. These results do not establish actual full lifecycle or final acceptance.
 
 ## Development plan execution
 

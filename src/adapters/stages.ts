@@ -17,19 +17,20 @@ import { MAX_ARCHIVE_BYTES, ciSourceDigest, readArtifactArchive, verifyCiArtifac
 import { ownerRequestDigest, type Owner, type OwnerRequest, type PublishedOwnerAdapter } from './published-owners.js';
 
 const ADAPTER_ID='runtime-ci-owner-stage-v1';
-const ADAPTER_DIGEST=valueDigest({id:ADAPTER_ID,stages:['candidate','verification'],workflow:'runtime-ci/v1',owners:'native/v1',observation:'runtime-ci-owner-values/v1',continuation:'explicit-original-request/v1'});
+const ADAPTER_DIGEST=valueDigest({id:ADAPTER_ID,stages:['implementation','candidate','verification'],source:'verified-exact-commit/v1',workflow:'runtime-ci/v1',owners:'native/v1',observation:'runtime-ci-owner-values/v1',continuation:'explicit-original-request/v1'});
 const same=(a:unknown,b:unknown)=>canonical(a)===canonical(b);
 type Pair={criterionId:string;variantId:string};
 export interface OwnerPin {ref:string;registrationDigest:string;scope:NativeScope;reference:NativeReference;criteria:Pair[];}
 interface CiPlan {
-  stageId:'candidate'|'verification'; binding:PlatformRegistration; commit:string; workflowDigest:string;
+  stageId:'implementation'|'candidate'|'verification'; binding:PlatformRegistration; commit:string; workflowDigest:string;source:VerifiedStageSource;
   expectedChecks:string[]; owners:Record<Owner,OwnerPin>; toolchainLockDigest:string;
   toolchainManifestDigest?:string;
   effectiveConfigDigest:string; candidateDigest:string|null;
 }
 export interface NativeAction {request:OwnerRequest;requestDigest:string;context:NativeValidationContext;observationDigest:string|null;digest:string;}
 export interface OwnerResult {owner:Owner;status:'PASS'|'FAIL'|'UNKNOWN';receiptDigest:string|null;reportDigest:string|null;}
-export interface NativeStageConnections extends Pick<BindingConnections,'owner'|'platform'> {toolchainLockDigest:string;toolchainManifestDigest?:string;}
+export interface VerifiedStageSource {commit:string;evidenceRef:string;}
+export interface NativeStageConnections extends Pick<BindingConnections,'owner'|'platform'> {toolchainLockDigest:string;toolchainManifestDigest?:string;source?:(instance:LifecycleInstance,stageId:string,actor:Principal,signal:AbortSignal)=>Promise<VerifiedStageSource>;}
 const hash=(v:unknown):string=>{const s=string(v,71);if(!/^sha256:[a-f0-9]{64}$/.test(s))reject('STAGE_EVIDENCE_INVALID','Exact evidence digest is required');return s;};
 function packageJson(pkg:Record<string,unknown>,path:unknown):Record<string,unknown>{
   const text=record(pkg.files)[string(path,512)];if(typeof text!=='string'||Buffer.byteLength(text)>2097152)reject('OWNER_PACKAGE_INVALID','A bounded owner inventory is required');
@@ -113,16 +114,25 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
     const a=connections.owner(pin.ref,config);
     if(a.owner!==kind||a.workspaceId!==store.workspaceId||record(a.capabilities()).registrationDigest!==pin.registrationDigest)reject('OWNER_BINDING_CHANGED','Original owner connection differs');return a;
   }
+  async function source(instance:LifecycleInstance,stageId:string,actor:Principal,signal:AbortSignal):Promise<VerifiedStageSource>{
+    if(!connections.source)reject('VERIFIED_SOURCE_REQUIRED','CI requires reviewed or completed implementation source evidence',409);
+    const value=await connections.source(instance,stageId,actor,signal);exact(record(value),['commit','evidenceRef']);
+    if(!/^[a-f0-9]{40}$/.test(string(value.commit,40)))reject('VERIFIED_SOURCE_REQUIRED','Exact verified implementation commit is required',409);string(value.evidenceRef,256);return value;
+  }
+  async function currentSource(p:CiPlan,instance:LifecycleInstance,actor:Principal,signal:AbortSignal){if(!same(await source(instance,p.stageId,actor,signal),p.source))reject('VERIFIED_SOURCE_CHANGED','Original CI source authority changed',409);}
   async function prepare(instance:LifecycleInstance,stageId:string,actor:Principal,signal:AbortSignal):Promise<StagePlan>{
     inspectInstance(instance);signal.throwIfAborted();
-    if(stageId!=='candidate'&&stageId!=='verification')reject('STAGE_ADAPTER_UNAVAILABLE','This fixed adapter owns candidate and verification CI stages only',409);
+    if(stageId!=='implementation'&&stageId!=='candidate'&&stageId!=='verification')reject('STAGE_ADAPTER_UNAVAILABLE','This fixed adapter owns implementation, candidate and verification CI only',409);
     if(stageId==='candidate'&&instance.candidate||stageId==='verification'&&!instance.candidate)reject('CANDIDATE_SCOPE','Stage does not match the current immutable candidate');
-    const config=configuration(actor,instance.pins.projectId),workflow=resource(config,instance,'config.'+stageId+'.'+(stageId==='candidate'?'buildWorkflowRef':'verifyWorkflowRef'));
-    const binding=configuredPlatform(config,actor,instance.pins.projectId,string(workflow.definition.platformRef));
+    const config=configuration(actor,instance.pins.projectId);
     const implementation=record(atPath(instance.definition.semantic,'config.implementation'));
+    let binding:PlatformRegistration;
+    if(stageId==='implementation'){
+      const matches=config.platforms.filter(p=>p.projectId===instance.pins.projectId&&(['provider','host','repository','repositoryId','defaultBranch','credentialRef','workflowPath','pipelinePath','runner'] as const).every(k=>p[k]===implementation[k]));if(matches.length!==1)reject('PLATFORM_SCOPE','Implementation must use one exact configured connection',409);binding=configuredPlatform(config,actor,instance.pins.projectId,matches[0]!.ref);
+    }else{const workflow=resource(config,instance,'config.'+stageId+'.'+(stageId==='candidate'?'buildWorkflowRef':'verifyWorkflowRef'));binding=configuredPlatform(config,actor,instance.pins.projectId,string(workflow.definition.platformRef));}
     for(const key of ['provider','host','repository','repositoryId','defaultBranch'] as const)if(binding[key]!==implementation[key])reject('PLATFORM_SCOPE','CI stage uses a different source repository');
-    const current=await connections.platform(binding).readiness(actor,signal);
-    if(current.bindingDigest!==valueDigest(binding)||current.projectId!==instance.pins.projectId||current.repositoryId!==binding.repositoryId||Date.parse(current.expiresAt)<=Date.now())reject('PLATFORM_SCOPE','CI stage readiness differs from its registration');
+    const selected=await source(instance,stageId,actor,signal),current=await connections.platform(binding).revision(actor,selected.commit,signal);
+    if(current.commit!==selected.commit||current.sourceSelection!=='exact-commit'||current.bindingDigest!==valueDigest(binding)||current.projectId!==instance.pins.projectId||current.repositoryId!==binding.repositoryId||Date.parse(current.expiresAt)<=Date.now())reject('PLATFORM_SCOPE','CI stage readiness differs from its exact source registration');
     if(instance.candidate&&instance.candidate.sourceDigest!==ciSourceDigest({commit:current.commit} as PlatformRunRequest,binding.provider,binding.repositoryId))reject('CANDIDATE_SOURCE_CHANGED','Verification cannot move the pinned candidate to another source commit');
     const pins={} as Record<Owner,OwnerPin>;let effectiveConfigDigest='';
     for(const kind of ['ontology','harness'] as const){
@@ -137,14 +147,14 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
       }
     }
     signal.throwIfAborted();
-    const parameters:CiPlan={stageId,binding,commit:current.commit,workflowDigest:current.workflowDigest,expectedChecks:[...instance.definition.nodes.find(n=>n.id===stageId)!.checks],owners:pins,toolchainLockDigest:connections.toolchainLockDigest,...(connections.toolchainManifestDigest?{toolchainManifestDigest:connections.toolchainManifestDigest}:{}),effectiveConfigDigest,candidateDigest:instance.candidateDigest};
+    const parameters:CiPlan={stageId,binding,commit:current.commit,workflowDigest:current.workflowDigest,source:selected,expectedChecks:[...instance.definition.nodes.find(n=>n.id===stageId)!.checks],owners:pins,toolchainLockDigest:connections.toolchainLockDigest,...(connections.toolchainManifestDigest?{toolchainManifestDigest:connections.toolchainManifestDigest}:{}),effectiveConfigDigest,candidateDigest:instance.candidateDigest};
     return{adapterId:ADAPTER_ID,adapterDigest:ADAPTER_DIGEST,action:'base.'+stageId,bindingDigest:valueDigest(parameters),parameters:parameters as unknown as Record<string,unknown>};
   }
   function plan(r:StageRequest,instance:LifecycleInstance,actor:Principal):{p:CiPlan;config:Readonly<IntegrationConfiguration>;client:PlatformClient;ci:PlatformRunRequest}{
     inspectInstance(instance);const p=r.plan.parameters as unknown as CiPlan,config=configuration(actor,r.projectId);
     const version=targetVersion(instance);if(version&&instance.candidate&&instance.candidate.version!==version)reject('CANDIDATE_VERSION_MISMATCH','Existing candidate differs from the reviewed target version',409);
     if(p.toolchainManifestDigest!==connections.toolchainManifestDigest)reject('TOOLCHAIN_CHANGED','Original native stage manifest cannot change across service restarts',409);
-    if(r.workspaceId!==store.workspaceId||r.projectId!==instance.pins.projectId||r.instanceId!==instance.id||r.pinsDigest!==instance.pinsDigest||r.plan.adapterId!==ADAPTER_ID||r.plan.adapterDigest!==ADAPTER_DIGEST||r.plan.action!=='base.'+r.stageId||r.plan.bindingDigest!==valueDigest(p)||valueDigest(r.plan)!==r.planDigest||p.stageId!==r.stageId||!['candidate','verification'].includes(p.stageId)||p.toolchainLockDigest!==connections.toolchainLockDigest||p.candidateDigest!==instance.candidateDigest||!same(p.expectedChecks,instance.definition.nodes.find(n=>n.id===r.stageId)?.checks))reject('STAGE_PLAN_MISMATCH','CI execution differs from its original immutable stage plan');
+    if(r.workspaceId!==store.workspaceId||r.projectId!==instance.pins.projectId||r.instanceId!==instance.id||r.pinsDigest!==instance.pinsDigest||r.plan.adapterId!==ADAPTER_ID||r.plan.adapterDigest!==ADAPTER_DIGEST||r.plan.action!=='base.'+r.stageId||r.plan.bindingDigest!==valueDigest(p)||valueDigest(r.plan)!==r.planDigest||p.stageId!==r.stageId||!['implementation','candidate','verification'].includes(p.stageId)||p.source.commit!==p.commit||p.toolchainLockDigest!==connections.toolchainLockDigest||p.candidateDigest!==instance.candidateDigest||!same(p.expectedChecks,instance.definition.nodes.find(n=>n.id===r.stageId)?.checks))reject('STAGE_PLAN_MISMATCH','CI execution differs from its original immutable stage plan');
     const current=configuredPlatform(config,actor,r.projectId,p.binding.ref);if(!same(current,p.binding))reject('PLATFORM_BINDING_CHANGED','Original stage platform registration changed');
     for(const kind of ['ontology','harness'] as const)owner(config,p.owners[kind],kind,r.projectId);
     const ci:PlatformRunRequest={schema:'runtime-ci-request/v1',requestId:'stage-'+valueDigest({workspaceId:r.workspaceId,projectId:r.projectId,requestId:r.id}).slice(7,55),projectId:r.projectId,bindingDigest:valueDigest(p.binding),commit:p.commit,workflowDigest:p.workflowDigest,inputDigest:r.inputDigest,stageId:r.stageId,candidateDigest:p.candidateDigest,requestedAt:r.requestedAt,deadlineAt:r.deadlineAt};
@@ -185,6 +195,7 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
     if(verified.status!=='PASSED')return observation(r,p,ci,'UNKNOWN');
     const owners=await Promise.all((['ontology','harness'] as const).map(kind=>ownerResult(r,p,config,kind,actor)));signal.throwIfAborted();
     const failed=owners.some(o=>o.status==='FAIL'),complete=owners.every(o=>o.status==='PASS');
+    if(complete)await currentSource(p,instance,actor,signal);
     const evidence={schema:'runtime-ci-stage-evidence/v1',requestId:r.id,inputDigest:r.inputDigest,ci:verified,owners,softwareRelease:false},ref=valueDigest(evidence);retain(r.projectId,'ci-stage-evidence',ref,evidence,true);
     const checks=verified.checks.map(c=>({id:c.id,status:failed?'FAIL' as const:complete?'PASS' as const:'UNKNOWN' as const,evidenceRef:ref}));
     return observation(r,p,ci,failed?'FAILED':complete?'COMPLETE':'RUNNING',checks,complete&&p.stageId==='candidate'?verified.candidate!:undefined);
@@ -206,6 +217,7 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
       if(!Number.isSafeInteger(state.revision)||Number(state.revision)<0)reject('OWNER_REVISION_INVALID','Native owner revision is unavailable');
       const request:OwnerRequest={operation:'native.package.validate',scope,input:{id:p.owners[kind].reference.id,version:p.owners[kind].reference.version,context,...(kind==='harness'?{observation:observationInput}:{})},requestId:'stage-native-'+valueDigest({requestId:r.id,projectId:r.projectId,owner:kind}).slice(7,55),expectedRevision:Number(state.revision)};
       const body={request,requestDigest:ownerRequestDigest(kind,request),context,observationDigest:kind==='harness'?nativeSha256(observationInput):null};retain(r.projectId,'stage-native-action',r.id+':'+kind,{...body,digest:valueDigest(body)},true);
+      await currentSource(p,instance,actor,signal);signal.throwIfAborted();
       const fresh=await permit();signal.throwIfAborted();authorize(fresh,r.projectId,'execution.request');
       if(fresh.id!==r.initiatedBy.id||fresh.revision!==r.initiatedBy.revision)reject('AUTHORITY_CHANGED','Native continuation requires the original current principal');
       await a.mutate(fresh,r.projectId,request,{projectId:r.projectId,owner:kind,requestDigest:body.requestDigest,authorityRef:r.authorityRef,expiresAt:r.deadlineAt});
@@ -214,6 +226,7 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
   }
   return{prepare,inspect,advance,async dispatch(r,instance,permit,signal){
     const actor=await permit(),{p,client,ci}=plan(r,instance,actor);
+    await currentSource(p,instance,actor,signal);signal.throwIfAborted();
     // The execution core persisted the original StageRequest before entering
     // here. Platform clients independently refuse replacement/ref redispatch.
     const run=await client.dispatch(ci,async requested=>{if(!same(requested,ci))reject('CI_REQUEST_MISMATCH','CI permit cannot change its original request');return permit();},signal);pinRun(r,run);

@@ -66,11 +66,16 @@ export function createImplementationReviewService(store:RuntimeStore,bindings:Im
     const key=reference(ref),raw=store.object(projectId,'implementation-review',key);if(!raw)reject('NOT_FOUND','Source review not found',404);const d=raw as SourceDecision,{ref:unused,...body}=d;
     if(d.schema!=='runtime-implementation-decision/v1'||d.ref!==key||'source-review:'+valueDigest(body)!==key||d.review.workspaceId!==store.workspaceId||d.review.projectId!==projectId||valueDigest(d.review)!==d.reviewDigest)reject('CORRUPT_SOURCE_REVIEW','Original source review content or scope changed',503);return d;
   }
-  async function resolve(actor:Principal,projectId:string,id:string):Promise<SourceDecision>{
+  function recorded(actor:Principal,projectId:string,id:string):SourceDecision{
     authorize(actor,projectId,'read');const pointer=store.object(projectId,'implementation-review-pointer',id);if(!pointer)reject('IMPLEMENTATION_REVIEW_REQUIRED','Source approval is still required',409);const d=saved(projectId,record(pointer).ref);
     if(d.review.stageRequestId!==id||d.choice!=='APPROVE'||store.object(projectId,'implementation-review-revocation',d.ref))reject('IMPLEMENTATION_REVIEW_REJECTED','Source review is rejected or revoked',409);
     const decider=principals(d.review.reviewerId);if(!decider||decider.revision!==d.review.reviewerRevision)reject('IMPLEMENTATION_REVIEWER_CHANGED','Original reviewer is no longer current',403);
-    reviewer(decider,projectId,policy(context(projectId,id).instance,actor));evidence(d);
+    const c=context(projectId,id),p=policy(c.instance,actor);reviewer(decider,projectId,p);evidence(d);
+    if(d.review.requestDigest!==c.request.digest||d.review.pinsDigest!==c.instance.pinsDigest||d.review.agentReportDigest!==c.report.digest||d.review.policyDigest!==p.digest)reject('IMPLEMENTATION_REVIEW_STALE','Retained source approval no longer matches its original task or policy',409);
+    return d;
+  }
+  async function resolve(actor:Principal,projectId:string,id:string):Promise<SourceDecision>{
+    const d=recorded(actor,projectId,id),decider=principals(d.review.reviewerId)!;
     const now=await preview(actor,projectId,id,decider);if(now.reviewDigest!==d.reviewDigest||now.source.state!=='OPEN'||Date.parse(now.deadlineAt)<=Date.now())reject('IMPLEMENTATION_REVIEW_STALE','Exact source review is no longer usable for this original task',409);return d;
   }
   async function read(actor:Principal,projectId:string,operation:string,input:Record<string,unknown>):Promise<unknown>{
@@ -98,5 +103,7 @@ export function createImplementationReviewService(store:RuntimeStore,bindings:Im
       return{objects:[{kind:'implementation-review',id:d.ref,value:d},{kind:'implementation-review-pointer',id,value:{ref:d.ref}}],value:{reviewRef:d.ref,decision:d.choice,stageRequestId:id,reviewDigest:d.reviewDigest,executionAuthorized:false,implementationComplete:false,releaseAuthorized:false},event:{type:'implementation-review-recorded',data:{stageRequestId:id,reviewRef:d.ref,reviewerId:fresh.id,choice:d.choice}}};
     },reauthorize);
   }
-  return{read,write,resolve};
+  // recorded() verifies retained authority only. Later stages may use it only
+  // with the completed implementation evidence; it does not observe current CI.
+  return{read,write,resolve,recorded};
 }

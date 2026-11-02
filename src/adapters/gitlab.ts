@@ -3,7 +3,7 @@ import { record, reject, ServiceError, string } from '../server/errors.js';
 import type { PlatformRegistration } from './config.js';
 import type { Principal } from '../server/security.js';
 import { sourceReader } from './source.js';
-import { aggregateJobs, ciInputs, ciSourceRef, commitId, executionPrincipal, fileBytes, jobResult, matchRepository, platformReader, positiveId, readinessResult, runResult, safePlatformError, sha256, validateRunRequest, validateSourceRef, type PlatformClient, type PlatformCredentialReader, type PlatformJobObservation, type PlatformRunRequest } from './platforms.js';
+import { aggregateJobs, ciInputs, ciSourceRef, commitId, executionPrincipal, fileBytes, jobResult, matchRepository, platformReader, positiveId, readinessResult, revisionReadinessResult, runResult, safePlatformError, sha256, validateRunRequest, validateSourceRef, type PlatformClient, type PlatformCredentialReader, type PlatformJobObservation, type PlatformRunRequest } from './platforms.js';
 
 /** GitLab v4 API, including the accepted self-managed 15.0 test instance. Only
  * explicit registered project/runner IDs are used; no admin runner discovery. */
@@ -39,14 +39,13 @@ export function gitlabClient(configuration:PlatformRegistration,credentials:Plat
     const variables=await get(actor,'/pipelines/'+id+'/variables',signal);if(!Array.isArray(variables)||variables.length>1000)reject('PLATFORM_RESPONSE_INVALID','Invalid bounded pipeline variable list',502);
     return Object.entries(ciInputs(r)).every(([key,value])=>{const matches=variables.map(record).filter(v=>v.key===key);return matches.length===1&&matches[0]!.value===value&&matches[0]!.variable_type==='env_var';});
   }
-  const client:PlatformClient={
-    source:sourceReader(binding,get),
-    async readiness(actor,signal){try{
+  async function ready(actor:Principal,signal:AbortSignal,requestedCommit?:string){try{
       const project=matchRepository(await get(actor,'',signal),binding);
       if(project.jobs_enabled!==true||(project.ci_config_path||'.gitlab-ci.yml')!==binding.pipelinePath)reject('WORKFLOW_NOT_READY','CI is disabled or its registered path differs',409);
       const branch=record(await get(actor,'/repository/branches/'+encodeURIComponent(binding.defaultBranch),signal));
       if(branch.name!==binding.defaultBranch)reject('PLATFORM_IDENTITY_CHANGED','Branch readback differs',409);
-      const commit=commitId(record(branch.commit).id),path=binding.pipelinePath!;
+      const branchHeadCommit=commitId(record(branch.commit).id),commit=requestedCommit===undefined?branchHeadCommit:commitId(requestedCommit),path=binding.pipelinePath!;
+      if(requestedCommit!==undefined&&record(await get(actor,'/repository/commits/'+commit,signal)).id!==commit)reject('CI_SOURCE_CHANGED','Exact source commit is unavailable in the registered repository',409);
       const file=record(await get(actor,'/repository/files/'+encodeURIComponent(path)+'?ref='+commit,signal));
       if(file.file_path!==path||file.encoding!=='base64'||file.commit_id!==commit)reject('WORKFLOW_NOT_READY','Pipeline file does not match the exact source revision',409);
       const bytes=fileBytes(file.content,file.size);if(sha256(bytes)!=='sha256:'+String(file.content_sha256))reject('WORKFLOW_CONTENT_CHANGED','Pipeline content integrity check failed',409);
@@ -58,8 +57,12 @@ export function gitlabClient(configuration:PlatformRegistration,credentials:Plat
         runner=list.map(record).find(r=>positiveId(r.id)===binding.runner);if(runner||list.length<100)break;
       }
       if(!runner||runner.active!==true||runner.paused===true||runner.online!==true||runner.status!=='online')reject('RUNNER_NOT_READY','Registered project runner is unavailable, paused or offline',409);
-      return readinessResult(binding,commit,path,sha256(bytes),{id:binding.runner!,online:true});
-    }catch(error){return safePlatformError(error);}},
+      return{observation:readinessResult(binding,commit,path,sha256(bytes),{id:binding.runner!,online:true}),branchHeadCommit};
+    }catch(error){return safePlatformError(error);}}
+  const client:PlatformClient={
+    source:sourceReader(binding,get),
+    async readiness(actor,signal){return(await ready(actor,signal)).observation;},
+    async revision(actor,commit,signal){commitId(commit);const r=await ready(actor,signal,commit);return revisionReadinessResult(r.observation,r.branchHeadCommit);},
     async job(actor,runId,jobId,commit,signal,sourceRef=binding.defaultBranch){try{
       positiveId(runId);positiveId(jobId);commitId(commit);validateSourceRef(sourceRef,binding);
       matchRepository(await get(actor,'',signal),binding);
@@ -70,7 +73,7 @@ export function gitlabClient(configuration:PlatformRegistration,credentials:Plat
     async dispatch(input,permit,signal){
       const r=validateRunRequest(input,binding),actor=await executionPrincipal(r,binding,permit,signal);
       if(await ownedRef(actor,r,signal))return client.run(actor,r,null,signal);
-      const ready=await client.readiness(actor,signal);if(ready.commit!==r.commit||ready.workflowDigest!==r.workflowDigest)reject('CI_SOURCE_CHANGED','Prepare the exact current source/workflow before requesting CI',409);
+      const ready=await client.revision(actor,r.commit,signal);if(ready.commit!==r.commit||ready.workflowDigest!==r.workflowDigest||ready.bindingDigest!==r.bindingDigest)reject('CI_SOURCE_CHANGED','Exact requested source/workflow differs from its retained plan',409);
       await contract(actor,r,signal);const current=()=>executionPrincipal(r,binding,permit,signal);
       await post(actor,'/repository/tags',{tag_name:ciSourceRef(r),ref:r.commit},current,signal);
       if(!await ownedRef(actor,r,signal))reject('CI_REF_UNKNOWN','Inspect the original source-ref creation',409);
