@@ -476,6 +476,33 @@ The probe retained its driver interruption and recovery evidence, revoked its
 synthetic authority and did not dispatch CI, merge, release or change the daily
 installation. It is handoff evidence, not full lifecycle acceptance.
 
+## Development exact source observations
+
+Both fixed platform clients expose a trusted internal `source` reader. Its input
+pins the preparation's baseline commit, submitted commit, PR/MR number and output
+inventory. It observes only the registered repository, checks the current target
+branch against the reviewed baseline, verifies exact base/head relationships,
+reads the complete changed-file inventory and hashes the declared remote outputs.
+The inventory includes deletions and changes beyond the reported output subset;
+subsequent review must cover the whole change. Metadata is read again afterward
+to reject drift. Forks, linked/submodule outputs and incomplete inventories fail
+closed. No provider account is inferred to be a Runtime review principal.
+
+The bounded profile supports 1,000 changed paths, 128 declared output files,
+1 MiB per remotely verified output and 64 MiB total. GitHub file inventories are
+paged; its comparison route accepts only exact commit hashes. GitLab uses the
+changes endpoint available in the verified 15.0 installation and requires an
+explicit false overflow flag and exact file count. Oversized, collapsed or
+truncated responses are not partial success. This API compatibility choice does
+not claim support for every later GitLab version.
+
+Results retain source facts, status, draft flag and content digest, with
+`sourceReviewApproved:false`, `ciVerified:false` and `releaseAuthorized:false`.
+The actual GitLab development readback verified the current Codex probe's exact
+two-file MR without any remote mutation. Both-provider regression tests exercise
+wrong base/head, byte mismatches, pagination and incomplete evidence; actual
+GitHub source-review and full lifecycle acceptance remain separate obligations.
+
 ## Development plan execution
 
 The registered `base.plan` adapter requires the original completed scope

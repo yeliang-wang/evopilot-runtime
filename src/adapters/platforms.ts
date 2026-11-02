@@ -5,6 +5,7 @@ import { valueDigest } from '../lifecycle/base.js';
 import { validatePlatformRegistration, type PlatformRegistration } from './config.js';
 import { containsInlineSecret } from '../lifecycle/compiler.js';
 import { MAX_ARCHIVE_BYTES } from './artifacts.js';
+import type { SourceRequest, SourceObservation } from './source.js';
 
 /** Trusted process credential resolution; never provided by a lifecycle/API. */
 export type PlatformCredentialReader=(binding:PlatformRegistration,actor:Principal,signal:AbortSignal)=>Promise<string>;
@@ -24,6 +25,7 @@ export interface PlatformJobObservation {
   artifactsVerified:false; lifecycleAcceptance:false;
 }
 export interface PlatformClient {
+  source(actor:Principal,request:SourceRequest,signal:AbortSignal):Promise<SourceObservation>;
   readiness(actor:Principal,signal:AbortSignal):Promise<PlatformReadiness>;
   job(actor:Principal,runId:string,jobId:string,commit:string,signal:AbortSignal,sourceRef?:string):Promise<PlatformJobObservation>;
   dispatch(request:PlatformRunRequest,permit:PlatformExecutionPermit,signal:AbortSignal):Promise<PlatformRunObservation>;
@@ -108,7 +110,8 @@ export function platformReader(registration:PlatformRegistration,credentials:Pla
   const prefix=binding.provider==='github'?'/repos/'+binding.repository:'/api/v4/projects/'+binding.repositoryId;
   async function request(actor:Principal,suffix:string,signal:AbortSignal,payload?:Record<string,unknown>,permit?:()=>Promise<Principal>):Promise<unknown>{
     authorize(actor,binding.projectId,'read');if(Date.parse(binding.expiresAt)<=Date.now())reject('PLATFORM_NOT_REGISTERED','Platform registration has expired',409);
-    if(suffix!==''&&!suffix.startsWith('/')||suffix.includes('..')||suffix.includes('#')||/[\u0000-\u0020\\]/.test(suffix))reject('INVALID_PLATFORM_ROUTE','Invalid fixed platform route');
+    const exactComparison=binding.provider==='github'&&/^\/compare\/[a-f0-9]{40}\.\.\.[a-f0-9]{40}\?per_page=1$/.test(suffix);
+    if(suffix!==''&&!suffix.startsWith('/')||suffix.includes('..')&&!exactComparison||suffix.includes('#')||/[\u0000-\u0020\\]/.test(suffix))reject('INVALID_PLATFORM_ROUTE','Invalid fixed platform route');
     const controller=AbortSignal.any([signal,AbortSignal.timeout(10000)]);
     try{
       controller.throwIfAborted();

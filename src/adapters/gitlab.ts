@@ -2,6 +2,7 @@ import { parseDocument } from 'yaml';
 import { record, reject, ServiceError, string } from '../server/errors.js';
 import type { PlatformRegistration } from './config.js';
 import type { Principal } from '../server/security.js';
+import { sourceReader } from './source.js';
 import { aggregateJobs, ciInputs, ciSourceRef, commitId, executionPrincipal, fileBytes, jobResult, matchRepository, platformReader, positiveId, readinessResult, runResult, safePlatformError, sha256, validateRunRequest, validateSourceRef, type PlatformClient, type PlatformCredentialReader, type PlatformJobObservation, type PlatformRunRequest } from './platforms.js';
 
 /** GitLab v4 API, including the accepted self-managed 15.0 test instance. Only
@@ -39,6 +40,7 @@ export function gitlabClient(configuration:PlatformRegistration,credentials:Plat
     return Object.entries(ciInputs(r)).every(([key,value])=>{const matches=variables.map(record).filter(v=>v.key===key);return matches.length===1&&matches[0]!.value===value&&matches[0]!.variable_type==='env_var';});
   }
   const client:PlatformClient={
+    source:sourceReader(binding,get),
     async readiness(actor,signal){try{
       const project=matchRepository(await get(actor,'',signal),binding);
       if(project.jobs_enabled!==true||(project.ci_config_path||'.gitlab-ci.yml')!==binding.pipelinePath)reject('WORKFLOW_NOT_READY','CI is disabled or its registered path differs',409);

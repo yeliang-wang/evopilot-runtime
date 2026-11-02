@@ -4,6 +4,7 @@ import { record, reject, ServiceError, string } from '../server/errors.js';
 import type { PlatformRegistration } from './config.js';
 import { aggregateJobs, ciInputs, ciRunTitle, ciSourceRef, commitId, executionPrincipal, fileBytes, jobResult, matchRepository, platformReader, positiveId, readinessResult, runResult, safePlatformError, sha256, validateRunRequest, validateSourceRef, type PlatformClient, type PlatformCredentialReader, type PlatformJobObservation, type PlatformRunRequest } from './platforms.js';
 import type { Principal } from '../server/security.js';
+import { sourceReader } from './source.js';
 
 /** GitHub.com REST observations. A successful old job is not evidence for a new
  * candidate or authority to dispatch another workflow. */
@@ -51,6 +52,7 @@ export function githubClient(configuration:PlatformRegistration,credentials:Plat
     if(!selected)reject('CI_CONTRACT_REQUIRED','Registered workflow is missing from the fixed inventory',409);
   }
   const client:PlatformClient={
+    source:sourceReader(binding,get),
     async readiness(actor,signal){try{
       matchRepository(await get(actor,'',signal),binding);
       const branch=record(await get(actor,'/branches/'+encodeURIComponent(binding.defaultBranch),signal));
