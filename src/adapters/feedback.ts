@@ -98,7 +98,7 @@ export function createOwnerFeedbackDelivery(store:RuntimeStore,connections:Feedb
   async function inspect(actor:Principal,projectId:string,eventId:string,owner:Owner,signal:AbortSignal):Promise<FeedbackObservation>{
     authorize(actor,projectId,'read');const e=event(projectId,eventId),a=adapter(e,owner),original=delivery(projectId,eventId+':'+owner);let result:FeedbackObservation;
     if(original&&(original.eventDigest!==e.digest||record(a.capabilities()).registrationDigest!==original.registrationDigest))reject('FEEDBACK_CONNECTION_CHANGED','Read the original pinned owner connection; a changed registration cannot replace its receipt',409);
-    try{const inbox=await bounded(()=>a.read(actor,projectId,{operation:'feedback.read',scope:e.scope,input:{id:e.id}}),signal);result=verifyOwnerFeedbackInbox(inbox,e,owner);}
+    try{const inbox=await bounded(()=>a.read(actor,projectId,{operation:'feedback.read',scope:e.scope,input:{id:e.id}}),signal);result=verifyOwnerFeedbackInbox(inbox,e,owner);const retained=store.object(projectId,'owner-feedback-inbox',eventId+':'+owner);if(!same(retained,inbox))save(projectId,'owner-feedback-inbox',eventId+':'+owner,inbox);}
     catch(error){if(error instanceof ServiceError&&error.code==='NOT_FOUND')result=delivery(projectId,eventId+':'+owner)?unknown():absent();else throw error;}
     const id=eventId+':'+owner,old=store.object(projectId,'owner-feedback-observation',id);
     if(!same(old,result))save(projectId,'owner-feedback-observation',id,result);return result;

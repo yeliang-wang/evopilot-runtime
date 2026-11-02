@@ -889,3 +889,55 @@ Development validation uses actual published 0.8.3 owner services and independen
 inbox/disposition readback with explicitly synthetic project assets, events and
 owner decisions. Those observations and the durability/security regression tests
 do not satisfy the frozen final-candidate E2E instances.
+
+## Development delivery smoke and closure evidence
+
+The delivery building blocks are implemented in development. A draft closure
+adapter composes them, but is not yet selected by `openRegisteredBindings` and
+has not passed a complete registered closure journey. The three selected delivery
+modes and both owner dispositions remain required; the regression results below
+are not final acceptance or a Runtime release claim.
+
+A closure CI request adds `runtime_delivery_input`, containing the fixed
+`runtime-delivery-input/v1` target and optional original candidate installation
+manifest artifact. Distribution binds the exact published commit, version tag,
+channel registration and release-description digest. Local installation and
+approved deployment bind the protected canonical directory and original manifest
+digest. Credentials and arbitrary commands are not input fields. The existing
+original-candidate consumption contract remains mandatory.
+
+The original downloaded CI archive must include `evidence/delivery-smoke.json`
+and nonempty probe evidence bound by `base.closure.delivery-acceptance`.
+`runtime-delivery-smoke/v1` identifies the original request, candidate, target,
+procedure, result and evidence paths. A local target additionally binds the same
+physical directory identity and installed-file facts independently observed by
+Runtime. A runner without access to that actual target cannot satisfy the check
+with a generic green build. Runtime neither installs the payload nor launches a
+coding Agent or arbitrary smoke command; the configured external workflow/Host
+performs its authorized work. This does not add remote production deployment.
+
+Native delivery evaluation uses its own `runtimeClosure` observation, original
+request and retained action/receipt. An earlier publication quality PASS cannot
+stand in for delivery quality. Missing criteria, changed input, unknown receipt,
+revoked permission or changed owner/toolchain bindings prevent a new PASS.
+An uncertain mutation is inspected through its original receipt, never repeated.
+The feedback reader now retains the independently validated original owner inbox
+for subsequent archival; this does not create or approve an owner disposition.
+
+The bounded private archive writer preserves original JSON records and CI ZIP
+bytes with a manifest and completion seal. It verifies ownership, file type,
+permissions, byte lengths and digests. Passive reads never create files. A partial,
+foreign or changed archive is retained and cannot be silently repaired by another
+write. Individual records are indexed separately rather than flattening a whole
+lifecycle into one unbounded JSON value. The delivery-ready archive precedes the
+execution core's terminal commit; the marker
+`DELIVERY_VERIFIED_CORE_COMMIT_PENDING` explicitly describes that ordering. A
+sealed archive alone is not a completed lifecycle.
+
+Development regressions cover all three smoke modes, target/candidate mismatch,
+missing evidence, fixed CI input, native success/failure and response loss,
+original receipt recovery, changed authority, archive readback, missing seal,
+changed bytes, links, unsafe permissions and immutable document inventory.
+Complete service wiring, the positive full-stage archival graph, actual CI smoke,
+released-owner feedback dispositions and the selected installation/deployment
+journeys remain to be exercised before these contracts can satisfy final checks.

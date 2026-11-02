@@ -164,7 +164,14 @@
         "tests/e2e/installation-v090.test.mjs",
         "src/adapters/source-tree.ts",
         "tests/e2e/source-tree-v090.test.mjs",
-        "src/adapters/stage-feedback.ts"
+        "src/adapters/stage-feedback.ts",
+        "src/adapters/delivery-smoke.ts",
+        "src/adapters/closure-stage.ts",
+        "src/adapters/closure-harness.ts",
+        "src/adapters/closure-archive.ts",
+        "tests/e2e/delivery-smoke-v090.test.mjs",
+        "tests/e2e/closure-v090.test.mjs",
+        "tests/e2e/closure-archive-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

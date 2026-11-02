@@ -8,6 +8,7 @@ import { MAX_ARCHIVE_BYTES, validateCandidateInput, type CandidateInput } from '
 import type { SourceRequest, SourceObservation } from './source.js';
 import type { ReleaseDocument, DocumentObservation } from './documents.js';
 import type { SourceTreeObservation } from './source-tree.js';
+import {validateDeliveryInput,type DeliveryInput} from './delivery-smoke.js';
 import { validatePublicationInput, type PublicationInput, type DistributionRequest, type DistributionObservation } from './distribution.js';
 
 /** Trusted process credential resolution; never provided by a lifecycle/API. */
@@ -52,6 +53,7 @@ export interface PlatformRunRequest {
   candidateDigest:string|null; requestedAt:string; deadlineAt:string;
   candidateInput?:CandidateInput;
   publicationInput?:PublicationInput;
+  deliveryInput?:DeliveryInput;
 }
 export type PlatformExecutionPermit=(request:PlatformRunRequest)=>Promise<Principal>;
 export interface PlatformRunObservation {
@@ -61,7 +63,7 @@ export interface PlatformRunObservation {
   observedAt:string; factsDigest:string; artifactsVerified:false; lifecycleAcceptance:false;
 }
 export function validateRunRequest(value:PlatformRunRequest,binding:PlatformRegistration):PlatformRunRequest{
-  const r=record(value);exact(r,['schema','requestId','projectId','bindingDigest','commit','workflowDigest','inputDigest','stageId','candidateDigest','requestedAt','deadlineAt'],['candidateInput','publicationInput']);
+  const r=record(value);exact(r,['schema','requestId','projectId','bindingDigest','commit','workflowDigest','inputDigest','stageId','candidateDigest','requestedAt','deadlineAt'],['candidateInput','publicationInput','deliveryInput']);
   if(r.schema!=='runtime-ci-request/v1'||r.projectId!==binding.projectId||r.bindingDigest!==valueDigest(binding)||!/^[-a-z0-9]{1,64}$/.test(string(r.requestId,64)))reject('CI_REQUEST_MISMATCH','CI request does not match this exact registered scope');
   commitId(r.commit);for(const k of ['workflowDigest','inputDigest'])if(!/^sha256:[a-f0-9]{64}$/.test(string(r[k],71)))reject('CI_REQUEST_MISMATCH','CI request must pin exact workflow and stage input');
   if(r.candidateDigest!==null&&!/^sha256:[a-f0-9]{64}$/.test(string(r.candidateDigest,71)))reject('CI_REQUEST_MISMATCH','CI candidate must be exact');
@@ -69,6 +71,8 @@ export function validateRunRequest(value:PlatformRunRequest,binding:PlatformRegi
   if(value.candidateInput){if(r.candidateDigest===null)reject('CI_CANDIDATE_INPUT_INVALID','Candidate input requires an existing candidate',409);validateCandidateInput(value.candidateInput,value,binding.provider,binding.repositoryId);}
   if(r.stageId==='publication'&&!value.publicationInput)reject('PUBLICATION_INPUT','Publication requires its exact reviewed channel and documents',409);
   if(value.publicationInput)validatePublicationInput(value.publicationInput,value,binding.provider);
+  if(r.stageId==='closure'&&!value.deliveryInput)reject('DELIVERY_INPUT','Closure requires the exact reviewed delivery input',409);
+  if(value.deliveryInput)validateDeliveryInput(value.deliveryInput,value);
   if(!/^(?:scope|plan|implementation|candidate|verification|release-decision|publication|closure|project\.[a-z][a-z0-9-]{0,62})$/.test(string(r.stageId,80))||!Number.isFinite(Date.parse(string(r.requestedAt,64)))||!Number.isFinite(Date.parse(string(r.deadlineAt,64)))||Date.parse(String(r.deadlineAt))<=Date.parse(String(r.requestedAt))||containsInlineSecret(canonical(r)))reject('CI_REQUEST_MISMATCH','Invalid exact CI stage/time metadata');
   return Object.freeze({...value});
 }
@@ -76,7 +80,7 @@ export function validateRunRequest(value:PlatformRunRequest,binding:PlatformRegi
  * release. Creation and dispatch are both covered by the retained action plan. */
 export const ciSourceRef=(r:PlatformRunRequest):string=>'evopilot-runtime/'+r.requestId;
 export const ciRunTitle=(r:PlatformRunRequest):string=>'evopilot:'+r.requestId+':'+r.inputDigest;
-export const ciInputs=(r:PlatformRunRequest):Record<string,string>=>({runtime_request_id:r.requestId,runtime_input_digest:r.inputDigest,runtime_source_commit:r.commit,runtime_stage:r.stageId,runtime_candidate_digest:r.candidateDigest??'none',runtime_workflow_digest:r.workflowDigest,runtime_binding_digest:r.bindingDigest,runtime_candidate_input:r.candidateInput?canonical(r.candidateInput):'none',...(r.publicationInput?{runtime_publication_input:canonical(r.publicationInput)}:{})});
+export const ciInputs=(r:PlatformRunRequest):Record<string,string>=>({runtime_request_id:r.requestId,runtime_input_digest:r.inputDigest,runtime_source_commit:r.commit,runtime_stage:r.stageId,runtime_candidate_digest:r.candidateDigest??'none',runtime_workflow_digest:r.workflowDigest,runtime_binding_digest:r.bindingDigest,runtime_candidate_input:r.candidateInput?canonical(r.candidateInput):'none',...(r.publicationInput?{runtime_publication_input:canonical(r.publicationInput)}:{}),...(r.deliveryInput?{runtime_delivery_input:canonical(r.deliveryInput)}:{})});
 export function validateSourceRef(ref:string,binding:PlatformRegistration):void{if(ref!==binding.defaultBranch&&!/^evopilot-runtime\/[-a-z0-9]{1,64}$/.test(ref))reject('CI_REF_SCOPE','Only the registered branch or a request-owned source ref is supported');}
 export function aggregateJobs(jobs:PlatformJobObservation[],providerStatus:string):PlatformJobObservation['status']{
   if(jobs.some(j=>j.status==='FAILED')||['failure','failed','cancelled','canceled','timed_out','skipped','neutral'].includes(providerStatus))return'FAILED';
