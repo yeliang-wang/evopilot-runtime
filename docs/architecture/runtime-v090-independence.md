@@ -47,3 +47,30 @@ retains 64 groups, 22 scenarios, 12 extension subcases, 6 closure variants and 8
 audit additions. P04 belongs only to post-release E22. Exact M0 parameter bindings
 and real platform/Host/browser evidence remain required. Governance validation
 does not prove product functionality or authenticate human authority.
+
+## Development service foundation
+
+The development tree now supplies `evopilot-runtime` (compiled entry
+`dist/server/cli.js`) alongside the historical compatibility CLI. Its metadata
+retains the baseline package version until an exact v0.9 release candidate is
+prepared; `developmentTarget: 0.9.0` does not claim a published version.
+
+For an isolated local state directory, run `auth-init` with explicit
+`--state-root`, `--workspace-id`, `--project`, `--principal` and
+`--role reader|editor|activator`. This creates a private, expiring service
+credential and prints only its `tokenRef`. It refuses to overwrite existing
+credentials. Roles do not authorize business execution or software publication.
+Then `serve --state-root <directory> --workspace-id <id> [--port <port>]`
+starts a loopback listener. `status --url <origin> --token-ref <file>
+--project <id>` reads it over authenticated HTTP. Never pass raw tokens in
+command arguments, URLs or YAML. These development commands do not modify the
+current Codex installation or migrate an existing workspace.
+
+The initial `/api/v1/request` and `/mcp` surfaces share the same scoped read
+dispatcher. `/api/v1/events` streams bounded, persistent project events and
+closes on revoked credentials. An OS-managed exclusive SQLite lock prevents a
+second writer; object changes, receipts, audit and events commit together.
+Restart rejects incompatible schemas and inconsistent receipt/event digests.
+Lifecycle definition authoring/admission, instance execution, owner/platform
+adapters, the two Dashboard pages and installed-plugin delivery are subsequent
+implementation work, not completed by this foundation.

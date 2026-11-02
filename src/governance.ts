@@ -96,6 +96,35 @@ export function evaluateGovernance(root: string, request: GovernanceRequest): Ga
     const acceptanceDigest = governanceDigest(acceptance.bytes);
     if (target.value.acceptanceDigest !== acceptanceDigest || roadmap.value.acceptanceDigest !== acceptanceDigest) fail('Acceptance digest drift requires review');
     validateAcceptanceCatalog(acceptance.value);
+    if (target.value.implementationBindings) {
+      for (const [path, digest] of Object.entries(object(target.value.implementationBindings))) {
+        if (!/^governance\/[a-z0-9-]+\.json$/.test(path)) fail('Unsafe implementation binding path');
+        if (governanceDigest(readBoundedJson(resolve(root, path)).bytes) !== digest) fail('Implementation binding drift: ' + path);
+      }
+      const matrix = readBoundedJson(resolve(root, 'governance/parameter-matrix-v090.json')).value;
+      const fields = readBoundedJson(resolve(root, 'governance/lifecycle-contract-v090.json'));
+      const environment = readBoundedJson(resolve(root, 'governance/environment-contract-v090.json')).value;
+      if(environment.packageLockDigest !== governanceDigest(readBoundedJson(resolve(root,'package-lock.json')).bytes))fail('Pinned package lock changed');
+      const cases = list(matrix.caseInstances).map(object);
+      if (matrix.schema !== 'runtime-v090-parameter-matrix/v1' || matrix.status !== 'FROZEN_IMPLEMENTATION_BASELINE' || matrix.sourceAcceptanceDigest !== acceptanceDigest || matrix.fieldContractDigest !== governanceDigest(fields.bytes)) fail('Parameter matrix binding mismatch');
+      if (matrix.count !== cases.length || new Set(cases.map(c => text(c.caseInstanceId))).size !== cases.length) fail('Parameter denominator mismatch');
+      for (const c of cases) {
+        const id = text(c.scenario);
+        if (!numbered('E', 22).includes(id) || c.required !== true || c.phase !== (['E21','E22'].includes(id) ? 'POST_RELEASE' : 'PRE_RELEASE')) fail('Invalid required parameter instance');
+        if (c.collector !== 'tests/acceptance/v090/' + id.toLowerCase() + '.test.mjs') fail('Parameter collector mismatch');
+        text(c.expected);
+      }
+      const caseIds=new Set(cases.map(c=>text(c.caseInstanceId)));
+      for(const scenario of list(acceptance.value.scenarios).map(object)) {
+        const id=text(scenario.id);
+        if(!caseIds.has(id+'.journey'))fail('Primary scenario missing from parameters');
+        for(let i=0;i<list(scenario.requiredVariants??[]).length;i++)if(!caseIds.has(id+'.variant.'+String(i+1).padStart(2,'0')))fail('Required scenario variant missing from parameters');
+      }
+      for(const key of ['extensions','closure','coverage'])for(const variant of list(acceptance.value[key]).map(object))for(const id of list(variant.mainCases??variant.cases).map(text))if(!caseIds.has(id+'.'+text(variant.id)))fail('Required EX/MC/CV parameter missing');
+      for (const field of list(fields.value.fields).map(object)) for (const provider of list(field.providers).map(text)) for (const fault of ['missing','invalid-value']) {
+        if (!cases.some(c => c.caseInstanceId === 'E03.field.' + provider + '.' + text(field.id) + '.' + fault)) fail('Required field case missing');
+      }
+    }
     sameIds(ids(roadmap.value.milestones), ['M0','M1','M2','M3','M4','M5','M6'], 'Roadmap milestones changed');
     sameIds(list(target.value.milestones).map(text), ['M0','M1','M2','M3','M4','M5','M6'], 'Target milestones changed');
     if (request.mode === 'check') return result('VALID', 'Scope and coverage structure are consistent; product results are not evaluated.');

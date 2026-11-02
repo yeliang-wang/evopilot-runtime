@@ -28,7 +28,8 @@ test('scope gate rejects drift, unbound milestones, unapproved files and release
   const dir = mkdtempSync(join(tmpdir(),'runtime-governance-'));
   try {
     mkdirSync(join(dir,'governance'));
-    for (const name of ['roadmap.json','target-v090.json','acceptance-v090.json']) writeFileSync(join(dir,'governance',name),readFileSync(join(root,'governance',name)));
+    for (const name of ['roadmap.json','target-v090.json','acceptance-v090.json','lifecycle-contract-v090.json','parameter-matrix-v090.json','environment-contract-v090.json']) writeFileSync(join(dir,'governance',name),readFileSync(join(root,'governance',name)));
+    writeFileSync(join(dir,'package-lock.json'),readFileSync(join(root,'package-lock.json')));
     const targetBytes=readFileSync(join(dir,'governance/target-v090.json'));
     const target=JSON.parse(targetBytes);
     const authorization=join(dir,'synthetic-test-authorization.json');
@@ -41,6 +42,12 @@ test('scope gate rejects drift, unbound milestones, unapproved files and release
     assert.equal(evaluateGovernance(dir,{...request,authorization:undefined}).status,'BLOCKED');
     assert.equal(evaluateGovernance(dir,{...request,intent:'any arbitrary new feature'}).status,'UNKNOWN');
     assert.equal(evaluateGovernance(dir,{mode:'release'}).status,'BLOCKED');
+    const matrixPath = join(dir,'governance/parameter-matrix-v090.json');
+    const matrixBytes = readFileSync(matrixPath);
+    const matrix = JSON.parse(matrixBytes); matrix.caseInstances.pop();
+    writeFileSync(matrixPath,JSON.stringify(matrix));
+    assert.equal(evaluateGovernance(dir,request).status,'DEVIATION');
+    writeFileSync(matrixPath,matrixBytes);
     writeFileSync(join(dir,'governance/roadmap.json'),readFileSync(join(dir,'governance/roadmap.json'),'utf8')+' ');
     assert.equal(evaluateGovernance(dir,request).status,'DEVIATION');
   } finally { rmSync(dir,{recursive:true,force:true}); }

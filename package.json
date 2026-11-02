@@ -49,6 +49,7 @@
   },
   "license": "Apache-2.0",
   "bin": {
+    "evopilot-runtime": "dist/server/cli.js",
     "evopilot-next-runtime": "dist/cli.js"
   },
   "devDependencies": {

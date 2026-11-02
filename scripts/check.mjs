@@ -50,6 +50,7 @@ const expected = {
   },
   "license": "Apache-2.0",
   "bin": {
+    "evopilot-runtime": "dist/server/cli.js",
     "evopilot-next-runtime": "dist/cli.js"
   },
   "devDependencies": {
@@ -90,7 +91,10 @@ export async function checkSource() {
   const pkg = JSON.parse(await readFile(resolve(ROOT, 'package.json'), 'utf8'));
   for (const [key, value] of Object.entries(expected)) assert.deepEqual(key === 'dependencies' ? pkg[key] ?? {} : pkg[key], value, key);
   for (const key of ['peerDependencies', 'optionalDependencies']) assert.deepEqual(pkg[key] ?? {}, {});
-  assert.deepEqual(pkg.bin, { 'evopilot-next-runtime': 'dist/cli.js' });
+  assert.deepEqual(pkg.bin, { 'evopilot-next-runtime': 'dist/cli.js', 'evopilot-runtime': 'dist/server/cli.js' });
+  const serviceCliPath=resolve(ROOT,pkg.bin['evopilot-runtime']);
+  assert((await readFile(serviceCliPath,'utf8')).startsWith('#!/usr/bin/env node\n'));
+  assert((await lstat(serviceCliPath)).isFile() && ((await lstat(serviceCliPath)).mode & 0o111)===0o111);
   const cliPath = resolve(ROOT, pkg.bin['evopilot-next-runtime']);
   assert((await readFile(cliPath, 'utf8')).startsWith('#!/usr/bin/env node\n'), 'CLI must start with its Node shebang');
   const cliStat = await lstat(cliPath);
@@ -176,6 +180,7 @@ export async function checkSource() {
     assert.doesNotMatch(source, /\bimport\s*\(|\brequire\s*\(|\beval\s*\(|\/Users\/|\/home\/|EVOPILOT_HARNESS_HOME|defaultHarnessHome|\.evopilot-harness|\bprocess\s*(?:\.\s*(?:env|cwd|chdir)|\[)|\bglobalThis\s*(?:\.|\[)|\bm0\//);
     for (const specifier of specifiers(source)) {
       if (isBuiltin(specifier)) continue;
+      if (path.endsWith('/src/server/mcp.ts') && ['@modelcontextprotocol/sdk/server/index.js','@modelcontextprotocol/sdk/server/streamableHttp.js','@modelcontextprotocol/sdk/types.js'].includes(specifier)) continue;
       if (specifier === 'yaml' && (path.endsWith('/src/asset-sources.mjs') || PRODUCT === 'ontology' && path.includes('/src/compat/'))) continue;
       if (PRODUCT === 'ontology' && path.includes('/src/compat/') && specifier === 'ajv/dist/2020.js') continue;
       assert(specifier.startsWith('.'), 'Undeclared import: ' + specifier);

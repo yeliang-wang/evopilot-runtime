@@ -6,7 +6,7 @@
   "acceptanceDigest": "612f78eefdeae8af3f8170656cc6d31a7208ea91b7415a86ba49f2720091b023",
   "sourceBaseline": "cbf46c713f5448a4feacf7990be09913c3fa4cf6",
   "approvedPlanDigest": "6b7effbfbd3be312b50bcffef3cffc29b7d3ae2aa5b85cadccf8d86885cbadb3",
-  "status": "IMPLEMENTATION_AUTHORIZED_M0_IN_PROGRESS",
+  "status": "IMPLEMENTATION_AUTHORIZED_M1_BOUND",
   "milestones": [
     "M0",
     "M1",
@@ -30,9 +30,37 @@
         "scripts/check.mjs",
         "tests/governance.test.mjs",
         "package.json",
-        "package-lock.json"
+        "package-lock.json",
+        "governance/lifecycle-contract-v090.json",
+        "governance/parameter-matrix-v090.json",
+        "governance/environment-contract-v090.json"
       ],
       "purpose": "Formalize the approved architecture/Roadmap/Target and audit-complete acceptance; prepare environments and exact parameter bindings."
+    },
+    "M1": {
+      "purpose": "Independent local strict TypeScript service foundation: one writer, protected authentication/scope, bounded HTTP/MCP read transport, durable state and recovery. No release, daily cutover or business Run implied.",
+      "paths": [
+        "src/server/errors.ts",
+        "src/server/security.ts",
+        "src/server/store.ts",
+        "src/server/http.ts",
+        "src/server/mcp.ts",
+        "src/server/cli.ts",
+        "tests/e2e/service-http-v090.test.mjs",
+        "tests/fixtures/service-v090-worker.mjs",
+        "scripts/check.mjs",
+        "scripts/build.mjs",
+        "package.json",
+        "package-lock.json"
+      ],
+      "prerequisiteBindings": [
+        "governance/lifecycle-contract-v090.json",
+        "governance/parameter-matrix-v090.json",
+        "governance/environment-contract-v090.json"
+      ],
+      "laterAcceptanceObligations": [
+        "Actual product Host/plugin and full cross-component/CI/browser E2E are still required under M3-M6; readiness probes do not satisfy them."
+      ]
     }
   },
   "beforeProductImplementation": [
@@ -43,5 +71,10 @@
   ],
   "acceptanceStatus": "NOT_EVALUATED",
   "releaseAuthorized": false,
-  "dailyInstallationAuthorized": false
+  "dailyInstallationAuthorized": false,
+  "implementationBindings": {
+    "governance/lifecycle-contract-v090.json": "5b18d80a73ec6ce249254aef2f78318aaac3c797d9b39d113993a4a66de966a1",
+    "governance/parameter-matrix-v090.json": "27e01ab86483a5adf379f15c8987a4ba40017b222a5b31b699a5246143d43367",
+    "governance/environment-contract-v090.json": "4ab0aaaf490ed3aa631a723b9b888c26aa36092995707cc43e36332d538f2825"
+  }
 }

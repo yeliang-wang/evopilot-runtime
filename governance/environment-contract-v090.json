@@ -1,0 +1,49 @@
+{
+  "schema": "runtime-v090-environment-contract/v1",
+  "platform": "darwin-arm64",
+  "node": "24.14.0",
+  "hostVersion": "0.166.0-alpha.5.1",
+  "actualHostHttpProtocol": "2025-06-18",
+  "httpProtocolCases": [
+    "2025-06-18",
+    "2025-11-25"
+  ],
+  "sdk": "@modelcontextprotocol/sdk@1.32.2",
+  "packageLockDigest": "a22bc0792dbf947fc1357f3d97ff0799ddd13ae14850d5096bc3f1e6a3139d71",
+  "platformBranches": [
+    "github-actions",
+    "gitlab-ci"
+  ],
+  "ownerPackages": {
+    "ontology": {
+      "version": "0.8.3",
+      "filesDigest": "f964dbcf37b0537d771320675b51704f836ebd7485a0a0fc2787906c11586767",
+      "manifestFile": "ontology-published-fixture-files.json",
+      "usage": "Published public package APIs and synthetic distributed fixture inputs only; no private project assets or sibling source imports."
+    },
+    "harness": {
+      "version": "0.8.3",
+      "filesDigest": "71a2f0870c7ee604d8de17489d5074db2bf86e6656f2143acaaefb290f2e3e9b",
+      "manifestFile": "harness-published-fixture-files.json",
+      "usage": "Published public package APIs and synthetic distributed fixture inputs only; no private project assets or sibling source imports."
+    }
+  },
+  "roles": {
+    "reader": [
+      "read"
+    ],
+    "editor": [
+      "read",
+      "draft.write"
+    ],
+    "activator": [
+      "read",
+      "draft.write",
+      "definition.activate"
+    ]
+  },
+  "executionAuthority": "Separate exact Target/Run/release decisions, not implied by a role or definition activation.",
+  "scope": "Every credential/principal/binding belongs to an explicit workspace and project.",
+  "privateEnvironmentDigest": "8fde2a52575fdf214265c5fb7a5fc82db817d728d3c9dda4255f4f6cdd19d1a9",
+  "productAcceptance": "NOT_EVALUATED"
+}
