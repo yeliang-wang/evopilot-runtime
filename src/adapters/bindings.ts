@@ -21,6 +21,8 @@ import { releaseDocuments } from './documents.js';
 import type { RuntimeStore } from '../server/store.js';
 import type { StageAdapter, StageServices } from '../lifecycle/execution.js';
 import { createReleaseStageAdapter } from './release-stages.js';
+import { publicationTarget } from './distribution.js';
+import { createPublicationStageAdapter } from './publication-stage.js';
 import type { PreparationValidator } from '../lifecycle/preparation.js';
 import { createPlanStageAdapter, createScopeStageAdapter, registeredPreparation } from './preparation-stages.js';
 import { registeredImplementationReview, type ImplementationReviewBindings } from '../lifecycle/implementation-review.js';
@@ -86,7 +88,7 @@ export function validateResourceDefinition(resource:ResourceRegistration):void{
     case 'authority-policy':fields(['principalIds','exactSubjectRequired']);strings(d.principalIds,128).forEach(slug);yes('exactSubjectRequired');break;
     case 'decision-source':fields(['backend','decisionTypes']);fixed('backend','runtime');if(canonical([...strings(d.decisionTypes)].sort())!==canonical(['execution','release']))reject('INVALID_RESOURCE','Execution and release decisions must remain separate');break;
     case 'evidence-policy':fields(['requireAll','requireCurrent','allowSkipped','documentation']);yes('requireAll');yes('requireCurrent');fixed('allowSkipped',false);releaseDocuments(d.documentation);break;
-    case 'channel':fields(['platformRef','channel']);ref(d.platformRef);if(!['github-release','gitlab-release'].includes(String(d.channel)))reject('INVALID_RESOURCE','Unsupported publication channel');break;
+    case 'channel':fields(['platformRef','channel','publication']);ref(d.platformRef);if(!['github-release','gitlab-release'].includes(String(d.channel)))reject('INVALID_RESOURCE','Unsupported publication channel');publicationTarget(d.publication,d.channel==='github-release'?'github':'gitlab');break;
     case 'readback':fields(['verifyDownloadedDigests','requireExactCandidate']);yes('verifyDownloadedDigests');yes('requireExactCandidate');break;
     case 'followup':fields(['onGap','autoExecute']);fixed('onGap','create-target');fixed('autoExecute',false);break;
     case 'delivery':fields(['mode'],['platformRef','directory']);if(d.mode==='distribution'){ref(d.platformRef);if(d.directory!==undefined)reject('INVALID_RESOURCE','Distribution uses the registered channel');}else if(['local-install','approved-deployment'].includes(String(d.mode))){directory(d.directory);if(d.platformRef!==undefined)reject('INVALID_RESOURCE','Installation uses the registered destination');}else reject('INVALID_RESOURCE','Unsupported delivery mode');break;
@@ -290,7 +292,7 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
   // Owner outages block dependent admission, never service/history availability.
   return{provider,preparation:registeredPreparation(configPath,workspaceId),implementationReview:registeredImplementationReview(configPath,workspaceId,connections),executor(store,services){
     if(store.workspaceId!==workspaceId)reject('INTEGRATION_SCOPE','Stage executor must share the service workspace',403);
-    let stages:ReturnType<typeof createImplementationStageAdapters>|undefined,scope:StageAdapter|undefined,plan:StageAdapter|undefined,release:StageAdapter|undefined;
+    let stages:ReturnType<typeof createImplementationStageAdapters>|undefined,scope:StageAdapter|undefined,plan:StageAdapter|undefined,release:StageAdapter|undefined,publication:StageAdapter|undefined;
     async function current(signal:AbortSignal,stageId:string):Promise<StageAdapter>{
       const config=await ensure(signal),toolchain=readRegisteredNativeToolchain(config);
       if(stageId==='scope'){scope??=createScopeStageAdapter(store,configPath,connections);return scope;}
@@ -300,6 +302,7 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
         if(!services.authorityPolicy)reject('AUTHORITY_POLICY_UNAVAILABLE','Release admission requires the service authority policy',409);
         release??=createReleaseStageAdapter(store,configPath,{platform:connections.platform,verification:stages.ci},services.releaseAuthority,services.authorityPolicy);return release;
       }
+      if(stageId==='publication'){publication??=createPublicationStageAdapter(store,configPath,connections,services.releaseAuthority);return publication;}
       return stageId==='implementation'?stages.implementation:stages.ci;
     }
     return{

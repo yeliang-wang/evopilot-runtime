@@ -9,6 +9,7 @@ import { validatePlatformRegistration, readIntegrationConfiguration, configuredP
 import { githubClient } from '../../dist/adapters/github.js';
 import { gitlabClient } from '../../dist/adapters/gitlab.js';
 import { ciInputs, ciRunTitle, ciSourceRef, fileBytes, platformReader } from '../../dist/adapters/platforms.js';
+import { candidateDigest } from '../../dist/lifecycle/instance.js';
 import { syntheticReadinessMaterial, lifecycleBindingExample } from '../fixtures/adapters-v090.mjs';
 import { nativeSha256 } from '../../vendor/compatibility/v1/native.mjs';
 import { READINESS_STANDARD_DIGEST, noReconstruction } from '../../vendor/compatibility/usability/v2/contract.mjs';
@@ -261,7 +262,10 @@ for(const provider of ['github','gitlab']){
   }));
   test(provider+' rejects missing execution/release authority and mismatched requests before network',()=>withDispatch(provider,async f=>{
     await assert.rejects(()=>f.client.dispatch(f.request,async()=>actor,AbortSignal.timeout(5000)),{code:'FORBIDDEN'});
-    await assert.rejects(()=>f.client.dispatch({...f.request,stageId:'publication'},async()=>ciActor,AbortSignal.timeout(5000)),{code:'FORBIDDEN'});
+    const manifest={schema:'runtime-candidate/v1',version:'0.9.0-preview.1',profile:'candidate-verification',sourceDigest:valueDigest({provider,repositoryId:f.p.repositoryId,commit}),buildDigest:valueDigest('synthetic build'),artifacts:[{name:'software.tgz',bytes:100,digest:valueDigest('synthetic bytes')}]};
+    const publication={...f.request,stageId:'publication',candidateDigest:candidateDigest(manifest),candidateInput:{schema:'runtime-ci-candidate-input/v1',manifest,archive:{provider,repositoryId:f.p.repositoryId,runId:'9',artifactId:'10',jobId:provider==='github'?null:'10',archiveDigest:valueDigest('synthetic archive'),archiveBytes:100}},publicationInput:{schema:'runtime-publication-input/v1',target:{tagPrefix:'v',prerelease:true,packageName:provider==='github'?null:'software'},tag:'v'+manifest.version,releaseMaterialDigest:valueDigest('synthetic material'),releaseAuthorityRef:'authority:'+valueDigest('synthetic authority'),notes:[{path:'CHANGELOG.md',digest:valueDigest('synthetic notes'),bytes:10}]}};
+    await assert.rejects(()=>f.client.dispatch(publication,async()=>ciActor,AbortSignal.timeout(5000)),{code:'FORBIDDEN'});
+    await assert.rejects(()=>f.client.dispatch({...f.request,stageId:'publication'},async()=>ciActor,AbortSignal.timeout(5000)),{code:'PUBLICATION_INPUT'});
     for(const changes of [{projectId:'beta'},{bindingDigest:'sha256:'+'e'.repeat(64)},{stageId:'arbitrary-code'},{requestId:'../escape'},{extra:'input'}])await assert.rejects(()=>f.client.dispatch({...f.request,...changes},f.permit,AbortSignal.timeout(5000)));
     await assert.rejects(()=>f.client.dispatch({...f.request,requestedAt:'2020-01-01',deadlineAt:'2020-01-02'},f.permit,AbortSignal.timeout(5000)),{code:'CI_DISPATCH_EXPIRED'});assert.equal(f.calls.length,0);
   }));

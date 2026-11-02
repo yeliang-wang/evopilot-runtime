@@ -52,7 +52,7 @@ export function lifecycleBindingExample({root,workspaceId,projectId,platform,cre
     'config.release-decision.authorityPolicyRef':{kind:'authority-policy',principalIds:['fixture'],exactSubjectRequired:true},
     'config.release-decision.decisionSourceRef':{kind:'decision-source',backend:'runtime',decisionTypes:['execution','release']},
     'config.release-decision.evidencePolicyRef':{kind:'evidence-policy',requireAll:true,requireCurrent:true,allowSkipped:false,documentation:[{role:'release-notes',path:'RELEASE.md'},{role:'migration',path:'MIGRATION.md'},{role:'readme',path:'README.md'},{role:'technical',path:'docs/technical.md'}]},
-    'config.publication.channelTargetRef':{kind:'channel',platformRef,channel:data.config.publication.channel},
+    'config.publication.channelTargetRef':{kind:'channel',platformRef,channel:data.config.publication.channel,publication:{tagPrefix:'v',prerelease:true,packageName:platform.provider==='github'?null:'runtime'}},
     'config.publication.publishWorkflowRef':{kind:'workflow',platformRef,purpose:'publish',outputContract:'runtime-ci/v1'},
     'config.publication.readbackPolicyRef':{kind:'readback',verifyDownloadedDigests:true,requireExactCandidate:true},
     'config.publication.recoveryPolicyRef':recovery,

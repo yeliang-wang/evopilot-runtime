@@ -154,7 +154,11 @@
         "src/adapters/documents.ts",
         "src/adapters/release-stages.ts",
         "tests/e2e/documents-v090.test.mjs",
-        "tests/e2e/release-stages-v090.test.mjs"
+        "tests/e2e/release-stages-v090.test.mjs",
+        "src/adapters/distribution.ts",
+        "src/adapters/publication-stage.ts",
+        "tests/e2e/distribution-v090.test.mjs",
+        "tests/e2e/publication-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

@@ -7,6 +7,7 @@ import { containsInlineSecret } from '../lifecycle/compiler.js';
 import { MAX_ARCHIVE_BYTES, validateCandidateInput, type CandidateInput } from './artifacts.js';
 import type { SourceRequest, SourceObservation } from './source.js';
 import type { ReleaseDocument, DocumentObservation } from './documents.js';
+import { validatePublicationInput, type PublicationInput, type DistributionRequest, type DistributionObservation } from './distribution.js';
 
 /** Trusted process credential resolution; never provided by a lifecycle/API. */
 export type PlatformCredentialReader=(binding:PlatformRegistration,actor:Principal,signal:AbortSignal)=>Promise<string>;
@@ -27,6 +28,7 @@ export interface PlatformJobObservation {
 }
 export interface PlatformRevisionReadiness extends PlatformReadiness {sourceSelection:'exact-commit';branchHeadCommit:string;}
 export interface PlatformClient {
+  distribution(actor:Principal,request:DistributionRequest,signal:AbortSignal):Promise<DistributionObservation>;
   documents(actor:Principal,request:{commit:string;documents:ReleaseDocument[]},signal:AbortSignal):Promise<DocumentObservation>;
   source(actor:Principal,request:SourceRequest,signal:AbortSignal):Promise<SourceObservation>;
   readiness(actor:Principal,signal:AbortSignal):Promise<PlatformReadiness>;
@@ -47,6 +49,7 @@ export interface PlatformRunRequest {
   commit:string; workflowDigest:string; inputDigest:string; stageId:string;
   candidateDigest:string|null; requestedAt:string; deadlineAt:string;
   candidateInput?:CandidateInput;
+  publicationInput?:PublicationInput;
 }
 export type PlatformExecutionPermit=(request:PlatformRunRequest)=>Promise<Principal>;
 export interface PlatformRunObservation {
@@ -56,12 +59,14 @@ export interface PlatformRunObservation {
   observedAt:string; factsDigest:string; artifactsVerified:false; lifecycleAcceptance:false;
 }
 export function validateRunRequest(value:PlatformRunRequest,binding:PlatformRegistration):PlatformRunRequest{
-  const r=record(value);exact(r,['schema','requestId','projectId','bindingDigest','commit','workflowDigest','inputDigest','stageId','candidateDigest','requestedAt','deadlineAt'],['candidateInput']);
+  const r=record(value);exact(r,['schema','requestId','projectId','bindingDigest','commit','workflowDigest','inputDigest','stageId','candidateDigest','requestedAt','deadlineAt'],['candidateInput','publicationInput']);
   if(r.schema!=='runtime-ci-request/v1'||r.projectId!==binding.projectId||r.bindingDigest!==valueDigest(binding)||!/^[-a-z0-9]{1,64}$/.test(string(r.requestId,64)))reject('CI_REQUEST_MISMATCH','CI request does not match this exact registered scope');
   commitId(r.commit);for(const k of ['workflowDigest','inputDigest'])if(!/^sha256:[a-f0-9]{64}$/.test(string(r[k],71)))reject('CI_REQUEST_MISMATCH','CI request must pin exact workflow and stage input');
   if(r.candidateDigest!==null&&!/^sha256:[a-f0-9]{64}$/.test(string(r.candidateDigest,71)))reject('CI_REQUEST_MISMATCH','CI candidate must be exact');
   if(r.stageId==='verification'&&r.candidateDigest===null||r.candidateDigest!==null&&!value.candidateInput)reject('CI_CANDIDATE_INPUT_REQUIRED','Candidate verification requires its original archive and manifest',409);
   if(value.candidateInput){if(r.candidateDigest===null)reject('CI_CANDIDATE_INPUT_INVALID','Candidate input requires an existing candidate',409);validateCandidateInput(value.candidateInput,value,binding.provider,binding.repositoryId);}
+  if(r.stageId==='publication'&&!value.publicationInput)reject('PUBLICATION_INPUT','Publication requires its exact reviewed channel and documents',409);
+  if(value.publicationInput)validatePublicationInput(value.publicationInput,value,binding.provider);
   if(!/^(?:scope|plan|implementation|candidate|verification|release-decision|publication|closure|project\.[a-z][a-z0-9-]{0,62})$/.test(string(r.stageId,80))||!Number.isFinite(Date.parse(string(r.requestedAt,64)))||!Number.isFinite(Date.parse(string(r.deadlineAt,64)))||Date.parse(String(r.deadlineAt))<=Date.parse(String(r.requestedAt))||containsInlineSecret(canonical(r)))reject('CI_REQUEST_MISMATCH','Invalid exact CI stage/time metadata');
   return Object.freeze({...value});
 }
@@ -69,7 +74,7 @@ export function validateRunRequest(value:PlatformRunRequest,binding:PlatformRegi
  * release. Creation and dispatch are both covered by the retained action plan. */
 export const ciSourceRef=(r:PlatformRunRequest):string=>'evopilot-runtime/'+r.requestId;
 export const ciRunTitle=(r:PlatformRunRequest):string=>'evopilot:'+r.requestId+':'+r.inputDigest;
-export const ciInputs=(r:PlatformRunRequest):Record<string,string>=>({runtime_request_id:r.requestId,runtime_input_digest:r.inputDigest,runtime_source_commit:r.commit,runtime_stage:r.stageId,runtime_candidate_digest:r.candidateDigest??'none',runtime_workflow_digest:r.workflowDigest,runtime_binding_digest:r.bindingDigest,runtime_candidate_input:r.candidateInput?canonical(r.candidateInput):'none'});
+export const ciInputs=(r:PlatformRunRequest):Record<string,string>=>({runtime_request_id:r.requestId,runtime_input_digest:r.inputDigest,runtime_source_commit:r.commit,runtime_stage:r.stageId,runtime_candidate_digest:r.candidateDigest??'none',runtime_workflow_digest:r.workflowDigest,runtime_binding_digest:r.bindingDigest,runtime_candidate_input:r.candidateInput?canonical(r.candidateInput):'none',...(r.publicationInput?{runtime_publication_input:canonical(r.publicationInput)}:{})});
 export function validateSourceRef(ref:string,binding:PlatformRegistration):void{if(ref!==binding.defaultBranch&&!/^evopilot-runtime\/[-a-z0-9]{1,64}$/.test(ref))reject('CI_REF_SCOPE','Only the registered branch or a request-owned source ref is supported');}
 export function aggregateJobs(jobs:PlatformJobObservation[],providerStatus:string):PlatformJobObservation['status']{
   if(jobs.some(j=>j.status==='FAILED')||['failure','failed','cancelled','canceled','timed_out','skipped','neutral'].includes(providerStatus))return'FAILED';
@@ -147,18 +152,20 @@ export function platformReader(registration:PlatformRegistration,credentials:Pla
   }
   async function download(actor:Principal,suffix:string,signal:AbortSignal):Promise<Buffer>{
     authorize(actor,binding.projectId,'read');if(Date.parse(binding.expiresAt)<=Date.now())reject('PLATFORM_NOT_REGISTERED','Platform registration has expired',409);
-    if(!(binding.provider==='github'?/^\/actions\/artifacts\/[1-9][0-9]{0,19}\/zip$/:/^\/jobs\/[1-9][0-9]{0,19}\/artifacts$/).test(suffix))reject('INVALID_PLATFORM_ROUTE','Only an exact artifact identity can be downloaded');
+    const releaseAsset=binding.provider==='github'&&/^\/releases\/assets\/[1-9][0-9]{0,19}$/.test(suffix),packageFile=binding.provider==='gitlab'&&/^\/packages\/generic\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\/[A-Za-z0-9](?:[A-Za-z0-9._-]|%2B){0,127}\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(suffix)&&!suffix.includes('..');
+    if(!releaseAsset&&!packageFile&&!(binding.provider==='github'?/^\/actions\/artifacts\/[1-9][0-9]{0,19}\/zip$/:/^\/jobs\/[1-9][0-9]{0,19}\/artifacts$/).test(suffix))reject('INVALID_PLATFORM_ROUTE','Only an exact provider artifact or registered distribution file can be downloaded');
     const controller=AbortSignal.any([signal,AbortSignal.timeout(30000)]);
     try{
       const token=await bounded(()=>credentials(binding,actor,controller),AbortSignal.any([controller,AbortSignal.timeout(10000)]));
       if(!/^[A-Za-z0-9_.-]{16,4096}$/.test(token))reject('UNSAFE_PLATFORM_CREDENTIAL','Invalid scoped credential',503);
-      const headers:Record<string,string>=binding.provider==='github'?{authorization:'Bearer '+token,'x-github-api-version':'2022-11-28'}:{'private-token':token};
+      const headers:Record<string,string>=binding.provider==='github'?{authorization:'Bearer '+token,'x-github-api-version':'2022-11-28',...(releaseAsset?{accept:'application/octet-stream'}:{})}:{'private-token':token};
       controller.throwIfAborted();let response=await fetch(origin+prefix+suffix,{headers,redirect:'manual',signal:controller});
       if(response.status===302){
         const location=response.headers.get('location')??'';await response.body?.cancel();let url:URL;try{url=new URL(location);}catch{return reject('CI_ARTIFACT_REDIRECT','Artifact redirect is not a valid provider location',502);}
         // GitHub's authenticated API returns a short-lived signed blob URL.
         // Never forward a credential, echo that URL or follow another redirect.
-        if(binding.provider!=='github'||location.length>16384||url.protocol!=='https:'||url.port||url.username||url.password||url.hash||!(/^[a-z0-9-]+\.blob\.core\.windows\.net$/.test(url.hostname)||/^(?:[a-z0-9-]+\.)?actions\.githubusercontent\.com$/.test(url.hostname)))reject('CI_ARTIFACT_REDIRECT','Artifact redirect leaves the supported provider storage boundary',502);
+        const trustedStorage=releaseAsset?url.hostname==='release-assets.githubusercontent.com':/^[a-z0-9-]+\.blob\.core\.windows\.net$/.test(url.hostname)||/^(?:[a-z0-9-]+\.)?actions\.githubusercontent\.com$/.test(url.hostname);
+        if(binding.provider!=='github'||location.length>16384||url.protocol!=='https:'||url.port||url.username||url.password||url.hash||!trustedStorage)reject('CI_ARTIFACT_REDIRECT','Artifact redirect leaves the supported provider storage boundary',502);
         controller.throwIfAborted();response=await fetch(url,{redirect:'error',signal:controller});
       }
       if(response.status!==200){await response.body?.cancel();reject('CI_ARTIFACT_UNAVAILABLE','Exact artifact download did not succeed',409);}
