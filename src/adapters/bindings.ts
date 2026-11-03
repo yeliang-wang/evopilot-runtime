@@ -230,14 +230,14 @@ export function createRegisteredBindings(configPath:string,workspaceId:string,co
         for(const requirement of list(action.requirementRefs,64))facts.push(await inspectResource(requirement,'extension.requirement'));
         facts.push(await inspectResource(action.evidenceMappingRef,'extension.mapping'));
         for(const [key,v] of Object.entries(parameters))facts.push(await inspectResource(v,key==='checkRef'?'extension.check':key==='reviewRef'?'extension.review':'extension.workflow'));
-        if(['runtime.check.ontology','runtime.check.harness','runtime.check.artifact','runtime.review.scope'].includes(String(action.actionRef))){
-          const reviewing=action.actionRef==='runtime.review.scope',kind=action.actionRef==='runtime.check.ontology'?'ontology':'harness',node=definition.nodes.find(n=>path==='extensions.'+n.id)!;
-          const check=reviewing?null:resource(parameters.checkRef,'extension.check'),required=list(action.requirementRefs,64).map(ref=>resource(ref,'extension.requirement'));
+        if(['runtime.check.ontology','runtime.check.harness','runtime.check.artifact','runtime.review.scope','runtime.operation.ci-prepare'].includes(String(action.actionRef))){
+          const reviewing=action.actionRef==='runtime.review.scope',preparing=action.actionRef==='runtime.operation.ci-prepare',kind=action.actionRef==='runtime.check.ontology'?'ontology':'harness',node=definition.nodes.find(n=>path==='extensions.'+n.id)!;
+          const check=reviewing||preparing?null:resource(parameters.checkRef,'extension.check'),required=list(action.requirementRefs,64).map(ref=>resource(ref,'extension.requirement'));
           if(check&&(check.definition.owner!==kind||required.some(r=>r.definition.owner!==kind)||!required.some(r=>same(r.definition,check.definition))))reject('EXTENSION_MAPPING','Extension checks must use their registered owner and required criterion');
           const local=resource(action.evidenceMappingRef,'extension.mapping').definition,global=resource(atPath(definition.semantic,'config.verification.evidenceMappingRef'),'config.verification.evidenceMappingRef').definition;
           const rows=(local.rows as Record<string,unknown>[]).filter(r=>r.stage===node.id),globalRows=(global.rows as Record<string,unknown>[]).filter(r=>r.stage===node.id),sorted=(rows:Record<string,unknown>[])=>[...rows].sort((a,b)=>String(a.checkId).localeCompare(String(b.checkId)));
           if(rows.length!==node.checks.length||!same(rows.map(r=>r.checkId).sort(),[...node.checks].sort())||!same(sorted(rows),sorted(globalRows)))reject('EXTENSION_MAPPING','Local and global extension mappings must cover the same required checks');
-          for(const r of required){const row=rows.find(row=>row.checkId===r.ref)!;if(row.source!==(reviewing?'decision':'owner-receipt')||row.owner!==r.definition.owner||row.criterionId!==r.definition.criterionId||!same([...(row.variantIds as string[])].sort(),[...(r.definition.variantIds as string[])].sort()))reject('EXTENSION_MAPPING','Each extension criterion must map to its exact fixed action evidence source');}
+          for(const r of required){const row=rows.find(row=>row.checkId===r.ref)!;if(row.source!==(reviewing?'decision':preparing?'ci-artifact':'owner-receipt')||row.owner!==r.definition.owner||row.criterionId!==r.definition.criterionId||!same([...(row.variantIds as string[])].sort(),[...(r.definition.variantIds as string[])].sort()))reject('EXTENSION_MAPPING','Each extension criterion must map to its exact fixed action evidence source');}
         }
         return{value:facts.map(f=>f.value),expiresAt:new Date(Math.min(...facts.map(f=>Date.parse(f.expiresAt)))).toISOString()};
       }
@@ -310,7 +310,7 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
   };
   const extensionReview=(store:RuntimeStore):ExtensionReviewBindings=>{
     let stages:ReturnType<typeof createImplementationStageAdapters>|undefined;
-    const review=registeredExtensionReview(store,configPath,{...connections,async source(instance,_stage,actor,signal){const config=await ensure(signal),toolchain=readRegisteredNativeToolchain(config);stages??=createImplementationStageAdapters(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest});return stages.source(instance,actor);}});
+    const review=registeredExtensionReview(store,configPath,{...connections,async source(instance,stage,actor,signal){const config=await ensure(signal),toolchain=readRegisteredNativeToolchain(config);stages??=createImplementationStageAdapters(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest});return stages.source(instance,actor,stage);}});
     return{...review,async facts(instance,id,actor,signal){await ensure(signal);return review.facts(instance,id,actor,signal);}};
   };
   // Owner outages block dependent admission, never service/history availability.
@@ -324,7 +324,8 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
       if(stageId==='plan'){plan??=createPlanStageAdapter(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest});return plan;}
       stages??=createImplementationStageAdapters(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest});
       if(instance.definition.nodes.find(n=>n.id===stageId)?.action?.actionRef==='runtime.review.scope'){if(!services.extensionReviews)reject('EXTENSION_REVIEW_UNAVAILABLE','Same service review workflow is required',409);return services.extensionReviews.adapter;}
-      if(stageId.startsWith('project.')){nativeExtension??=createNativeExtensionStageAdapter(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest,source:async(instance,_stage,actor,signal)=>{signal.throwIfAborted();return stages!.source(instance,actor);}});return nativeExtension;}
+      if(instance.definition.nodes.find(n=>n.id===stageId)?.action?.actionRef==='runtime.operation.ci-prepare')return stages.ci;
+      if(stageId.startsWith('project.')){nativeExtension??=createNativeExtensionStageAdapter(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest,source:async(instance,stage,actor,signal)=>{signal.throwIfAborted();return stages!.source(instance,actor,stage);}});return nativeExtension;}
       if(stageId==='release-decision'){
         if(!services.authorityPolicy)reject('AUTHORITY_POLICY_UNAVAILABLE','Release admission requires the service authority policy',409);
         release??=createReleaseStageAdapter(store,configPath,{platform:connections.platform,verification:stages.ci},services.releaseAuthority,services.authorityPolicy);return release;

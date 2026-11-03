@@ -11,6 +11,7 @@ import { readReleaseMaterial } from '../adapters/release-stages.js';
 import { readPublicationEvidence } from '../adapters/publication-stage.js';
 import {readClosureEvidence} from '../adapters/closure-stage.js';
 import {EXTENSION_REVIEW_ADAPTER_ID,readExtensionReviewEvidence,type ExtensionReviewService} from './extension-review.js';
+import {CI_PREPARATION_ADAPTER_ID,readCiPreparationEvidence} from '../adapters/ci-preparation.js';
 import {readExtensionEvidence} from '../adapters/extension-stages.js';
 import {readVerificationFeedbackForRequest} from '../adapters/stage-feedback.js';
 import type { AuthorityPolicyProvider } from '../adapters/authority.js';
@@ -180,7 +181,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
   function read(actor:Principal,projectId:string,operation:string,input:Record<string,unknown>):unknown{
     authorize(actor,projectId,'read');
     if(operation==='lifecycle.verification.feedback.read'){exact(input,['stageRequestId']);return{event:readVerificationFeedbackForRequest(store,actor,request(projectId,string(input.stageRequestId))),historical:true,feedbackDelivered:false,releaseAuthorized:false};}
-    if(operation==='lifecycle.extension.evidence.read'){exact(input,['stageRequestId']);const r=request(projectId,string(input.stageRequestId));return r.plan.adapterId===EXTENSION_REVIEW_ADAPTER_ID?readExtensionReviewEvidence(store,r):readExtensionEvidence(store,r);}
+    if(operation==='lifecycle.extension.evidence.read'){exact(input,['stageRequestId']);const r=request(projectId,string(input.stageRequestId));return r.plan.adapterId===EXTENSION_REVIEW_ADAPTER_ID?readExtensionReviewEvidence(store,r):r.plan.adapterId===CI_PREPARATION_ADAPTER_ID?readCiPreparationEvidence(store,r):readExtensionEvidence(store,r);}
     if(operation==='lifecycle.closure.evidence.read'){exact(input,['stageRequestId']);return readClosureEvidence(store,request(projectId,string(input.stageRequestId)));}
     if(operation==='lifecycle.publication.evidence.read'){exact(input,['stageRequestId']);return readPublicationEvidence(store,request(projectId,string(input.stageRequestId)));}
     if(operation==='lifecycle.release.evidence.read'){

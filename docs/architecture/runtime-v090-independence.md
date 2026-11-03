@@ -144,8 +144,10 @@ the fixed scope and plan stages and external Codex task handoff are also
 implemented. Reviewed implementation CI now composes the same native validators
 and supplies its verified source to candidate and verification stages. A bounded
 real GitLab probe has exercised scope through verification without seeded
-predecessors. CI preparation extensions, independent Host
-integration and full lifecycle acceptance remain M3 work.
+predecessors. Registered CI preparation extensions now retain source-changing
+outputs through native validation and candidate creation. Their actual workflow
+qualification, independent Host integration and full lifecycle acceptance remain
+M3–M5 work.
 Unconfigured adapters fail closed; synthetic regression adapters are test
 fixtures only and cannot certify real asset usability or final E2E. The two
 Dashboard pages, independent installed Expert/plugin, migration and complete
@@ -602,9 +604,10 @@ joins, owner failures, response loss, restart, mapping/source drift, project
 isolation and archive integrity; their synthetic providers and owner decisions
 are not final-candidate acceptance evidence.
 
-The remaining publisher-registered action `runtime.operation.ci-prepare` and
-preparation-generated source propagation remain implementation obligations. Unsupported actions fail
-closed; their presence in the compiler registry does not establish an executor.
+The publisher-registered action `runtime.operation.ci-prepare` uses the separate
+CI preparation path described below. Its workflow purpose, complete requirement
+mapping and both native owner evaluations are mandatory. Unsupported actions
+still fail closed; compiler registration alone does not establish an executor.
 
 ## Development project scope review
 
@@ -1126,7 +1129,27 @@ The deterministic source reducer selects only a consumer's dependency ancestors.
 Sequential operations must extend their exact predecessor evidence. Required
 parallel branches with different resulting commits block the join; identical
 commits combine every branch's evidence instead of choosing whichever finished
-first. The following candidate must bind the resolved final source. These typed
-contracts and reducer are implemented; wiring the retained preparation requests,
-owner evaluations, archive and stage executor remains in progress. Their source
-regressions and read-only GitLab probe do not establish final candidate acceptance.
+first. The following candidate must bind the resolved final source.
+
+The registered executor is limited to the `before-candidate` slot. It fixes the
+workflow, requirements, complete local/global CI evidence mapping, original
+preparation and predecessor outcomes before dispatch. It retains the original CI
+request, run, archive, independently observed output source and both native owner
+actions/receipts. Harness receives Runtime's exact input/output/source facts;
+CI cannot supply or replace that reserved observation. Native context binds the
+resulting tree and original requirements. A passing CI run alone cannot advance
+the lifecycle or create a candidate.
+
+Lost responses reconcile the same original request and native actions. Completed
+source proofs are usable only after the original stage outcome and every
+required CI/native result pass. Later artifact checks inspect every consumed
+preparation archive; configured scope reviews use their exact resulting source.
+Closure retains the original run, source proof, archive and native receipts.
+Missing or corrupt evidence blocks downstream use instead of falling back to
+the original implementation commit. HTTP and MCP read the same retained evidence.
+
+Source regressions cover changed/unchanged output, response loss, restart,
+sequential/parallel preparation, native input mismatch and full closure with
+downstream checks/reviews. Their synthetic providers and the separate read-only
+GitLab probe do not establish actual source-changing workflow qualification or
+final candidate acceptance.

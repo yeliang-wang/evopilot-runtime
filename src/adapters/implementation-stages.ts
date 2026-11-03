@@ -3,6 +3,8 @@ import { canonical, record, reject } from '../server/errors.js';
 import { authorize, currentPrincipal, type Principal } from '../server/security.js';
 import { RuntimeStore } from '../server/store.js';
 import { valueDigest } from '../lifecycle/base.js';
+import {readPreparationPacket} from '../lifecycle/preparation.js';
+import {resolvePreparationLineage,completedPreparationSource} from './ci-preparation.js';
 import type { LifecycleInstance } from '../lifecycle/instance.js';
 import type { StageAdapter, StageObservation, StageProgress, StageRequest } from '../lifecycle/execution.js';
 import { readAgentHandoff, readAgentReport, AGENT_ADAPTER_DIGEST } from '../lifecycle/agent.js';
@@ -31,7 +33,7 @@ export function readImplementationEvidence(store:RuntimeStore,r:StageRequest){
 /** The original coding request stays immutable. Explicit advance retains a
  * derived exact-source CI request under the same authority/deadline before any
  * CI effect. Restart observes that request; it cannot replace or redispatch it. */
-export function createImplementationStageAdapters(store:RuntimeStore,configPath:string,connections:NativeStageConnections,identify:typeof inspectExternalAgent=inspectExternalAgent):{implementation:StageAdapter;ci:StageAdapter;source:(instance:LifecycleInstance,actor:Principal)=>VerifiedStageSource}{
+export function createImplementationStageAdapters(store:RuntimeStore,configPath:string,connections:NativeStageConnections,identify:typeof inspectExternalAgent=inspectExternalAgent):{implementation:StageAdapter;ci:StageAdapter;source:(instance:LifecycleInstance,actor:Principal,stageId?:string)=>VerifiedStageSource}{
   const reviews=createImplementationReviewService(store,registeredImplementationReview(configPath,store.workspaceId,connections),id=>currentPrincipal(store.root,store.workspaceId,id));
   const codex=createCodexStageAdapter(store,configPath,identify);
   function retain(r:StageRequest,kind:string,id:string,value:unknown){
@@ -51,8 +53,13 @@ export function createImplementationStageAdapters(store:RuntimeStore,configPath:
     const current=reviews.recorded(actor,r.projectId,r.id);if(current.ref!==d.sourceReviewRef||current.reviewDigest!==d.sourceReviewDigest||current.review.agentReportDigest!==d.agentReportDigest||current.source.factsDigest!==d.sourceFactsDigest)reject('VERIFIED_SOURCE_CHANGED','Completed implementation source review is no longer current',409);
     return{commit:current.source.commit,evidenceRef:ref};
   }
-  const ci=createCiStageAdapter(store,configPath,{...connections,async source(instance,stageId,actor,signal){
-    signal.throwIfAborted();if(stageId!=='implementation')return completedSource(instance,actor);
+  function sourceForStage(instance:LifecycleInstance,actor:Principal,stageId='candidate'):VerifiedStageSource{return resolvePreparationLineage(instance.definition.nodes,stageId,completedSource(instance,actor),id=>completedPreparationSource(store,instance,id));}
+  const ci=createCiStageAdapter(store,configPath,{...connections,async preparationInput(instance,stageId,source,actor,signal){
+    signal.throwIfAborted();if(!same(source,sourceForStage(instance,actor,stageId)))reject('CI_PREPARATION_SOURCE','Preparation source differs from its complete dependency lineage',409);
+    const id=instance.stages.implementation.requestId;if(!id)reject('IMPLEMENTATION_REQUEST_REQUIRED','Original implementation request is required',409);const original=reviews.recorded(actor,instance.pins.projectId,id),packet=readPreparationPacket(store,instance.pins.projectId,instance.pins.targetRef);
+    return{schema:'runtime-ci-preparation-input/v1',baselineCommit:packet.input.source.commit,parentCommit:source.commit,change:original.source.change,requirementsDigest:instance.pins.requirementsDigest};
+  },async source(instance,stageId,actor,signal){
+    signal.throwIfAborted();if(stageId!=='implementation')return sourceForStage(instance,actor,stageId);
     const id=instance.stages.implementation.requestId;if(!id)reject('IMPLEMENTATION_REQUEST_REQUIRED','Original coding task must exist before implementation CI',409);
     const approved=await reviews.resolve(actor,instance.pins.projectId,id);signal.throwIfAborted();return{commit:approved.source.commit,evidenceRef:approved.ref};
   }});
@@ -83,5 +90,5 @@ export function createImplementationStageAdapters(store:RuntimeStore,configPath:
     // cancellation or process death must be reconciled, never dispatched again.
     return translated(r,base,d,await ci.dispatch(request,instance,permit,signal));
   }};
-  return{implementation,ci,source:completedSource};
+  return{implementation,ci,source:sourceForStage};
 }

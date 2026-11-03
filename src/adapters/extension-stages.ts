@@ -19,13 +19,14 @@ import {validateCandidateInput,verifyCiArtifact,MAX_ARCHIVE_BYTES,type Candidate
 import type {PlatformRunRequest,PlatformArtifactArchive} from './platforms.js';
 import {readImplementationEvidence} from './implementation-stages.js';
 import type {SourceTreeObservation} from './source-tree.js';
+import {preparationAncestorIds,completedPreparationSource,readCiPreparationEvidence,type CiPreparationInput} from './ci-preparation.js';
 import {nativeSha256,type NativeReference,type NativeValidationContext} from '../../vendor/compatibility/v1/native.mjs';
 
 const ID='runtime-native-extension-stage-v1',ADAPTER_DIGEST=valueDigest({id:ID,actions:['runtime.check.ontology','runtime.check.harness','runtime.check.artifact'],input:'runtime-extension-observation/v1',recovery:'inspect-original-only'});
 const same=(a:unknown,b:unknown)=>canonical(a)===canonical(b);
 const hash=(v:unknown)=>{const s=string(v,71);if(!/^sha256:[a-f0-9]{64}$/.test(s))reject('EXTENSION_EVIDENCE','Exact SHA256 evidence is required',409);return s;};
-interface Prior {stageId:string;requestDigest:string;outcomeDigest:string;}
-interface ArtifactCheckInput {schema:'runtime-extension-artifacts/v1';kind:'reviewed-documents'|'implementation-ci'|'candidate-ci';documents?:Record<string,unknown>;requestDigest?:string;artifact?:VerifiedCiArtifact;}
+export interface Prior {stageId:string;requestDigest:string;outcomeDigest:string;}
+interface ArtifactCheckInput {schema:'runtime-extension-artifacts/v1';kind:'reviewed-documents'|'implementation-ci'|'candidate-ci'|'prepared-ci';preparations?:{stageId:string;requestDigest:string;source:VerifiedStageSource;artifact:VerifiedCiArtifact}[];documents?:Record<string,unknown>;requestDigest?:string;artifact?:VerifiedCiArtifact;}
 interface Parameters {
   node:EffectiveNode;kind:Owner;resources:ResourceRegistration[];resourceDigest:string;preparationRef:string;preparationDigest:string;preparationFactsDigest:string;
   predecessors:Prior[];binding:PlatformRegistration;source:VerifiedStageSource;sourceTree:SourceTreeObservation;
@@ -98,7 +99,7 @@ export function createNativeExtensionStageAdapter(store:RuntimeStore,configPath:
     if(rows.length!==node.checks.length||!same(rows.map(r=>r.checkId).sort(),[...node.checks].sort())||!same([...rows].sort((a,b)=>String(a.checkId).localeCompare(String(b.checkId))),[...globalRows].sort((a,b)=>String(a.checkId).localeCompare(String(b.checkId)))))reject('EXTENSION_MAPPING','Local and global mappings must cover every exact required extension check',409);
     for(const requirement of requirements){const row=rows.find(r=>r.checkId===requirement.ref)!;if(row.owner!==kind||row.criterionId!==requirement.definition.criterionId||row.source!=='owner-receipt'||!same([...(row.variantIds as string[])].sort(),[...(requirement.definition.variantIds as string[])].sort()))reject('EXTENSION_MAPPING','Required criteria and actual native evidence must agree',409);}
     for(const owner of ['ontology','harness']){const asset=record(atPath(i.definition.semantic,'assets.'+owner)),ref=record(mapping.definition[owner]);if(ref.product!==owner||ref.id!==asset.id||ref.version!==asset.version||ref.digest!==asset.digest||!same(ref,global.definition[owner]))reject('EXTENSION_MAPPING','Extension mapping uses another selected asset',409);}
-    const implementation=record(atPath(i.definition.semantic,'config.implementation')),matches=c.platforms.filter(p=>p.projectId===i.pins.projectId&&['provider','host','repository','repositoryId','defaultBranch','credentialRef'].every(k=>record(p)[k]===implementation[k]));if(matches.length!==1)reject('EXTENSION_SOURCE','One exact project source connection is required',409);
+    const implementation=record(atPath(i.definition.semantic,'config.implementation')),matches=c.platforms.filter(p=>p.projectId===i.pins.projectId&&['provider','host','repository','repositoryId','defaultBranch','credentialRef','workflowPath','pipelinePath','runner'].every(k=>record(p)[k]===implementation[k]));if(matches.length!==1)reject('EXTENSION_SOURCE','One exact project source connection is required',409);
     const binding=configuredPlatform(c,actor,i.pins.projectId,matches[0]!.ref),asset=record(atPath(i.definition.semantic,'assets.'+kind)),assetMap=resource(c,i,asset.mappingRef,'assets.'+kind+'.mappingRef'),reference=assetMap.definition.reference as NativeReference;
     if(!same(reference,mapping.definition[kind])||reference.visibility!==asset.visibility)reject('EXTENSION_MAPPING','Owner asset reference differs from extension requirements',409);
     return{node,kind,c,packet,facts,binding,asset,reference,resources:[check,mapping,global,assetMap,...requirements],predecessors:predecessors(store,i,node)};
@@ -110,6 +111,21 @@ export function createNativeExtensionStageAdapter(store:RuntimeStore,configPath:
   async function artifacts(i:LifecycleInstance,s:ReturnType<typeof selected>,resolved:VerifiedStageSource,input:CandidateInput|null,signal:AbortSignal):Promise<ArtifactCheckInput|null>{
     if(s.node.action!.actionRef!=='runtime.check.artifact')return null;
     if(s.node.stage==='after-plan')return{schema:'runtime-extension-artifacts/v1',kind:'reviewed-documents',documents:record(s.facts.evidence.documents)};
+    const preparedIds=s.node.stage==='before-candidate'?preparationAncestorIds(i.definition.nodes,s.node.id):[];
+    if(preparedIds.length){
+      const preparations:NonNullable<ArtifactCheckInput['preparations']>=[];
+      for(const stageId of preparedIds){
+        signal.throwIfAborted();const proof=completedPreparationSource(store,i,stageId),r=store.object(i.pins.projectId,'stage-request',i.stages[stageId].requestId!) as StageRequest,view=readCiPreparationEvidence(store,r),verified=view.artifact!,p=r.plan.parameters,binding=p.binding as PlatformRegistration,a=verified.sourceArchive;
+        if(['provider','host','repository','repositoryId','defaultBranch'].some(k=>record(binding)[k]!==record(s.binding)[k]))reject('EXTENSION_ARTIFACT','Prepared artifact belongs to a different source repository',409);
+        const path=join(store.root,'stage-ci-artifacts',hash(a.archiveDigest).slice(7)+'.zip');privateFile(path);const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW);let bytes:Buffer;
+        try{const stat=fstatSync(fd);if(!stat.isFile()||stat.nlink!==1||stat.size!==a.archiveBytes||stat.size>MAX_ARCHIVE_BYTES)reject('EXTENSION_ARTIFACT','Prepared archive size or file identity differs',409);bytes=readFileSync(fd);}finally{closeSync(fd);}
+        if(byteDigest(bytes)!==a.archiveDigest)reject('EXTENSION_ARTIFACT','Original prepared archive changed',409);
+        const ci:PlatformRunRequest={schema:'runtime-ci-request/v1',requestId:'stage-'+valueDigest({workspaceId:r.workspaceId,projectId:r.projectId,requestId:r.id}).slice(7,55),projectId:r.projectId,bindingDigest:valueDigest(binding),commit:string(p.commit),workflowDigest:hash(p.workflowDigest),inputDigest:r.inputDigest,stageId,candidateDigest:null,preparationInput:record(p.preparation).input as CiPreparationInput,requestedAt:r.requestedAt,deadlineAt:r.deadlineAt};
+        const archive:PlatformArtifactArchive={...a,requestId:ci.requestId,inputDigest:ci.inputDigest,bindingDigest:ci.bindingDigest,commit:ci.commit,runStatus:'PASSED',name:'runtime-ci',bytes,evidenceRef:verified.evidenceRef},observed=await verifyCiArtifact(archive,ci,i.definition.nodes.find(n=>n.id===stageId)!.checks,signal);
+        if(!same(observed,verified))reject('EXTENSION_ARTIFACT','Prepared evidence differs from independently reverified original bytes',409);preparations.push({stageId,requestDigest:r.digest,source:proof.output,artifact:observed});
+      }
+      return{schema:'runtime-extension-artifacts/v1',kind:'prepared-ci',preparations};
+    }
     const before=s.node.stage==='before-candidate',stage=i.stages[before?'implementation':'candidate'];
     if(stage.status!=='PASSED'||!stage.requestId)reject('EXTENSION_ARTIFACT','Original completed artifact producer is required',409);
     let r=store.object(i.pins.projectId,'stage-request',stage.requestId) as StageRequest|null;
