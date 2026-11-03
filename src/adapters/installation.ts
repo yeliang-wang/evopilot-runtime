@@ -1,8 +1,8 @@
 import {createHash} from 'node:crypto';
 import {constants,closeSync,fstatSync,lstatSync,openSync,readSync,readdirSync,readlinkSync,realpathSync,type Stats} from 'node:fs';
 import {isAbsolute,join,posix,resolve} from 'node:path';
-import {exact,record,reject,ServiceError,string} from '../server/errors.js';
-import {byteDigest,valueDigest} from '../lifecycle/base.js';
+import {exact,record,reject,ServiceError,string,evidenceValueDigest as valueDigest} from '../server/errors.js';
+import {byteDigest} from '../lifecycle/base.js';
 import {candidateDigest,type CandidateManifest} from '../lifecycle/instance.js';
 
 const MAX_ENTRIES=65536,MAX_FILE_BYTES=128*1024*1024,MAX_TOTAL_BYTES=1024*1024*1024,MAX_MANIFEST_BYTES=8*1024*1024;

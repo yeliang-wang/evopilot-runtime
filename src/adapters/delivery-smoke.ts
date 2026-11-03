@@ -1,4 +1,4 @@
-import {canonical,exact,record,reject,string} from '../server/errors.js';
+import {canonical,exact,record,reject,string,evidenceValueDigest} from '../server/errors.js';
 import {valueDigest} from '../lifecycle/base.js';
 import {containsInlineSecret} from '../lifecycle/compiler.js';
 import {artifactPath,readArtifactArchive,verifyCiArtifact,type VerifiedCiArtifact} from './artifacts.js';
@@ -54,7 +54,7 @@ export async function verifyDeliverySmoke(archive:PlatformArtifactArchive,reques
     const stated=record(value.installation);exact(stated,['directoryIdentity','factsDigest']);hash(stated.directoryIdentity);hash(stated.factsDigest);
     if(!installation||installation.directory!==target.directory||installation.manifestDigest!==target.manifestDigest||installation.candidateDigest!==request.candidateDigest)reject('DELIVERY_SMOKE_SCOPE','Independent readback of the exact selected installation is required',409);
     const{schema,factsDigest,observedAt,softwareExecuted,deploymentAccepted,...facts}=installation;
-    if(schema!=='runtime-installation-observation/v1'||factsDigest!==valueDigest(facts)||softwareExecuted!==false||deploymentAccepted!==false)reject('DELIVERY_SMOKE_SCOPE','Installation evidence must come from the fixed independent file verifier',409);
+    if(schema!=='runtime-installation-observation/v1'||factsDigest!==evidenceValueDigest(facts)||softwareExecuted!==false||deploymentAccepted!==false)reject('DELIVERY_SMOKE_SCOPE','Installation evidence must come from the fixed independent file verifier',409);
     installationFactsDigest=factsDigest;
     installed=installation.status==='PASSED'&&stated.directoryIdentity===installation.directoryIdentity&&stated.factsDigest===factsDigest;
   }

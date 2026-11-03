@@ -12,7 +12,7 @@ export interface Receipt { projectId: string; requestId: string; operation: stri
 
 // Only fixed adapters can produce these original evidence records. No public
 // mutation accepts an object kind or arbitrary evidence payload.
-const LARGE_EVIDENCE_KINDS=new Set(['plan-stage-native-receipt','stage-native-receipt','stage-evaluation-run','owner-feedback-event','owner-feedback-inbox','publication-harness-receipt','closure-harness-receipt','release-stage-material']);
+const LARGE_EVIDENCE_KINDS=new Set(['plan-stage-native-receipt','stage-native-receipt','stage-evaluation-run','owner-feedback-event','owner-feedback-inbox','publication-harness-receipt','closure-harness-receipt','release-stage-material','closure-evidence','closure-harness-input','closure-harness-action']);
 
 /** Owns one local writer. The OS releases the separate SQLite exclusive lock after process death. */
 export class RuntimeStore {

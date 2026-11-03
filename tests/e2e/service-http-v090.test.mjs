@@ -15,6 +15,28 @@ import { RuntimeStore } from '../../dist/server/store.js';
 import { startRuntimeServer } from '../../dist/server/http.js';
 import {canonical,canonicalEvidence,canonicalReadback,evidenceValueDigest,EVIDENCE_MAX_BYTES} from '../../dist/server/errors.js';
 import {valueDigest} from '../../dist/lifecycle/base.js';
+import {ownerRequestDigest} from '../../dist/adapters/published-owners.js';
+
+test('only fixed native validation accepts the evidence-sized original observation in an owner permit digest',()=>{
+  const request={operation:'native.package.validate',scope:{visibility:'private',projectId:'alpha'},input:{observation:{values:{original:'x'.repeat(300000)}}},requestId:'original-validation',expectedRevision:0};
+  assert.equal(ownerRequestDigest('harness',request),evidenceValueDigest({owner:'harness',request}));
+  assert.notEqual(ownerRequestDigest('ontology',request),ownerRequestDigest('harness',request));
+  assert.notEqual(ownerRequestDigest('harness',{...request,requestId:'different'}),ownerRequestDigest('harness',request));
+  assert.throws(()=>ownerRequestDigest('harness',{...request,operation:'feedback.ingest'}),{code:'INPUT_LIMIT'});
+  assert.throws(()=>ownerRequestDigest('harness',{...request,input:{observation:'x'.repeat(EVIDENCE_MAX_BYTES)}}),{code:'INPUT_LIMIT'});
+});
+
+test('original closure inventory, owner input and exact action survive restart within the evidence bound only',()=>{
+  const f=fixture();let s=new RuntimeStore(f.root,'test');
+  try{
+    const original={entries:Array.from({length:2500},(_,i)=>({path:'file-'+i,status:'PASSED',actual:{path:'file-'+i,type:'file',digest:'sha256:'+'a'.repeat(64),bytes:1,executable:false},reason:null}))};
+    const kinds=['closure-evidence','closure-harness-input','closure-harness-action'];assert(Buffer.byteLength(canonicalEvidence(original))>262144);
+    s.mutate(f.actor,mutation(),()=>({value:{retained:true},objects:kinds.map(kind=>({kind,id:'original',value:original})),event:{type:'fixture-written',data:{}}}));
+    s.close();s=new RuntimeStore(f.root,'test');for(const kind of kinds)assert.deepEqual(s.object('alpha',kind,'original'),original);
+    for(const kind of kinds){assert.throws(()=>s.mutate(f.actor,mutation('too-large-'+kind,1),()=>({value:{},objects:[{kind,id:'oversized',value:{original:'x'.repeat(EVIDENCE_MAX_BYTES)}}],event:{type:'fixture-written',data:{}}})),{code:'INPUT_LIMIT'});assert.equal(s.object('alpha',kind,'oversized'),null);}
+    assert.throws(()=>s.mutate(f.actor,{...mutation('untrusted-input',1),input:original},()=>change()),{code:'INPUT_LIMIT'});assert.equal(s.revision('alpha'),1);
+  }finally{s.close();f.cleanup();}
+});
 
 test('original evidence serialization preserves old digests and keeps request/page, depth and structure limits separate',()=>{
   const small={z:[1,true,null],a:'original'};

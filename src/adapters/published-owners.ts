@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { canonical, exact, record, reject, slug, string, ServiceError } from '../server/errors.js';
+import { canonical, exact, record, reject, slug, string, ServiceError, evidenceValueDigest } from '../server/errors.js';
 import { authorize, type Principal } from '../server/security.js';
 import { valueDigest } from '../lifecycle/base.js';
 import { nativeSha256, nativeStableSerialize, referenceForPackage, validateNativeReference, type NativePackage, type NativeReference, type NativeScope, type NativeToolchain } from '../../vendor/compatibility/v1/native.mjs';
@@ -85,7 +85,9 @@ function validateConfiguration(config:OwnerConfiguration):void{
     const stat=lstatSync(path);if(!stat.isFile()||stat.isSymbolicLink())reject('OWNER_NOT_INITIALIZED','Initialize the owner through its own workflow before registering it');
   }
 }
-export function ownerRequestDigest(owner:Owner,request:OwnerRequest):string{return valueDigest({owner,request});}
+// Only a fixed native validation adapter supplies an original observation. The
+// permit still binds every byte; public requests and other owner calls stay small.
+export function ownerRequestDigest(owner:Owner,request:OwnerRequest):string{return(request.operation==='native.package.validate'?evidenceValueDigest:valueDigest)({owner,request});}
 export interface PublishedOwnerAdapter {
   readonly owner:Owner; readonly workspaceId:string;
   capabilities():unknown;

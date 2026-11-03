@@ -1,8 +1,9 @@
 # Runtime v0.9 independence and lifecycle boundary
 
-Original native evidence and release material have a bounded serialization profile: 8 MiB,
+Original native evidence, installation observations and release material have a bounded serialization profile: 8 MiB,
 200,000 JSON nodes and depth 32. It applies only to fixed native-receipt,
-verification-run, owner-feedback and release-material record kinds and the six explicit plan,
+verification-run, owner-feedback, release-material and three fixed closure record kinds
+(`closure-evidence`, `closure-harness-input`, `closure-harness-action`) and the six explicit plan,
 implementation, release, publication, closure and verification-feedback evidence
 read operations, plus the full `lifecycle.authority.preview` review. HTTP and
 Streamable MCP apply the same response bound. Ordinary
@@ -797,6 +798,15 @@ declared tree; dangling, cyclic and escaping links fail. Inventory, byte and tim
 bounds apply. The result distinguishes absent, partial, mismatching and matching
 installations. It neither extracts packages nor executes software, and a matching
 inventory alone cannot establish startup, deployment or lifecycle completion.
+Original candidate manifests, before/after filesystem snapshots and complete
+installation observations use the bounded evidence profile above, rather than
+the smaller public-request profile. The same complete facts flow through smoke
+verification, the exact native-validation permit, retained closure evidence and
+private archival. Each encoded record must satisfy both byte and structure bounds;
+the inventory entry ceiling is not a guarantee that every layout below it fits.
+Native owner limits remain authoritative, and oversized evidence fails without
+truncation or a replacement validation request. Small-record canonical hashes,
+HTTP/MCP input limits, YAML and monitor-page limits remain unchanged.
 The manifest verifier is now connected to the registered closure adapter; actual
 selected-target delivery journeys remain required.
 

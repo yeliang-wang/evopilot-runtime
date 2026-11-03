@@ -6,8 +6,25 @@ import {join} from 'node:path';
 import {byteDigest,valueDigest} from '../../dist/lifecycle/base.js';
 import {readInstallationManifest,observeInstallation} from '../../dist/adapters/installation.js';
 import {validateResourceDefinition} from '../../dist/adapters/bindings.js';
+import {canonicalEvidence,evidenceValueDigest,EVIDENCE_MAX_BYTES} from '../../dist/server/errors.js';
 
 const signal=()=>AbortSignal.timeout(5000);
+test('large exact installation inventories preserve every file and both filesystem snapshots without a request-size limit',()=>{
+ const f=fixture();try{
+  const m=structuredClone(f.manifest);for(let i=0;i<2500;i++){const path='entry-'+i+'.txt';writeFileSync(join(f.directory,path),'x',{mode:0o600});m.entries.push({path,type:'file',digest:byteDigest('x'),bytes:1,executable:false});}
+  const p=f.pin(m);assert(p.bytes.length>262144);const read=()=>observeInstallation(f.directory,p.verified,AbortSignal.timeout(15000)),first=read();
+  assert.equal(first.status,'PASSED');assert.equal(first.entries.length,2503);const{schema,factsDigest,observedAt,softwareExecuted,deploymentAccepted,...facts}=first;
+  assert.equal(factsDigest,evidenceValueDigest(facts));assert(Buffer.byteLength(canonicalEvidence(facts))>262144);assert.equal(read().factsDigest,factsDigest);
+  writeFileSync(join(f.directory,'entry-2499.txt'),'y');const changed=read();assert.equal(changed.status,'MISMATCH');assert.equal(changed.entries.find(e=>e.path==='entry-2499.txt').status,'MISMATCH');
+  const damaged=structuredClone(p.verified);damaged.manifest.entries.at(-1).digest=byteDigest('y');assert.throws(()=>observeInstallation(f.directory,damaged,signal()),{code:'INSTALLATION_CANDIDATE'});
+ }finally{f.cleanup();}
+});
+test('installation manifests retain independent byte and structure ceilings before any filesystem read',()=>{
+ const f=fixture();try{
+  const raw=Buffer.alloc(EVIDENCE_MAX_BYTES+1,32),candidate={...f.candidate,artifacts:[...f.candidate.artifacts,{name:'installation.json',digest:byteDigest(raw),bytes:raw.length}]};assert.throws(()=>readInstallationManifest(candidate,'installation.json',raw),{code:'INSTALLATION_CANDIDATE'});
+  const m=structuredClone(f.manifest);m.entries=Array.from({length:35000},(_,i)=>({path:'entry-'+i,type:'file',digest:byteDigest(''),bytes:0,executable:false}));assert(Buffer.byteLength(JSON.stringify(m))<EVIDENCE_MAX_BYTES);assert.throws(()=>f.pin(m),{code:'INPUT_LIMIT'});
+ }finally{f.cleanup();}
+});
 function fixture(){
  const root=mkdtempSync(join(realpathSync(tmpdir()),'runtime-installed-readback-')),directory=join(root,'installed');mkdirSync(directory,{mode:0o700});mkdirSync(join(directory,'bin'),{mode:0o700});
  const body=Buffer.from('Exact installed implementation\n');writeFileSync(join(directory,'bin/app.mjs'),body,{mode:0o700});writeFileSync(join(directory,'empty.txt'),'',{mode:0o600});symlinkSync('bin/app.mjs',join(directory,'app'));
