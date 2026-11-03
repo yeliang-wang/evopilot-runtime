@@ -173,3 +173,6 @@ export function createNativeExtensionStageAdapter(store:RuntimeStore,configPath:
     return{adapterId:ID,adapterDigest:ADAPTER_DIGEST,action:String(s.node.action!.actionRef),bindingDigest:valueDigest(p),parameters:p as unknown as Record<string,unknown>};
   },inspect,dispatch:execute,advance:async(r,i,_progress,permit,signal)=>execute(r,i,permit,signal)};
 }
+
+// Shared fixed context verifiers; exported only for publisher-owned adapters.
+export {nodeFor as extensionNode,resource as extensionResource,predecessors as extensionPredecessors,candidate as extensionCandidate,verifyTree as verifyExtensionSourceTree,mappedCriteria as mappedExtensionCriteria};

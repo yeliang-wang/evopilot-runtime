@@ -144,7 +144,7 @@ the fixed scope and plan stages and external Codex task handoff are also
 implemented. Reviewed implementation CI now composes the same native validators
 and supplies its verified source to candidate and verification stages. A bounded
 real GitLab probe has exercised scope through verification without seeded
-predecessors. Project review and CI preparation extensions, independent Host
+predecessors. CI preparation extensions, independent Host
 integration and full lifecycle acceptance remain M3 work.
 Unconfigured adapters fail closed; synthetic regression adapters are test
 fixtures only and cannot certify real asset usability or final E2E. The two
@@ -602,10 +602,58 @@ joins, owner failures, response loss, restart, mapping/source drift, project
 isolation and archive integrity; their synthetic providers and owner decisions
 are not final-candidate acceptance evidence.
 
-The other publisher-registered actions (`runtime.review.scope`,
-`runtime.operation.ci-prepare`) and preparation-generated
-source propagation remain implementation obligations. Unsupported actions fail
+The remaining publisher-registered action `runtime.operation.ci-prepare` and
+preparation-generated source propagation remain implementation obligations. Unsupported actions fail
 closed; their presence in the compiler registry does not establish an executor.
+
+## Development project scope review
+
+`runtime.review.scope` uses the configured `extension.review` resource in any
+of the four extension slots. Every additional requirement must identify an
+existing published owner criterion/variant and map to `decision` evidence.
+Runtime checks the complete local and global mappings during admission and
+execution. An eligible reviewer approves or rejects the entire fixed scope;
+multiple required reviewer gates can be represented by separate required review
+nodes. The existing `reviewerIds` list identifies eligible reviewers, not a
+quorum or automatic approval.
+
+The original stage first waits for a decision. The same HTTP/MCP entry provides:
+
+- `lifecycle.extension.review.preview {stageRequestId}` returns the exact subject,
+  its digest, published assets and criteria, preparation documents, source tree,
+  original predecessor outcomes and original candidate, where applicable.
+- `lifecycle.extension.review.record` accepts `stageRequestId`, `reviewDigest`,
+  `decision` (`APPROVE` or `REJECT`) and `evidenceRef`. The authenticated principal
+  must have `decision.record`, belong to the current configured reviewer list,
+  and supply retained decision evidence for the Runtime operation
+  `lifecycle.extension.review` and that exact subject digest. The request uses the
+  ordinary request ID and CAS revision. A response loss replays the same receipt.
+- `lifecycle.extension.review.inspect {reviewRef}` retains the original decision
+  and separately reports current usability and any revocation.
+- `lifecycle.extension.review.revoke {reviewRef, reason}` records a new revocation
+  under the current reviewer policy; it does not erase the original decision.
+
+An approval completes only this required scope-review node. Rejection blocks its
+AND successor. Neither choice approves a new domain model, publishes an owner
+asset or grants software-release authority. New decisions require the original
+pending, unexpired request; a completed or failed review cannot be overwritten.
+
+Before a successor request, dispatch or successful outcome is committed, Runtime
+checks all completed scope reviews. Their original reviewer, policy, decision
+evidence and complete subject must still be valid. Source observations are
+rechecked independently; a final synchronous check prevents revocation during an
+asynchronous observation from granting later execution. Historical stage results
+remain intact when a decision becomes unusable. A pre-candidate scope decision
+retains its original source subject after a later candidate appears; it does not
+become candidate approval.
+
+The general `lifecycle.extension.evidence.read` also reads original scope-review
+evidence. Closure archives the exact decision, attestation, source evidence and
+matching stage outcome. Missing or revoked decisions block closure. Development
+tests cover all four slots, explicit approve/reject, reviewer and project scope,
+forged/stale input, response replay, restart, revocation, source drift, HTTP/MCP
+equivalence and complete archive readback. Fixture decisions are explicitly
+synthetic and do not establish final product acceptance.
 
 ## Development implementation review decisions
 

@@ -14,9 +14,11 @@ import { createPreparationService, PREPARATION_READS, PREPARATION_WRITES, type P
 import { createAgentService, AGENT_READS, AGENT_WRITES } from '../lifecycle/agent.js';
 import { createImplementationReviewService, IMPLEMENTATION_REVIEW_READS, IMPLEMENTATION_REVIEW_WRITES, type ImplementationReviewBindings } from '../lifecycle/implementation-review.js';
 
+import {createExtensionReviewService,EXTENSION_REVIEW_READS,EXTENSION_REVIEW_WRITES,type ExtensionReviewBindings} from '../lifecycle/extension-review.js';
+
 const VERSION = String(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version);
 export interface ServerOptions { stateRoot: string; workspaceId: string; port?: number; }
-export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver, trustedPolicy?:AuthorityPolicyProvider, trustedExecutor?:StageAdapter|((store:RuntimeStore,services:StageServices)=>StageAdapter), trustedPreparation?:PreparationValidator, trustedImplementationReview?:ImplementationReviewBindings) {
+export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver, trustedPolicy?:AuthorityPolicyProvider, trustedExecutor?:StageAdapter|((store:RuntimeStore,services:StageServices)=>StageAdapter), trustedPreparation?:PreparationValidator, trustedImplementationReview?:ImplementationReviewBindings, trustedExtensionReview?:((store:RuntimeStore)=>ExtensionReviewBindings)) {
   const config = record(options); exact(config,['stateRoot','workspaceId'],['port']);
   string(options.stateRoot,4096); slug(options.workspaceId);
   if (options.port !== undefined && (!Number.isSafeInteger(options.port) || options.port < 0 || options.port > 65535)) reject('INVALID_PORT','Invalid loopback port');
@@ -25,8 +27,9 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
   const preparations=createPreparationService(store,trustedPreparation);
   const authorities=createAuthorityService(store,trustedPolicy,id=>currentPrincipal(options.stateRoot,options.workspaceId,id),preparations.verify);
   const definitions=createDefinitionService(store,trustedBindings,trustedAuthorities??authorities.resolveExecution,trustedAuthorities?undefined:authorities.verifyExecution,authorities.resolveRelease);
+  const extensionReviews=createExtensionReviewService(store,trustedExtensionReview?.(store),id=>currentPrincipal(options.stateRoot,options.workspaceId,id));
   let execution:ReturnType<typeof createExecutionService>;
-  try{execution=createExecutionService(store,{bindings:trustedBindings,authorities:trustedAuthorities??authorities.resolveExecution,verifyAuthority:trustedAuthorities?undefined:authorities.verifyExecution,releaseAuthority:authorities.resolveRelease,principal:id=>currentPrincipal(options.stateRoot,options.workspaceId,id),adapter:typeof trustedExecutor==='function'?trustedExecutor(store,{releaseAuthority:authorities.resolveRelease,authorityPolicy:trustedPolicy}):trustedExecutor});}
+  try{execution=createExecutionService(store,{bindings:trustedBindings,authorities:trustedAuthorities??authorities.resolveExecution,verifyAuthority:trustedAuthorities?undefined:authorities.verifyExecution,releaseAuthority:authorities.resolveRelease,principal:id=>currentPrincipal(options.stateRoot,options.workspaceId,id),verifyProjectReviews:extensionReviews.verifyPassed,verifyProjectReviewState:extensionReviews.verifyCurrentDecisions,adapter:typeof trustedExecutor==='function'?trustedExecutor(store,{releaseAuthority:authorities.resolveRelease,authorityPolicy:trustedPolicy,extensionReviews}):trustedExecutor});}
   catch(e){store.close();throw e;}
   const agents=createAgentService(store,(actor,projectId,id)=>execution.authorizeOriginal(actor,projectId,id));
   const implementationReviews=createImplementationReviewService(store,trustedImplementationReview,id=>currentPrincipal(options.stateRoot,options.workspaceId,id));
@@ -40,7 +43,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     const actor = principal(req); authorize(actor,projectId,'read');
     if(WRITE_OPERATIONS.includes(operation as typeof WRITE_OPERATIONS[number])){
       exact(envelope,['operation','projectId','input','requestId','expectedRevision']);if(!Number.isSafeInteger(envelope.expectedRevision)||Number(envelope.expectedRevision)<0)reject('INVALID_REVISION','Expected a nonnegative revision');
-      const service=IMPLEMENTATION_REVIEW_WRITES.includes(operation as typeof IMPLEMENTATION_REVIEW_WRITES[number])?implementationReviews:AGENT_WRITES.includes(operation as typeof AGENT_WRITES[number])?agents:PREPARATION_WRITES.includes(operation as typeof PREPARATION_WRITES[number])?preparations:AUTHORITY_WRITES.includes(operation as typeof AUTHORITY_WRITES[number])?authorities:EXECUTION_WRITES.includes(operation as typeof EXECUTION_WRITES[number])?execution:definitions;
+      const service=EXTENSION_REVIEW_WRITES.includes(operation as typeof EXTENSION_REVIEW_WRITES[number])?extensionReviews:IMPLEMENTATION_REVIEW_WRITES.includes(operation as typeof IMPLEMENTATION_REVIEW_WRITES[number])?implementationReviews:AGENT_WRITES.includes(operation as typeof AGENT_WRITES[number])?agents:PREPARATION_WRITES.includes(operation as typeof PREPARATION_WRITES[number])?preparations:AUTHORITY_WRITES.includes(operation as typeof AUTHORITY_WRITES[number])?authorities:EXECUTION_WRITES.includes(operation as typeof EXECUTION_WRITES[number])?execution:definitions;
       return service.write(actor,projectId,operation,input,string(envelope.requestId),Number(envelope.expectedRevision),()=>principal(req));
     }
     exact(envelope,['operation','projectId','input']);
@@ -49,6 +52,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     if(EXECUTION_READS.includes(operation as typeof EXECUTION_READS[number]))return execution.read(actor,projectId,operation,input);
     if(PREPARATION_READS.includes(operation as typeof PREPARATION_READS[number]))return preparations.read(actor,projectId,operation,input);
     if(AGENT_READS.includes(operation as typeof AGENT_READS[number]))return agents.read(actor,projectId,operation,input);
+    if(EXTENSION_REVIEW_READS.includes(operation as typeof EXTENSION_REVIEW_READS[number]))return extensionReviews.read(actor,projectId,operation,input);
     if(IMPLEMENTATION_REVIEW_READS.includes(operation as typeof IMPLEMENTATION_REVIEW_READS[number]))return implementationReviews.read(actor,projectId,operation,input);
     switch (operation) {
       case 'runtime.status': exact(input,[]); return { ...status(), projectId, revision: store.revision(projectId),observationWorker:execution.health(projectId) };
@@ -131,7 +135,11 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
       reject('NOT_FOUND','Endpoint not found',404);
     } catch (e) {
       const error=e instanceof ServiceError?e:new ServiceError('INTERNAL','Request could not be completed',500);
-      if(error.status===413){res.shouldKeepAlive=false;req.resume();}
+      // Preserve the negotiated connection while returning 413 before EOF.
+      // Forcing close here can reset a client still uploading before it reads
+      // the rejection. Discard remaining bytes without buffering; the existing
+      // request timeout still bounds an unfinished upload.
+      if(error.status===413)req.resume();
       if(!res.headersSent)json(res,error.status,{requestId,error:{code:error.code,message:error.message}});else res.end();
     }
   });

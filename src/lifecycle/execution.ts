@@ -10,6 +10,7 @@ import { readImplementationEvidence } from '../adapters/implementation-stages.js
 import { readReleaseMaterial } from '../adapters/release-stages.js';
 import { readPublicationEvidence } from '../adapters/publication-stage.js';
 import {readClosureEvidence} from '../adapters/closure-stage.js';
+import {EXTENSION_REVIEW_ADAPTER_ID,readExtensionReviewEvidence,type ExtensionReviewService} from './extension-review.js';
 import {readExtensionEvidence} from '../adapters/extension-stages.js';
 import {readVerificationFeedbackForRequest} from '../adapters/stage-feedback.js';
 import type { AuthorityPolicyProvider } from '../adapters/authority.js';
@@ -41,12 +42,15 @@ export interface StageAdapter {
 export interface StageServices {
   releaseAuthority:(instance:LifecycleInstance,actor:Principal)=>ReleaseAuthority|undefined;
   authorityPolicy?:AuthorityPolicyProvider;
+  extensionReviews?:ExtensionReviewService;
 }
 export interface ExecutionDependencies {
   bindings?:DefinitionBindingProvider; authorities?:AuthorityResolver;
   verifyAuthority?:(grant:ExecutionAuthority,definition:EffectiveDefinition,actor:Principal)=>void;
   releaseAuthority?:(instance:LifecycleInstance,actor:Principal)=>ReleaseAuthority|undefined;
   principal:(id:string)=>Principal|null; adapter?:StageAdapter;
+  verifyProjectReviews?:(instance:LifecycleInstance,actor:Principal,signal?:AbortSignal)=>Promise<void>;
+  verifyProjectReviewState?:(instance:LifecycleInstance,actor:Principal,completingStageId?:string,completingDecision?:'APPROVE'|'REJECT')=>void;
 }
 const hash=(v:unknown)=>{const s=string(v,128);if(!/^sha256:[a-f0-9]{64}$/.test(s))reject('INVALID_EXECUTION_PIN','Exact content digest required');return s;};
 function safeData(v:unknown):void{if(containsInlineSecret(canonical(v)))reject('INLINE_SECRET','Execution metadata cannot contain raw credentials');}
@@ -96,6 +100,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     const authority=await resolveAuthority(deps.authorities,ref.evidenceRef,saved.definition,actor);
     const checked=await validateBindings(saved.definition,actor,deps.bindings);
     deps.verifyAuthority?.(authority,saved.definition,actor);
+    if(saved.definition.nodes.some(n=>n.action?.actionRef==='runtime.review.scope'&&saved.stages[n.id].status==='PASSED')){if(!deps.verifyProjectReviews)reject('EXTENSION_REVIEW_UNAVAILABLE','Current project review verification is required',409);await deps.verifyProjectReviews(saved,actor);}
     const release=stageId==='publication'?deps.releaseAuthority?.(saved,actor):undefined;
     return{authority,checked,release,context:{authority,bindingsCurrent:checked.ready,releaseAuthority:release}};
   }
@@ -104,7 +109,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     if(Date.parse(r.deadlineAt)<=Date.now())reject('EXECUTION_DEADLINE','This original request exhausted its dispatch time budget',409);
     const saved=fixedInstance(r),actor=actorFor(r),current=await admission(saved,r.stageId,actor);
     if(!current.checked.ready||current.checked.stamp!==r.bindingStamp||valueDigest(current.authority)!==saved.pins.authorityDigest||current.authority.evidenceRef!==r.authorityRef||(current.release?.decisionRef??null)!==r.releaseAuthorityRef)reject('EXECUTION_BINDING_CHANGED','Current execution pins or authority differ from the retained request',409);
-    const fresh=actorFor(r);deps.verifyAuthority?.(current.authority,saved.definition,fresh);
+    const fresh=actorFor(r);deps.verifyAuthority?.(current.authority,saved.definition,fresh);deps.verifyProjectReviewState?.(saved,fresh);
     if(closed||Date.parse(r.deadlineAt)<=Date.now())reject('EXECUTION_DEADLINE','This original request cannot dispatch now',409);return fresh;
   }
   function validateObservation(r:StageRequest,prior:StageProgress,observation:StageObservation):void{
@@ -117,7 +122,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
   }
   function recordObservation(r:StageRequest,observation:StageObservation,reason:string|null=null):void{
     const p=progress(r);if(p.terminal)return;
-    validateObservation(r,p,observation);const saved=fixedInstance(r),next=recordStageOutcome(saved,r.stageId,observation.outcome);
+    validateObservation(r,p,observation);const saved=fixedInstance(r);if(observation.phase==='COMPLETE'||observation.phase==='FAILED'&&r.plan.action==='runtime.review.scope')deps.verifyProjectReviewState?.(saved,system(r.projectId),r.stageId,observation.phase==='FAILED'?'REJECT':'APPROVE');const next=recordStageOutcome(saved,r.stageId,observation.outcome);
     if(canonical(p.observation)===canonical(observation)&&p.reason===reason)return;
     const evidence={schema:'runtime-stage-observation/v1',requestId:r.id,observation,reason,observedAt:new Date().toISOString()},observationRef=valueDigest(evidence);
     const updated:StageProgress={requestId:r.id,phase:observation.phase,terminal:['COMPLETE','FAILED'].includes(observation.phase),handle:observation.handle,observation,observationRef,reason,observedAt:evidence.observedAt};
@@ -141,9 +146,11 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
       try{
         const saved=fixedInstance(r);
         const observed=await bounded(async signal=>{
-          if(mode==='dispatch'){await permit(r);return deps.adapter!.dispatch(r,saved,()=>permit(r),signal);}
-          if(mode==='advance'){await permit(r);if(!deps.adapter!.advance)reject('STAGE_ADVANCE_UNAVAILABLE','This adapter has no explicitly requested continuation');return deps.adapter!.advance(r,saved,progress(r),()=>permit(r),signal);}
-          return deps.adapter!.inspect(r,saved,progress(r),system(r.projectId),signal);
+          let observation:StageObservation;
+          if(mode==='dispatch'){await permit(r);observation=await deps.adapter!.dispatch(r,saved,()=>permit(r),signal);}
+          else if(mode==='advance'){await permit(r);if(!deps.adapter!.advance)reject('STAGE_ADVANCE_UNAVAILABLE','This adapter has no explicitly requested continuation');observation=await deps.adapter!.advance(r,saved,progress(r),()=>permit(r),signal);}
+          else observation=await deps.adapter!.inspect(r,saved,progress(r),system(r.projectId),signal);
+          await deps.verifyProjectReviews?.(fixedInstance(r),system(r.projectId),signal);signal.throwIfAborted();return observation;
         // Multi-request provider protocols include current permit checks and
         // immutable ref creation. Keep their transport window bounded without
         // replacing or extending the already approved original stage deadline.
@@ -173,7 +180,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
   function read(actor:Principal,projectId:string,operation:string,input:Record<string,unknown>):unknown{
     authorize(actor,projectId,'read');
     if(operation==='lifecycle.verification.feedback.read'){exact(input,['stageRequestId']);return{event:readVerificationFeedbackForRequest(store,actor,request(projectId,string(input.stageRequestId))),historical:true,feedbackDelivered:false,releaseAuthorized:false};}
-    if(operation==='lifecycle.extension.evidence.read'){exact(input,['stageRequestId']);return readExtensionEvidence(store,request(projectId,string(input.stageRequestId)));}
+    if(operation==='lifecycle.extension.evidence.read'){exact(input,['stageRequestId']);const r=request(projectId,string(input.stageRequestId));return r.plan.adapterId===EXTENSION_REVIEW_ADAPTER_ID?readExtensionReviewEvidence(store,r):readExtensionEvidence(store,r);}
     if(operation==='lifecycle.closure.evidence.read'){exact(input,['stageRequestId']);return readClosureEvidence(store,request(projectId,string(input.stageRequestId)));}
     if(operation==='lifecycle.publication.evidence.read'){exact(input,['stageRequestId']);return readPublicationEvidence(store,request(projectId,string(input.stageRequestId)));}
     if(operation==='lifecycle.release.evidence.read'){
@@ -231,7 +238,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     const result=store.mutate(actor,mutation,()=>{
       if(closed)reject('STOPPING','Service is stopping',503);
       const fresh=reauthorize();authorize(fresh,projectId,'execution.request');if(stageId==='publication')authorize(fresh,projectId,'release.request');
-      deps.verifyAuthority?.(current.authority,saved.definition,fresh);
+      deps.verifyAuthority?.(current.authority,saved.definition,fresh);deps.verifyProjectReviewState?.(saved,fresh);
       if(!current.checked.expiresAt||Date.parse(current.checked.expiresAt)<=Date.now()||Date.parse(r.deadlineAt)<=Date.now())reject('EXECUTION_DEADLINE','Execution admission expired before request commit',409);
       if(stageId==='publication'&&deps.releaseAuthority?.(saved,fresh)?.decisionRef!==r.releaseAuthorityRef)reject('AUTHORITY_CHANGED','Release authority changed before request commit',409);
       const next=requestStage(saved,stageId,r.id,current.context),p:StageProgress={requestId:r.id,phase:'DISPATCHING',terminal:false,handle:null,observation:null,observationRef:null,reason:null,observedAt:r.requestedAt};

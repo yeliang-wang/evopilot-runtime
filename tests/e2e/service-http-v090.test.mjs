@@ -119,6 +119,13 @@ test('oversized fixed and unfinished chunked requests receive explicit rejection
   }finally{await server.close();f.cleanup();}
 });
 
+test('repeated oversized uploads preserve explicit rejection and healthy keep-alive requests',async()=>{
+  const f=fixture(),server=await startRuntimeServer({stateRoot:f.root,workspaceId:'test'});
+  try{const before=(await request(server,f.token)).body.result.revision,body=JSON.stringify({extra:'x'.repeat(1048576)});
+    for(let n=0;n<32;n++){const endpoint=n%2?'/mcp':'/api/v1/request',res=await fetch(server.url+endpoint,{method:'POST',headers:{authorization:'Bearer '+f.token,'content-type':'application/json'},body});assert.equal(res.status,413,'upload '+n);assert.equal((await res.json()).error.code,'INPUT_LIMIT');const healthy=await request(server,f.token);assert.equal(healthy.status,200);assert.equal(healthy.body.result.revision,before);}
+  }finally{await server.close();f.cleanup();}
+});
+
 test('service store atomically retains object, audit, receipt, events and exact replay across restart',()=>{
   const f=fixture();let s=new RuntimeStore(f.root,'test');
   try {

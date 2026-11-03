@@ -48,5 +48,5 @@ export const canonical=(value:unknown):string=>serialize(value,262144,20000);
 export const EVIDENCE_MAX_BYTES=8388608;
 export const canonicalEvidence=(value:unknown):string=>serialize(value,EVIDENCE_MAX_BYTES,200000);
 export const evidenceValueDigest=(value:unknown):string=>'sha256:'+createHash('sha256').update(canonicalEvidence(value)).digest('hex');
-const EVIDENCE_READS=new Set(['lifecycle.plan.evidence.read','lifecycle.implementation.evidence.read','lifecycle.release.evidence.read','lifecycle.publication.evidence.read','lifecycle.closure.evidence.read','lifecycle.verification.feedback.read','lifecycle.authority.preview','lifecycle.extension.evidence.read']);
+const EVIDENCE_READS=new Set(['lifecycle.plan.evidence.read','lifecycle.implementation.evidence.read','lifecycle.release.evidence.read','lifecycle.publication.evidence.read','lifecycle.closure.evidence.read','lifecycle.verification.feedback.read','lifecycle.authority.preview','lifecycle.extension.evidence.read','lifecycle.extension.review.preview']);
 export const canonicalReadback=(operation:unknown,value:unknown):string=>EVIDENCE_READS.has(String(operation))?canonicalEvidence(value):canonical(value);
