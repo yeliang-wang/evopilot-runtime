@@ -35,8 +35,13 @@ if (mode.startsWith('crash-')) {
 }
 store.mutate(actor,{projectId:'alpha',operation:'fixture.write',requestId:'worker-write',expectedRevision:0,input:{value:1},permission:'draft.write'},()=>({value:{ok:true},objects:[{kind:'fixture',id:'one',value:{synthetic:true}}],event:{type:'fixture-written',data:{synthetic:true}}}));
 if(mode==='hold') {
-  process.stdout.write(JSON.stringify({ready:true})+'\n');
-  setInterval(()=>{},1000);
+  // A live process alone does not retain DatabaseSync handles. Keep the store
+  // reachable for the whole holding phase, as the actual service does.
+  setInterval(()=>store.revision('alpha'),1000);
+  setImmediate(()=>{
+    global.gc?.();
+    process.stdout.write(JSON.stringify({ready:true,gcTested:typeof global.gc==='function'})+'\n');
+  });
 } else store.close();
 
 }

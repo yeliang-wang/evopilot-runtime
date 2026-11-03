@@ -93,7 +93,7 @@ async function request(server,token,operation='runtime.status',projectId='alpha'
   const response=await fetch(server.url+'/api/v1/request',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({operation,projectId,input})});
   return {status:response.status,body:await response.json()};
 }
-function worker(f,mode) { return spawn(process.execPath,[new URL('../fixtures/service-v090-worker.mjs',import.meta.url).pathname,mode,f.root,'test'],{stdio:['ignore','pipe','pipe']}); }
+function worker(f,mode) { return spawn(process.execPath,[...(mode==='hold'?['--expose-gc']:[]),new URL('../fixtures/service-v090-worker.mjs',import.meta.url).pathname,mode,f.root,'test'],{stdio:['ignore','pipe','pipe']}); }
 function rawStatus(url,headers) { return new Promise((resolve,reject)=>{
   const req=httpRequest(url,{headers},res=>{res.resume();res.once('end',()=>resolve(res.statusCode));});req.once('error',reject);req.end();
 }); }
@@ -167,13 +167,14 @@ for(const phase of ['before','after'])test('OS crash '+phase+' commit recovers t
 });
 
 test('live second writer is rejected, killed writer releases OS lock and retains committed evidence',async()=>{
-  const f=fixture();let s,child;
+  const f=fixture();let s,child,unexpected;
   try {
-    child=worker(f,'hold');await once(child.stdout,'data',{signal:AbortSignal.timeout(10000)});
-    assert.throws(()=>new RuntimeStore(f.root,'test'),{code:'WRITER_ACTIVE'});
+    child=worker(f,'hold');const [ready]=await once(child.stdout,'data',{signal:AbortSignal.timeout(10000)});
+    assert.deepEqual(JSON.parse(ready.toString()),{ready:true,gcTested:true});assert.equal(child.exitCode,null);assert.equal(child.signalCode,null);
+    assert.throws(()=>{unexpected=new RuntimeStore(f.root,'test');},{code:'WRITER_ACTIVE'});
     const exit=once(child,'exit');child.kill('SIGKILL');await exit;
     s=new RuntimeStore(f.root,'test');assert.equal(s.revision('alpha'),1);
-  }finally{if(child?.exitCode===null && child?.signalCode===null)child.kill('SIGKILL');s?.close();f.cleanup();}
+  }finally{if(child?.exitCode===null && child?.signalCode===null){const exit=once(child,'exit');child.kill('SIGKILL');await exit;}unexpected?.close();s?.close();f.cleanup();}
 });
 
 test('unknown schema and wrong workspace fail without silently adopting state',()=>{
