@@ -1,0 +1,126 @@
+{
+  "schema": "runtime-owned-source-provenance/v1",
+  "sourceRepository": "EvoPilot",
+  "sourceRevision": "c24aace7a0e73e41323d3bbb044924070e1595f1",
+  "license": "Apache-2.0",
+  "files": [
+    {
+      "source": "integration/toolchain/toolchain.lock.json",
+      "sha256": "4b0f4a4d71d426a56ca791b1583e2764d49ce7bf785bdc4c8daa7f5fc61c4e33",
+      "ownedPath": "provenance/native-toolchain/toolchain.lock.json"
+    },
+    {
+      "source": "integration/toolchain/conftest-dependencies.json",
+      "sha256": "0b29225e50f93d1c411e0f473e984fb39b084ca13631502f6173e7437ee1a7bd",
+      "ownedPath": "provenance/native-toolchain/conftest-dependencies.json"
+    },
+    {
+      "source": "integration/toolchain/archive.ts",
+      "sha256": "6577c26b63b059fcae66757fffd67442fb06d7394d51060069168dff06aa37d2",
+      "ownedPath": "src/installation/toolchain/archive.ts"
+    },
+    {
+      "source": "integration/toolchain/cli.ts",
+      "sha256": "caa029aecbbe1d3b1a8876477eef8647bbe67f00efbb6f526cb3f7b3f312dba5",
+      "ownedPath": "src/installation/toolchain/cli.ts"
+    },
+    {
+      "source": "integration/toolchain/opa-dependencies.json",
+      "sha256": "e9830f06e88df0b6268aec45910a50774f007bce6199eed73db213bb6449830e",
+      "ownedPath": "provenance/native-toolchain/opa-dependencies.json"
+    },
+    {
+      "source": "integration/toolchain/locked.ts",
+      "sha256": "00b0d207c72d1281a418a83936dad05910f252319eccd3827ea83da3d5f81bf1",
+      "ownedPath": "src/installation/toolchain/locked.ts"
+    },
+    {
+      "source": "integration/toolchain/requirements.lock",
+      "sha256": "70ebd465ae53f649be376871487271be9bedc0ff1e80321de126be2fa3d8bcb9",
+      "ownedPath": "provenance/native-toolchain/requirements.lock"
+    },
+    {
+      "source": "integration/toolchain/licenses/packaging-0-LICENSE",
+      "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48",
+      "ownedPath": "provenance/native-toolchain/licenses/packaging-0-LICENSE"
+    },
+    {
+      "source": "integration/toolchain/licenses/opa-LICENSE",
+      "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+      "ownedPath": "provenance/native-toolchain/licenses/opa-LICENSE"
+    },
+    {
+      "source": "integration/toolchain/licenses/packaging-1-LICENSE",
+      "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+      "ownedPath": "provenance/native-toolchain/licenses/packaging-1-LICENSE"
+    },
+    {
+      "source": "integration/toolchain/licenses/packaging-3-LICENSE",
+      "sha256": "590d12eee73ddbec53b4e9ee5bfc64d9cb3aacb4940e8ebcba260757ce56740b",
+      "ownedPath": "provenance/native-toolchain/licenses/packaging-3-LICENSE"
+    },
+    {
+      "source": "integration/toolchain/licenses/pyparsing-0-LICENSE",
+      "sha256": "a5425f9dc14ac74d4c5f0b679e941f2442e32cca7452a4418d5b1a49893ebe4e",
+      "ownedPath": "provenance/native-toolchain/licenses/pyparsing-0-LICENSE"
+    },
+    {
+      "source": "integration/toolchain/licenses/packaging-2-LICENSE",
+      "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5",
+      "ownedPath": "provenance/native-toolchain/licenses/packaging-2-LICENSE"
+    },
+    {
+      "source": "integration/toolchain/licenses/pyshacl-0-LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "ownedPath": "provenance/native-toolchain/licenses/pyshacl-0-LICENSE"
+    },
+    {
+      "source": "integration/toolchain/licenses/html5rdf-0-LICENSE",
+      "sha256": "16a39991619e92f18680932da2a9199fdf7d95df3ecaedc52ea06218aabafd6f",
+      "ownedPath": "provenance/native-toolchain/licenses/html5rdf-0-LICENSE"
+    },
+    {
+      "source": "integration/toolchain/licenses/wcwidth-0-LICENSE",
+      "sha256": "70b98a95a2144eb70af8017fa8c6d95ce247e40867436e8bc649e137fe13d21a",
+      "ownedPath": "provenance/native-toolchain/licenses/wcwidth-0-LICENSE"
+    },
+    {
+      "source": "integration/toolchain/licenses/owlrl-0-LICENSE",
+      "sha256": "4314f05aad7a217e792d310af1b4381d132e03d2f823c29bb7ab0f87c6849257",
+      "ownedPath": "provenance/native-toolchain/licenses/owlrl-0-LICENSE"
+    },
+    {
+      "source": "integration/toolchain/licenses/conftest-LICENSE",
+      "sha256": "a3fc6a99a82b59b761a6b1aabe8fc540b7046d5f91377fc1d8897dbbf3bd18ac",
+      "ownedPath": "provenance/native-toolchain/licenses/conftest-LICENSE"
+    },
+    {
+      "source": "integration/toolchain/licenses/python-LICENSE",
+      "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf",
+      "ownedPath": "provenance/native-toolchain/licenses/python-LICENSE"
+    },
+    {
+      "source": "integration/toolchain/licenses/packaging-4-LICENSE",
+      "sha256": "596ec35e2ca0ebcba9fd8343ff0a51625af548786257815f24b41f7e08613314",
+      "ownedPath": "provenance/native-toolchain/licenses/packaging-4-LICENSE"
+    },
+    {
+      "source": "integration/toolchain/licenses/rdflib-0-LICENSE",
+      "sha256": "53a705e51bfd199e8c97d0442376cb4bbd4ffcf13ba4f2c4c2794211400e4012",
+      "ownedPath": "provenance/native-toolchain/licenses/rdflib-0-LICENSE"
+    },
+    {
+      "source": "integration/toolchain/licenses/prettytable-0-LICENSE",
+      "sha256": "0c8adcc204c8af6cdfdf7887dfd1f99c29901f6c1d505a78bba96efa4fb2cb05",
+      "ownedPath": "provenance/native-toolchain/licenses/prettytable-0-LICENSE"
+    }
+  ],
+  "adaptation": [
+    "Move pure locked preparation/archive/CLI logic and exact original dependency/license bytes into the independent Runtime operator package.",
+    "Use the existing local vendor native contract; no sibling source import or dependency version change.",
+    "Validate existing path ancestors before creating toolchain descendants.",
+    "Retained Host preparation journal and stopped-service maintenance are separate unfinished integration work.",
+    "Await complete stdout stream delivery for large CLI dependency inventories; one synchronous pipe write was truncated in an actual offline probe."
+  ],
+  "productAcceptance": "NOT_EVALUATED"
+}
