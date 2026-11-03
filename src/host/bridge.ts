@@ -6,13 +6,16 @@ import {CallToolRequestSchema,ListToolsRequestSchema} from '@modelcontextprotoco
 import {createRuntimeHttpClient,type RuntimeHttpClient} from './client.js';
 import {canonicalReadback,record,ServiceError} from '../server/errors.js';
 import {READ_OPERATIONS,WRITE_OPERATIONS,runtimeToolDefinitions} from '../server/mcp.js';
+import {createLegacyTools} from './legacy-tools.js';
 
 /** Optional transport compatibility only. The bridge has no store, executor,
  * service launcher or separate approval state. HTTP is the primary entry. */
 export function createStdioBridge(client:RuntimeHttpClient):Server{
+  const legacy=createLegacyTools(client);
   const server=new Server({name:'evopilot-runtime-stdio-bridge',version:client.connection.version},{capabilities:{tools:{}},instructions:'Compatibility transport to the same independent Runtime service. Prefer the Runtime HTTP plugin. No state or execution authority is created by this bridge.'});
-  server.setRequestHandler(ListToolsRequestSchema,async()=>{await client.status();return{tools:runtimeToolDefinitions()};});
+  server.setRequestHandler(ListToolsRequestSchema,async()=>{const status=await client.status();return{tools:[...runtimeToolDefinitions(),...(record(status.result).legacy?legacy.definitions:[])]};});
   server.setRequestHandler(CallToolRequestSchema,async(request,extra)=>{
+    if(legacy.has(request.params.name))return legacy.call(request.params.name,request.params.arguments,extra.signal);
     try{const args=record(request.params.arguments),read=request.params.name==='runtime_read',write=request.params.name==='runtime_write';if(!read&&!write||!(read?READ_OPERATIONS:WRITE_OPERATIONS).includes(args.operation as never))throw new ServiceError('UNKNOWN_TOOL','Tool does not permit this operation',404);const result=await client.request(args,extra.signal);return{content:[{type:'text',text:canonicalReadback(String(args.operation),result)}]};}
     catch(error){const e=error instanceof ServiceError?error:new ServiceError('SERVICE_UNAVAILABLE','The selected Runtime service is unavailable.',503);return{isError:true,content:[{type:'text',text:JSON.stringify({error:{code:e.code,message:e.message}})}]};}
   });return server;

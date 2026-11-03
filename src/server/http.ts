@@ -15,12 +15,16 @@ import { createAgentService, AGENT_READS, AGENT_WRITES } from '../lifecycle/agen
 import { createImplementationReviewService, IMPLEMENTATION_REVIEW_READS, IMPLEMENTATION_REVIEW_WRITES, type ImplementationReviewBindings } from '../lifecycle/implementation-review.js';
 
 import {createExtensionReviewService,EXTENSION_REVIEW_READS,EXTENSION_REVIEW_WRITES,type ExtensionReviewBindings} from '../lifecycle/extension-review.js';
+import {createLegacyGateway,readLegacyBinding} from '../compat/gateway.js';
+import {LEGACY_READ,LEGACY_WRITE} from '../compat/catalog.js';
+import type {Providers as LegacyProviders} from '../service.js';
 
 const VERSION = String(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version);
-export interface ServerOptions { stateRoot: string; workspaceId: string; port?: number; }
-export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver, trustedPolicy?:AuthorityPolicyProvider, trustedExecutor?:StageAdapter|((store:RuntimeStore,services:StageServices)=>StageAdapter), trustedPreparation?:PreparationValidator, trustedImplementationReview?:ImplementationReviewBindings, trustedExtensionReview?:((store:RuntimeStore)=>ExtensionReviewBindings)) {
-  const config = record(options); exact(config,['stateRoot','workspaceId'],['port']);
+export interface ServerOptions { stateRoot: string; workspaceId: string; port?: number; legacyBindingRef?:string; }
+export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver, trustedPolicy?:AuthorityPolicyProvider, trustedExecutor?:StageAdapter|((store:RuntimeStore,services:StageServices)=>StageAdapter), trustedPreparation?:PreparationValidator, trustedImplementationReview?:ImplementationReviewBindings, trustedExtensionReview?:((store:RuntimeStore)=>ExtensionReviewBindings), trustedLegacyProviders?:LegacyProviders) {
+  const config = record(options); exact(config,['stateRoot','workspaceId'],['port','legacyBindingRef']);
   string(options.stateRoot,4096); slug(options.workspaceId);
+  if(options.legacyBindingRef!==undefined)string(options.legacyBindingRef,4096);
   if (options.port !== undefined && (!Number.isSafeInteger(options.port) || options.port < 0 || options.port > 65535)) reject('INVALID_PORT','Invalid loopback port');
   assertCredentials(options.stateRoot,options.workspaceId);
   const store = new RuntimeStore(options.stateRoot, options.workspaceId);
@@ -33,14 +37,24 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
   catch(e){store.close();throw e;}
   const agents=createAgentService(store,(actor,projectId,id)=>execution.authorizeOriginal(actor,projectId,id));
   const implementationReviews=createImplementationReviewService(store,trustedImplementationReview,id=>currentPrincipal(options.stateRoot,options.workspaceId,id));
+  let legacy:ReturnType<typeof createLegacyGateway>|undefined;
+  try{if(options.legacyBindingRef)legacy=createLegacyGateway(store,readLegacyBinding(options.legacyBindingRef),trustedLegacyProviders);}
+  catch(error){await execution.close();store.close();throw error;}
   const streams = new Set<ServerResponse>();
   let port = 0, closing = false;
-  const status = () => ({ product: 'evopilot-runtime', version: VERSION, developmentTarget: '0.9.0', contract: 'runtime-service/v1', workspaceId: options.workspaceId, serviceId: store.serviceId, transport: 'streamable-http', protocols: HTTP_PROTOCOLS, operations: [...READ_OPERATIONS,...WRITE_OPERATIONS], independentLlm: false, productAcceptance: 'NOT_EVALUATED' });
+  const status = () => ({ product: 'evopilot-runtime', version: VERSION, developmentTarget: '0.9.0', contract: 'runtime-service/v1', workspaceId: options.workspaceId, serviceId: store.serviceId, transport: 'streamable-http', protocols: HTTP_PROTOCOLS, operations: [...READ_OPERATIONS,...WRITE_OPERATIONS], legacy:legacy?{bound:true,migrationDigest:legacy.inspect().migrationDigest,revisionNamespace:'original-family'}:null, independentLlm: false, productAcceptance: 'NOT_EVALUATED' });
   function principal(req: IncomingMessage) { return authenticate(options.stateRoot,options.workspaceId,req.headers.authorization); }
   async function dispatch(req: IncomingMessage, value: unknown): Promise<unknown> {
     const envelope = record(value); exact(envelope,['operation','projectId','input'],['requestId','expectedRevision']);
     const projectId = slug(envelope.projectId), operation = string(envelope.operation), input = record(envelope.input);
     const actor = principal(req); authorize(actor,projectId,'read');
+    if(operation===LEGACY_READ||operation===LEGACY_WRITE){
+      if(!legacy)reject('LEGACY_NOT_BOUND','No verified legacy migration is bound to this service',409);
+      if(operation===LEGACY_READ){exact(envelope,['operation','projectId','input']);return legacy.read(actor,projectId,input,()=>principal(req));}
+      exact(envelope,['operation','projectId','input','requestId','expectedRevision']);
+      if(!Number.isSafeInteger(envelope.expectedRevision)||Number(envelope.expectedRevision)<0)reject('INVALID_REVISION','Use the original legacy family revision');
+      return legacy.write(actor,projectId,input,string(envelope.requestId),Number(envelope.expectedRevision),()=>principal(req));
+    }
     if(WRITE_OPERATIONS.includes(operation as typeof WRITE_OPERATIONS[number])){
       exact(envelope,['operation','projectId','input','requestId','expectedRevision']);if(!Number.isSafeInteger(envelope.expectedRevision)||Number(envelope.expectedRevision)<0)reject('INVALID_REVISION','Expected a nonnegative revision');
       const service=EXTENSION_REVIEW_WRITES.includes(operation as typeof EXTENSION_REVIEW_WRITES[number])?extensionReviews:IMPLEMENTATION_REVIEW_WRITES.includes(operation as typeof IMPLEMENTATION_REVIEW_WRITES[number])?implementationReviews:AGENT_WRITES.includes(operation as typeof AGENT_WRITES[number])?agents:PREPARATION_WRITES.includes(operation as typeof PREPARATION_WRITES[number])?preparations:AUTHORITY_WRITES.includes(operation as typeof AUTHORITY_WRITES[number])?authorities:EXECUTION_WRITES.includes(operation as typeof EXECUTION_WRITES[number])?execution:definitions;
@@ -145,11 +159,12 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
   });
   server.requestTimeout=15000;server.headersTimeout=10000;server.keepAliveTimeout=5000;server.maxRequestsPerSocket=100;
   try { await new Promise<void>((resolve,reject) => {server.once('error',reject);server.listen(options.port ?? 0,'127.0.0.1',() => {server.removeListener('error',reject);resolve();});}); }
-  catch(e){await execution.close();store.close();throw e;}
-  const address=server.address(); if(!address || typeof address==='string'){await execution.close();store.close();reject('START_FAILED','No loopback listener',500);}
+  catch(e){await legacy?.close();await execution.close();store.close();throw e;}
+  const address=server.address(); if(!address || typeof address==='string'){await legacy?.close();await execution.close();store.close();reject('START_FAILED','No loopback listener',500);}
   port=address.port;
-  return Object.freeze({ url:'http://127.0.0.1:'+port,port,identity:status(), async close(){
+  const legacyIntentSource=legacy?.intentSource(actor=>{const current=currentPrincipal(options.stateRoot,options.workspaceId,actor.id);if(!current)reject('UNAUTHENTICATED','Original principal is no longer available',401);return current;});
+  return Object.freeze({ url:'http://127.0.0.1:'+port,port,identity:status(),legacyIntentSource, async close(){
     if(closing)return;closing=true;for(const res of streams)res.end();streams.clear();
-    server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));await execution.close();store.close();
+    server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));await legacy?.close();await execution.close();store.close();
   }});
 }

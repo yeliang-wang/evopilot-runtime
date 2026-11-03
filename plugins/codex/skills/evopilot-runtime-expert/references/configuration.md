@@ -55,3 +55,10 @@ an instance, start coding/CI, approve assets or authorize a software release.
 The user can complete this same unit in Dashboard's graph/YAML editor; do not
 force them back to Codex for a second definition approval. The monitor is
 read-only and does not expose editing or business action controls.
+
+An imported legacy project/goal/asset-validation Run is historical domain data;
+it does not supply missing lifecycle settings or become an active definition.
+If the service reports a legacy binding, its original records can inform the
+wizard. Keep their scopes, IDs and receipt meanings intact. The separate
+`runtime.legacy.*` transport uses its original family revision; new lifecycle
+mutations continue using the current project revision from this service.

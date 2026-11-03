@@ -11,6 +11,7 @@ import { configuredPlatform, readIntegrationConfiguration, type IntegrationConfi
 import { openPublishedOwner, verifyReadinessView, type Owner, type PublishedOwnerAdapter } from './published-owners.js';
 import type { PlatformClient, PlatformReadiness } from './platforms.js';
 import { createRuntimeService } from '../service.js';
+import type {LegacyIntentSource} from '../compat/gateway.js';
 import { readPlatformToken } from './config.js';
 import { githubClient } from './github.js';
 import { gitlabClient } from './gitlab.js';
@@ -256,7 +257,7 @@ export function createRegisteredBindings(configPath:string,workspaceId:string,co
 /** Fixed local composition of published owner consumers, the existing Runtime
  * readiness API and registered HTTPS providers. No caller-selected imports,
  * owner authoring, raw database access or default external execution. */
-export async function openRegisteredBindings(configPath:string,workspaceId:string):Promise<{provider:DefinitionBindingProvider;preparation:PreparationValidator;implementationReview:ImplementationReviewBindings;extensionReview:(store:RuntimeStore)=>ExtensionReviewBindings;executor(store:RuntimeStore,services:StageServices):StageAdapter;close():void}>{
+export async function openRegisteredBindings(configPath:string,workspaceId:string,managedIntentSource?:()=>LegacyIntentSource):Promise<{provider:DefinitionBindingProvider;preparation:PreparationValidator;implementationReview:ImplementationReviewBindings;extensionReview:(store:RuntimeStore)=>ExtensionReviewBindings;executor(store:RuntimeStore,services:StageServices):StageAdapter;close():void}>{
   slug(workspaceId);string(configPath,4096);
   let legacy:ReturnType<typeof createRuntimeService>|undefined,opening:Promise<void>|null=null,connectedDigest:string|null=null,closed=false;
   let serviceStore:RuntimeStore|undefined;
@@ -274,7 +275,10 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
       const roots=new Set(configuration.owners.map(o=>o.workspaceRoot));if(roots.size!==1)reject('OWNER_SCOPE','Current published owner composition requires one shared workspace identity/root');
       const workspaceRoot=[...roots][0];directory(workspaceRoot);
       const marker=workspaceRoot+'/state/runtime/runtime.db';if(realpathSync(marker)!==marker||!lstatSync(marker).isFile())reject('RUNTIME_INTENT_STORE_MISSING','Initialize modeling intent through the existing Runtime owner workflow first');
-      legacy=createRuntimeService({workspaceRoot,workspaceId});legacy.initialize();
+      const source=managedIntentSource?.();
+      if(managedIntentSource&&!source)reject('RUNTIME_INTENT_STORE_MISSING','The selected managed Runtime intent source is unavailable',409);
+      if(source){if(source.workspaceRoot!==workspaceRoot||source.workspaceId!==workspaceId)reject('RUNTIME_INTENT_SCOPE','Published owner bindings must use the same managed Runtime workspace',409);}
+      else{legacy=createRuntimeService({workspaceRoot,workspaceId});legacy.initialize();}
       for(const registered of configuration.owners.filter(o=>o.owner==='ontology')){
         const{ref,...config}=registered;adapters.set(ref,await openPublishedOwner(config,toolchain,undefined,undefined,feedback));if(closed)reject('CLOSED','Integration composition is closed',503);
       }
@@ -283,7 +287,8 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
         if(possible.length!==1)reject('OWNER_BINDING_AMBIGUOUS','Harness needs one exact scoped Ontology connection');
         const{ref,...config}=registered;
         adapters.set(ref,await openPublishedOwner(config,toolchain,adapters.get(possible[0].ref),async(actor,projectId,request)=>{
-          authorize(actor,projectId,'read');if(!legacy)reject('OWNER_UNAVAILABLE','Runtime intent reader is unavailable');
+          authorize(actor,projectId,'read');if(source)return source.read(actor,projectId,request);
+          if(!legacy)reject('OWNER_UNAVAILABLE','Runtime intent reader is unavailable');
           return await legacy.readiness({operation:'readiness.intent.read',scope:request.scope,input:{standardVersion:'v2',digest:request.digest}}) as ReadinessIntentRecord&{current:boolean};
         },feedback));if(closed)reject('CLOSED','Integration composition is closed',503);
       }

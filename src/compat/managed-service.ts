@@ -5,8 +5,8 @@ import {acquireManagedLegacyContext,type ManagedLegacyBinding} from './managed-s
 /** Reuse Runtime-owned legacy semantics without translating any original
  * revision, request, Run, claim, budget, decision or receipt. Transport admission
  * is separate: this internal owner gateway grants no HTTP/Host authority. */
-export function createManagedLegacyService(binding:ManagedLegacyBinding,providers:Providers={}) {
-  const context=acquireManagedLegacyContext(binding);
+export function createManagedLegacyService(binding:ManagedLegacyBinding,providers:Providers={},authorize?:()=>void) {
+  const context=acquireManagedLegacyContext(binding,authorize);
   let service:ReturnType<typeof createRuntimeService>;
   try {service=context.run(()=>createRuntimeService({workspaceRoot:binding.workspaceRoot,workspaceId:binding.workspaceId},providers));context.run(()=>service.initialize());}
   catch(error){context.close();throw error;}

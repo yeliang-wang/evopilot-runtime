@@ -1269,3 +1269,51 @@ tool/CLI routing, current permissions and applicable lifecycle admission, owner
 entry transition, operator migration integration and actual accurate-candidate
 cutover remain required. The managed-store tests are development evidence, not
 completion of E15 or the final acceptance catalog.
+
+## Legacy Runtime transport development
+
+An operator may start the independent service with `--legacy-ref` pointing to the
+private, exact adoption binding. The binding must match that service's existing
+workspace/service identity. The authenticated status indicates whether legacy
+access is bound. A request cannot initialize, adopt, select or replace a legacy
+store, install a provider, or register owner authoring operations.
+
+`runtime.legacy.read` and `runtime.legacy.write` carry a fixed family and original
+envelope. The explicit catalog covers request, native, planning, readiness,
+readable, feedback, online, response and reconstruction. Input/domain validation,
+human decision evidence, old reconstruction fields/budgets and retired JSON Run
+restrictions remain in their original Runtime-owned implementations. The gateway
+adds current project permissions and reauthentication at the existing managed
+store guards, including after asynchronous provider reads. It does not create a
+new software lifecycle instance or grant stage/release completion authority.
+
+Write request IDs and expected revisions refer to the original family, not the
+independent service's project counter. The new service separately records scoped
+`legacy-call-admitted` audit events with principal, original IDs and intent hash.
+These events are only transport admission, never successful business receipts.
+Original receipts remain authoritative; a lost response is recovered with the
+same family and original request/Run/attempt identity. No transport retries a
+mutation automatically or converts an unknown result into success.
+
+The optional stdio bridge advertises the original Runtime `request`, `native`,
+`dispatch`, `reconcile`, `inspect`, `activate`, `deactivate` and `capabilities`
+aliases when a legacy binding exists. It forwards to the same authenticated HTTP
+service and opens no local store. Session activation merely verifies the existing
+service. The legacy CLI's `request` and `native-request` support the protected
+`--connection-ref` alternative to direct workspace arguments. Direct opening of
+an adopted store remains rejected; connection failure never selects local mode.
+
+Registered Ontology/Harness consumption uses the managed service's scoped intent
+reader when `--legacy-ref` is present. It verifies the same workspace/root and
+cannot fall back to another Runtime handle when that reader is unavailable.
+Published owner API/version checks and native/asset-content semantics remain
+unchanged. Trusted legacy external providers are still explicit process
+integration; the gateway does not infer them from paths or client requests.
+
+Owner authoring and the old workspace/native-project/toolchain maintenance
+helpers are **not** silently redirected into Runtime HTTP mutations. The old
+combined daemon initializes Runtime at startup, so keeping it configured cannot
+prove owner compatibility after adoption. The dedicated owner-entry transition,
+remaining maintenance mapping, installer cutover and accurate-candidate Host
+qualification remain explicit M3/M5 work. Current transport tests and isolated
+published-owner consumption evidence do not close E15/N09 by themselves.

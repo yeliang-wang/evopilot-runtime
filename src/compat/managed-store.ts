@@ -18,7 +18,7 @@ export interface LegacyMigrationSeal {
   serviceId:string;sourceSchemaVersion:number;sourceSnapshotDigest:string;
   backupRoot:string;backupDigest:string;sealedAt:string;migrationDigest:string;
 }
-interface Context {binding:Readonly<ManagedLegacyBinding>;active:boolean;device:number;inode:number;}
+interface Context {binding:Readonly<ManagedLegacyBinding>;active:boolean;device:number;inode:number;authorize?:()=>void;}
 const contexts=new AsyncLocalStorage<Context>();
 export const LEGACY_MANAGED_SCHEMA=9;
 export const legacyDatabasePath=(root:string):string=>join(root,'state','runtime','runtime.db');
@@ -54,6 +54,7 @@ export function assertManagedStateAccess(db:DatabaseSync,root:string,id:string):
   const context=contexts.getStore();
   if(!context?.active||context.binding.workspaceRoot!==root||context.binding.workspaceId!==id)reject('MANAGED_SERVICE_REQUIRED','This database is owned by the independent Runtime service',409);
   matches(seal,context.binding);
+  context.authorize?.();
   const stat=lstatSync(legacyDatabasePath(root));
   if(stat.dev!==context.device||stat.ino!==context.inode)reject('MIGRATION_BINDING_CHANGED','Managed database file was replaced',409);
   return seal;
@@ -71,7 +72,7 @@ export function acquireLegacyWriterLease(root:string,id:string):{close:()=>void}
   catch {lock.close();reject('LEGACY_WRITER_ACTIVE','This legacy store already has a managed writer or migration',409);}
   let closed=false;return{close(){if(!closed){lock.close();closed=true;}}};
 }
-export function acquireManagedLegacyContext(input:ManagedLegacyBinding):{run:<T>(fn:()=>T)=>T;close:()=>void} {
+export function acquireManagedLegacyContext(input:ManagedLegacyBinding,authorize?:()=>void):{run:<T>(fn:()=>T)=>T;close:()=>void} {
   exact(record(input),['workspaceRoot','workspaceId','serviceId','migrationDigest']);
   string(input.serviceId,128);string(input.migrationDigest,64);
   const binding=Object.freeze({...input}),lease=acquireLegacyWriterLease(binding.workspaceRoot,binding.workspaceId);
@@ -79,7 +80,7 @@ export function acquireManagedLegacyContext(input:ManagedLegacyBinding):{run:<T>
     const db=new DatabaseSync(legacyDatabasePath(binding.workspaceRoot),{readOnly:true,allowExtension:false});
     try {const seal=migrationSeal(db);if(!seal)reject('MIGRATION_REQUIRED','Legacy store has not been adopted');matches(seal,binding);} finally {db.close();}
     const stat=lstatSync(legacyDatabasePath(binding.workspaceRoot));
-    const context:Context={binding,active:true,device:stat.dev,inode:stat.ino};
+    const context:Context={binding,active:true,device:stat.dev,inode:stat.ino,authorize};
     return{run<T>(fn:()=>T):T{if(!context.active)reject('CLOSED','Managed legacy service is closed');return contexts.run(context,fn);},close(){if(context.active){context.active=false;lease.close();}}};
   } catch(error) {lease.close();throw error;}
 }

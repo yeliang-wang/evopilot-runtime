@@ -13,12 +13,16 @@ import type { Request, Composition, ExternalRequest } from './types.js';
 import type { NativeRequest } from './native-types.js';
 import { NATIVE_RUNTIME_OPERATIONS, NATIVE_RUNTIME_LIMITS } from './native.js';
 import { nativeAssertJSON, nativeExact } from '../vendor/compatibility/v1/native.mjs';
+import {createRuntimeHttpClient} from './host/client.js';
+import {forwardLegacyRuntime} from './host/legacy-tools.js';
+import {ServiceError} from './server/errors.js';
 type InputStream = AsyncIterable<string | Uint8Array>;
 const serviceCodes = new Set(('CLOSED NOT_INITIALIZED REQUEST_CONFLICT CORRUPT_STATE REVISION_CONFLICT NOT_FOUND LIMIT INVALID_ENCODING INVALID_REQUEST INVALID_INPUT INVALID_OPERATION INVALID_SCOPE EXISTS MISSING_RESOLVER ASYNC_RESOLVER MATERIAL_SCOPE INVALID_MATERIAL MISSING_EXECUTOR APPROVAL_REQUIRED PIN_DRIFT REVIEW_MISMATCH TERMINAL DECISION_CONFLICT NO_CLAIM CLAIM_MISMATCH UNSAFE_WORKSPACE UNSUPPORTED_PLATFORM UNKNOWN_WORKSPACE IDENTITY_MISMATCH STATE_ERROR').split(' '));
 for(const code of ['HISTORICAL_READ_ONLY','STANDARD_MISMATCH','REQUIREMENTS_MISMATCH','MISSING_REQUIREMENTS_READER','MISSING_SOURCE_READER','MISSING_COLLECTOR','MISSING_RECEIPT_READER','MISSING_EVIDENCE','EVIDENCE_DRIFT','REVIEW_REQUIRED','INCOMPLETE','CONTRACT_MISMATCH','INVALID_RECEIPT','INVALID_PROVIDER_RECEIPT'])serviceCodes.add(code);
 const asyncOperations = ['run.dispatch', 'run.reconcile'];
 const help = {
-  usage: ['evopilot-next-runtime capabilities', 'evopilot-next-runtime help', 'evopilot-next-runtime version', 'evopilot-next-runtime request --workspace <canonicalAbsoluteRoot> --workspace-id <slug> [--request-file <absoluteJSONpath>]', 'evopilot-next-runtime native-request --workspace <canonicalAbsoluteRoot> --workspace-id <slug> [--request-file <absoluteJSONpath>]'],
+  usage: ['evopilot-next-runtime capabilities', 'evopilot-next-runtime help', 'evopilot-next-runtime version', 'evopilot-next-runtime request --workspace <canonicalAbsoluteRoot> --workspace-id <slug> [--request-file <absoluteJSONpath>]', 'evopilot-next-runtime native-request --workspace <canonicalAbsoluteRoot> --workspace-id <slug> [--request-file <absoluteJSONpath>]', 'evopilot-next-runtime <request|native-request> --connection-ref <protectedRuntimeConnection> [--request-file <absoluteJSONpath>]'],
+  managed: 'After explicit service adoption, use --connection-ref. The compatibility client preserves original request IDs and family revisions, never starts a service or falls back to local writing.',
   input: 'One bounded JSON request from stdin or the exact explicit regular file.',
   exitCodes: { success: 0, serviceFailure: 1, invalidInput: 2 },
 };
@@ -107,15 +111,19 @@ function parseArgs(args: string[]) {
   const flags: Record<string,string> = {};
   for (let i = 0; i < rest.length; i += 2) {
     const key = rest[i], value = rest[i + 1];
-    if (!['--workspace', '--workspace-id', '--request-file'].includes(key) || Object.hasOwn(flags, key) || !value || value.startsWith('--')) fail('USAGE', 'Invalid request flags');
+    if (!['--workspace', '--workspace-id', '--request-file','--connection-ref'].includes(key) || Object.hasOwn(flags, key) || !value || value.startsWith('--')) fail('USAGE', 'Invalid request flags');
     flags[key] = value;
+  }
+  const file = flags['--request-file'];
+  if (file && !isAbsolute(file)) fail('USAGE', 'Absolute request file required');
+  if(flags['--connection-ref']){
+    if(flags['--workspace']||flags['--workspace-id']||!isAbsolute(flags['--connection-ref']))fail('USAGE','Choose the protected service connection without local workspace flags');
+    return{command,connectionRef:flags['--connection-ref'],file,root:undefined,id:undefined};
   }
   const root = flags['--workspace'];
   if (!root || !isAbsolute(root) || resolve(root) !== root || !flags['--workspace-id']) fail('USAGE', 'Explicit canonical workspace and workspace id required');
   slug(flags['--workspace-id']);
-  const file = flags['--request-file'];
-  if (file && !isAbsolute(file)) fail('USAGE', 'Absolute request file required');
-  return { command, root, id: flags['--workspace-id'], file };
+  return { command, root, id: flags['--workspace-id'], file,connectionRef:undefined };
 }
 async function readInput(file: string | undefined, stdin: InputStream, native = false): Promise<Request | NativeRequest> {
   const chunks: Buffer[] = []; let size = 0;
@@ -174,6 +182,10 @@ export async function main(args: string[], { stdin = process.stdin, stdout = pro
     };
     else {
       const request = await readInput(parsed.file, stdin, parsed.command==='native-request');
+      if(parsed.connectionRef){
+        executing=true;
+        result=(await forwardLegacyRuntime(createRuntimeHttpClient(parsed.connectionRef),parsed.command==='native-request'?'native':'request',request)).result;
+      }else{
       const service = createRuntimeService({ workspaceRoot: parsed.root!, workspaceId: parsed.id! });
       try {
         executing = true;
@@ -185,10 +197,11 @@ export async function main(args: string[], { stdin = process.stdin, stdout = pro
           result = await (request.operation === 'run.dispatch' ? service.dispatch(args as ExternalRequest) : service.reconcile(args as ExternalRequest));
         } else result = service.execute(request as Request<Exclude<Request['operation'],'run.dispatch'|'run.reconcile'>>);
       } finally { service.close(); }
+      }
     }
     response = { ok: true, product: PRODUCT, version: VERSION, result, authority: false };
   } catch (error) {
-    const code = ['USAGE', 'INPUT_FILE'].includes(errorCode(error)!) || serviceCodes.has(errorCode(error)!) ? errorCode(error)! : executing ? 'STATE_ERROR' : 'INVALID_REQUEST';
+    const code = error instanceof ServiceError ? error.code : ['USAGE', 'INPUT_FILE'].includes(errorCode(error)!) || serviceCodes.has(errorCode(error)!) ? errorCode(error)! : executing ? 'STATE_ERROR' : 'INVALID_REQUEST';
     // Never echo exception messages, paths, parser excerpts or caller-controlled fields.
     const message = code === 'USAGE' ? 'Invalid command arguments; use help.'
       : code === 'INPUT_FILE' ? 'Cannot read a bounded regular request file.'

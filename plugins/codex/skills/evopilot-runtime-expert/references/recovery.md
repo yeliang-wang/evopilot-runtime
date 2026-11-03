@@ -40,3 +40,23 @@ execution state. It does not substitute for actual HTTP plugin qualification.
 Published 0.8.3 Ontology/Harness workflows remain their own entries; unsupported
 legacy Runtime calls need an explicit migration mapping, not an invented
 translation or a second background Runtime writer.
+
+For a verified adopted store, `runtime.legacy.read` and `runtime.legacy.write`
+take `{family, envelope:{operation, scope, input}}`; write identity fields remain
+on the outer transport envelope. Use the **original family** revision and request
+ID, never `runtime.status.revision`. Look up an uncertain legacy result through
+that family's original receipt/Run/attempt operation. `runtime.receipt.read`
+contains the new service's transport admission audit, not the old business
+receipt; admission alone proves no domain operation succeeded.
+
+The optional stdio bridge exposes the supported `evopilot_v01_request`/`native`
+and session aliases only when the same service has a verified legacy binding.
+Activation does not start a daemon. The legacy CLI can use `--connection-ref`
+instead of direct workspace flags; it never falls back to local writing after a
+connection failure. Inspect the returned migration mapping and original error
+code. Missing provider bindings remain blocking; do not invent replacement
+executors or translate legacy asset verification into lifecycle stage completion.
+
+Do not leave the old combined daemon running against an adopted Runtime store:
+its startup also opens Runtime, even for owner requests. Confirm the independent
+owner entry transition and exact supported-tool mapping before real cutover.

@@ -199,7 +199,12 @@
         "src/installation/migration.ts",
         "src/state.ts",
         "src/readiness.ts",
-        "tests/e2e/legacy-managed-v090.test.mjs"
+        "tests/e2e/legacy-managed-v090.test.mjs",
+        "src/compat/catalog.ts",
+        "src/compat/gateway.ts",
+        "src/host/legacy-tools.ts",
+        "tests/e2e/legacy-http-v090.test.mjs",
+        "src/cli.ts"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",
