@@ -29,7 +29,10 @@
     "Managed schema9 capture validates adoption and inventories every database table on private copies; original semantic snapshot APIs remain unchanged.",
     "Backup covers exact selected project, owner workspace and independent service roots plus explicitly pinned reference files. It is not semantic acceptance or authority to restore, relocate or restart.",
     "Exclude only the two nonce-bearing temporary journals of held, empty Runtime writer locks; record exact exclusions and retain business files and zero-byte lock files.",
-    "Allow the installed operator to preserve its own exact serviceRoot/package layout with a matching protected service specification; reject source checkouts and arbitrary ancestors."
+    "Allow the installed operator to preserve its own exact serviceRoot/package layout with a matching protected service specification; reject source checkouts and arbitrary ancestors.",
+    "Original-location managed restore checks the retained known-backup anchor, selected references, lineage keys and stopped user jobs before recovering missing/empty original roots.",
+    "The same shared Host lease and original two SQLite writer locks protect recovery. Restore verifies full captured state without redispatching pending business requests or automatically starting services.",
+    "Selected missing references use exact staged copy and exclusive hard-link publication, with bounded verification/recovery of only the two owned link names after a crash. Existing differing references remain untouched."
   ],
   "productAcceptance": "NOT_EVALUATED"
 }

@@ -1,12 +1,13 @@
-/** Private operator backup only. Keeps original pending requests and adoption
- * seals unchanged. Restore, relocation and Host routing are separate operations. */
+/** Private operator preservation. Keeps original pending requests and adoption
+ * seals unchanged. Relocation and Host routing are separate operations. */
 import fs from 'node:fs';
 import path from 'node:path';
 import {randomBytes,createHash} from 'node:crypto';
 import {isDeepStrictEqual as equal} from 'node:util';
-import {canonicalPath,fail,fields,readRegular} from '../../compat/project/files.js';
+import {canonicalPath,fail,fields,outsideGit,readRegular} from '../../compat/project/files.js';
+import {keyDirectory} from '../../location-lineage.js';
 import {copyMaintenanceFile,hashMaintenanceFile,inspectMaintenanceTree,maintenanceJSONDigest,writeMaintenanceJSON,type MaintenanceEntry} from './stream.js';
-import {maintenanceLocation,present,privateDirectory,separateRoots,withQuiescentWorkspace,type ManagedWorkspaceSnapshot,type WorkspaceSelection} from './snapshot.js';
+import {maintenanceLocation,present,privateDirectory,separateRoots,withQuiescentWorkspace,withRestoringWorkspace,type ManagedWorkspaceSnapshot,type WorkspaceSelection,type PreservedReference} from './snapshot.js';
 
 export interface ManagedBackup {
   schema:'runtime-managed-workspace-backup/v1';requestId:string;createdAt:string;ownerUid:number;
@@ -39,13 +40,14 @@ function safeRelative(value:string):void {
   if(typeof value!=='string'||!value||path.isAbsolute(value)||value.includes('\\')||value.includes('\0')||value.split('/').some(part=>!part||part==='.'||part==='..'))fail('MAINTENANCE_PATH');
 }
 /** Resume only an exact retained prefix. Foreign partials are never erased. */
-function copyInventory(source:string,destination:string,entries:MaintenanceEntry[],requestId:string):void {
+function copyInventory(source:string,destination:string,entries:MaintenanceEntry[],requestId:string,transients:string[]=[]):void {
   mkdir(destination);const stageName='.evopilot-copy-'+requestId,stage=path.join(destination,stageName);
   const expected=new Map<string,MaintenanceEntry>();
   for(const entry of entries){safeRelative(entry.path);if(entry.path===stageName||entry.path.startsWith(stageName+'/')||expected.has(entry.path))fail('MAINTENANCE_PARTIAL_CONFLICT');expected.set(entry.path,entry);}
   const stageKey=(entry:MaintenanceEntry)=>maintenanceJSONDigest({destination,requestId,path:entry.path,sha256:entry.sha256});
   const stages=new Map(entries.filter(e=>e.kind==='file').map(e=>[stageKey(e),e]));
   for(const entry of inspectMaintenanceTree(destination)){
+    if(transients.includes(entry.path))continue;
     if(entry.path===stageName||entry.path.startsWith(stageName+'/'))continue;
     if(!equal(expected.get(entry.path),entry))fail('MAINTENANCE_PARTIAL_CONFLICT');
   }
@@ -77,7 +79,7 @@ function copyInventory(source:string,destination:string,entries:MaintenanceEntry
   }if(!made)fail('MAINTENANCE_LINK');}
   for(const name of fs.readdirSync(stage)){if(!stages.has(name))fail('MAINTENANCE_PARTIAL_CONFLICT');fs.unlinkSync(path.join(stage,name));}
   fs.rmdirSync(stage);syncDirectory(destination);
-  if(!equal(inspectMaintenanceTree(destination),entries))fail('MAINTENANCE_COPY_DIFFERENT');
+  if(!equal(inspectMaintenanceTree(destination).filter(e=>!transients.includes(e.path)),entries))fail('MAINTENANCE_COPY_DIFFERENT');
 }
 function manifestDigest(manifest:ManagedBackup):string {const {backupDigest,...body}=manifest;return maintenanceJSONDigest(body);}
 function readManifest(filename:string,expectedDigest:string,backupRoot:string):ManagedBackup {
@@ -141,4 +143,134 @@ export async function createManagedWorkspaceBackup(input:WorkspaceSelection,requ
       journal.status='VERIFIED';save(journalPath,journal);return verified;
     }catch(error){journal.status='INTERRUPTED';journal.lastError=error&&typeof error==='object'&&'code' in error&&typeof error.code==='string'?error.code:'MAINTENANCE_INTERRUPTED';save(journalPath,journal);throw error;}
   },signal);
+}
+
+export interface ManagedRestoreResult {
+  schema:'runtime-managed-workspace-restore/v1';requestId:string;backupRoot:string;backupDigest:string;
+  selection:WorkspaceSelection;snapshotDigest:string;completedAt:string;status:'VERIFIED';
+  serviceStarted:false;businessWorkDispatched:false;authority:false;resultDigest:string;
+}
+interface RestoreJournal {
+  schema:'runtime-managed-restore-journal/v1';intentDigest:string;
+  status:'PREPARED'|'COPYING'|'VERIFYING'|'VERIFIED'|'INTERRUPTED';
+  missingReferences:string[];result:ManagedRestoreResult|null;lastError:string|null;
+}
+const referenceStage=(ref:PreservedReference,requestId:string,backupDigest:string)=>path.join(path.dirname(ref.path),'.evopilot-restore-'+maintenanceJSONDigest({path:ref.path,requestId,backupDigest}));
+const expectedReference=(ref:PreservedReference)=>({bytes:ref.bytes,sha256:ref.sha256,mode:ref.mode});
+function referenceMatches(ref:PreservedReference):boolean {return equal(hashMaintenanceFile(ref.path),expectedReference(ref));}
+/** Only the two names created by our exclusive publish may share an inode.
+ * Hash through an unchanged descriptor before removing the staged name. This
+ * handles a crash after link(2) and before unlink without permitting other links. */
+function finishReferencePair(ref:PreservedReference,stage:string,complete=true):void {
+  canonicalPath(ref.path);canonicalPath(stage);
+  const a=fs.lstatSync(stage),b=fs.lstatSync(ref.path);
+  const same=(x:fs.Stats,y:fs.Stats)=>x.dev===y.dev&&x.ino===y.ino&&x.size===y.size&&x.mtimeMs===y.mtimeMs&&x.ctimeMs===y.ctimeMs&&x.nlink===y.nlink;
+  if(!a.isFile()||!b.isFile()||a.uid!==process.getuid!()||b.uid!==process.getuid!()||a.nlink!==2||b.nlink!==2||!same(a,b)||a.size!==ref.bytes||(a.mode&0o777)!==ref.mode)fail('MAINTENANCE_REFERENCE_CONFLICT');
+  const fd=fs.openSync(stage,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW),buffer=Buffer.allocUnsafe(4*1024*1024),hash=createHash('sha256');let total=0;
+  try{
+    if(!same(a,fs.fstatSync(fd)))fail('MAINTENANCE_REFERENCE_CONFLICT');
+    let count;while((count=fs.readSync(fd,buffer,0,Math.min(buffer.length,ref.bytes-total+1),null))>0){total+=count;if(total>ref.bytes)fail('MAINTENANCE_REFERENCE_CONFLICT');hash.update(buffer.subarray(0,count));}
+    if(total!==ref.bytes||hash.digest('hex')!==ref.sha256||!same(a,fs.fstatSync(fd))||!same(a,fs.lstatSync(stage))||!same(a,fs.lstatSync(ref.path)))fail('MAINTENANCE_REFERENCE_CONFLICT');
+  }finally{fs.closeSync(fd);}
+  if(!complete)return;
+  fs.unlinkSync(stage);syncDirectory(path.dirname(stage));
+  if(!referenceMatches(ref))fail('MAINTENANCE_REFERENCE_CONFLICT');
+}
+function restoreReference(backupRoot:string,ref:PreservedReference,requestId:string,backupDigest:string,wasMissing:boolean):void {
+  const stage=referenceStage(ref,requestId,backupDigest);
+  if(present(ref.path)){
+    if(wasMissing&&present(stage)&&fs.lstatSync(ref.path).nlink===2){finishReferencePair(ref,stage);return;}
+    if(!referenceMatches(ref))fail('MAINTENANCE_REFERENCE_CONFLICT');
+    if(present(stage)){
+      if(!wasMissing)fail('MAINTENANCE_REFERENCE_CONFLICT');
+      copyMaintenanceFile(path.join(backupRoot,'references',fileKey(ref.path)),stage,{...ref,kind:'file'});
+      fs.unlinkSync(stage);syncDirectory(path.dirname(stage));
+    }
+    return;
+  }
+  if(!wasMissing)fail('MAINTENANCE_REFERENCE_CONFLICT','A previously existing external reference disappeared during recovery');
+  copyMaintenanceFile(path.join(backupRoot,'references',fileKey(ref.path)),stage,{...ref,kind:'file'});
+  try{fs.linkSync(stage,ref.path);syncDirectory(path.dirname(ref.path));}
+  catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;if(!referenceMatches(ref))fail('MAINTENANCE_REFERENCE_CONFLICT');fs.unlinkSync(stage);syncDirectory(path.dirname(stage));return;}
+  finishReferencePair(ref,stage);
+}
+function retainedKeys(snapshot:ManagedWorkspaceSnapshot):void {
+  if(snapshot.requiredKeyIds.length>192)fail('MAINTENANCE_KEYS');
+  for(const id of snapshot.requiredKeyIds){
+    if(!/^[a-f0-9]{64}$/.test(id))fail('MAINTENANCE_KEYS');
+    const directory=keyDirectory();privateDirectory(directory);
+    if(readRegular(path.join(directory,id+'.key'),32,true).length!==32)fail('MISSING_RELOCATION_KEY');
+  }
+}
+/** Restore only the original locations from a known externally anchored backup.
+ * An exact VERIFIED retry returns the original receipt, not a current-state
+ * acceptance. It cannot overwrite newer work or restart a service. */
+export async function restoreManagedWorkspaceBackup(backupRoot:string,expectedBackupDigest:string,requestId:string,signal?:AbortSignal):Promise<ManagedRestoreResult> {
+  if(!/^[a-zA-Z0-9][a-zA-Z0-9-]{0,63}$/.test(requestId))fail('MAINTENANCE_ID');
+  const manifest=verifyManagedWorkspaceBackup(backupRoot,expectedBackupDigest),snapshot=manifest.snapshot,selection=structuredClone(snapshot.selection);
+  const control=selection.workspaceRoot+'.evopilot-maintenance';
+  separateRoots([selection.projectRoot,selection.workspaceRoot,selection.serviceRoot,backupRoot,control]);
+  privateDirectory(control);privateDirectory(path.join(control,'requests'));privateDirectory(path.join(control,'known-backups'));
+  const anchor=JSON.parse(readRegular(path.join(control,'known-backups',fileKey(backupRoot)+'.json'),32768,true).toString()) as unknown;
+  if(!equal(anchor,{schema:'runtime-managed-backup-anchor/v1',requestId:manifest.requestId,backupRoot,backupDigest:expectedBackupDigest,snapshotDigest:snapshot.snapshotDigest}))fail('MAINTENANCE_BACKUP_UNKNOWN');
+  const journalPath=path.join(control,'requests',requestId+'.json');
+  const intentDigest=maintenanceJSONDigest({operation:'restore',selection,requestId,backupRoot,backupDigest:expectedBackupDigest});
+  const load=():RestoreJournal|null=>{
+    if(!present(journalPath))return null;
+    const value:unknown=JSON.parse(readRegular(journalPath,32*1048576,true).toString());fields(value,['schema','intentDigest','status','missingReferences','result','lastError']);
+    const journal=value as unknown as RestoreJournal;
+    if(journal.schema!=='runtime-managed-restore-journal/v1'||journal.intentDigest!==intentDigest||!['PREPARED','COPYING','VERIFYING','VERIFIED','INTERRUPTED'].includes(journal.status)||!Array.isArray(journal.missingReferences)||new Set(journal.missingReferences).size!==journal.missingReferences.length||journal.missingReferences.some(ref=>!snapshot.references.some(r=>r.path===ref)))fail('MAINTENANCE_CONFLICT');
+    if(journal.status==='VERIFIED'){
+      if(!journal.result)fail('MAINTENANCE_CONFLICT');
+      const {resultDigest,...body}=journal.result;
+      if(maintenanceJSONDigest(body)!==resultDigest||body.schema!=='runtime-managed-workspace-restore/v1'||body.requestId!==requestId||body.backupRoot!==backupRoot||body.backupDigest!==expectedBackupDigest||!equal(body.selection,selection)||body.snapshotDigest!==snapshot.snapshotDigest||body.status!=='VERIFIED'||body.authority!==false||body.serviceStarted!==false||body.businessWorkDispatched!==false)fail('MAINTENANCE_CONFLICT');
+    }else if(journal.result!==null)fail('MAINTENANCE_CONFLICT');
+    return journal;
+  };
+  const previous=load();if(previous?.status==='VERIFIED')return previous.result!;
+  retainedKeys(snapshot);let journal:RestoreJournal|undefined;
+  return withRestoringWorkspace(selection,requestId,()=>{
+    const current=load();if(current?.status==='VERIFIED')fail('MAINTENANCE_ALREADY_COMPLETED','Read the completed original restore receipt');
+    journal=current??undefined;
+    const refs=snapshot.references;
+    for(const ref of refs){
+      canonicalPath(ref.path,true);outsideGit(path.dirname(ref.path));const parent=fs.lstatSync(path.dirname(ref.path));
+      if(!parent.isDirectory()||parent.uid!==process.getuid!()||(parent.mode&0o022)||[selection.projectRoot,selection.workspaceRoot,selection.serviceRoot,backupRoot,control].some(root=>ref.path===root||ref.path.startsWith(root+path.sep)))fail('MAINTENANCE_REFERENCE_CONFLICT');
+      const stage=referenceStage(ref,requestId,expectedBackupDigest);
+      if(present(stage)&&!current?.missingReferences.includes(ref.path))fail('MAINTENANCE_REFERENCE_CONFLICT');
+      if(present(ref.path)){
+        if(current?.missingReferences.includes(ref.path)&&present(stage)&&fs.lstatSync(ref.path).nlink===2)finishReferencePair(ref,stage,false);
+        else if(!referenceMatches(ref))fail('MAINTENANCE_REFERENCE_CONFLICT');
+      }
+    }
+    if(!current){
+      for(const root of [selection.projectRoot,selection.workspaceRoot,selection.serviceRoot])if(present(root)&&fs.readdirSync(root).length)fail('MAINTENANCE_DESTINATION_NOT_EMPTY');
+      journal={schema:'runtime-managed-restore-journal/v1',intentDigest,status:'PREPARED',missingReferences:refs.filter(ref=>!present(ref.path)).map(ref=>ref.path),result:null,lastError:null};save(journalPath,journal,false);
+    }else journal=current;
+    // Guard each known empty lock path before any database bytes are restored.
+    // Existing partial content is checked exactly by copyInventory below.
+    for(const root of [selection.projectRoot,selection.workspaceRoot,selection.serviceRoot])mkdir(root);
+    for(const root of [path.join(selection.workspaceRoot,'state'),path.join(selection.workspaceRoot,'state/runtime-service'),path.join(selection.serviceRoot,'data')])mkdir(root);
+    for(const file of [path.join(selection.workspaceRoot,'state/runtime-service/writer-lock.sqlite'),path.join(selection.serviceRoot,'data/writer-lock.sqlite')]){
+      canonicalPath(file,true);if(!present(file)){const fd=fs.openSync(file,fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_EXCL|fs.constants.O_NOFOLLOW,0o600);try{fs.fsyncSync(fd);}finally{fs.closeSync(fd);}syncDirectory(path.dirname(file));}
+    }
+  },capture=>{
+    try{
+      const retained=journal!;retained.status='COPYING';retained.lastError=null;save(journalPath,retained);
+      verifyManagedWorkspaceBackup(backupRoot,expectedBackupDigest);
+      for(const role of roles){signal?.throwIfAborted();copyInventory(path.join(backupRoot,role),selection[role==='workspace'?'workspaceRoot':role==='project'?'projectRoot':'serviceRoot'],snapshot.roots[role],requestId,role==='project'?[]:snapshot.transientExclusions[role]);}
+      for(const ref of snapshot.references){signal?.throwIfAborted();restoreReference(backupRoot,ref,requestId,expectedBackupDigest,retained.missingReferences.includes(ref.path));}
+      retained.status='VERIFYING';save(journalPath,retained);signal?.throwIfAborted();
+      if(capture().snapshotDigest!==snapshot.snapshotDigest)fail('MAINTENANCE_RESTORE_DIFFERENT');
+      verifyManagedWorkspaceBackup(backupRoot,expectedBackupDigest);
+      const body={schema:'runtime-managed-workspace-restore/v1' as const,requestId,backupRoot,backupDigest:expectedBackupDigest,selection,snapshotDigest:snapshot.snapshotDigest,completedAt:new Date().toISOString(),status:'VERIFIED' as const,serviceStarted:false as const,businessWorkDispatched:false as const,authority:false as const};
+      const result={...body,resultDigest:maintenanceJSONDigest(body)};
+      const completed={...retained,result,status:'VERIFIED' as const};save(journalPath,completed);journal=completed;return result;
+    }catch(error){const retained=journal!;retained.status='INTERRUPTED';retained.lastError=error&&typeof error==='object'&&'code' in error&&typeof error.code==='string'?error.code:'MAINTENANCE_INTERRUPTED';save(journalPath,retained);throw error;}
+  },signal).catch(error=>{
+    if(journal&&journal.status!=='VERIFIED'){
+      journal.status='INTERRUPTED';journal.lastError=error&&typeof error==='object'&&'code' in error&&typeof error.code==='string'?error.code:'MAINTENANCE_INTERRUPTED';save(journalPath,journal);
+    }
+    throw error;
+  });
 }

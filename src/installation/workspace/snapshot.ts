@@ -10,7 +10,7 @@ import {promisify} from 'node:util';
 import {DatabaseSync} from 'node:sqlite';
 import {canonicalPath,codeRoot,fail,fields,outsideGit,readRegular} from '../../compat/project/files.js';
 import {withWorkspaceLease} from '../../compat/workspace-lease.js';
-import {acquireLegacyWriterLease,migrationSeal,type ManagedLegacyBinding} from '../../compat/managed-store.js';
+import {legacyWorkspace,migrationSeal,type ManagedLegacyBinding} from '../../compat/managed-store.js';
 import {readIdentity,readRelocations} from '../../location-lineage.js';
 import {RuntimeStore} from '../../server/store.js';
 import {copyMaintenanceFile,hashMaintenanceFile,inspectMaintenanceTree,maintenanceJSONDigest,type MaintenanceEntry} from './stream.js';
@@ -56,11 +56,14 @@ export function maintenanceLocation(root:string,missing=false,installedService=f
   }
   if(present(root))privateDirectory(root);
 }
-export function validateSelection(selection:WorkspaceSelection):void {
+function selectionLocations(selection:WorkspaceSelection,missing=false):void {
   fields(selection,['projectRoot','workspaceRoot','workspaceId','serviceRoot','serviceId','migrationDigest','referenceFiles']);
   if(!/^[a-z0-9][a-z0-9-]{0,63}$/.test(selection.workspaceId)||typeof selection.serviceId!=='string'||!selection.serviceId||selection.serviceId.length>128||!/^[a-f0-9]{64}$/.test(selection.migrationDigest))fail('MAINTENANCE_IDENTITY');
   if(!Array.isArray(selection.referenceFiles)||selection.referenceFiles.length>128||selection.referenceFiles.some(v=>typeof v!=='string')||new Set(selection.referenceFiles).size!==selection.referenceFiles.length)fail('MAINTENANCE_REFERENCE');
-  const roots=[selection.projectRoot,selection.workspaceRoot,selection.serviceRoot];roots.forEach((r,i)=>maintenanceLocation(r,false,i===2));separateRoots(roots);
+  const roots=[selection.projectRoot,selection.workspaceRoot,selection.serviceRoot];roots.forEach((r,i)=>maintenanceLocation(r,missing,i===2));separateRoots(roots);
+}
+export function validateSelection(selection:WorkspaceSelection):void {
+  selectionLocations(selection);
   const project=JSON.parse(readRegular(path.join(selection.projectRoot,'workspace-project.json')).toString()) as Record<string,unknown>;
   if(project.schema!=='evopilot-workspace-project/v1'||project.id!==selection.workspaceId)fail('MAINTENANCE_IDENTITY');
   readIdentity(selection.workspaceRoot,selection.workspaceId);
@@ -149,29 +152,26 @@ async function onlineWorkerStopped(selection:WorkspaceSelection):Promise<void> {
   catch(error){const e=error as {stderr?:string};if(e.stderr?.includes('Could not find service')&&e.stderr.includes('"'+label+'"'))return;fail('MAINTENANCE_WORKER_INSPECTION');}
   fail('ONLINE_WORKER_ACTIVE','Stop the separately owned online worker before maintenance');
 }
-/** No automatic stop/restart. The operator must first stop the exact owned
- * service. Shared Host exclusion and both writer leases remain held throughout
- * the callback. A second capture can verify drift after a long copy. */
-export async function withQuiescentWorkspace<T>(input:WorkspaceSelection,requestId:string,callback:(capture:()=>ManagedWorkspaceSnapshot)=>T|Promise<T>,signal?:AbortSignal):Promise<T> {
-  const selection=structuredClone(input);
-  validateSelection(selection);
-  return withWorkspaceLease({workspaceRoot:selection.workspaceRoot,workspaceId:selection.workspaceId},requestId,async()=>{
-    await onlineWorkerStopped(selection);signal?.throwIfAborted();
+/** Both normal capture and recovery hold the same original writer locks. */
+async function withWriterLocks<T>(selection:WorkspaceSelection,callback:(capture:()=>ManagedWorkspaceSnapshot)=>T|Promise<T>,signal?:AbortSignal):Promise<T> {
     const originalLock=path.join(selection.workspaceRoot,'state/runtime-service/writer-lock.sqlite');
     const lockPath=path.join(selection.serviceRoot,'data/writer-lock.sqlite');
     for(const file of [originalLock,lockPath]){
+      privateDirectory(path.dirname(file));
       const st=fs.lstatSync(canonicalPath(file));if(!st.isFile()||st.uid!==process.getuid!()||st.nlink!==1||(st.mode&0o777)!==0o600||st.size!==0)fail('MAINTENANCE_PERMISSIONS');
       for(const suffix of ['-wal','-shm','-journal'])if(present(file+suffix)){
         const sidecar=fs.lstatSync(canonicalPath(file+suffix));if(!sidecar.isFile()||sidecar.uid!==process.getuid!()||sidecar.nlink!==1||(sidecar.mode&0o777)!==0o600||sidecar.size>1048576)fail('MAINTENANCE_PERMISSIONS');
       }
     }
-    const legacy=acquireLegacyWriterLease(selection.workspaceRoot,selection.workspaceId);let lock:DatabaseSync|undefined,active=true;
+    const locks:DatabaseSync[]=[];let active=true;
     try{
-      lock=new DatabaseSync(lockPath,{allowExtension:false});lock.enableDefensive(true);
-      try{lock.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE');}catch{fail('WRITER_ACTIVE','Stop the independent Runtime service before maintenance');}
+      for(const [i,file] of [originalLock,lockPath].entries()){
+        const lock=new DatabaseSync(file,{allowExtension:false});locks.push(lock);lock.enableDefensive(true);
+        try{lock.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE');}catch{fail(i===0?'LEGACY_WRITER_ACTIVE':'WRITER_ACTIVE','Stop Runtime writers before maintenance');}
+      }
       const capture=():ManagedWorkspaceSnapshot=>{
         if(!active)fail('MAINTENANCE_CLOSED');
-        signal?.throwIfAborted();validateSelection(selection);
+        signal?.throwIfAborted();validateSelection(selection);legacyWorkspace(selection.workspaceRoot,selection.workspaceId);
         for(const owner of owners)quietDatabase(path.join(selection.workspaceRoot,'state',owner,owner+'.db'));
         quietDatabase(path.join(selection.serviceRoot,'data/service.sqlite'));
         // BEGIN EXCLUSIVE on an empty lock file creates a temporary journal
@@ -186,7 +186,36 @@ export async function withQuiescentWorkspace<T>(input:WorkspaceSelection,request
         return{...body,snapshotDigest:maintenanceJSONDigest(body)};
       };
       return await callback(capture);
-    }finally{active=false;lock?.close();legacy.close();}
+    }finally{active=false;for(const lock of locks.reverse())lock.close();}
+}
+
+/** No automatic stop/restart. The operator first stops the exact owned service. */
+export async function withQuiescentWorkspace<T>(input:WorkspaceSelection,requestId:string,callback:(capture:()=>ManagedWorkspaceSnapshot)=>T|Promise<T>,signal?:AbortSignal):Promise<T> {
+  const selection=structuredClone(input);validateSelection(selection);
+  return withWorkspaceLease({workspaceRoot:selection.workspaceRoot,workspaceId:selection.workspaceId},requestId,async()=>{
+    await onlineWorkerStopped(selection);signal?.throwIfAborted();legacyWorkspace(selection.workspaceRoot,selection.workspaceId);
+    return withWriterLocks(selection,callback,signal);
+  },signal);
+}
+/** Recovery of this macOS user-service deployment must not leave a loaded
+ * KeepAlive job capable of starting against a partial restored tree. No job is
+ * stopped or killed by this primitive, and no PID is selected by the caller. */
+export async function requireRecoveryServicesStopped(selection:WorkspaceSelection):Promise<void> {
+  if(process.platform!=='darwin')fail('MAINTENANCE_RESTORE_PLATFORM');
+  await onlineWorkerStopped(selection);
+  const label='io.evopilot.runtime.'+selection.workspaceId+'.'+createHash('sha256').update(selection.serviceRoot).digest('hex').slice(0,16);
+  try{await execute('/bin/launchctl',['print','gui/'+process.getuid!()+'/'+label],{timeout:5000,maxBuffer:1048576});}
+  catch(error){const e=error as {stderr?:string};if(e.stderr?.includes('Could not find service')&&e.stderr.includes('"'+label+'"'))return;fail('MAINTENANCE_SERVICE_INSPECTION');}
+  fail('SERVICE_ACTIVE','Unload the exact selected Runtime user service before restoring');
+}
+/** Internal operator composition: prepare validates retained restore authority
+ * and creates only its missing/empty destination scaffolding. Shared Host
+ * exclusion is already held; no nested workspace lease is acquired. */
+export async function withRestoringWorkspace<T>(input:WorkspaceSelection,requestId:string,prepare:()=>void,callback:(capture:()=>ManagedWorkspaceSnapshot)=>T|Promise<T>,signal?:AbortSignal):Promise<T> {
+  const selection=structuredClone(input);selectionLocations(selection,true);
+  return withWorkspaceLease({workspaceRoot:selection.workspaceRoot,workspaceId:selection.workspaceId},requestId,async()=>{
+    await requireRecoveryServicesStopped(selection);signal?.throwIfAborted();prepare();
+    return withWriterLocks(selection,callback,signal);
   },signal);
 }
 export async function inspectManagedWorkspace(selection:WorkspaceSelection,requestId:string,signal?:AbortSignal):Promise<ManagedWorkspaceSnapshot> {

@@ -89,10 +89,24 @@ digest, every copied file and mode, internal relative links and reference bytes.
 An interrupted copy resumes only the same request and verified prefix; source
 drift or foreign partial content is rejected without overwriting it.
 
-These helpers currently establish snapshot/backup preservation only. The Host
-maintenance aliases, restore and location migration still require their own
-integration and acceptance; neither this documentation nor a source test marks
-the complete legacy maintenance path accepted.
+The operator restore helper accepts the known backup and its external digest,
+and restores only its original missing/empty roots. It requires the retained
+backup anchor and lineage keys, and refuses a loaded Runtime or online worker
+job even if that job currently has no running process. Both writer locks protect
+the destination while it is copied. Recover an unavailable installation from a
+separate verified Runtime package; do not remove the executing rescue package.
+Missing selected external configuration files may be restored; existing files
+must match exactly and are never replaced. An interrupted copy or exclusive
+reference publish can resume only the same retained request. Every database,
+payload and selected reference is checked again before recording completion.
+
+Restore preserves pending work and returns `serviceStarted: false` and
+`businessWorkDispatched: false`. Startup remains a separate explicit operator
+step. A repeated completed request returns its historical restore receipt and
+cannot overwrite subsequent work; it does not certify the current environment.
+The Host maintenance aliases and location migration still require their own
+integration and acceptance. Neither this documentation nor source tests mark
+the complete legacy maintenance path or final product acceptance passed.
 
 ## 中文说明
 
@@ -114,4 +128,14 @@ the complete legacy maintenance path accepted.
 外部源码、工具链缓存、两方发行包和迁移签名密钥不会因 JSON 中出现路径就被
 递归导入。应保留对应依赖及密钥；清单只声明所选目录和文件的覆盖范围。
 中断后只允许按原请求、原源数据及核对后的复制进度继续；摘要或文件变化会被
-拒绝。备份校验通过不代表已完成恢复、搬迁、Host 运维入口或最终产品验收。
+拒绝。
+
+恢复工具仅写入备份记录中的原位置，目标须为空或本次请求留下的可验证进度。
+须保留外部备份锚点及迁移密钥，并先卸载对应 Runtime 和在线 worker 的服务任务，
+避免任务在恢复中途自动启动。安装目录不可用时，使用另一份已核验 Runtime 包
+作为恢复入口。缺失的已选配置文件可以补回；已有文件必须完全一致，不会被覆盖。
+恢复完成前会核对全部所选文件、数据库表和引用；未决业务请求仍保持原样。
+
+恢复不会启动服务或重新派发业务。对已完成请求的重试只返回原恢复回执，不回滚
+后续新数据，也不代表当前环境重新验收通过。搬迁、Host 运维入口和最终产品验收
+仍须继续完成各自的集成及验收。
