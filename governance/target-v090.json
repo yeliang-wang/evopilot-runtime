@@ -176,7 +176,9 @@
         "tests/e2e/extension-stages-v090.test.mjs",
         "tests/fixtures/extension-v090.mjs",
         "src/lifecycle/extension-review.ts",
-        "tests/e2e/extension-review-v090.test.mjs"
+        "tests/e2e/extension-review-v090.test.mjs",
+        "src/adapters/ci-preparation.ts",
+        "tests/e2e/ci-preparation-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

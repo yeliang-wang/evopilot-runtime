@@ -107,3 +107,14 @@ test('artifact transfer rejects cross-provider redirects, arbitrary routes and o
     globalThis.fetch=async()=>new Response('small',{headers:{'content-length':'20'}});await assert.rejects(()=>reader.download(actor,'/actions/artifacts/99/zip',signal()),{code:'CI_ARTIFACT_INTEGRITY'});
   }finally{globalThis.fetch=old;}
 });
+
+test('preparation archive binds exact input and every prepared file but still needs independent provider and owner validation',async()=>{
+ const f=fixture('candidate'),content=Buffer.from('generated source'),evidence=Buffer.from('preparation evidence');f.request.stageId='project.prepare';f.request.preparationInput={schema:'runtime-ci-preparation-input/v1',baselineCommit:'b'.repeat(40),parentCommit:f.request.commit,change:{kind:'pull-request',id:'1'},requirementsDigest:byteDigest('requirements')};
+ const output={schema:'runtime-ci-preparation-output/v1',inputDigest:valueDigest(f.request.preparationInput),source:{commit:'c'.repeat(40),change:{kind:'pull-request',id:'1'},artifacts:[{path:'generated.ts',digest:byteDigest(content),bytes:content.length}]}};
+ const result={...f.result,stageId:'project.prepare',preparationOutput:output,checks:[{id:'required.check',status:'PASS',evidence:[{path:'evidence/preparation.txt',digest:byteDigest(evidence),bytes:evidence.length}]}]};delete result.candidate;
+ const archive=(mutate=()=>{},source=content)=>{const r=structuredClone(result);mutate(r);const bytes=zip([{name:'runtime-result.json',bytes:JSON.stringify(r)},{name:'evidence/preparation.txt',bytes:evidence},{name:'prepared-source/generated.ts',bytes:source}]);return{...f.archive(),bytes,archiveDigest:byteDigest(bytes),archiveBytes:bytes.length};};
+ const checked=await verifyCiArtifact(archive(),f.request,['required.check'],signal());assert.deepEqual(checked.preparationOutput,output);assert.equal(checked.candidate,null);assert.equal(checked.ownerEvaluationsVerified,false);assert.equal(checked.lifecycleAcceptance,false);
+ for(const mutate of [r=>delete r.preparationOutput,r=>r.preparationOutput.inputDigest=byteDigest('another input'),r=>r.preparationOutput.source.artifacts[0].digest=byteDigest('wrong'),r=>r.candidate=f.result.candidate])await assert.rejects(()=>verifyCiArtifact(archive(mutate),f.request,['required.check'],signal()));
+ await assert.rejects(()=>verifyCiArtifact(archive(()=>{},Buffer.from('different')),f.request,['required.check'],signal()),{code:'CI_ARTIFACT_INTEGRITY'});
+ const ordinary={...f.request};delete ordinary.preparationInput;await assert.rejects(()=>verifyCiArtifact(archive(),ordinary,['required.check'],signal()),{code:'CI_PREPARATION_OUTPUT'});
+});

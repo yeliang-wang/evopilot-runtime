@@ -5,6 +5,7 @@ import { byteDigest, valueDigest } from '../lifecycle/base.js';
 import { candidateDigest, type CandidateManifest } from '../lifecycle/instance.js';
 import { containsInlineSecret } from '../lifecycle/compiler.js';
 import type { PlatformArtifactArchive, PlatformRunRequest } from './platforms.js';
+import {validatePreparationInput,validatePreparationOutput,type CiPreparationOutput} from './ci-preparation.js';
 
 export const MAX_ARCHIVE_BYTES=128*1024*1024;
 const MAX_EXPANDED_BYTES=256*1024*1024,MAX_ENTRIES=512;
@@ -59,6 +60,7 @@ export interface CiArtifactResult {
   repositoryId:string; runId:string; sourceCommit:string; workflowDigest:string;
   stageId:string; candidateDigest:string|null; checks:CiArtifactCheck[]; candidate?:CandidateManifest;
   candidateConsumption?:{inputDigest:string;artifacts:CandidateManifest['artifacts']};
+  preparationOutput?:CiPreparationOutput;
 }
 export interface VerifiedCiArtifact {
   schema:'runtime-ci-verified-artifact/v1'; requestId:string; inputDigest:string;
@@ -67,6 +69,7 @@ export interface VerifiedCiArtifact {
   candidateDigest:string|null; files:CiEvidenceFile[]; artifactsVerified:true;
   ownerEvaluationsVerified:false; lifecycleAcceptance:false;
   sourceArchive:CandidateArchiveIdentity;
+  preparationOutput?:CiPreparationOutput;
 }
 export const ciSourceDigest=(request:PlatformRunRequest,provider:string,repositoryId:string):string=>valueDigest({provider,repositoryId,commit:request.commit});
 export const ciBuildDigest=(request:PlatformRunRequest,runId:string):string=>valueDigest({requestId:request.requestId,inputDigest:request.inputDigest,bindingDigest:request.bindingDigest,workflowDigest:request.workflowDigest,runId});
@@ -78,7 +81,7 @@ export async function verifyCiArtifact(archive:PlatformArtifactArchive,request:P
   const files=await readArtifactArchive(archive.bytes,signal),resultBytes=files.get('runtime-result.json');
   if(!resultBytes||resultBytes.length>2097152)reject('CI_RESULT_MISSING','Bounded runtime-result.json is required at archive root',409);
   let result:Record<string,unknown>;try{result=record(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(resultBytes)));}catch{return reject('CI_RESULT_INVALID','CI result must be valid UTF-8 JSON',409);}
-  exact(result,['schema','requestId','inputDigest','provider','repositoryId','runId','sourceCommit','workflowDigest','stageId','candidateDigest','checks'],['candidate','candidateConsumption']);
+  exact(result,['schema','requestId','inputDigest','provider','repositoryId','runId','sourceCommit','workflowDigest','stageId','candidateDigest','checks'],['candidate','candidateConsumption','preparationOutput']);
   if(result.schema!=='runtime-ci/v1'||result.requestId!==request.requestId||result.inputDigest!==request.inputDigest||result.provider!==archive.provider||result.repositoryId!==archive.repositoryId||result.runId!==archive.runId||result.sourceCommit!==request.commit||result.workflowDigest!==request.workflowDigest||result.stageId!==request.stageId||result.candidateDigest!==request.candidateDigest)reject('CI_RESULT_MISMATCH','CI evidence belongs to different request/source/stage/candidate pins',409);
   if(containsInlineSecret(canonical(result)))reject('CI_RESULT_INVALID','CI result metadata contains inline credentials',409);
   if(!Array.isArray(result.checks)||result.checks.length>128)reject('CI_CHECK_SCOPE','CI result check set must be bounded',409);
@@ -100,8 +103,14 @@ export async function verifyCiArtifact(archive:PlatformArtifactArchive,request:P
     if(consumed.inputDigest!==valueDigest(input)||canonical(consumed.artifacts)!==canonical(input.manifest.artifacts))reject('CI_CANDIDATE_CONSUMPTION','Evidence must identify every consumed artifact from the original candidate',409);
     for(const item of input.manifest.artifacts)verifyFile({path:'candidate/'+item.name,digest:item.digest,bytes:item.bytes});
   }else if(result.candidateConsumption!==undefined||request.candidateInput!==undefined)reject('CI_CANDIDATE_CONSUMPTION','A pre-candidate stage cannot claim candidate consumption',409);
+  let preparationOutput:CiPreparationOutput|undefined;
+  if(request.preparationInput){
+    validatePreparationInput(request.preparationInput,request,archive.provider);
+    preparationOutput=validatePreparationOutput(result.preparationOutput as CiPreparationOutput,request.preparationInput,archive.provider);
+    for(const file of preparationOutput.source.artifacts)verifyFile({...file,path:'prepared-source/'+file.path});
+  }else if(result.preparationOutput!==undefined)reject('CI_PREPARATION_OUTPUT','A non-preparation request cannot introduce a source output',409);
   for(const path of files.keys())if(!declared.has(path))reject('CI_ARTIFACT_UNDECLARED','CI archive includes undeclared files',409);
   const status=archive.runStatus==='FAILED'||checks.some(c=>c.status==='FAIL')?'FAILED':archive.runStatus==='PASSED'&&checks.every(c=>c.status==='PASS')?'PASSED':'UNKNOWN';
   const sourceArchive:CandidateArchiveIdentity={provider:archive.provider,repositoryId:archive.repositoryId,runId:archive.runId,artifactId:archive.artifactId,jobId:archive.jobId,archiveDigest:archive.archiveDigest,archiveBytes:archive.archiveBytes};
-  return{schema:'runtime-ci-verified-artifact/v1',requestId:request.requestId,inputDigest:request.inputDigest,runId:archive.runId,archiveDigest:archive.archiveDigest,resultDigest:byteDigest(resultBytes),evidenceRef:archive.evidenceRef,status,checks,candidate,candidateDigest:newDigest,files:[...files].map(([path,bytes])=>({path,digest:byteDigest(bytes),bytes:bytes.length})),artifactsVerified:true,ownerEvaluationsVerified:false,lifecycleAcceptance:false,sourceArchive};
+  return{schema:'runtime-ci-verified-artifact/v1',requestId:request.requestId,inputDigest:request.inputDigest,runId:archive.runId,archiveDigest:archive.archiveDigest,resultDigest:byteDigest(resultBytes),evidenceRef:archive.evidenceRef,status,checks,candidate,candidateDigest:newDigest,files:[...files].map(([path,bytes])=>({path,digest:byteDigest(bytes),bytes:bytes.length})),artifactsVerified:true,ownerEvaluationsVerified:false,lifecycleAcceptance:false,sourceArchive,...(preparationOutput?{preparationOutput}:{})};
 }

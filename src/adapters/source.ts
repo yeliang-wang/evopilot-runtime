@@ -6,11 +6,11 @@ import type { PlatformRegistration } from './config.js';
 import { commitId, matchRepository, positiveId, sha256 } from './platforms.js';
 
 export interface SourceOutput {path:string;digest:string;bytes:number;}
-export interface SourceRequest {baselineCommit:string;commit:string;change:{kind:'pull-request'|'merge-request';id:string};artifacts:SourceOutput[];}
+export interface SourceRequest {baselineCommit:string;parentCommit?:string;commit:string;change:{kind:'pull-request'|'merge-request';id:string};artifacts:SourceOutput[];}
 export interface SourceChange {path:string;previousPath:string|null;status:'added'|'modified'|'removed'|'renamed'|'changed';}
 export interface SourceObservation {
   schema:'runtime-source-observation/v1'; provider:'github'|'gitlab';projectId:string;repositoryId:string;bindingDigest:string;
-  baselineCommit:string;commit:string;change:SourceRequest['change'];state:'OPEN'|'CLOSED'|'MERGED';draft:boolean;
+  baselineCommit:string;parentCommit?:string;commit:string;change:SourceRequest['change'];state:'OPEN'|'CLOSED'|'MERGED';draft:boolean;
   sourceBranch:string;targetBranch:string;changes:SourceChange[];artifacts:SourceOutput[];
   evidenceRef:string;observedAt:string;factsDigest:string;sourceReviewApproved:false;ciVerified:false;releaseAuthorized:false;
 }
@@ -20,7 +20,7 @@ function path(value:unknown):string{
   const p=string(value,1024);if(p.startsWith('/')||p.includes('\\')||/[\u0000-\u001f\u007f]/.test(p)||p.split('/').some(s=>!s||s==='.'||s==='..'||s==='.git'))reject('SOURCE_PATH_INVALID','A canonical repository-relative file path is required');return p;
 }
 function request(value:SourceRequest,binding:PlatformRegistration):SourceRequest{
-  const r=record(value);exact(r,['baselineCommit','commit','change','artifacts']);commitId(r.baselineCommit);commitId(r.commit);
+  const r=record(value);exact(r,['baselineCommit','commit','change','artifacts'],['parentCommit']);commitId(r.baselineCommit);commitId(r.commit);if(r.parentCommit!==undefined)commitId(r.parentCommit);
   if(r.baselineCommit===r.commit)reject('SOURCE_UNCHANGED','Implementation needs an exact change from its reviewed baseline',409);
   const change=record(r.change);exact(change,['kind','id']);positiveId(change.id);
   if(change.kind!==(binding.provider==='github'?'pull-request':'merge-request'))reject('SOURCE_PROVIDER_MISMATCH','Change reference belongs to another provider',409);
@@ -88,6 +88,30 @@ export function sourceReader(binding:PlatformRegistration,get:Get){
         changes.push({path:path(f.deleted_file?f.old_path:f.new_path),previousPath:f.renamed_file?path(f.old_path):null,status});
       }
     }
+    // A CI preparation output keeps the original reviewed default-branch
+    // baseline. Its additional parent pin proves it extends the immediately
+    // preceding implementation/preparation, rather than replacing that work.
+    if(r.parentCommit!==undefined&&r.parentCommit!==r.commit){
+      if(github){
+        const compare=record(await get(actor,'/compare/'+r.parentCommit+'...'+r.commit+'?per_page=1',signal));
+        if(compare.status!=='ahead'||compare.behind_by!==0||record(compare.base_commit).sha!==r.parentCommit||record(compare.merge_base_commit).sha!==r.parentCommit)reject('SOURCE_PARENT_MISMATCH','Prepared source must descend from its exact input commit',409);
+      }else{
+        // Commit parent identities work on the accepted GitLab 15 API. Do not
+        // infer ancestry from a possibly truncated compare response or dates.
+        const pending=[r.commit],seen=new Set<string>();let found=false;
+        while(pending.length){
+          signal.throwIfAborted();const id=pending.shift()!;if(seen.has(id))continue;
+          if(id===r.parentCommit){found=true;break;}
+          if(seen.size>=1000)reject('SOURCE_ANCESTRY_LIMIT','Prepared source ancestry exceeds the bounded 1000-commit profile',409);seen.add(id);
+          const commit=record(await get(actor,'/repository/commits/'+id,signal));
+          if(commit.id!==id||!Array.isArray(commit.parent_ids)||commit.parent_ids.length>1000||new Set(commit.parent_ids).size!==commit.parent_ids.length)reject('SOURCE_PARENT_MISMATCH','Commit parent evidence is incomplete',409);
+          for(const parent of commit.parent_ids){commitId(parent);if(parent===id)reject('SOURCE_PARENT_MISMATCH','Commit cannot be its own parent',409);if(parent===r.parentCommit){found=true;break;}if(!seen.has(parent))pending.push(parent);}
+          if(found)break;
+          if(pending.length>1000)reject('SOURCE_ANCESTRY_LIMIT','Prepared source ancestry exceeds its bounded traversal',409);
+        }
+        if(!found)reject('SOURCE_PARENT_MISMATCH','Prepared source does not descend from its exact input commit',409);
+      }
+    }
     changes=inventory(changes);if(changes.length!==before.count)reject('SOURCE_INVENTORY_INCOMPLETE','Complete file inventory differs from provider count',409);
     for(const a of r.artifacts){
       if(!changes.some(c=>c.path===a.path&&c.status!=='removed'))reject('SOURCE_OUTPUT_MISMATCH','A declared output is absent from the exact change',409);
@@ -98,7 +122,7 @@ export function sourceReader(binding:PlatformRegistration,get:Get){
       if((github?f.sha:f.blob_id)!==blob||!github&&'sha256:'+String(f.content_sha256)!==sha256(b)||b.length!==a.bytes||sha256(b)!==a.digest)reject('SOURCE_OUTPUT_MISMATCH','Remote source bytes differ from submitted output',409);
     }
     await branch();const after=metadata(await get(actor,route,signal));if(!same(before,after))reject('SOURCE_CHANGE_CHANGED','Source change moved during verification',409);signal.throwIfAborted();
-    const facts={provider:binding.provider,projectId:binding.projectId,repositoryId:binding.repositoryId,bindingDigest:valueDigest(binding),baselineCommit:r.baselineCommit,commit:r.commit,change:r.change,state:before.state,draft:before.draft,sourceBranch:before.sourceBranch,targetBranch:before.targetBranch,changes,artifacts:r.artifacts};
+    const facts={provider:binding.provider,projectId:binding.projectId,repositoryId:binding.repositoryId,bindingDigest:valueDigest(binding),baselineCommit:r.baselineCommit,...(r.parentCommit!==undefined?{parentCommit:r.parentCommit}:{}),commit:r.commit,change:r.change,state:before.state,draft:before.draft,sourceBranch:before.sourceBranch,targetBranch:before.targetBranch,changes,artifacts:r.artifacts};
     return{schema:'runtime-source-observation/v1',...facts,evidenceRef:binding.host+'/'+binding.repository+(github?'/pull/':'/-/merge_requests/')+r.change.id,observedAt:new Date().toISOString(),factsDigest:valueDigest(facts),sourceReviewApproved:false,ciVerified:false,releaseAuthorized:false};
   };
 }

@@ -1101,3 +1101,32 @@ HTTP/MCP regressions cover same-project access, cross-project denial and no new
 external effects. Actual CI smoke, released-owner feedback dispositions, current
 Host and selected installation/deployment journeys remain to be exercised before
 these contracts can satisfy final checks.
+
+### CI preparation source contract in development
+
+The CI preparation contract carries the original reviewed branch baseline, the
+exact immediate input commit, the project change reference and requirements
+digest. A `runtime-ci/v1` archive may supply `preparationOutput` only for a request
+with `preparationInput`; every declared output file must be present under
+`prepared-source/` with matching size and SHA256. This preserves the existing
+candidate contract: a preparation output cannot introduce or replace a candidate,
+publish software or claim owner validation.
+
+The source observer independently reads the same project's open change, complete
+change inventory, declared file bytes and full Git tree. It retains the original
+baseline and additionally verifies that the output descends from its immediate
+input commit. Unchanged source is allowed, with its evidence still retained.
+GitHub uses the existing [commit comparison API](https://docs.github.com/en/rest/commits/commits#compare-two-commits);
+GitLab follows exact `parent_ids` from its [single-commit API](https://docs.gitlab.com/api/commits/#get-a-single-commit),
+with at most 1,000 commit observations and the original call deadline. Missing,
+truncated, mismatched or unrelated ancestry blocks use; a CI success field cannot
+substitute for these observations.
+
+The deterministic source reducer selects only a consumer's dependency ancestors.
+Sequential operations must extend their exact predecessor evidence. Required
+parallel branches with different resulting commits block the join; identical
+commits combine every branch's evidence instead of choosing whichever finished
+first. The following candidate must bind the resolved final source. These typed
+contracts and reducer are implemented; wiring the retained preparation requests,
+owner evaluations, archive and stage executor remains in progress. Their source
+regressions and read-only GitLab probe do not establish final candidate acceptance.

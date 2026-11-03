@@ -13,14 +13,15 @@ function fixture(provider){
   const metadata=gh?{number:1,base:{repo:{id:42},ref:'main',sha:base},head:{repo:{id:42},ref:'task/source',sha:commit},state:'open',merged:false,draft:true,changed_files:2}:{iid:1,project_id:42,source_project_id:42,target_project_id:42,target_branch:'main',source_branch:'task/source',sha:commit,diff_refs:{base_sha:base,start_sha:base,head_sha:commit},state:'opened',draft:true,changes_count:'2'};
   const files=gh?[{filename:'src/output.mjs',status:'added'},{filename:'old.mjs',status:'removed'}]:[{old_path:'src/output.mjs',new_path:'src/output.mjs',a_mode:'0',b_mode:'100644',new_file:true,deleted_file:false,renamed_file:false,diff:'@@ ...'},{old_path:'old.mjs',new_path:'old.mjs',a_mode:'100644',b_mode:'0',new_file:false,deleted_file:true,renamed_file:false,diff:'@@ ...'}];
   const file=gh?{type:'file',path:'src/output.mjs',encoding:'base64',content:Buffer.from(text).toString('base64'),size:Buffer.byteLength(text),sha:blob}:{file_path:'src/output.mjs',commit_id:commit,encoding:'base64',content:Buffer.from(text).toString('base64'),size:Buffer.byteLength(text),blob_id:blob,content_sha256:byteDigest(text).slice(7)};
-  const compare={status:'ahead',behind_by:0,base_commit:{sha:base},merge_base_commit:{sha:base}},control={overflow:false,branch:base,alter:null},calls=[],original=globalThis.fetch;let metadataReads=0;
+  const compare={status:'ahead',behind_by:0,base_commit:{sha:base},merge_base_commit:{sha:base}},control={overflow:false,branch:base,alter:null,parents:new Map(),parentCompare:null},calls=[],original=globalThis.fetch;let metadataReads=0;
   globalThis.fetch=async(url,options)=>{
     const u=new URL(url),prefix=gh?'/repos/synthetic/project':'/api/v4/projects/42',route=u.pathname.slice(prefix.length);calls.push({url:u.href,method:options.method??'GET'});assert.equal(u.origin,gh?'https://api.github.com':binding.host);assert(u.pathname.startsWith(prefix));assert.equal(options.method??'GET','GET');
     let value;
     if(route==='')value=gh?{id:42,full_name:binding.repository,default_branch:'main',archived:false}:{id:42,path_with_namespace:binding.repository,default_branch:'main',archived:false};
     else if(route===(gh?'/branches/main':'/repository/branches/main'))value={name:'main',commit:{[gh?'sha':'id']:control.branch}};
     else if(route===(gh?'/pulls/1':'/merge_requests/1')){metadataReads++;value=structuredClone(metadata);if(control.alter)control.alter(value,metadataReads);}
-    else if(route.startsWith('/compare/'))value=compare;
+    else if(route.startsWith('/compare/'))value=route.startsWith('/compare/'+base)?compare:control.parentCompare;
+    else if(route.startsWith('/repository/commits/'))value=control.parents.get(route.split('/').at(-1));
     else if(route==='/pulls/1/files'){const page=Number(u.searchParams.get('page'));value=files.slice((page-1)*100,page*100);}
     else if(route==='/merge_requests/1/changes')value={...metadata,overflow:control.overflow,changes:files};
     else if(route===(gh?'/contents/src/output.mjs':'/repository/files/src%2Foutput.mjs')){assert.equal(u.searchParams.get('ref'),commit);value=file;}
@@ -72,4 +73,27 @@ test('GitHub ancestry and regular-file constraints reject divergence, links and 
 });
 test('GitLab 15 changes endpoint requires explicit no-overflow and supported regular-file modes',async()=>{
   for(const mutate of [f=>f.control.overflow=true,f=>f.control.overflow=undefined,f=>f.files[0].b_mode='120000',f=>f.files[0].b_mode='160000',f=>f.files[0].too_large=true,f=>f.files[0].collapsed=true,f=>f.files[0].deleted_file=true]){const f=fixture('gitlab');try{mutate(f);await assert.rejects(()=>f.read(),e=>e.code.startsWith("SOURCE_"));}finally{f.restore();}}
+});
+
+for(const provider of ['github','gitlab']){
+  test(provider+' preparation ancestry retains original baseline and independently binds its input parent',async()=>{
+    const f=fixture(provider),parent='c'.repeat(40),middle='d'.repeat(40);try{
+      f.req.parentCommit=parent;f.control.parentCompare={status:'ahead',behind_by:0,base_commit:{sha:parent},merge_base_commit:{sha:parent}};
+      f.control.parents.set(commit,{id:commit,parent_ids:[middle]});f.control.parents.set(middle,{id:middle,parent_ids:[parent]});
+      const v=await f.read();assert.equal(v.baselineCommit,base);assert.equal(v.parentCommit,parent);assert.equal(v.commit,commit);assert.equal(v.sourceReviewApproved,false);
+      assert(f.calls.some(c=>c.url.includes(provider==='github'?'/compare/'+parent:'/repository/commits/'+middle)));
+      const n=f.calls.length;await assert.rejects(()=>f.read({...f.req,parentCommit:'../secret'}));assert.equal(f.calls.length,n);
+      f.req.parentCommit=commit;const same=await f.read();assert.equal(same.parentCommit,commit);assert.equal(same.baselineCommit,base);
+    }finally{f.restore();}
+  });
+  test(provider+' preparation ancestry rejects unrelated replacement even when the original baseline still matches',async()=>{
+    const f=fixture(provider),parent='c'.repeat(40);try{f.req.parentCommit=parent;f.control.parentCompare={status:'diverged',behind_by:1,base_commit:{sha:parent},merge_base_commit:{sha:base}};f.control.parents.set(commit,{id:commit,parent_ids:[base]});f.control.parents.set(base,{id:base,parent_ids:[]});await assert.rejects(()=>f.read(),{code:'SOURCE_PARENT_MISMATCH'});}finally{f.restore();}
+  });
+}
+test('GitLab ancestry follows merge parents and rejects mismatched, cyclic or unbounded evidence',async()=>{
+  const parent='c'.repeat(40),middle='d'.repeat(40);
+  for(const mutate of [f=>f.control.parents.set(commit,{id:middle,parent_ids:[parent]}),f=>f.control.parents.set(commit,{id:commit,parent_ids:[commit]}),f=>f.control.parents.set(commit,{id:commit,parent_ids:[middle]}),f=>f.control.parents.set(commit,{id:commit,parent_ids:Array.from({length:1001},(_,n)=>n.toString(16).padStart(40,'0'))})]){
+    const f=fixture('gitlab');try{f.req.parentCommit=parent;f.control.parents.set(middle,{id:middle,parent_ids:[commit]});mutate(f);await assert.rejects(()=>f.read(),{code:'SOURCE_PARENT_MISMATCH'});}finally{f.restore();}
+  }
+  const f=fixture('gitlab');try{f.req.parentCommit=parent;f.control.parents.set(commit,{id:commit,parent_ids:[base,middle]});f.control.parents.set(base,{id:base,parent_ids:[]});f.control.parents.set(middle,{id:middle,parent_ids:[parent]});assert.equal((await f.read()).parentCommit,parent);}finally{f.restore();}
 });
