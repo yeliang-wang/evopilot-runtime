@@ -20,7 +20,8 @@ function directory(root: string): void {
   if (!stat.isDirectory() || stat.uid !== process.getuid!() || (stat.mode & 0o077)) fail('TEMPLATE_UPGRADE_PATH');
 }
 function synchronize(root: string): void { const fd = fs.openSync(root, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } }
-function createFile(filename: string, bytes: Buffer, stagingRoot: string): void {
+/** Internal composition helper; caller holds the exact private project lease. */
+export function createFile(filename: string, bytes: Buffer, stagingRoot: string): void {
   // Reserved request staging is disposable; final user paths never contain partial writes.
   const pending = path.join(stagingRoot, digest(filename) + '.pending');
   if (exists(pending)) { readRegular(pending, 8 * 1024 * 1024, true); fs.unlinkSync(pending); synchronize(stagingRoot); }
@@ -44,8 +45,12 @@ function createFile(filename: string, bytes: Buffer, stagingRoot: string): void 
 }
 function recoverPublication(context:ProjectContext,requestId:string):void {
   const recordRoot=path.join(context.projectRoot,'.evopilot-template-upgrades'),staging=path.join(recordRoot,'.staging-'+requestId);
-  if(!exists(staging))return;directory(staging);
   const destinations=[path.join(recordRoot,requestId+'.json'),path.join(recordRoot,requestId+'.workspace-project.json'),path.join(context.projectRoot,'.workspace-project-'+requestId+'.tmp'),...inspectProjectTemplate().files.map(f=>path.join(context.projectRoot,f.relative))];
+  recoverProjectPublications(staging,destinations);
+}
+/** Only the retained request's enumerated project files may finish publication. */
+export function recoverProjectPublications(staging:string,destinations:string[]):void {
+  if(!exists(staging))return;directory(staging);
   const allowed=new Map(destinations.map(file=>[digest(file)+'.pending',file]));
   for(const name of fs.readdirSync(staging)){
     const target=allowed.get(name);if(!target)fail('TEMPLATE_UPGRADE_CONFLICT');

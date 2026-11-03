@@ -308,7 +308,10 @@
         "provenance/project-template-v02/docs/storage.md",
         "provenance/project-template-v02/examples/forward/README.md",
         "provenance/project-template-v02/examples/reverse/README.md",
-        "provenance/project-template-v02/examples/reverse/source.json"
+        "provenance/project-template-v02/examples/reverse/source.json",
+        "src/installation/workspace/bootstrap.ts",
+        "src/installation/workspace/bootstrap-owners.ts",
+        "tests/e2e/workspace-bootstrap-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

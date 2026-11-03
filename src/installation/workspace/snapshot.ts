@@ -19,6 +19,7 @@ import {copyMaintenanceFile,hashMaintenanceFile,inspectMaintenanceTree,maintenan
 export interface WorkspaceSelection extends ManagedLegacyBinding {
   projectRoot:string;serviceRoot:string;referenceFiles:string[];
 }
+export type WorkspaceServiceLocation=Pick<WorkspaceSelection,'workspaceRoot'|'workspaceId'|'serviceRoot'>;
 export interface PreservedReference {path:string;bytes:number;sha256:string;mode:number;}
 export interface DatabaseInventory {
   owner:'runtime'|'ontology'|'harness'|'service';path:string;schemaVersion:number;schemaDigest:string;
@@ -124,7 +125,7 @@ function databases(selection:WorkspaceSelection,roots:ManagedWorkspaceSnapshot['
     return result;
   }finally{fs.rmSync(scratch,{recursive:true,force:true});}
 }
-async function onlineWorkerStopped(selection:WorkspaceSelection):Promise<void> {
+async function onlineWorkerStopped(selection:WorkspaceServiceLocation):Promise<void> {
   if(process.platform!=='darwin'){
     if(present(selection.workspaceRoot+'.evopilot-online-worker'))fail('MAINTENANCE_WORKER_INSPECTION');return;
   }
@@ -186,7 +187,7 @@ export async function withQuiescentWorkspace<T>(input:WorkspaceSelection,request
 /** Recovery of this macOS user-service deployment must not leave a loaded
  * KeepAlive job capable of starting against a partial restored tree. No job is
  * stopped or killed by this primitive, and no PID is selected by the caller. */
-export async function requireRecoveryServicesStopped(selection:WorkspaceSelection):Promise<void> {
+export async function requireRecoveryServicesStopped(selection:WorkspaceServiceLocation):Promise<void> {
   if(process.platform!=='darwin')fail('MAINTENANCE_RESTORE_PLATFORM');
   await onlineWorkerStopped(selection);
   const label='io.evopilot.runtime.'+selection.workspaceId+'.'+createHash('sha256').update(selection.serviceRoot).digest('hex').slice(0,16);

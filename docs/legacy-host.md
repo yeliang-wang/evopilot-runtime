@@ -328,3 +328,47 @@ receipt confers semantic, execution or release authority.
 模板六份原文件及来源随 Runtime 发布，不依赖父项目目录。中断后须沿用原请求并核对
 部分文件，已有内容变化会阻止覆盖。新记录明确使用独立模板摘要；历史父项目安装摘要
 和记录保持原义，不能复用历史请求 ID 将旧记录改写成新升级结果。
+
+### Stopped Workspace preparation core / 停机工作区准备核心
+
+`installation/workspace/bootstrap.ts` prepares an explicitly selected editable
+project and owner workspace for independent Runtime installation. The selection
+pins the project/state/service roots, workspace ID, fixed published owner
+packages, `initialize` or `attach`, and a retained request ID. Defaults and Host
+registration belong to the later entry composition; this core never chooses
+daily paths, starts a service or restores the retired parent daemon.
+
+Initialization requires empty or absent project/state roots. Attachment requires
+the existing canonical workspace identity and preserves existing project files
+and template versions; it can create a missing editable project. Both flows use
+the six pinned original template files and initialize only through Runtime and
+the verified published Ontology/Harness **0.8.3** APIs. An already managed
+workspace is inspected under its exact current service binding and writer
+capability, without opening it through an old Runtime writer. A service bound
+to another workspace cannot be switched by this operation.
+
+The selected Runtime and online worker must be stopped. Original connection
+claims, independent writer/installer locks, unsafe locations and conflicting
+requests block preparation. Installation and Workspace coordination leases
+protect the retained intent; owner initialization is idempotent, project file
+publication is exclusive, and an interrupted request must resume under the
+same selection. Replacing an unfinished request is refused. Original business
+requests and receipts are not dispatched, canceled or rewritten.
+
+The result is **PREPARED**. `serviceBindingRequired` distinguishes a workspace
+awaiting independent installation from an already managed same-service
+attachment; neither means that a service or session was activated. A completed
+retry returns historical evidence with `currentEnvironmentVerified: false`,
+preserving subsequent data. The original installation/adoption records remain
+unchanged. `workspace_initialize` / `workspace_attach` Host wiring and explicit
+installation/start composition remain required before the complete onboarding
+journey can be accepted.
+
+准备核心明确选择项目、状态和服务目录，不自动写入日常目录。初始化要求空目录；
+接入保留已有工作区身份、业务记录、项目内容和模板版本，也可补建缺失的私有项目。
+已受独立服务管理的工作区只能沿用其当前绑定，不能切换至其他服务或通过旧 Runtime
+写入。运行中的服务、在线 worker、写锁或未完成的不同请求都会阻止继续。
+
+返回“已准备”不等于服务已启动、插件已安装或会话已激活。中断后沿用原请求；完成后
+重复读取返回历史证据，不覆盖新数据，也不证明当前环境已重验。Host 初始化／接入
+入口及安装／启动组合尚须继续接线，开发验证不能代替完整接入 E2E。
