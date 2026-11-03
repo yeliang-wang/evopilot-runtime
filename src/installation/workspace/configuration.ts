@@ -9,6 +9,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {isDeepStrictEqual as equal} from 'node:util';
 import {canonical,digest,exact,record,reject} from '../../server/errors.js';
 import {readHostConnection,readPrivateJson} from '../../server/security.js';
+import {readWorkspaceOperatorConfiguration} from '../../host/workspace.js';
 import {readLegacyBinding} from '../../compat/gateway.js';
 import {resolvedManagedBinding,type ManagedLegacyBinding} from '../../compat/managed-store.js';
 import {readIdentity} from '../../location-lineage.js';
@@ -57,8 +58,8 @@ export function prepareRelocationConfiguration(sourceInput:WorkspaceSelection,de
   validateSelection(source);validateSelection(destination);
   if(source.workspaceId!==destination.workspaceId||source.serviceId!==destination.serviceId||source.migrationDigest===destination.migrationDigest)fail();
   separateRoots([...selectedRoots(source),...selectedRoots(destination)]);
-  exact(record(ownerHost),[],['ownerConfigRef','ownerConfigDigest']);
-  if((ownerHost.ownerConfigRef===undefined)!==(ownerHost.ownerConfigDigest===undefined))fail();
+  exact(record(ownerHost),[],['ownerConfigRef','ownerConfigDigest','workspaceConfigRef','workspaceConfigDigest']);
+  if((ownerHost.ownerConfigRef===undefined)!==(ownerHost.ownerConfigDigest===undefined)||(ownerHost.workspaceConfigRef===undefined)!==(ownerHost.workspaceConfigDigest===undefined))fail();
   validateCopiedState(source,destination);
   const pins=new Map<string,{path:string;sha256:string;bytes:number;mode:number}>();
   const pin=(file:string)=>{const p={path:file,...hashMaintenanceFile(file)};const previous=pins.get(file);if(previous&&!equal(previous,p))fail();pins.set(file,p);return p;};
@@ -112,13 +113,20 @@ export function prepareRelocationConfiguration(sourceInput:WorkspaceSelection,de
     if(config.nativeToolchain)config.nativeToolchain={...config.nativeToolchain,path:mappedFile(config.nativeToolchain.path)};
     const name='relocated-owner-host.json';addJSON(name,config);relocatedHost={ownerConfigRef:path.join(destination.serviceRoot,name),ownerConfigDigest:digest(config)};
   }
+  if(ownerHost.workspaceConfigRef){
+    const config=json(ownerHost.workspaceConfigRef,readWorkspaceOperatorConfiguration);
+    if(digest(config)!==ownerHost.workspaceConfigDigest||!equal(config.selection,source)||config.specificationDigest!==digest(original)||!equal(config.ownerHost,ownerHost.ownerConfigRef?{ownerConfigRef:ownerHost.ownerConfigRef,ownerConfigDigest:ownerHost.ownerConfigDigest}:{}))fail();
+    const moved={...config,selection:destination,specificationDigest:digest(specification),connectionRef:path.join(destination.serviceRoot,'connection.json'),owners:{ontology:map(config.owners.ontology),harness:map(config.owners.harness)},ownerHost:{...relocatedHost}};
+    const name='relocated-workspace-operator.json';addJSON(name,moved);relocatedHost={...relocatedHost,workspaceConfigRef:path.join(destination.serviceRoot,name),workspaceConfigDigest:digest(moved)};
+  }
   const connection=json(path.join(source.serviceRoot,'connection.json'),readHostConnection);
   if(connection.workspaceId!==source.workspaceId||connection.projectId!==original.projectId||connection.principalId!==original.principalId||connection.serviceId!==source.serviceId||connection.version!==original.version||connection.tokenRef!==original.tokenRef||connection.origin!=='http://127.0.0.1:'+original.port)fail();
   addJSON('connection.json',{...connection,tokenRef:specification.tokenRef});
   const oldPlugin=runtimePluginMaterial(original.packageRoot,path.join(source.serviceRoot,'connection.json'),original.nodeExecutable,ownerHost);
   for(const [name,bytes] of oldPlugin.files){const file=path.join(source.serviceRoot,'plugin',name);if(pin(file).sha256!==sha(bytes))fail();}
-  const helper=path.join(specification.packageRoot,'dist/host/header-helper.js'),args=[path.join(specification.packageRoot,'dist/host/bridge.js'),'--connection-ref',path.join(destination.serviceRoot,'connection.json'),'--legacy-only'];
+  const helper=path.join(specification.packageRoot,'dist/host/header-helper.js'),args=[path.join(specification.packageRoot,relocatedHost.workspaceConfigRef?'dist/installation/workspace-host.js':'dist/host/bridge.js'),'--connection-ref',path.join(destination.serviceRoot,'connection.json'),'--legacy-only'];
   if(relocatedHost.ownerConfigRef)args.push('--owner-config-ref',relocatedHost.ownerConfigRef,'--owner-config-digest',relocatedHost.ownerConfigDigest!);
+  if(relocatedHost.workspaceConfigRef)args.push('--operator-config-ref',relocatedHost.workspaceConfigRef,'--operator-config-digest',relocatedHost.workspaceConfigDigest!);
   addJSON('plugin/.mcp.json',{mcpServers:{evopilot_runtime:{type:'http',url:connection.origin+'/mcp',http_headers_helper:[original.nodeExecutable,helper,'--connection-ref',path.join(destination.serviceRoot,'connection.json')].map(quoteHelperArgument).join(' ')},evopilot_runtime_legacy:{type:'stdio',command:original.nodeExecutable,args}}});
   const catalog=(root:string)=>({name:marketplace(root),plugins:[{name:'evopilot-runtime',source:{source:'local',path:'./plugin'},policy:{installation:'AVAILABLE',authentication:'ON_INSTALL'}}]});
   if(!equal(read('.agents/plugins/marketplace.json'),catalog(source.serviceRoot)))fail();

@@ -29,7 +29,7 @@ export function createLegacyTools(client:RuntimeHttpClient,owners?:LegacyOwnerRo
     const data={namespace:'evopilot-runtime-legacy',sessionId,sessionActive:active,connection:{workspaceId:client.connection.workspaceId,projectId:client.connection.projectId,serviceId:client.connection.serviceId,version:client.connection.version},authority:false,migrationNotice:'Runtime calls now use the independent HTTP service. Configured owner calls use the published owner API in this Host process; legacy records do not activate a Project Lifecycle.',...(owner?{delegation:{owner,transport:'local-published-owner-api',runtimeHttpAuthoring:false}}:{}),...(correlation?{correlation}:{}) ,...(error?{error:{code:error.code,message:error.message}}:{result})};
     return{content:[{type:'text',text:canonicalEvidence(data)}],structuredContent:data,...(error?{isError:true}:{})};
   }
-  return{definitions,has:(name:string)=>definitions.some(tool=>tool.name===name),async call(name:string,value:unknown,signal?:AbortSignal):Promise<CallToolResult>{
+  return{definitions,sessionActive:()=>active,deactivate:()=>{active=false;},has:(name:string)=>definitions.some(tool=>tool.name===name),async call(name:string,value:unknown,signal?:AbortSignal):Promise<CallToolResult>{
     try{
       const args=record(value),action=name.slice(prefix.length);
       if(!definitions.some(tool=>tool.name===name))reject('UNKNOWN_TOOL','Unknown legacy tool',404);

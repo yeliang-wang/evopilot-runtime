@@ -237,3 +237,13 @@ test('actual installed service recovers committed adoption, preserves old receip
   const failures=readdirSync(join(f.plan.root,'installation-audit')).filter(n=>n.endsWith('-failure.json'));assert.equal(failures.length,2);assert.deepEqual(failures.map(n=>JSON.parse(readFileSync(join(f.plan.root,'installation-audit',n))).code).sort(),['INSTALLATION_CHANGED','MIGRATION_BINDING_CHANGED']);
  }finally{await stdio?.close();if(spec)await stopUserService(spec);f.cleanup();}
 });
+
+test('Workspace operator grants are explicit managed-installation selections and staging does not enable local maintenance',async()=>{
+ const f=distributionFixture();try{
+  const grant={projectRoot:join(f.root,'project'),referenceFiles:[],owners:{ontology:join(f.root,'ontology'),harness:join(f.root,'harness')},calls:['workspace_inspect','workspace_backup'],expiresAt:'2030-01-01T00:00:00Z'};
+  f.plan.workspaceOperator=grant;await assert.rejects(()=>runInstaller(f.plan,'stage'),{code:'MIGRATION_REQUIRED'});
+  legacyFixture(f);mkdirSync(grant.projectRoot,{mode:0o700});writeFileSync(join(grant.projectRoot,'workspace-project.json'),JSON.stringify({schema:'evopilot-workspace-project/v1',id:f.plan.workspaceId}),{mode:0o600});
+  await runInstaller(f.plan,'stage');assert(!existsSync(join(f.plan.root,'workspace-operator.json')));assert(!existsSync(join(f.plan.root,'plugin')));
+  await assert.rejects(()=>runInstaller({...f.plan,workspaceOperator:{...grant,calls:['arbitrary.execute']}},'stage'),{code:'WORKSPACE_OPERATOR_CONFIGURATION'});
+ }finally{f.cleanup();}
+});

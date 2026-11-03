@@ -68,3 +68,12 @@ test('unsigned destination bindings, overlapping roots and changed project ident
  assert.throws(()=>prepareRelocationConfiguration(f.source,{...f.destination,serviceRoot:f.source.serviceRoot},f.ownerHost),{code:'MAINTENANCE_LOCATION'});
  put(join(f.destination.projectRoot,'workspace-project.json'),{schema:'evopilot-workspace-project/v1',id:'other'});assert.throws(()=>prepare(f),{code:'MAINTENANCE_IDENTITY'});
 });
+
+
+test('relocation retains exact local maintenance permissions and rebinds only its operator paths and configuration digest',t=>{
+ const f=fixture(t,true,true,true),material=prepare(f);assert(material.ownerHost.workspaceConfigRef);apply(f,material);
+ const config=read(material.ownerHost.workspaceConfigRef);assert.deepEqual(config.calls,f.operatorConfig.calls);assert.equal(config.expiresAt,f.operatorConfig.expiresAt);assert.deepEqual(config.selection,f.destination);assert.equal(config.specificationDigest,digest(read(join(f.destination.serviceRoot,'service-specification.json'))));assert.equal(config.connectionRef,join(f.destination.serviceRoot,'connection.json'));
+ assert.deepEqual(config.ownerHost,{ownerConfigRef:material.ownerHost.ownerConfigRef,ownerConfigDigest:material.ownerHost.ownerConfigDigest});
+ const plugin=runtimePluginMaterial(join(f.destination.serviceRoot,'package'),config.connectionRef,node,material.ownerHost);assert.deepEqual(plugin.files.get('.mcp.json'),fs.readFileSync(join(f.destination.serviceRoot,'plugin/.mcp.json')));
+ assert.equal(prepare(f).materialDigest,material.materialDigest);
+});

@@ -15,11 +15,11 @@ const put=(file,v)=>{fs.mkdirSync(dirname(file),{recursive:true,mode:0o700});fs.
 const read=file=>JSON.parse(fs.readFileSync(file));
 const scoped=(binding,fn)=>{const c=acquireManagedLegacyContext(binding);try{return c.run(fn);}finally{c.close();}};
 function copy(source,target){fs.cpSync(source,target,{recursive:true,verbatimSymlinks:true});const visit=(a,b)=>{const s=fs.lstatSync(a);if(s.isSymbolicLink())return;fs.chmodSync(b,s.mode&0o777);if(s.isDirectory())for(const name of fs.readdirSync(a))visit(join(a,name),join(b,name));};visit(source,target);}
-export function relocationConfigurationFixture(t,withOwners=true,move=true){
+export function relocationConfigurationFixture(t,withOwners=true,move=true,withOperator=false){
  const f=workspaceMaintenanceFixture(t),s=f.selection,packageRoot=join(s.serviceRoot,'package'),expiresAt=new Date(Date.now()+7*86400000).toISOString();
  fs.mkdirSync(packageRoot,{mode:0o700});put(join(packageRoot,'package.json'),{name:'@evopilot-next/runtime',version:'0.8.3'});
  copy(join(repo,'plugins'),join(packageRoot,'plugins'));
- for(const name of ['server/cli.js','host/bridge.js','host/header-helper.js'])put(join(packageRoot,'dist',name),'#!/usr/bin/env node\n// Synthetic material fixture; never executed.\n');
+ for(const name of ['server/cli.js','host/bridge.js','host/header-helper.js','installation/workspace-host.js'])put(join(packageRoot,'dist',name),'#!/usr/bin/env node\n// Synthetic material fixture; never executed.\n');
  const token='synthetic_client_credential_1234567890abcdef';
  put(join(s.serviceRoot,'client.json'),{schema:'runtime-client-credential/v1',workspaceId:s.workspaceId,projectId:'synthetic',principalId:'synthetic',token});
  initializeCredentials(join(s.serviceRoot,'data'),s.workspaceId,[{id:'synthetic',projects:['synthetic'],permissions:['read'],revision:1,expiresAt,tokenDigest:tokenDigest(token)}]);
@@ -37,6 +37,8 @@ export function relocationConfigurationFixture(t,withOwners=true,move=true){
  const spec={schema:'runtime-user-service/v1',root:s.serviceRoot,packageRoot,version:'0.8.3',nodeExecutable:node,nodeSha256,workspaceId:s.workspaceId,projectId:'synthetic',principalId:'synthetic',tokenRef:join(s.serviceRoot,'client.json'),port:32198,integrationsRef:join(f.root,'integrations.json'),legacyRef:join(s.serviceRoot,'legacy-binding.json'),...(providers?{legacyProviders:{ref:join(f.root,'providers.json'),digest:digest(providers)}}:{})};
  put(join(s.serviceRoot,'service-specification.json'),spec);put(join(s.serviceRoot,'service.plist'),userServicePlist(spec));
  put(join(s.serviceRoot,'connection.json'),{schema:'runtime-host-connection/v1',origin:'http://127.0.0.1:'+spec.port,workspaceId:s.workspaceId,projectId:'synthetic',principalId:'synthetic',serviceId:s.serviceId,version:spec.version,tokenRef:spec.tokenRef});
+ let operatorConfig;
+ if(withOperator){operatorConfig={schema:'runtime-workspace-operator/v1',selection:s,specificationDigest:digest(spec),connectionRef:join(s.serviceRoot,'connection.json'),owners:Object.fromEntries(Object.entries(owners).map(([o,v])=>[o,v.packageRoot])),ownerHost:{...ownerHost},calls:['workspace_inspect','workspace_capacity','workspace_backup','workspace_backup_inspect','workspace_restore','workspace_migrate'],expiresAt};const ref=join(s.serviceRoot,'workspace-operator.json');put(ref,operatorConfig);ownerHost={...ownerHost,workspaceConfigRef:ref,workspaceConfigDigest:digest(operatorConfig)};}
  const material=runtimePluginMaterial(packageRoot,join(s.serviceRoot,'connection.json'),node,ownerHost);for(const [name,bytes] of material.files)put(join(s.serviceRoot,'plugin',name),bytes);
  put(join(s.serviceRoot,'.agents/plugins/marketplace.json'),{name:'evopilot-runtime-'+sha(s.serviceRoot).slice(0,16),plugins:[{name:'evopilot-runtime',source:{source:'local',path:'./plugin'},policy:{installation:'AVAILABLE',authentication:'ON_INSTALL'}}]});
  put(join(s.serviceRoot,'installation-plan.json'),{synthetic:'Retain original installation history',root:s.serviceRoot});put(join(s.serviceRoot,'legacy-adoption.json'),{synthetic:'Retain original immutable adoption receipt'});
@@ -47,5 +49,5 @@ export function relocationConfigurationFixture(t,withOwners=true,move=true){
  const moved=scoped(f.binding,()=>relocateWorkspaceSnapshot({sourceRoot:s.workspaceRoot,destinationRoot:destination.workspaceRoot,workspaceId:s.workspaceId,expectedSnapshotDigest:snap.snapshotDigest}));Object.assign(destination,moved.managedBinding);
  t.after(()=>{for(const id of moved.requiredKeyIds)fs.rmSync(join(keyDirectory(),id+'.key'),{force:true});});
  }
- return{...f,source:s,destination,ownerHost,spec,integrations,providers};
+ return{...f,source:s,destination,ownerHost,spec,integrations,providers,operatorConfig};
 }

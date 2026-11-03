@@ -2,10 +2,15 @@
 
 `evopilot_v01_guide` remains an offline, read-only tool. The `v01` namespace is
 historical; it does not identify the current Runtime version. Starting the
-compatibility entry without a connection exposes only the guide. A missing or
+ordinary compatibility entry without a connection exposes only the guide. A missing or
 unavailable connection cannot prevent a guide call. Service calls still require
 the exact protected connection; the bridge never starts a daemon, creates a
 Workspace, opens a Runtime database or grants permissions.
+
+An explicitly configured local Workspace operator can additionally expose the
+six maintenance tools described below while HTTP is offline. This uses the
+installation bootstrap, not an HTTP operation or implicit permission from loading
+the plugin.
 
 The guide preserves the original named scenarios and V02–V08 identifiers. V02
 use cases and all original test paths describe historical provenance, not current
@@ -104,8 +109,8 @@ Restore preserves pending work and returns `serviceStarted: false` and
 `businessWorkDispatched: false`. Startup remains a separate explicit operator
 step. A repeated completed request returns its historical restore receipt and
 cannot overwrite subsequent work; it does not certify the current environment.
-The durable location operator is described below; Host maintenance aliases and
-final migration acceptance remain separate. Neither this documentation nor source tests mark
+The durable location operator and selected Host maintenance aliases are described
+below; final migration acceptance remains separate. Neither this documentation nor source tests mark
 the complete legacy maintenance path or final product acceptance passed.
 
 Physical preservation checks retain each published owner's signed audit format:
@@ -120,8 +125,8 @@ existing signed same-host lineage. All business tables, their schema and the
 original adoption seal are included in the snapshot. A managed move returns a
 new location binding without rewriting that seal or any original claim/receipt.
 Plain directory copies, stale bindings, changed destination records and missing
-lineage keys are rejected. The durable operator below composes service configuration cutover. The Host
-migration entry remains separate integration work; this core never starts a service
+lineage keys are rejected. The durable operator below composes service configuration cutover. Its selected Host
+migration entry uses the same core; this core never starts a service
 or redispatches work.
 
 The operator configuration assembler can prepare the new service, connection,
@@ -140,7 +145,7 @@ references. It contains no client or platform token values and cannot renew
 authority or register Codex. Changed copied credentials, service state, package
 files or original Host permissions are rejected. Prepared bytes do not make old
 execution claims current or authorize restarting them. The durable operator below applies these bytes under its retained journal and
-leases. Host maintenance aliases still need integration.
+leases. Selected Host maintenance aliases use this retained operator flow.
 
 ## 中文说明
 
@@ -171,13 +176,13 @@ leases. Host maintenance aliases still need integration.
 恢复完成前会核对全部所选文件、数据库表和引用；未决业务请求仍保持原样。
 
 恢复不会启动服务或重新派发业务。对已完成请求的重试只返回原恢复回执，不回滚
-后续新数据，也不代表当前环境重新验收通过。搬迁运维流程见下文；Host 运维入口和最终产品验收
-仍须继续完成各自的集成及验收。
+后续新数据，也不代表当前环境重新验收通过。搬迁运维流程及可选 Host 入口见下文；
+最终产品验收仍须提供精确候选的完整证据。
 
 Runtime 搬迁核心已支持由独立服务接管的 schema-9 数据库：快照覆盖全部业务表、
 表结构和原接管记录，新位置通过既有本机签名链取得新绑定。原接管记录及历史
 请求、claim、回执保持不变。普通复制、旧绑定、目标数据变化或缺失密钥均不能
-通过。下文的运维流程已组合服务配置切换，Host 搬迁入口仍须集成；搬迁核心不会启动服务或重跑业务。
+通过。下文的运维流程及可选 Host 搬迁入口已组合服务配置切换；搬迁核心不会启动服务或重跑业务。
 
 配置准备器可为已有签名搬迁绑定生成新服务、连接、provider、Host、插件和 launchd
 配置。它只读，不写入配置、不启动服务、不注册 Codex。账号、权限、有效期、凭据、
@@ -211,8 +216,8 @@ and prepared configuration bytes may resume; different input, foreign files,
 changed domain tables or new writes are refused. A completed retry returns the
 original historical receipt without replacing newer target data. A VERIFIED
 result starts no service, registers no Codex plugin and dispatches no business
-request. Explicit attachment/start and Host maintenance aliases remain separate
-integration work. Source regressions are not final E15 or the 664-case acceptance.
+request. Explicit attachment/start remains a separate operator step. Source
+regressions are not final E15 or the 664-case acceptance.
 
 操作入口 `relocateManagedWorkspace` 复用带独立摘要锚点的本机备份，在原位置和
 目标位置的共享锁、写锁及已有安装锁内，完成三目录复制、三个组件各自的位置证明和
@@ -222,5 +227,63 @@ integration work. Source regressions are not final E15 or the 664-case acceptanc
 
 中断后沿用原请求 ID 恢复。日志只允许续做原来的精确部分副本与配置；遇到新数据、
 外来文件或输入变化时拒绝覆盖。完成后的重复调用只返回历史回执，不重新验证当前状态。
-操作本身不启动服务、不启用 Codex 插件、不重新派发业务任务。Host 运维入口接线、
-显式接入／启动以及正式候选 E15 和 664 项验收仍需单独完成。
+操作本身不启动服务、不启用 Codex 插件、不重新派发业务任务。显式接入／启动以及
+正式候选 E15 和 664 项验收仍需单独完成。
+
+### Selected local Workspace tools / 显式选择的本地运维工具
+
+The immutable installer plan may select `workspaceOperator` with the exact
+private `projectRoot`, selected `referenceFiles`, published `owners` package
+paths, allowed `calls` and `expiresAt`. This requires a verified `legacyMigration`
+and matching project marker. Stage creates no operator connection. Installation
+binds the grant to the actual service identity, managed workspace, specification
+digest and protected connection. Old installation plans gain no new permissions.
+
+There is still one Runtime plugin: its primary entry uses HTTP, and its
+`evopilot_runtime_legacy` entry uses the local
+`dist/installation/workspace-host.js` bootstrap when this grant is selected.
+The ordinary bridge remains a transport adapter. HTTP, Dashboard and project
+YAML cannot select local maintenance. The bootstrap requires the exact protected
+operator configuration and digest, and refuses a different transport connection.
+Every call rechecks the pinned scope and expiry; editing the file does not widen
+an existing selection. Tokens are not returned in tool results.
+
+| Tool (all prefixed `evopilot_v01_`) | Behavior |
+| --- | --- |
+| `workspace_inspect` | Passive selected-root and owned-service inspection; creates no workspace or service. |
+| `workspace_capacity` | Bounded file counts, sizes and digests; explicitly not a consistent backup. |
+| `workspace_backup` | Stops the exact configured Runtime job and preserves all three selected roots under the existing maintenance guards. |
+| `workspace_backup_inspect` | Verifies the complete backup against its external anchor and original selection, with no service start. |
+| `workspace_restore` | Restores only missing/empty original roots; supports an external rescue configuration while HTTP is unavailable. |
+| `workspace_migrate` | Retains a backup and composes whole-workspace relocation and operational configuration switching. |
+
+New backup and migration requests require activation of the same compatibility
+session. Backup, migration and restore deactivate that session; none restarts
+services, registers Codex or dispatches business work. A live independent online
+worker still blocks preservation; these calls do not stop an unrelated job.
+Each mutation uses a stable `requestId`. Inspect a failed original request before
+continuing it; the exact retained request may resume offline. Changed arguments
+are refused. A completed retry returns its original historical receipt and
+preserves subsequent data.
+
+Migration retains the original `destinationProjectRoot` and
+`destinationStateRoot` arguments. Its service destination defaults to
+`destinationStateRoot + '.evopilot-runtime'`; select `destinationServiceRoot`
+explicitly to change that location. The relocated plugin preserves allowed calls
+and expiry while binding the new operational paths. Source roots and original
+installation history remain retained. To recover missing service files, use a
+separate verified Runtime package and a protected copy of the original operator
+configuration with the same pinned digest; do not remove the running rescue
+package or the backup anchor.
+
+安装计划必须显式选择本地运维的项目目录、引用文件、两方发行包、允许调用和有效期；
+旧计划不会自动获得权限。安装器绑定真实服务及工作区身份后，同一个 Runtime 插件的
+兼容入口才会启用上述六项工具，HTTP 主入口保持不变。每次调用核对原配置摘要、范围
+和有效期；修改配置不能扩权，工具结果不返回 token。
+
+新备份／搬迁请求须先激活当前兼容会话；备份、恢复、搬迁都会停用该会话，但不会
+自动重启服务、注册插件或重跑业务。独立在线 worker 须先另行停用。中断后核对并沿用
+原请求 ID 和参数，可离线继续；已完成请求只返回历史回执，不覆盖后续数据。
+搬迁默认将新服务目录放在 `destinationStateRoot + '.evopilot-runtime'`，也可显式指定
+第三个目标目录。迁移保留授权范围和有效期。完整原有功能映射中的初始化、接入、
+模板升级、工具链准备及在线配置仍须继续完成；这些工具的开发测试不替代最终 E15。

@@ -294,7 +294,11 @@
         "src/installation/workspace/relocation.ts",
         "src/installation/workspace/owners.ts",
         "tests/e2e/workspace-relocation-v090.test.mjs",
-        "tests/fixtures/relocation-configuration-v090.mjs"
+        "tests/fixtures/relocation-configuration-v090.mjs",
+        "src/host/workspace.ts",
+        "src/installation/workspace/operator.ts",
+        "src/installation/workspace-host.ts",
+        "tests/e2e/workspace-host-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",
