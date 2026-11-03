@@ -150,8 +150,9 @@ qualification, independent Host integration and full lifecycle acceptance remain
 M3–M5 work.
 Unconfigured adapters fail closed; synthetic regression adapters are test
 fixtures only and cannot certify real asset usability or final E2E. The two
-Dashboard pages, independent installed Expert/plugin, migration and complete
-candidate acceptance remain unfinished. These development features do not claim
+Dashboard pages have development browser coverage. Independent installed
+Expert/plugin, full migration and complete candidate acceptance remain unfinished.
+These development features do not claim
 that the frozen 664 acceptance instances have passed.
 
 ## Development integration admission
@@ -1349,6 +1350,52 @@ omits every event data body. It prompts state readback instead of interpreting
 events as completion or permission to dispatch. Credential revocation also ends
 the stream. Unknown and pending instance facts remain unknown and pending.
 
-These endpoints and their source regression tests are implementation evidence.
-React/SeeCode integration, actual browser interaction, all frozen UI variants,
-the installed candidate and full final acceptance remain required separately.
+### Two-page Dashboard development implementation
+
+The packaged loopback service serves `/lifecycle` and `/monitor`, with no third
+product page or development server. `evopilot-runtime browser-code
+--connection-ref <protected connection>` verifies the selected service identity
+and prints its local URL and a one-use connection code. Enter the code in either
+page. A reader can browse; draft editing and activation require their separate
+existing permissions. No long-lived token is placed in the browser.
+
+The definition page presents the actual hash-pinned MIT SeeCode graph renderer,
+node properties and the original YAML. The complete local renderer import closure
+and provenance are checked during build; no remote fonts, scripts or renderer CLI
+run in the browser. Click or keyboard-select a node to configure it; drag or arrow
+keys change presentation coordinates only. Project extensions can be inserted in
+the four publisher slots, configured and connected within the same slot. Base
+dependencies and checks remain locked. AST edits preserve comments and unrelated
+fields. Incomplete extensions remain selectable, and their graph is explicitly
+labelled a draft preview until the shared service compiler validates that source.
+An invalid or unsupported graph falls back to node selection without discarding
+the YAML. Browser graph construction never supplies readiness or execution proof.
+
+Saving a draft preserves its exact source. The same page can validate, show the
+complete textual difference from the active revision, then save and activate using
+that reviewed validation digest. A background preview cannot replace the digest
+selected for activation. Concurrent writes preserve the local text and require
+readback. An uncertain write retains only its original request identity in session
+storage; the UI inspects its receipt and never submits a replacement automatically.
+YAML and long-lived credentials are not stored in browser storage. Reauthentication
+to the same project retains unsaved text in the open page's memory. Closing or
+reloading the page still loses unsaved memory, with an unsaved-navigation warning.
+
+The monitor only reads the dedicated snapshot/event endpoints. It displays pinned
+instance definitions, stage status, request identity and retained receipt details;
+it has no YAML, edit, dispatch or release controls. Events trigger complete state
+readback, rather than becoming a PASS. Duplicates are ignored, gaps trigger a fresh
+snapshot, and disconnects mark the last observed data as stale while bounded
+read-only reconnect/polling continues. Revoked access requires a new connection.
+Desktop and narrow layouts retain scrollable graphs, source and stage tables.
+
+The real Chromium development suite runs against an isolated HTTP service and
+durable store, with explicitly synthetic owner bindings and stage observations.
+It checks graph/source editing, same-page activation, stale bindings, conflicts,
+original-request recovery, permissions, service restart, live instance events,
+fallback and narrow layouts. It is separate from all 664 frozen exact-candidate
+acceptance instances and does not certify real owner/CI/Host integration, daily
+installation or release. Run it after build using
+`node node_modules/@playwright/test/cli.js test --config
+tests/browser/dashboard-v090.config.mjs`; optional `EVOPILOT_BROWSER_OUTPUT` keeps
+screenshots/traces in a private evidence directory.

@@ -1,0 +1,106 @@
+{
+  "schema": "runtime-seecode-renderer/v1",
+  "repository": "https://github.com/Aryanutkarsh/SeeCode",
+  "commit": "9967db28e86e0e212d4ddf5a60f90fe62f3436c0",
+  "version": "0.6.3",
+  "license": "MIT",
+  "scope": "Unmodified pure graph renderer import closure only; no skill, CLI, filesystem access, external fonts or network loading.",
+  "files": {
+    "dashboard/vendor/seecode/lib/render/graph/graph.mjs": {
+      "sha256": "204f0935d212e08e03543673abe8b3cc93a4305ffa866a225c936b1f00e51de6",
+      "bytes": 21765,
+      "upstreamPath": "skills/seecode/scripts/lib/render/graph/graph.mjs",
+      "gitBlob": "5e2dea1a4ac3c41c8cf99643b99eb722064daad2"
+    },
+    "dashboard/vendor/seecode/lib/svg.mjs": {
+      "sha256": "302984d2543004459d41e577aee00344e104654d0729c632c23fd3658f6400ae",
+      "bytes": 2998,
+      "upstreamPath": "skills/seecode/scripts/lib/svg.mjs",
+      "gitBlob": "a9ccfc6949c4451cc335465963ca272ffebed091"
+    },
+    "dashboard/vendor/seecode/lib/text.mjs": {
+      "sha256": "e835b186a607bb9da2db677ee232acbd1eae378af07aada1edec4a8447b8694e",
+      "bytes": 5327,
+      "upstreamPath": "skills/seecode/scripts/lib/text.mjs",
+      "gitBlob": "e68b80b3b9ad3773772c14a099c9ee7ff66331e2"
+    },
+    "dashboard/vendor/seecode/lib/render/shared/nodes.mjs": {
+      "sha256": "ccdccc649b69a6d23adc4b21718e62b2f34ef65ed62a9da7d7030b4b06a69603",
+      "bytes": 9555,
+      "upstreamPath": "skills/seecode/scripts/lib/render/shared/nodes.mjs",
+      "gitBlob": "6069a683a87609f61a0d5b79ec09b114e01699d0"
+    },
+    "dashboard/vendor/seecode/lib/render/shared/edges.mjs": {
+      "sha256": "b04c41ec0e8fc90d1071968165e0385834c8c372cf3e0e186d3c24228ed40c9e",
+      "bytes": 6942,
+      "upstreamPath": "skills/seecode/scripts/lib/render/shared/edges.mjs",
+      "gitBlob": "74a84ca8171a6dda1b5a15c60e2da73eec3e4190"
+    },
+    "dashboard/vendor/seecode/lib/render/shared/legend.mjs": {
+      "sha256": "61bc831265ab2f7792f073e74605c07d6fb7ef4e6958cdd957a83df78d005cee",
+      "bytes": 3563,
+      "upstreamPath": "skills/seecode/scripts/lib/render/shared/legend.mjs",
+      "gitBlob": "e0c47014af891575c3a52a3f7013f4aec8a70bfc"
+    },
+    "dashboard/vendor/seecode/lib/render/graph/route.mjs": {
+      "sha256": "88bc7125004218c8a79d184a65f3494a22f02ef3aa0f981bb1dd78267f2ae0b3",
+      "bytes": 13439,
+      "upstreamPath": "skills/seecode/scripts/lib/render/graph/route.mjs",
+      "gitBlob": "6764c9a167e9245c0a147afe76c76c36d677c762"
+    },
+    "dashboard/vendor/seecode/lib/render/graph/verify.mjs": {
+      "sha256": "530b545d3bb24adc35cb182492911c24a90e4b1cf7df40fab8de21652a87ee1d",
+      "bytes": 7148,
+      "upstreamPath": "skills/seecode/scripts/lib/render/graph/verify.mjs",
+      "gitBlob": "c768c1b5d6b2a148c43d912c1289d45f2e734efc"
+    },
+    "dashboard/vendor/seecode/lib/motion.mjs": {
+      "sha256": "1fbd33b5165cb6e9dc2f502c156dc7335c5ee8ce03369cfc506709428baa8796",
+      "bytes": 5627,
+      "upstreamPath": "skills/seecode/scripts/lib/motion.mjs",
+      "gitBlob": "8123357cbc6e1fd49036a39f192fcf873322a138"
+    },
+    "dashboard/vendor/seecode/lib/tokens.mjs": {
+      "sha256": "56240784eeba9377af26a211b6757374e484dc6a233cdb1ee78c66356a2a98be",
+      "bytes": 22076,
+      "upstreamPath": "skills/seecode/scripts/lib/tokens.mjs",
+      "gitBlob": "328887099038ac1372f2feee85b68a865e647568"
+    },
+    "dashboard/vendor/seecode/lib/render/shared/icons.mjs": {
+      "sha256": "4f3ed529829d42fdf45aa504cbca1206abf15c0305757e97ddde4a846579bcc9",
+      "bytes": 3391,
+      "upstreamPath": "skills/seecode/scripts/lib/render/shared/icons.mjs",
+      "gitBlob": "ca1074cd2eec7f6e1c9bf4af7a874900f07597cf"
+    },
+    "dashboard/vendor/seecode/LICENSE": {
+      "sha256": "5be261958981f40476e2f0c073bd427f362f92d5f8903b1134eb3527f3854785",
+      "bytes": 1069,
+      "upstreamPath": "LICENSE",
+      "gitBlob": "c22edde8a701dfd8f535de28108224fe6d27246e"
+    },
+    "dashboard/vendor/seecode/lib/color.mjs": {
+      "sha256": "e1f48091db75829bcec53b06a7c99419e2fc3f9b4fbeabffb257b30cfd1db509",
+      "bytes": 5912,
+      "upstreamPath": "skills/seecode/scripts/lib/color.mjs",
+      "gitBlob": "b6eb6fe718715609c582d8300532738a40d49f7b"
+    },
+    "dashboard/vendor/seecode/lib/render/structure/axon.mjs": {
+      "sha256": "2b5c175dfc9f3d4a0ab9c535b506d5fd8da5adf51cf0f24e0adcf3f27e3c39be",
+      "bytes": 17469,
+      "upstreamPath": "skills/seecode/scripts/lib/render/structure/axon.mjs",
+      "gitBlob": "259b59bed3ae157c377fb48498d1739287c056e6"
+    },
+    "dashboard/vendor/seecode/lib/render/structure/iso-detail.mjs": {
+      "sha256": "99b00fc709de2fb9611f3d7b9c8d551991c676dc33d17c5d5bb9444ad2418a1d",
+      "bytes": 20011,
+      "upstreamPath": "skills/seecode/scripts/lib/render/structure/iso-detail.mjs",
+      "gitBlob": "b49f221633108d1decea06b74852071a8344b8c3"
+    },
+    "dashboard/vendor/seecode/lib/render/structure/object.mjs": {
+      "sha256": "cd3913d726c85445884c9c6153ef18a5b9461afd7016726fb6427839b5f8eacc",
+      "bytes": 11691,
+      "upstreamPath": "skills/seecode/scripts/lib/render/structure/object.mjs",
+      "gitBlob": "4e949300161defb1a9ecdec1d9a09bfeab7d3129"
+    }
+  }
+}

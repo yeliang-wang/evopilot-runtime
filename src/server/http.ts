@@ -20,6 +20,7 @@ import {LEGACY_READ,LEGACY_WRITE} from '../compat/catalog.js';
 import type {Providers as LegacyProviders} from '../service.js';
 import {createBrowserSessions} from './browser-session.js';
 import {dashboardEnvelope,monitorEvents,monitorSnapshot} from './dashboard.js';
+import {serveDashboard} from './static-ui.js';
 
 const VERSION = String(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version);
 export interface ServerOptions { stateRoot: string; workspaceId: string; port?: number; legacyBindingRef?:string; }
@@ -137,6 +138,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     try {
       if(closing)reject('STOPPING','Service is stopping',503);
       const url=boundary(req);
+      if(serveDashboard(url.pathname,req.method,res))return;
       if(url.pathname==='/api/v1/dashboard-code'&&req.method==='POST'){
         const actor=principal(req),input=record(await body(req));exact(input,['projectId']);
         const authorization=req.headers.authorization;

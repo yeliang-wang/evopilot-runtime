@@ -1,0 +1,15 @@
+import {build} from 'vite';
+import {writeFileSync,readFileSync,readdirSync,lstatSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {fileURLToPath} from 'node:url';
+import {join,relative} from 'node:path';
+import {spawnSync} from 'node:child_process';
+import {verifySeeCode} from './check-dashboard.mjs';
+import {DIAGRAM_CSS,skinCss} from '../dashboard/vendor/seecode/lib/tokens.mjs';
+const root=fileURLToPath(new URL('../',import.meta.url)),out=join(root,'dist/dashboard');verifySeeCode();
+const typed=spawnSync(process.execPath,[join(root,'node_modules/typescript/bin/tsc'),'-p','dashboard/tsconfig.json'],{cwd:root,stdio:'inherit'});if(typed.error)throw typed.error;if(typed.status!==0)process.exit(typed.status??1);
+await build({configFile:false,root:join(root,'dashboard'),base:'/ui/',build:{outDir:out,emptyOutDir:true,sourcemap:false,target:'es2023'},logLevel:'warn'});
+writeFileSync(join(out,'seecode.css'),skinCss({skin:'light',brand:{fonts:{sans:'system-ui',mono:'monospace',serif:'serif'}}})+'\n'+DIAGRAM_CSS+'\n');
+writeFileSync(join(out,'SEECODE-LICENSE.txt'),readFileSync(join(root,'dashboard/vendor/seecode/LICENSE')));
+const files={};function walk(dir){for(const entry of readdirSync(dir)){const path=join(dir,entry);if(lstatSync(path).isDirectory())walk(path);else{const bytes=readFileSync(path),name=relative(out,path);files[name]={bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex'),type:name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.js')?'text/javascript; charset=utf-8':name.endsWith('.css')?'text/css; charset=utf-8':'text/plain; charset=utf-8'};}}}walk(out);
+writeFileSync(join(out,'manifest.json'),JSON.stringify({schema:'runtime-dashboard-distribution/v1',files},null,2)+'\n');

@@ -4,7 +4,8 @@ import { constants, closeSync, fsyncSync, openSync, writeFileSync, unlinkSync } 
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { canonical, exact, record, reject, ServiceError, slug, string } from './errors.js';
-import { ensurePrivateRoot, initializeCredentials, readPrivateJson, tokenDigest, type Permission } from './security.js';
+import { ensurePrivateRoot, initializeCredentials, readPrivateJson, tokenDigest,readHostConnection,hostHeaders, type Permission } from './security.js';
+import {createRuntimeHttpClient} from '../host/client.js';
 import { startRuntimeServer } from './http.js';
 import { openRegisteredBindings } from '../adapters/bindings.js';
 import { registeredAuthorityPolicy } from '../adapters/authority.js';
@@ -15,7 +16,18 @@ export async function serviceMain(argv: string[], output: { write(value: string)
   try {
     const [command,...args]=argv, flags: Record<string,string>=Object.create(null);
     for(let i=0;i<args.length;i+=2){const name=args[i];if(!/^--[a-z-]+$/.test(name)||!args[i+1]||args[i+1].startsWith('--')||Object.hasOwn(flags,name.slice(2)))reject('INVALID_ARGUMENT','Expected unique named arguments');flags[name.slice(2)]=args[i+1];}
-    if(command==='help' || !command){exact(flags,[]);print({commands:['auth-init','serve','status','request'],developmentTarget:'0.9.0',releaseReady:false,credentials:'Use protected credential files; do not pass raw tokens on the command line.',request:'request --url <origin> --token-ref <protected file> --project <id> --request-ref <protected JSON envelope>; no automatic retry after uncertain transport results.'});return 0;}
+    if(command==='help' || !command){exact(flags,[]);print({commands:['auth-init','serve','status','request','browser-code'],developmentTarget:'0.9.0',releaseReady:false,credentials:'Use protected credential files; do not pass raw tokens on the command line.',request:'request --url <origin> --token-ref <protected file> --project <id> --request-ref <protected JSON envelope>; no automatic retry after uncertain transport results.',browser:'browser-code --connection-ref <protected connection>; enter the one-use code on /monitor or /lifecycle. No token in the URL.'});return 0;}
+    if(command==='browser-code'){
+      exact(flags,['connection-ref']);const connection=readHostConnection(flags['connection-ref']);await createRuntimeHttpClient(flags['connection-ref']).status();
+      const response=await fetch(connection.origin+'/api/v1/dashboard-code',{method:'POST',headers:{...hostHeaders(connection),'content-type':'application/json'},body:canonical({projectId:connection.projectId}),signal:AbortSignal.timeout(10000),redirect:'error'});
+      if(!response.headers.get('content-type')?.startsWith('application/json')||!response.body)reject('INVALID_SERVICE_RESPONSE','Expected a bounded browser connection response',502);
+      const reader=response.body.getReader(),parts:Uint8Array[]=[];let size=0;
+      try{for(;;){const part=await reader.read();if(part.done)break;size+=part.value.length;if(size>4096)reject('SERVICE_RESPONSE_LIMIT','Browser connection response exceeds its limit',502);parts.push(part.value);}}catch(error){await reader.cancel();throw error;}finally{reader.releaseLock();}
+      const value=record(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(parts))) as unknown);if(!response.ok){const error=record(value.error);reject(string(error.code),string(error.message),response.status);}const result=record(value.result);exact(result,['code','expiresAt','projectId']);
+      if(!/^[A-Za-z0-9_-]{43}$/.test(string(result.code,128))||!Number.isFinite(Date.parse(string(result.expiresAt,64))))reject('INVALID_SERVICE_RESPONSE','Invalid browser connection response',502);
+      if(result.projectId!==connection.projectId)reject('WRONG_WORKSPACE','Browser code does not match the selected project');
+      print({url:connection.origin+'/monitor',...result,oneUse:true,executionAuthorized:false});return 0;
+    }
     if(command==='auth-init'){
       exact(flags,['state-root','workspace-id','project','principal','role']);
       const root=flags['state-root'],workspaceId=slug(flags['workspace-id']),projectId=slug(flags.project),id=slug(flags.principal);

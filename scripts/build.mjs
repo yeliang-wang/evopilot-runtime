@@ -14,3 +14,4 @@ if(result.status===0){
   if(historical.error)throw historical.error;
   if(historical.status!==0)process.exitCode=historical.status??1;
 }
+if(!process.exitCode){const ui=spawnSync(process.execPath,[fileURLToPath(new URL('./build-dashboard.mjs',import.meta.url))],{cwd:root,stdio:'inherit'});if(ui.error)throw ui.error;if(ui.status!==0)process.exitCode=ui.status??1;}

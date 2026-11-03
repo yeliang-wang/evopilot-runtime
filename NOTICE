@@ -17,3 +17,13 @@ CI archive inspection uses yauzl 3.4.0 (MIT), by Josh Wolfe and contributors,
 and pend 1.2.0 (MIT), by Andrew Kelley. Their original licenses are retained
 in the installed dependency packages. Development types use @types/yauzl
 3.4.0 (MIT). Runtime adds its own bounded extraction and evidence checks.
+
+Dashboard graph rendering includes the pure renderer import closure from
+SeeCode 0.6.3, commit 9967db28e86e0e212d4ddf5a60f90fe62f3436c0:
+https://github.com/Aryanutkarsh/SeeCode
+Copyright (c) 2026 Aryanutkarsh, MIT License.
+Original source bytes and license are retained under dashboard/vendor/seecode
+in source distributions. The packaged Dashboard retains the original license
+at dist/dashboard/SEECODE-LICENSE.txt; provenance/seecode.json records every
+upstream file digest. Runtime's browser wrapper, lifecycle mapping and editing
+logic are independent additions. This does not imply endorsement by SeeCode.

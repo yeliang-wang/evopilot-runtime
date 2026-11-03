@@ -1,4 +1,5 @@
 import { checkDocumentation } from './check-documentation.mjs';
+import {checkDashboard} from './check-dashboard.mjs';
 import assert from 'node:assert/strict';
 import { lstat, readFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -89,6 +90,7 @@ async function files(directory) {
 
 export async function checkSource() {
   await checkDocumentation();
+  checkDashboard();
   const { loadPublisherBase } = await import('../dist/lifecycle/base.js');
   assert.equal(loadPublisherBase().base.fields.length,84);
   for (const args of [['--noEmit'], ['--noEmit','--strict','--target','ES2023','--module','NodeNext','tests/types/contracts.ts']]) {
