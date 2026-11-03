@@ -123,7 +123,9 @@ export async function openPublishedOwner(configuration:OwnerConfiguration,toolch
     authorize(context.actor,context.projectId,'read');
     const event=await readFeedback(context.actor,context.projectId,{workspaceId:config.workspaceId,...request});
     validateFeedbackEvent(event);
-    if(event.workspaceId!==config.workspaceId||event.projectId!==context.projectId||event.id!==request.id||nativeStableSerialize(event.scope)!==nativeStableSerialize(request.scope))reject('OWNER_SCOPE','Feedback differs from the exact retained project event',403);
+    // event.projectId is the original native candidate ID, which may differ
+    // from the authenticated project scope. The trusted reader binds its Run.
+    if(event.workspaceId!==config.workspaceId||event.id!==request.id||nativeStableSerialize(event.scope)!==nativeStableSerialize(request.scope))reject('OWNER_SCOPE','Feedback differs from the exact retained project event',403);
     // No caller-controlled event is passed through feedback.ingest. The owner
     // resolves its event ID against this scoped, trusted Runtime reader.
     return JSON.parse(nativeStableSerialize(event)) as FeedbackEvent;

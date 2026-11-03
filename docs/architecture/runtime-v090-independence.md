@@ -1489,9 +1489,40 @@ the same owned journal. An existing journal never authorizes another dispatch.
 Compiled CLI, migrated HTTP and local stdio development probes exercise actual
 published owner validation and isolated Node execution with explicitly synthetic
 source, assets and decisions. They grant no real-project or product acceptance.
-Original feedback/response/online/reconstruction provider
-composition, complete maintenance mapping and exact-candidate E15 qualification
-remain separate unfinished work.
+Original response/online/reconstruction provider composition, complete
+maintenance mapping and exact-candidate E15 qualification remain separate
+unfinished work.
+
+Registered original feedback reads the retained Runtime event through the same
+managed gateway, then uses each published owner's public feedback API. It keeps
+the original delivery request ID, event/receipt digests and family revisions.
+The event's native candidate ID is distinct from its authenticated project scope;
+access remains bound to the exact workspace and scope. A missing inbox permits
+the original ingest path; an unavailable owner is not interpreted as absence.
+A retained inbox or a lost response followed by receipt readback never requires
+another owner mutation. Delivery creates REVIEW_REQUIRED candidates, not an
+approval. Owner proposal/decision stays in the separately configured Host path;
+Runtime completion still requires both exact reviewed dispositions. An installed
+development probe with real 0.8.3 owners verified delivery, unchanged owner
+revisions on repetition, FEEDBACK_PENDING before synthetic review, completion
+after both exact synthetic decisions, and unchanged feedback after restart.
+
+The controlled installer accepts optional `legacyProviders: {ref, digest}` only
+with an explicit legacy migration. The protected selection must match the
+installation workspace, project and exact future migration binding. Staging
+checks the selection without adopting old state, loading owner providers or
+granting execution. Startup passes both `--legacy-providers-ref` and
+`--legacy-providers-digest` to the installed CLI, which checks the pin again
+inside the new process. Changes to the selection reject startup and live
+readback; stopping the exact owned job remains possible if that configuration
+has disappeared or become invalid. Installation credentials retain their
+selected least-authority role.
+
+An isolated development installation exercised the installed stdio bridge,
+actual Node collection, public 0.8.3 owner validators, original domain/completion
+gates, and service restart with unchanged claim/receipt and no second collection.
+Its assets and decisions were synthetic. It did not register in the daily Codex
+or establish exact-candidate E15 qualification.
 
 ### Browser authentication and monitor transport development
 
@@ -1523,23 +1554,6 @@ snapshot. The dedicated event stream retains authenticated cursor semantics but
 omits every event data body. It prompts state readback instead of interpreting
 events as completion or permission to dispatch. Credential revocation also ends
 the stream. Unknown and pending instance facts remain unknown and pending.
-
-The controlled installer accepts optional `legacyProviders: {ref, digest}` only
-with an explicit legacy migration. The protected selection must match the
-installation workspace, project and exact future migration binding. Staging
-checks the selection without adopting old state, loading owner providers or
-granting execution. Startup passes both `--legacy-providers-ref` and
-`--legacy-providers-digest` to the installed CLI, which checks the pin again
-inside the new process. Changes to the selection reject startup and live
-readback; stopping the exact owned job remains possible if that configuration
-has disappeared or become invalid. Installation credentials retain their
-selected least-authority role.
-
-An isolated development installation exercised the installed stdio bridge,
-actual Node collection, public 0.8.3 owner validators, original domain/completion
-gates, and service restart with unchanged claim/receipt and no second collection.
-Its assets and decisions were synthetic. It did not register in the daily Codex
-or establish exact-candidate E15 qualification.
 
 ### Two-page Dashboard development implementation
 

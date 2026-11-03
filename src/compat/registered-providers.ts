@@ -4,13 +4,14 @@ import {canonical,digest,exact,record,reject,slug,string} from '../server/errors
 import {readPrivateJson,authorize} from '../server/security.js';
 import {readLegacyBinding} from './gateway.js';
 import type {LegacyProviderFactory,LegacyProviderContext} from './provider-context.js';
-import {openPublishedOwner,openPublishedOwnerInspectors,type Owner,type PublishedOwnerAdapter,type OwnerIntentReader} from '../adapters/published-owners.js';
+import {openPublishedOwner,openPublishedOwnerInspectors,type Owner,type PublishedOwnerAdapter,type OwnerIntentReader,type OwnerFeedbackReader} from '../adapters/published-owners.js';
 import {readRegisteredNativeToolchain,type NativeToolchainRegistration} from '../adapters/config.js';
 import {createNativeProjectService} from './project/native-project.js';
 import {canonicalPath,codeRoot,pinnedFile} from './project/files.js';
 import {createLocalCollector} from './collection/local.js';
 import {createLegacyNativeProviders} from './native-providers.js';
 import type {NativeScope,ReadinessIntentRecord} from '../service.js';
+import type {FeedbackEvent} from '../feedback.js';
 
 interface Configuration {
  schema:'runtime-legacy-providers/v1';workspaceId:string;projects:string[];
@@ -53,7 +54,8 @@ export async function openRegisteredLegacyProviders(ref:string,expectedBindingRe
  try{
   fresh();const toolchain=registeredToolchain(),inspectors={ontology:await openPublishedOwnerInspectors('ontology',config.owners.ontology.packageRoot),harness:await openPublishedOwnerInspectors('harness',config.owners.harness.packageRoot)};
   const readIntent:OwnerIntentReader=async(actor,projectId,request)=>{const c=current(request.scope);if(request.workspaceId!==workspaceId||c.actor.id!==actor.id||c.actor.revision!==actor.revision||c.projectId!==projectId)reject('LEGACY_PROVIDER_SCOPE','Owner intent read differs from the authenticated call',403);const value=await context!.read('readiness',{operation:'readiness.intent.read',scope:request.scope,input:{standardVersion:'v2',digest:request.digest}});current(request.scope);return value as ReadinessIntentRecord&{current:boolean};};
-  for(const owner of ['ontology','harness'] as const)owners[owner]=await openPublishedOwner({owner,packageRoot:config.owners[owner].packageRoot,workspaceRoot:binding.workspaceRoot,workspaceId,projects:config.projects},toolchain,owner==='harness'?owners.ontology:undefined,readIntent);
+  const readFeedback:OwnerFeedbackReader=async(actor,projectId,request)=>{const c=current(request.scope);if(request.workspaceId!==workspaceId||c.actor.id!==actor.id||c.actor.revision!==actor.revision||c.projectId!==projectId)reject('LEGACY_PROVIDER_SCOPE','Owner feedback read differs from the authenticated call',403);const value=await context!.read('feedback',{operation:'feedback.event',scope:request.scope,input:{id:request.id}});current(request.scope);return value as FeedbackEvent;};
+  for(const owner of ['ontology','harness'] as const)owners[owner]=await openPublishedOwner({owner,packageRoot:config.owners[owner].packageRoot,workspaceRoot:binding.workspaceRoot,workspaceId,projects:config.projects},toolchain,owner==='harness'?owners.ontology:undefined,readIntent,readFeedback);
   return{bind(c){if(context)reject('LEGACY_PROVIDER_BOUND','A provider composition belongs to one service gateway');context=c;fresh();const project=createNativeProjectService({projectRoot:config.projectRoot,stateRoot:binding.workspaceRoot,workspaceId},{assertCurrent:()=>{current();}});
     const collector=config.collection?createLocalCollector({assertCurrent:()=>{const c=current();authorize(c.actor,c.projectId,'execution.request');},resolveExecution:claim=>{current(claim.scope);if(claim.workspace.id!==workspaceId||claim.workspace.canonicalRoot!==binding.workspaceRoot)reject('LEGACY_PROVIDER_SCOPE','Original collection workspace differs');const execution=project.resolveExecution(claim),allowed=config.collection!;if(execution.toolFiles.length!==1||execution.toolFiles[0].path!==allowed.executable||execution.toolFiles[0].sha256!==allowed.sha256||execution.readRoots.length)reject('LEGACY_COLLECTION_TOOLCHAIN','Collection differs from the explicitly registered Node closure');return execution;}}):undefined;
     return{...createLegacyNativeProviders({workspaceId,workspaceRoot:binding.workspaceRoot,expiresAt:config.expiresAt,toolchain,owners,standards:{ontology:inspectors.ontology.standardPins,harness:inspectors.harness.standardPins},parameters:inspectors.harness.parameters,current,context:c}),inspectSource:request=>{current(request.scope);return project.inspectSource(request);},resolveRequirements:request=>{current(request.scope);return project.resolveRequirements(request);},verifyProject:request=>{current(request.project.scope);return project.verifyProject(request);},...collector};

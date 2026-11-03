@@ -6,6 +6,7 @@ import {record,reject} from '../server/errors.js';
 import {authorize} from '../server/security.js';
 import {ownerRequestDigest,type Owner,type PublishedOwnerAdapter,type OwnerRequest} from '../adapters/published-owners.js';
 import type {LegacyProviderContext} from './provider-context.js';
+import {validateFeedbackEvent,validateFeedbackReceipt,type FeedbackEvent,type FeedbackInbox} from '../../vendor/compatibility/feedback/v1/feedback.mjs';
 interface Published {reference:NativeReference;scope:NativeScope;package:NativePackage;materialDigest:string;}
 export interface LegacyNativeComposition {
   workspaceId:string;workspaceRoot:string;expiresAt:string;toolchain:NativeToolchain;
@@ -47,10 +48,36 @@ export function createLegacyNativeProviders(c:LegacyNativeComposition):Providers
   };
   async function receipt(claim:Readonly<NativeRunClaim>):Promise<NativeProviderReceipt>{const ontology=await readOwnerReceipt({owner:'ontology',requestId:validationId(claim,'ontology'),scope:claim.scope,claim}),harness=await readOwnerReceipt({owner:'harness',requestId:validationId(claim,'harness'),scope:claim.scope,claim});return{schema:'runtime-receipt/v1',contractDigest:NATIVE_CONTRACT_DIGEST,producer:{product:'runtime',version:'0.3.0'},claimId:claim.claimId,inputDigest:claim.inputDigest,projectCandidateDigest:claim.input.projectCandidateDigest,pins:claim.pins,standardPins:claim.input.standardPins,ownerReceipts:{ontology,harness}};}
   return{
+    ...createLegacyFeedbackProviders(c),
     nativeStandards:c.standards,
     async resolveNative(request):Promise<NativeMaterial>{if(request.workspace.id!==c.workspaceId||request.workspace.canonicalRoot!==c.workspaceRoot||request.workspace.schema!=='evopilot-workspace/v1')reject('MATERIAL_SCOPE','Exact original Runtime workspace required');const value=await published(request.reference,request.scope);return{reference:value.reference,workspace:request.workspace,scope:value.scope,published:true,materialDigest:value.materialDigest,descriptor:{kind:request.reference.product==='ontology'?'ontology-composition/v1':'harness-composition/v1',digest:value.materialDigest}};},
     async executeNative({claim,signal}){signal.throwIfAborted();const materials=await claimInputs(claim);for(const owner of ['ontology','harness'] as const){const ctx=c.current(claim.scope);authorize(ctx.actor,ctx.projectId,'execution.request');signal.throwIfAborted();const scope=materials[owner].scope,state=record(await c.owners[owner].read(ctx.actor,ctx.projectId,{operation:'workspace.inspect',scope,input:{}}));c.current(claim.scope);signal.throwIfAborted();const request:OwnerRequest={operation:'native.package.validate',scope,input:validationInput(claim,owner),requestId:validationId(claim,owner),expectedRevision:Number(state.revision)};await c.owners[owner].mutate(ctx.actor,ctx.projectId,request,{projectId:ctx.projectId,owner,requestDigest:ownerRequestDigest(owner,request),expiresAt:new Date(Math.min(Date.parse(c.expiresAt),Date.now()+60000)).toISOString(),authorityRef:'legacy-run:'+claim.claimId});c.current(claim.scope);}signal.throwIfAborted();return receipt(claim);},
     async inspectNative({claim,signal}){signal.throwIfAborted();return receipt(claim);},readOwnerReceipt,
     async readReadinessAssessment(request){if(request.workspaceId!==c.workspaceId)reject('READINESS_SCOPE','Exact workspace required');const value=record(await read('harness',request.scope,'readiness.assessment.read',{standardVersion:'v2',id:request.id}));return value.result as ReadinessResult;},
   };
+}
+
+/** Original delivery IDs and Runtime outbox remain authoritative. Owners only
+ * ingest a retained event; their review/decision APIs remain outside this API. */
+export function createLegacyFeedbackProviders(c:Pick<LegacyNativeComposition,'workspaceId'|'expiresAt'|'owners'|'current'|'context'>):Pick<Providers,'deliverFeedback'|'readFeedbackInbox'>{
+  function adapter(owner:Owner){if(!Object.hasOwn(c.owners,owner))reject('UNSUPPORTED_OWNER','Exact original feedback owner required');return c.owners[owner];}
+  async function event(scope:NativeScope,id:string):Promise<FeedbackEvent>{
+    c.current(scope);const value=await c.context.read('feedback',{operation:'feedback.event',scope,input:{id}});c.current(scope);validateFeedbackEvent(value);
+    if(value.id!==id||value.workspaceId!==c.workspaceId||!same(value.scope,scope))reject('LEGACY_FEEDBACK_SCOPE','Feedback differs from the retained scoped Runtime event',403);return value;
+  }
+  const readFeedbackInbox:NonNullable<Providers['readFeedbackInbox']>=async({owner,scope,id})=>{
+    const original=await event(scope,id),ctx=c.current(scope);let result:FeedbackInbox;
+    try{result=await adapter(owner).read(ctx.actor,ctx.projectId,{operation:'feedback.read',scope,input:{id}}) as FeedbackInbox;}catch(error){c.current(scope);if((error as {code?:string}).code==='NOT_FOUND')return null;throw error;}
+    c.current(scope);if(!same(result.event,original))reject('LEGACY_FEEDBACK_CHANGED','Owner feedback differs from its original Runtime event');validateFeedbackReceipt(result.receipt,original,owner);return result;
+  };
+  return{readFeedbackInbox,async deliverFeedback({owner,event:requested}){
+    const original=await event(requested.scope,requested.id);if(!same(original,requested))reject('LEGACY_FEEDBACK_CHANGED','Only the exact retained feedback event may be delivered');
+    const existing=await readFeedbackInbox({owner,scope:original.scope,id:original.id});if(existing)return existing;
+    let ctx=c.current(original.scope);authorize(ctx.actor,ctx.projectId,'execution.request');
+    const state=record(await adapter(owner).read(ctx.actor,ctx.projectId,{operation:'feedback.inspect',scope:original.scope,input:{}}));ctx=c.current(original.scope);authorize(ctx.actor,ctx.projectId,'execution.request');
+    if(state.owner!==owner||state.workspaceId!==c.workspaceId||!same(state.scope,original.scope)||!Number.isSafeInteger(state.revision)||Number(state.revision)<0)reject('LEGACY_FEEDBACK_SCOPE','Owner feedback revision differs from its original scope',403);
+    const request:OwnerRequest={operation:'feedback.ingest',scope:original.scope,input:{id:original.id,digest:original.digest},requestId:'feedback-'+original.id.slice(7,55),expectedRevision:Number(state.revision)};
+    await adapter(owner).mutate(ctx.actor,ctx.projectId,request,{projectId:ctx.projectId,owner,requestDigest:ownerRequestDigest(owner,request),expiresAt:new Date(Math.min(Date.parse(c.expiresAt),Date.now()+60000)).toISOString(),authorityRef:'legacy-feedback:'+original.id});c.current(original.scope);
+    const result=await readFeedbackInbox({owner,scope:original.scope,id:original.id});if(!result)reject('FEEDBACK_RECEIPT_UNAVAILABLE','Inspect the retained original owner delivery');return result;
+  }};
 }
