@@ -8,6 +8,13 @@ Copyright 2026 The EvoPilot Harness Authors
 
 This product is licensed under the Apache License, Version 2.0.
 
+Runtime-owned historical project preparation and ledger compatibility is migrated
+from EvoPilot 0.8.3 (Apache-2.0), Copyright 2026 The EvoPilot Authors.
+provenance/project-compatibility.json identifies the source commit and original
+file digests. Original project standard bytes remain unchanged under
+provenance/project-standard-v1. Runtime does not import or require the parent
+installation; owner validators remain in their published public packages.
+
 The public documentation layout draws inspiration from OpenHands:
 https://github.com/All-Hands-AI/OpenHands
 The documentation content is independently written for EvoPilot Runtime.

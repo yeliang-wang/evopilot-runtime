@@ -15,6 +15,7 @@ interface Context {
   workspaceId:string;projectId:string;client:RuntimeHttpClient;
   guard():{scope:NativeScope;signal?:AbortSignal};
   readOwner(owner:Owner,envelope:Record<string,unknown>):Promise<unknown>;
+  readWorkspaceEvidence?:(request:{scope:NativeScope;reference:ResponseEvidenceRef})=>ResponseEvidence;
 }
 export function createLegacyOwnerProviders(context:Context,owner:Owner='harness'):Record<string,unknown>{
   const same=(a:unknown,b:unknown)=>canonical(a)===canonical(b);
@@ -39,6 +40,7 @@ export function createLegacyOwnerProviders(context:Context,owner:Owner='harness'
   }
   async function responseEvidence(request:{scope:NativeScope;reference:ResponseEvidenceRef}):Promise<ResponseEvidence>{
     scope(request);responseReference(request.reference);const {reference}=request;
+    if(reference.owner==='workspace'&&context.readWorkspaceEvidence){const value=context.readWorkspaceEvidence(request);scope(request);return value;}
     if(reference.owner==='harness'){
       const value=await context.readOwner('harness',{operation:'response.evidence.inspect',scope:request.scope,input:{reference}});scope(request);validateResponseEvidence(value);
       if(value.workspaceId!==context.workspaceId||!same(value.scope,request.scope)||!same(value.reference,reference))reject('RESPONSE_EVIDENCE_DRIFT','Evidence differs from its exact owner reference');return value;

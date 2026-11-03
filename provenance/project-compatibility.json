@@ -1,0 +1,48 @@
+{
+  "schema": "runtime-project-compatibility-provenance/v1",
+  "sourceRepository": "https://github.com/yeliang-wang/evopilot",
+  "sourceCommit": "c24aace7a0e73e41323d3bbb044924070e1595f1",
+  "releaseBaseline": "0.8.3",
+  "license": "Apache-2.0",
+  "runtimeDependencyOnParent": false,
+  "sourceFiles": {
+    "src/host/project/modeling-intent.ts": {
+      "sourcePath": "integration/workspace/modeling-intent.ts",
+      "sourceSha256": "6df316cf62eae879734a0098574dca2afb3cafec1a4abcf1311e6920a1be17a1"
+    },
+    "src/host/project/project-lock.ts": {
+      "sourcePath": "integration/workspace/project-lock.ts",
+      "sourceSha256": "9bc7862c53d02ebc0c9c16ab2f70d9105929337e48ea2e56f1300aaa97c9b19e"
+    },
+    "src/host/project/native-promotion.ts": {
+      "sourcePath": "integration/workspace/native-promotion.ts",
+      "sourceSha256": "40660a65ef982ee2cdca0462e02c1660c6fca9ece3e536a9d2bab4d18bf85c79"
+    },
+    "src/host/project/project-navigation.ts": {
+      "sourcePath": "integration/workspace/project-navigation.ts",
+      "sourceSha256": "65dbdf619a3d04abe99decb794703f8dfd9e0a10d889b93f722160b8163df9c5"
+    },
+    "src/host/project/native-project.ts": {
+      "sourcePath": "integration/workspace/native-project.ts",
+      "sourceSha256": "55ae368802d3955acb2ff41b5d2c74609b62a40e9741e5eb3af7d12e59ce1008"
+    },
+    "src/host/project/ledger.ts": {
+      "sourcePath": "integration/workspace/project.ts",
+      "sourceSha256": "6bd1c22a793ddc7f828143f6209641eb55549522bed4328f5fe259c4877a188d"
+    },
+    "src/host/project/campaign.ts": {
+      "sourcePath": "integration/workspace/campaign.ts",
+      "sourceSha256": "28c5b4c10eb7d3897054bc45c789811f741f238481847b98d5ffa591d763d6cf"
+    }
+  },
+  "standardFiles": {
+    "README.md": "c1bddd9787537fc91e98c926b4072cbf1c890f78de25bc1ba6f9f83b1a0427ed",
+    "base-requirements.json": "a1503b39d16ba7e67aae2458f21c6746125a4a22f27e1073ecc8b669b158e847",
+    "directory-layout.json": "aec2a05e4b8e998a880e03d5ca29d47733c52873bf41675fa4e9249219588711"
+  },
+  "standardUnmodified": true,
+  "adaptations": [
+    "Owned Runtime module paths, explicit public owner validator injection, protected Host currentness checks.",
+    "Project record schemas, native standards, original decisions and file ownership remain unchanged."
+  ]
+}

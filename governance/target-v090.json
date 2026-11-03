@@ -207,7 +207,22 @@
         "src/cli.ts",
         "src/host/legacy-owners.ts",
         "src/host/legacy-owner-providers.ts",
-        "tests/e2e/legacy-owners-v090.test.mjs"
+        "tests/e2e/legacy-owners-v090.test.mjs",
+        "src/host/project/files.ts",
+        "src/host/project/modeling-intent.ts",
+        "src/host/project/project-lock.ts",
+        "src/host/project/native-promotion.ts",
+        "src/host/project/project-navigation.ts",
+        "src/host/project/native-project.ts",
+        "src/host/project/ledger.ts",
+        "src/host/project/campaign.ts",
+        "src/host/project/routes.ts",
+        "provenance/project-standard-v1/README.md",
+        "provenance/project-standard-v1/directory-layout.json",
+        "provenance/project-standard-v1/base-requirements.json",
+        "provenance/project-compatibility.json",
+        "tests/e2e/legacy-project-v090.test.mjs",
+        "tests/fixtures/legacy-project-v090.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

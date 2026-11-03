@@ -1,0 +1,12 @@
+{
+  "schema": "evopilot-project-base-requirements/v1",
+  "requirements": [
+    {"criterionId":"project:inventory","variantIds":["complete"],"origin":"source-declaration"},
+    {"criterionId":"project:directory","variantIds":["complete"],"origin":"source-declaration"},
+    {"criterionId":"project:manifest","variantIds":["complete"],"origin":"source-declaration"},
+    {"criterionId":"project:bindings","variantIds":["complete"],"origin":"source-declaration"},
+    {"criterionId":"project:coverage","variantIds":["complete"],"origin":"source-declaration"}
+  ],
+  "domainReview": {"criterionId":"domain:<projectId>:acceptance","variantIds":["accepted"],"origin":"source-declaration"},
+  "ownerRequirements": "Independently reviewed ontology: and harness: requirements supplied before any native package is generated; both owners required. Their native case contracts enforce positive/negative and actual observation coverage."
+}

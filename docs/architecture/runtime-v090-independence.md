@@ -1379,13 +1379,46 @@ Runtime reader; the Host checks its receipt/claim digest and original observatio
 time. Run projections require retained collection references and both owner
 outcomes, using the oldest collection observation. `FAIL` and `UNKNOWN` are
 preserved. No read dispatches collection or retries a Run. Workspace governance
-references still need their separately bound project-ledger reader; unsupported
-owners do not become caller-asserted `PASS` evidence.
+references use the separately bound project-ledger reader described below;
+unsupported owners do not become caller-asserted `PASS` evidence.
+
+An optional `project` object in that same protected Host registration contains
+the canonical private project `root` and exact helper `calls`. The root must be
+owned by the current user, have mode 0700, match the migrated workspace marker
+and remain separate from service state and installation roots. It adds the
+historical `evopilot_v01_native_project` and `evopilot_v01_workspace_project`
+tools to the optional local entry; they still require session activation.
+Native helper calls use `native:<operation>` for `preflight`, `prepare`, `freeze`,
+`materialize`, `review-domain`, `inspect`, `check-layout`, `candidate-location`,
+`prepare-execution` or `promote`. Ledger calls use `workspace:<operation>` for
+`bind`, `inspect`, `drift`, `baseline.accept`, `campaign.write` or
+`campaign.inspect`. A selection grants only routing, never a domain decision.
+
+Runtime now owns these retained source-inventory, frozen-candidate, editable
+material and Target/Loop helpers. Their parent source attribution and unchanged
+project standard bytes live under `provenance`; installed code imports no parent
+implementation. Native preflight delegates to exact published owner validation
+exports. Every call rechecks the registered native-toolchain manifest; changed
+bytes invalidate the original binding even in an already connected Host.
+Source/fragment/requirement drift, revoked configuration, missing exact review
+and changed material block admission. Owner authoring callbacks synchronously
+check the actual frozen materials and reviewed source context. They do not use a
+detached authoring cache. L1/L2/L3 intent and the current v2 content semantics are
+preserved: preparing or freezing a candidate issues no grade, and v2 L3 content
+grading does not require business reconstruction or database access.
+
+Promotion still requires the original domain decision and a completed Runtime
+project read through authenticated HTTP; custom files and original evidence are
+retained. The Target/Loop ledger remains structural `authority:false` evidence.
+Its optional response reader checks exact file/loop digests and preserves the
+original observation sentinel `1`; a structural PASS cannot become a fresh
+operational prerequisite. `prepare-execution` retains its original requirement
+for a registered collection toolchain. The Host composition does not yet supply
+that execution registration and fails closed when it is absent.
 
 This transport implementation and isolated real-owner validation do not establish
-the entire historical authoring or maintenance workflow. Trusted native/readiness
-authoring admission, workspace response/online providers, private project helpers,
-old Runtime execution-provider wiring, full tool mapping, actual Codex journeys
+the entire historical authoring or maintenance workflow. Online providers,
+old Runtime execution-provider wiring, complete maintenance mapping, actual Codex journeys
 and accurate-candidate migration remain required before N09/E15 can pass. No
 unsupported owner capability is supplied by changing an owner product or importing
 parent implementation modules. The original component split scope is unchanged.

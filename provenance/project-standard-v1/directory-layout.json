@@ -1,0 +1,14 @@
+{
+  "schema": "evopilot-project-directory-layout/v1",
+  "specVersion": "v1",
+  "root": "<visibility>/projects/<projectId>",
+  "requiredFiles": ["README.md", "project.json", "project-manifest.json", "scope/requirements.json", "sources/inventory.json", "sources/bindings.json", "acceptance/contracts/<candidateId>.json", "acceptance/current.ref.json"],
+  "requiredDirectories": ["scope", "sources", "ontology", "harness", "acceptance/contracts", "evidence", "deliveries", "campaigns"],
+  "assetManifest": "<owner>/<assetId>/package.json",
+  "assetFiles": "Exactly the NativePackage manifest files; no second editing source",
+  "ontologyDirectories": ["shapes", "instances", "tests/positive", "tests/negative"],
+  "harnessDirectories": ["policy", "data", "tests/fixtures"],
+  "evidence": ["evidence/<runId>/raw", "evidence/<runId>/observations.json", "evidence/<runId>/reports"],
+  "delivery": "deliveries/<version>/manifest.json",
+  "history": "Existing project.json and campaigns retain exact bytes; current corrected identity belongs to project-manifest.json and protected state"
+}
