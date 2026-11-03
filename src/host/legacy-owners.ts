@@ -14,8 +14,8 @@ import {readRegisteredNativeToolchain,type NativeToolchainRegistration} from '..
 import type {RuntimeHttpClient} from './client.js';
 import {createLegacyOwnerProviders} from './legacy-owner-providers.js';
 import {createProjectHostRoutes,PROJECT_CALLS,type ProjectHostSelection,type ProjectHostRoutes} from './project/routes.js';
-import {canonicalPath,codeRoot} from './project/files.js';
-import type {ProjectOwnerValidation} from './project/native-project.js';
+import {canonicalPath,codeRoot} from '../compat/project/files.js';
+import type {ProjectOwnerValidation} from '../compat/project/native-project.js';
 import type {NativeProject} from '../native-types.js';
 import {forwardLegacyRuntime} from './legacy-tools.js';
 import {nativeBytesDigest,nativeSha256} from '../../vendor/compatibility/v1/native.mjs';

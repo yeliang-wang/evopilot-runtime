@@ -1,9 +1,9 @@
 import path from 'node:path';
 import {exact,record,reject,string} from '../../server/errors.js';
-import {createNativeProjectService,type NativeProjectContext,type NativeProjectTrusted} from './native-project.js';
-import {projectOperation} from './ledger.js';
-import {validateCampaignDocument} from './campaign.js';
-import {readRegular,codeRoot} from './files.js';
+import {createNativeProjectService,type NativeProjectContext,type NativeProjectTrusted} from '../../compat/project/native-project.js';
+import {projectOperation} from '../../compat/project/ledger.js';
+import {validateCampaignDocument} from '../../compat/project/campaign.js';
+import {readRegular,codeRoot} from '../../compat/project/files.js';
 import {nativeBytesDigest,nativeSha256,nativeRelativePath,type NativeScope} from '../../../vendor/compatibility/v1/native.mjs';
 import {responseReference,type ResponseEvidenceRef,type ResponseEvidence} from '../../../vendor/compatibility/response/v1/response.mjs';
 

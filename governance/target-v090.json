@@ -222,7 +222,15 @@
         "provenance/project-standard-v1/base-requirements.json",
         "provenance/project-compatibility.json",
         "tests/e2e/legacy-project-v090.test.mjs",
-        "tests/fixtures/legacy-project-v090.mjs"
+        "tests/fixtures/legacy-project-v090.mjs",
+        "src/compat/project/files.ts",
+        "src/compat/project/modeling-intent.ts",
+        "src/compat/project/project-lock.ts",
+        "src/compat/project/native-promotion.ts",
+        "src/compat/project/project-navigation.ts",
+        "src/compat/project/native-project.ts",
+        "src/compat/project/ledger.ts",
+        "src/compat/project/campaign.ts"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

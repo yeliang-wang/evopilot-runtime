@@ -6,31 +6,31 @@
   "license": "Apache-2.0",
   "runtimeDependencyOnParent": false,
   "sourceFiles": {
-    "src/host/project/modeling-intent.ts": {
+    "src/compat/project/modeling-intent.ts": {
       "sourcePath": "integration/workspace/modeling-intent.ts",
       "sourceSha256": "6df316cf62eae879734a0098574dca2afb3cafec1a4abcf1311e6920a1be17a1"
     },
-    "src/host/project/project-lock.ts": {
+    "src/compat/project/project-lock.ts": {
       "sourcePath": "integration/workspace/project-lock.ts",
       "sourceSha256": "9bc7862c53d02ebc0c9c16ab2f70d9105929337e48ea2e56f1300aaa97c9b19e"
     },
-    "src/host/project/native-promotion.ts": {
+    "src/compat/project/native-promotion.ts": {
       "sourcePath": "integration/workspace/native-promotion.ts",
       "sourceSha256": "40660a65ef982ee2cdca0462e02c1660c6fca9ece3e536a9d2bab4d18bf85c79"
     },
-    "src/host/project/project-navigation.ts": {
+    "src/compat/project/project-navigation.ts": {
       "sourcePath": "integration/workspace/project-navigation.ts",
       "sourceSha256": "65dbdf619a3d04abe99decb794703f8dfd9e0a10d889b93f722160b8163df9c5"
     },
-    "src/host/project/native-project.ts": {
+    "src/compat/project/native-project.ts": {
       "sourcePath": "integration/workspace/native-project.ts",
       "sourceSha256": "55ae368802d3955acb2ff41b5d2c74609b62a40e9741e5eb3af7d12e59ce1008"
     },
-    "src/host/project/ledger.ts": {
+    "src/compat/project/ledger.ts": {
       "sourcePath": "integration/workspace/project.ts",
       "sourceSha256": "6bd1c22a793ddc7f828143f6209641eb55549522bed4328f5fe259c4877a188d"
     },
-    "src/host/project/campaign.ts": {
+    "src/compat/project/campaign.ts": {
       "sourcePath": "integration/workspace/campaign.ts",
       "sourceSha256": "28c5b4c10eb7d3897054bc45c789811f741f238481847b98d5ffa591d763d6cf"
     }

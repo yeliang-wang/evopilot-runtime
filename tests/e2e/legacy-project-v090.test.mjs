@@ -5,9 +5,9 @@ import {join} from 'node:path';
 import {projectFixture,put,rehash} from '../fixtures/legacy-project-v090.mjs';
 import {nativePackageDigest,nativeSha256 as hash,nativeBytesDigest} from '../../vendor/compatibility/v1/native.mjs';
 import {createProjectHostRoutes,PROJECT_CALLS} from '../../dist/host/project/routes.js';
-import {inspectProjectStandard} from '../../dist/host/project/native-project.js';
+import {inspectProjectStandard} from '../../dist/compat/project/native-project.js';
 import {createLegacyTools} from '../../dist/host/legacy-tools.js';
-import {preparePromotion,finishPromotion} from '../../dist/host/project/native-promotion.js';
+import {preparePromotion,finishPromotion} from '../../dist/compat/project/native-promotion.js';
 
 for(const level of ['L1','L2','L3'])test(`project preparation retains explicit ${level} target without issuing an asset grade or reconstruction`,async()=>{
  const f=projectFixture({level});try{const candidate=await f.service.prepare(f.input);assert.equal(candidate.modelingIntent.definition.targetLevel,level);assert.equal(candidate.authority,false);assert(!Object.hasOwn(candidate,'verifiedLevel'));assert(!Object.hasOwn(candidate.modelingIntent.definition,'reconstruction'));assert.equal(f.control.validationCalls,0);}finally{f.cleanup();}

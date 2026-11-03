@@ -1397,7 +1397,11 @@ Native helper calls use `native:<operation>` for `preflight`, `prepare`, `freeze
 Runtime now owns these retained source-inventory, frozen-candidate, editable
 material and Target/Loop helpers. Their parent source attribution and unchanged
 project standard bytes live under `provenance`; installed code imports no parent
-implementation. Native preflight delegates to exact published owner validation
+implementation. The owning core is `src/compat/project`; local transport and
+owner admission routing remain in `src/host/project/routes.ts`. This separation
+allows registered Runtime provider composition to reuse its own project readers
+without importing Host integration or exposing owner authoring in HTTP.
+Native preflight delegates to exact published owner validation
 exports. Every call rechecks the registered native-toolchain manifest; changed
 bytes invalidate the original binding even in an already connected Host.
 Source/fragment/requirement drift, revoked configuration, missing exact review

@@ -1,6 +1,6 @@
 import {mkdtempSync,realpathSync,mkdirSync,writeFileSync,rmSync,readFileSync} from 'node:fs';
 import {join} from 'node:path';import {tmpdir} from 'node:os';import {execFileSync} from 'node:child_process';
-import {createNativeProjectService,inspectSourceInventory} from '../../dist/host/project/native-project.js';
+import {createNativeProjectService,inspectSourceInventory} from '../../dist/compat/project/native-project.js';
 import {nativeSha256 as hash,nativeBytesDigest,NATIVE_CONTRACT_DIGEST,validateNativePackage} from '../../vendor/compatibility/v1/native.mjs';
 import {syntheticReadinessMaterial} from './adapters-v090.mjs';
 import {syntheticDecisionEvidence} from './native/decision-evidence.mjs';
