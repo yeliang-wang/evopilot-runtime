@@ -240,7 +240,10 @@
         "tests/e2e/legacy-collection-v090.test.mjs",
         "tests/e2e/legacy-providers-v090.test.mjs",
         "tests/fixtures/legacy-provider-v090.mjs",
-        "provenance/legacy-execution.json"
+        "provenance/legacy-execution.json",
+        "src/compat/response-evidence.ts",
+        "src/compat/response-providers.ts",
+        "tests/e2e/legacy-response-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

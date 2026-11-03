@@ -1489,9 +1489,9 @@ the same owned journal. An existing journal never authorizes another dispatch.
 Compiled CLI, migrated HTTP and local stdio development probes exercise actual
 published owner validation and isolated Node execution with explicitly synthetic
 source, assets and decisions. They grant no real-project or product acceptance.
-Original response/online/reconstruction provider composition, complete
-maintenance mapping and exact-candidate E15 qualification remain separate
-unfinished work.
+Original online collection/worker and reconstruction provider composition,
+complete maintenance mapping and exact-candidate E15 qualification remain
+separate unfinished work.
 
 Registered original feedback reads the retained Runtime event through the same
 managed gateway, then uses each published owner's public feedback API. It keeps
@@ -1523,6 +1523,25 @@ actual Node collection, public 0.8.3 owner validators, original domain/completio
 gates, and service restart with unchanged claim/receipt and no second collection.
 Its assets and decisions were synthetic. It did not register in the daily Codex
 or establish exact-candidate E15 qualification.
+
+Original response providers read published Harness runbooks, problems, recovery
+links and findings through a fixed read-only consumer allowlist. Runbook material
+resolves its exact published Harness reference; no owner authoring method is
+enabled in Runtime HTTP. Runtime evidence uses the same managed gateway and
+retained collection/Run digests, original observation times and both owner
+outcomes. Workspace Target/Loop evidence retains its structural timestamp
+sentinel and cannot substitute for a fresh operational prerequisite. The Host
+and service share these evidence readers.
+
+Response cancellation writes only the exact original collection's protected
+journal after checking its claim, workspace, scope, current caller and retained
+worker request. The result means cancellation was requested; only a later real
+collection receipt confirms termination. Repeated requests do not redispatch the
+collector or rewrite conflicting material. Development tests cover a real
+isolated worker, changed claims, revoked access and symlink/foreign-file refusal.
+Reading an online finding does not start telemetry collection, an online worker
+or a repair. Full response and online journeys still require their separate
+exact-candidate evidence.
 
 ### Browser authentication and monitor transport development
 

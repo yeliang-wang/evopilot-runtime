@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { canonical, exact, record, reject, slug, string, ServiceError, evidenceValueDigest } from '../server/errors.js';
 import { authorize, type Principal } from '../server/security.js';
 import { valueDigest } from '../lifecycle/base.js';
-import { nativeSha256, nativeStableSerialize, referenceForPackage, validateNativeReference, type NativePackage, type NativeReference, type NativeScope, type NativeToolchain } from '../../vendor/compatibility/v1/native.mjs';
+import { nativeSha256, nativeStableSerialize, nativePackageDigest, referenceForPackage, validateNativeReference, type NativePackage, type NativeReference, type NativeScope, type NativeToolchain } from '../../vendor/compatibility/v1/native.mjs';
 import { READINESS_STANDARD_DIGEST, validateReadinessIntent, verifyReadinessProjection, type ReadinessIntentRecord, type ReadinessProjection } from '../../vendor/compatibility/usability/v2/contract.mjs';
 import { validateFeedbackEvent, type FeedbackEvent } from '../../vendor/compatibility/feedback/v1/feedback.mjs';
 import {validateStandardPins,NATIVE_CONTRACT_DIGEST,type StandardPins,type NativeJSON} from '../../vendor/compatibility/v1/native.mjs';
@@ -27,6 +27,7 @@ interface OwnerService {
   initialize():unknown; close():void; capabilities():unknown;
   execute(request:unknown):unknown; native(request:unknown):Promise<unknown>;
   readiness(request:unknown):Promise<unknown>; feedback(request:unknown):Promise<unknown>;
+  response?(request:unknown):Promise<unknown>;online?(request:unknown):Promise<unknown>;
 }
 export type OwnerIntentReader=(actor:Principal,projectId:string,request:{workspaceId:string;scope:NativeScope;digest:string})=>Promise<ReadinessIntentRecord&{current:boolean}>;
 export type OwnerFeedbackReader=(actor:Principal,projectId:string,request:{workspaceId:string;scope:NativeScope;id:string})=>Promise<FeedbackEvent>;
@@ -36,6 +37,7 @@ interface FactoryProviders {
   readReadinessIntent?:(request:{workspaceId:string;scope:NativeScope;digest:string})=>Promise<ReadinessIntentRecord&{current:boolean}>;
   readReadinessProjection?:(request:{workspaceId:string;scope:NativeScope;reference:NativeReference})=>Promise<ReadinessProjection>;
   readFeedback?:(request:{scope:NativeScope;id:string})=>Promise<FeedbackEvent>;
+  resolveFeedbackMaterial?:(request:{scope:NativeScope;reference:NativeReference})=>Promise<unknown>;
 }
 type Factory=(options:{workspaceRoot:string;workspaceId:string},providers:FactoryProviders)=>OwnerService;
 const sha=(value:Buffer)=>createHash('sha256').update(value).digest('hex');
@@ -74,8 +76,9 @@ export function verifyOwnerDistribution(owner:Owner,packageRoot:string):Readonly
 }
 const NATIVE_READS=['standard.inspect','native.package.inspect','native.package.list','native.package.readback','native.receipt.inspect'];
 const FEEDBACK_READS=['feedback.inspect','feedback.list','feedback.read'];
+const HARNESS_OPERATIONAL_READS=['response.runbook.inspect','response.problem.inspect','response.evidence.inspect','response.recovery.inspect','online.finding.inspect'];
 const READINESS_READS={ontology:['readiness.standard.inspect','readiness.package.inspect','readiness.package.export','readiness.package.verify'],harness:['readiness.standard.inspect','readiness.inspect','readiness.assessment.read','readiness.assessment.version','readiness.assessment.list','readiness.receipt.inspect']};
-function permittedRead(owner:Owner,operation:string):boolean{return NATIVE_READS.includes(operation)||FEEDBACK_READS.includes(operation)||READINESS_READS[owner].includes(operation)||operation==='workspace.inspect';}
+function permittedRead(owner:Owner,operation:string):boolean{return NATIVE_READS.includes(operation)||FEEDBACK_READS.includes(operation)||READINESS_READS[owner].includes(operation)||owner==='harness'&&HARNESS_OPERATIONAL_READS.includes(operation)||operation==='workspace.inspect';}
 function validateConfiguration(config:OwnerConfiguration):void{
   exact(record(config),['owner','packageRoot','workspaceRoot','workspaceId','projects']);slug(config.workspaceId);
   if(!Object.hasOwn(MANIFESTS,config.owner)||!Array.isArray(config.projects)||!config.projects.length||config.projects.length>1000||new Set(config.projects).size!==config.projects.length)reject('INVALID_OWNER_CONFIGURATION','Invalid owner project registration');
@@ -153,6 +156,16 @@ export async function openPublishedOwner(configuration:OwnerConfiguration,toolch
       return intent;
     };
   }
+  // Published runbook inspection resolves only a pinned Harness package via
+  // this same consumer. It grants neither authoring nor review operations.
+  if(config.owner==='harness')providers.resolveFeedbackMaterial=async request=>{
+    const context=calls.getStore();if(!context||request.scope.projectId!==context.projectId)reject('OWNER_SCOPE','Runbook material requires the original scoped call',403);
+    validateNativeReference(request.reference,{product:'harness'});if(request.scope.visibility==='public'&&request.reference.visibility==='private')reject('OWNER_SCOPE','Public scope cannot consume private guidance',403);
+    const scopes=request.reference.visibility==='private'?[request.scope]:[...new Set([context.projectId,'shared'])].map(projectId=>({visibility:'public' as const,projectId})),found:unknown[]=[];
+    for(const scope of scopes){let value:Record<string,unknown>;try{value=await readPackage(context.actor,context.projectId,scope,request.reference);}catch(error){if(error instanceof ServiceError&&['NOT_FOUND','NOT_PUBLISHED'].includes(error.code))continue;throw error;}
+      const pkg=value.package as NativePackage;found.push({reference:request.reference,scope,package:pkg,materialDigest:nativePackageDigest(pkg),workspaceId:config.workspaceId,published:true});}
+    if(found.length!==1)reject('OWNER_REFERENCE_CHANGED','One exact published Harness runbook package is required');return found[0];
+  };
   const module=await import(pathToFileURL(join(config.packageRoot, 'dist/service.js')).href) as Record<string,unknown>;
   const factory=module[config.owner==='ontology'?'createOntologyService':'createHarnessService'];
   if(typeof factory!=='function')reject('OWNER_CAPABILITY','Published owner factory is missing');
@@ -172,6 +185,8 @@ export async function openPublishedOwner(configuration:OwnerConfiguration,toolch
       if(request.operation.startsWith('native.')||request.operation==='standard.inspect')return service.native(request);
       if(request.operation.startsWith('readiness.'))return service.readiness(request);
       if(request.operation.startsWith('feedback.'))return service.feedback(request);
+      if(request.operation.startsWith('response.')){if(!service.response)reject('OWNER_CAPABILITY','Published response reader is missing');return service.response(request);}
+      if(request.operation.startsWith('online.')){if(!service.online)reject('OWNER_CAPABILITY','Published online reader is missing');return service.online(request);}
       return service.execute(request);
     });}catch(error){
       if(error instanceof ServiceError)throw error;
@@ -194,7 +209,7 @@ export async function openPublishedOwner(configuration:OwnerConfiguration,toolch
     return output;
   };
   return Object.freeze({owner:config.owner,workspaceId:config.workspaceId,
-    capabilities:()=>({...identity,registrationDigest:valueDigest(config),readOperations:[...NATIVE_READS,...FEEDBACK_READS,...READINESS_READS[config.owner],'workspace.inspect'],mutationOperations:['native.package.validate',...(config.owner==='ontology'?['native.package.reconcile']:[]),'feedback.ingest'],authoring:false,assetPublication:false,softwareRelease:false}),
+    capabilities:()=>({...identity,registrationDigest:valueDigest(config),readOperations:[...NATIVE_READS,...FEEDBACK_READS,...READINESS_READS[config.owner],...(config.owner==='harness'?HARNESS_OPERATIONAL_READS:[]),'workspace.inspect'],mutationOperations:['native.package.validate',...(config.owner==='ontology'?['native.package.reconcile']:[]),'feedback.ingest'],authoring:false,assetPublication:false,softwareRelease:false}),
     read,readPackage,
     async mutate(actor:Principal,projectId:string,request:OwnerRequest,permit:OwnerMutationPermit){
       exact(record(request),['operation','scope','input','requestId','expectedRevision']);record(request.input);string(request.requestId);

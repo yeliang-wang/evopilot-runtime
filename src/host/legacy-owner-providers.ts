@@ -9,7 +9,7 @@ import {nativePackageDigest,nativeSha256,referenceForPackage,validateNativeRefer
 import {validateFeedbackEvent} from '../../vendor/compatibility/feedback/v1/feedback.mjs';
 import {validateReadinessIntent,verifyReadinessProjection,type ReadinessProjection} from '../../vendor/compatibility/usability/v2/contract.mjs';
 import {responseReference,validateResponseEvidence,type ResponseEvidence,type ResponseEvidenceRef} from '../../vendor/compatibility/response/v1/response.mjs';
-import type {CollectionRecord,NativeRun} from '../native-types.js';
+import {readRuntimeResponseEvidence} from '../compat/response-evidence.js';
 
 interface Context {
   workspaceId:string;projectId:string;client:RuntimeHttpClient;
@@ -46,29 +46,7 @@ export function createLegacyOwnerProviders(context:Context,owner:Owner='harness'
       if(value.workspaceId!==context.workspaceId||!same(value.scope,request.scope)||!same(value.reference,reference))reject('RESPONSE_EVIDENCE_DRIFT','Evidence differs from its exact owner reference');return value;
     }
     if(reference.owner!=='runtime')reject('RESPONSE_EVIDENCE_UNSUPPORTED','No registered evidence reader for this owner');
-    let actualDigest:string,observedAt:number,status:ResponseEvidence['status'];
-    if(reference.id.startsWith('collection:')){
-      const id=string(reference.id.slice(11)),collection=await runtime('native','collection.inspect',request,{id}) as CollectionRecord;
-      if(!collection.receipt||!collection.claim||collection.id!==id||collection.workspace.id!==context.workspaceId||!same(collection.scope,request.scope))reject('RESPONSE_EVIDENCE_INCOMPLETE','Original collection claim and receipt are required');
-      const {digest,...subject}=collection.receipt;
-      if(nativeSha256(subject)!==digest||collection.receipt.claimId!==collection.claim.claimId)reject('RESPONSE_EVIDENCE_INTEGRITY','Collection receipt no longer matches its original claim');
-      actualDigest=digest;observedAt=Math.floor(Date.parse(collection.receipt.result.endedAt)/1000);
-      if(!Number.isSafeInteger(observedAt)||observedAt<1)reject('RESPONSE_EVIDENCE_TIME','Use the original receipt observation time');
-      status=collection.stage==='SUCCEEDED'?'PASS':collection.stage==='FAILED'?'FAIL':'UNKNOWN';
-    }else if(reference.id.startsWith('run:')){
-      const id=string(reference.id.slice(4)),run=await runtime('native','run.inspect',request,{id}) as NativeRun;
-      if(!run.receipt||!run.claim||run.plan.id!==id||run.plan.workspace.id!==context.workspaceId||!same(run.plan.scope,request.scope))reject('RESPONSE_EVIDENCE_INCOMPLETE','Original Run claim and receipt are required');
-      actualDigest=nativeSha256(run.receipt);
-      if(!Array.isArray(run.plan.input.collectionReceipts)||!run.plan.input.collectionReceipts.length)reject('RESPONSE_EXECUTION_EVIDENCE_REQUIRED','A Run needs its retained collection evidence');
-      const times:number[]=[];
-      for(const ref of run.plan.input.collectionReceipts)times.push((await responseEvidence({scope:request.scope,reference:{owner:'runtime',id:'collection:'+ref.id,digest:ref.digest}})).observedAt);
-      observedAt=Math.min(...times);
-      const reports=run.receipt.ownerReceipts;exact(record(reports),['ontology','harness']);
-      const owners=Object.values(reports);
-      status=run.stage==='SUCCEEDED'&&owners.every(r=>r.executionStatus==='SUCCEEDED'&&r.qualityStatus==='PASS')?'PASS':run.stage==='FAILED'||owners.some(r=>r.qualityStatus==='FAIL')?'FAIL':'UNKNOWN';
-    }else reject('RESPONSE_EVIDENCE_UNSUPPORTED','Unsupported original Runtime evidence reference');
-    if(actualDigest!==reference.digest)reject('RESPONSE_EVIDENCE_DRIFT','Evidence digest differs from the original reference');
-    const value={workspaceId:context.workspaceId,scope:request.scope,reference,status,observedAt};validateResponseEvidence(value);scope(request);return value;
+    const value=await readRuntimeResponseEvidence({workspaceId:context.workspaceId},envelope=>runtime('native',envelope.operation,{scope:envelope.scope},envelope.input),request.scope,reference);scope(request);return value;
   }
   const providers={
     resolveNativeDependency:async(request:{workspaceId:string;scope:NativeScope;reference:NativeReference})=>{scope(request);const value=await published(request.reference,request.scope);return{reference:value.reference,published:true,workspaceId:context.workspaceId,scope:value.scope};},

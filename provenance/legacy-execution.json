@@ -25,10 +25,15 @@
     "src/compat/native-providers.ts": {
       "sourcePath": "integration/native-composition.ts",
       "sourceSha256": "bcc986d8d2ce6dc61cc7a3b10af8c1cf5d465150fc729c353e64e1fd567d8941"
+    },
+    "src/compat/response-evidence.ts": {
+      "sourcePath": "integration/response/evidence.ts",
+      "sourceSha256": "74a835fb198c759f36a8c7de7391f15615b976d28054460df09119e4c7fb03bd"
     }
   },
   "adaptations": [
     "Owned module/type imports, authenticated current invocation, published owner consumer adapters, protected operator registration and currentness checks.",
-    "Preserve original claim and receipt identities, fixed collection isolation and no redispatch."
+    "Preserve original claim and receipt identities, fixed collection isolation and no redispatch.",
+    "Shared response evidence reader and exact owned cancellation journal, preserving workspace ledger sentinel and current authenticated invocation."
   ]
 }
