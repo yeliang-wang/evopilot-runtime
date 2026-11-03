@@ -360,9 +360,9 @@ awaiting independent installation from an already managed same-service
 attachment; neither means that a service or session was activated. A completed
 retry returns historical evidence with `currentEnvironmentVerified: false`,
 preserving subsequent data. The original installation/adoption records remain
-unchanged. `workspace_initialize` / `workspace_attach` Host wiring and explicit
-installation/start composition remain required before the complete onboarding
-journey can be accepted.
+unchanged. The protected first-use operator below composes this core with
+`workspace_initialize` / `workspace_attach`, binding and selected service state.
+An accurate final candidate and actual Codex journey remain required for acceptance.
 
 准备核心明确选择项目、状态和服务目录，不自动写入日常目录。初始化要求空目录；
 接入保留已有工作区身份、业务记录、项目内容和模板版本，也可补建缺失的私有项目。
@@ -371,7 +371,7 @@ journey can be accepted.
 
 返回“已准备”不等于服务已启动、插件已安装或会话已激活。中断后沿用原请求；完成后
 重复读取返回历史证据，不覆盖新数据，也不证明当前环境已重验。Host 初始化／接入
-入口及安装／启动组合尚须继续接线，开发验证不能代替完整接入 E2E。
+入口现由下述受保护的首次接入操作组合；开发验证不能代替正式候选的完整接入 E2E。
 
 ### Binding prepared state to a stopped installation / 准备后的安装绑定
 
@@ -401,11 +401,53 @@ The result is **BOUND**, with `serviceStarted`, `hostRegistered`,
 `sessionActivated` and `businessWorkDispatched` all false. Startup must explicitly
 select the resulting current specification. The original installer plan remains
 immutable and cannot be replayed as a replacement for the changed configuration.
-This development core is still awaiting initialize/attach Host composition; it
-does not by itself complete the onboarding or final candidate acceptance.
+The protected initialize/attach operator composes this core. The core alone
+does not establish onboarding or final candidate acceptance.
 
 绑定使用已保留的准备结果、准确安装身份和已核验备份；原安装计划、服务身份、凭据、
 连接及业务记录保持不变。服务数据库在临时副本中核验，原库字节不会因核验而改变。
 中断后沿原请求恢复，配置仅接受准确的原值或预期新值，不覆盖其他修改；原失败保留。
-返回 `BOUND` 不代表启动服务、启用会话或执行业务。完整插件初始化／接入流程仍需
-后续组合与真实 E2E；旧安装计划不能冒充变更后的当前启动配置。
+返回 `BOUND` 不代表启动服务、启用会话或执行业务。完整插件初始化／接入流程通过
+下述操作组合；旧安装计划不能冒充变更后的当前启动配置。
+
+### Protected first-use plugin / 插件首次接入
+
+An unbound installation may explicitly select `workspaceSetup` in its immutable
+installation plan. The grant pins the project and owner-state roots, the fixed
+published owner packages, optional owner/maintenance permissions, expiry and
+`serviceAfterSetup: running | stopped`. It cannot be combined with an already
+selected migration or expand service HTTP permissions.
+
+The same Runtime plugin retains primary HTTP and one local compatibility entry.
+Its setup configuration is protected and digest-pinned. Loading it exposes
+passive inspection and the original `workspace_initialize` / `workspace_attach`
+aliases without creating a Workspace. Initialize may omit roots to use the
+explicit installation selection; attach supplies all original root/identity
+fields. Neither operation can switch that selection or accept arbitrary paths.
+
+An explicit call stops only the selected independent service, prepares the
+Workspace, captures an anchored original Runtime backup and binds the same
+service identity. It then applies the selected running/stopped state. The
+Runtime-only adoption backup protects the records this operation changes; it
+does not claim to be a whole Workspace backup. Interrupted copies reconcile only
+the retained source inventory and exact destination prefix. Failures remain as
+separate records after recovery; another request cannot replace unfinished work.
+
+Within the same Host process, setup invalidates cached connection/owner routes,
+deactivates the compatibility session and sends tool-list-change notification.
+Tool calls are serialized across this configuration change. After a running
+result the Host can rediscover tools, explicitly activate and use its selected
+owner entries without reopening the plugin. HTTP endpoint, credentials and
+service ID stay unchanged. A stopped selection needs explicit operator startup.
+Completed replay returns its historical receipt without restarting a service.
+
+Binding does not activate a Project Lifecycle, approve assets, start a business
+Run or provide release authority. Isolated SDK/launchd/public-owner development
+journeys verify this implementation; exact-candidate actual Codex acceptance is
+still a separate requirement.
+
+首次接入使用安装时明确配置的项目目录、状态目录、owner 权限、有效期和结束后的服务
+状态。加载插件只提供检查入口；用户调用初始化或接入后，才执行停机、准备、备份、
+绑定及选定的服务状态。原安装计划与凭据不变。中断沿原请求恢复，失败记录独立保留。
+同一会话可刷新工具后显式激活并继续使用，无需安装第二个插件。工作区接入成功不代表
+生命周期已启用、业务已执行或软件已获准发布。

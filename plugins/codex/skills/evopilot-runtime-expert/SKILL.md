@@ -16,6 +16,13 @@ workspace, service, version and project revision. The plugin name is not proof
 that a service, exact version or execution capability is ready. An unavailable
 service is a connection problem; never open its database as a fallback.
 
+If this installation exposes the protected Workspace setup entry, first use
+`evopilot_v01_workspace_inspect`. For an unbound selection, follow the first-use
+section in [configuration](references/configuration.md). Initialize or attach
+only the selected locations; then read the same service and explicitly activate
+the compatibility session when using the original owner tools. Setup does not
+activate a Project Lifecycle or approve asset semantics.
+
 Runtime is deterministic. Codex provides conversation, reasoning and coding;
 Runtime stores configuration, exact decisions and evidence and enforces the
 published Base. Do not configure a Runtime LLM profile, copy Host model

@@ -16,6 +16,7 @@ import {createFile,recoverProjectPublications} from '../../compat/project/upgrad
 import {readLegacyOwnerHostConfiguration} from '../../host/legacy-owners.js';
 import {runtimePluginMaterial,type LegacyPluginSelection} from '../../host/plugin.js';
 import {validateWorkspaceOperatorGrant,type WorkspaceOperatorGrant} from '../../host/workspace.js';
+import {readWorkspaceSetupConfiguration} from '../../host/setup.js';
 import {verifyInstalledRuntimePackage,type RuntimeInstallPlan} from '../installer.js';
 import {adoptLegacyWorkspace,verifyLegacyBackup} from '../migration.js';
 import {renderUserServicePlist,type UserServiceSpecification} from '../service.js';
@@ -27,6 +28,7 @@ export interface WorkspaceBindingRequest {
   setupRequestId:string;setupResultDigest:string;installationPlanDigest:string;
   specificationDigest:string;connectionDigest:string;backupRoot:string;backupDigest:string;
   ownerHost:{ref:string;digest:string}|null;workspaceOperator:WorkspaceOperatorGrant|null;
+  setupHost?:{ref:string;digest:string};
 }
 interface Patch {relative:string;before:string|null;after:string;content:string;}
 interface Baseline {
@@ -43,12 +45,13 @@ const fileHash=(file:string)=>sha(readRegular(file,67108864,true));
 const fail=():never=>reject('WORKSPACE_BINDING_CHANGED','Prepared Workspace or retained installation differs; inspect the original request',409);
 const mutable=['legacy-adoption.json','legacy-binding.json','workspace-operator.json','plugin/.mcp.json','service.plist','service-specification.json'] as const;
 function validate(request:WorkspaceBindingRequest):void {
-  exact(record(request),['schema','requestId','serviceRoot','setupRequestId','setupResultDigest','installationPlanDigest','specificationDigest','connectionDigest','backupRoot','backupDigest','ownerHost','workspaceOperator']);
+  exact(record(request),['schema','requestId','serviceRoot','setupRequestId','setupResultDigest','installationPlanDigest','specificationDigest','connectionDigest','backupRoot','backupDigest','ownerHost','workspaceOperator'],['setupHost']);
   if(request.schema!=='runtime-workspace-binding/v1')reject('WORKSPACE_BINDING_INPUT','Unsupported binding request');id(request.requestId);id(request.setupRequestId);
   maintenanceLocation(request.serviceRoot,false,true);maintenanceLocation(request.backupRoot);
   for(const field of ['setupResultDigest','installationPlanDigest','specificationDigest','connectionDigest','backupDigest'] as const)hash(request[field]);
   if(request.ownerHost){exact(record(request.ownerHost),['ref','digest']);canonicalPath(request.ownerHost.ref);hash(request.ownerHost.digest);}
   if(request.workspaceOperator){validateWorkspaceOperatorGrant(request.workspaceOperator);if(Date.parse(request.workspaceOperator.expiresAt)<=Date.now())reject('WORKSPACE_OPERATOR_EXPIRED','Selected maintenance grant expired',403);}
+  if(request.setupHost){exact(record(request.setupHost),['ref','digest']);const c=readWorkspaceSetupConfiguration(request.setupHost.ref);if(digest(c)!==request.setupHost.digest||c.serviceRoot!==request.serviceRoot||c.installationPlanDigest!==request.installationPlanDigest||c.specificationDigest!==request.specificationDigest||c.connectionDigest!==request.connectionDigest||canonical(c.ownerHost)!==canonical(request.ownerHost)||canonical(c.workspaceOperator)!==canonical(request.workspaceOperator)||Date.parse(c.expiresAt)<=Date.now())reject('SETUP_CONFIGURATION','Retained setup permission differs or expired');}
 }
 function preparation(request:WorkspaceBindingRequest):Record<string,unknown> {
   const root=request.serviceRoot+'.evopilot-setup',selected=json(path.join(root,'selection.json')),journal=json(path.join(root,'requests',request.setupRequestId+'.json'));
@@ -90,6 +93,7 @@ function apply(root:string,patch:Patch,stage:string):void {
 
 export async function bindPreparedWorkspace(input:WorkspaceBindingRequest,signal?:AbortSignal,assertCurrent:()=>void=()=>{}):Promise<Record<string,unknown>> {
   const request=structuredClone(input);validate(request);const requestDigest=digest(request),selection=preparation(request),workspaceId=string(selection.workspaceId,64),workspaceRoot=String(selection.workspaceRoot),control=request.serviceRoot+'.evopilot-binding';
+  if(request.setupHost){const c=readWorkspaceSetupConfiguration(request.setupHost.ref);if(c.projectRoot!==selection.projectRoot||c.workspaceRoot!==workspaceRoot||c.workspaceId!==workspaceId||canonical(c.owners)!==canonical(selection.owners))reject('SETUP_SCOPE','Prepared Workspace differs from the installed first-use selection');}
   const current=()=>{signal?.throwIfAborted();assertCurrent();validate(request);if(canonical(preparation(request))!==canonical(selection))fail();};current();
   return withWorkspaceLease({workspaceRoot:control,workspaceId},request.requestId,async()=>{
     current();const chosen=path.join(control,'selection.json'),directory=path.join(control,request.requestId),requestRef=path.join(directory,'request.json'),resultRef=path.join(directory,'result.json');
@@ -145,6 +149,7 @@ export async function bindPreparedWorkspace(input:WorkspaceBindingRequest,signal
           const config={schema:'runtime-workspace-operator/v1',selection:{...adopted.binding,projectRoot:grant.projectRoot,serviceRoot:request.serviceRoot,referenceFiles:grant.referenceFiles},specificationDigest:digest(specification),connectionRef:path.join(request.serviceRoot,'connection.json'),owners:grant.owners,ownerHost:{...legacy},calls:grant.calls,expiresAt:grant.expiresAt};
           patch('workspace-operator.json',bytes(config));legacy.workspaceConfigRef=path.join(request.serviceRoot,'workspace-operator.json');legacy.workspaceConfigDigest=digest(config);
         }
+        if(request.setupHost){legacy.setupConfigRef=request.setupHost.ref;legacy.setupConfigDigest=request.setupHost.digest;}
         const material=runtimePluginMaterial(specification.packageRoot,path.join(request.serviceRoot,'connection.json'),specification.nodeExecutable,legacy);
         for(const [name,content] of material.files)if(name!=='.mcp.json'&&!readRegular(path.join(request.serviceRoot,'plugin',name),65536,true).equals(content))fail();
         // The service specification is last: until the complete local route

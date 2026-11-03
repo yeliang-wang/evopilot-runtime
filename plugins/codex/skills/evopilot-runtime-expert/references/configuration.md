@@ -1,5 +1,26 @@
 # Project lifecycle configuration
 
+For a first-use installation with Workspace setup tools, inspect the protected
+selection using `evopilot_v01_workspace_inspect`. Initialization uses
+`evopilot_v01_workspace_initialize` with a stable `requestId`; omitted roots use
+the explicit installation selection. To attach existing data, use
+`evopilot_v01_workspace_attach` with `projectRoot`, `stateRoot`, `workspaceId` and
+`requestId`. The roots must match that selection; a different location requires
+an actual operator configuration, not a guessed path or edited connection file.
+
+The local operator stops the selected service, preserves the original backup,
+prepares and binds the Workspace, then applies the installation's selected
+running/stopped state. It never activates this session or starts business work.
+After a running result, discover the refreshed tools and call
+`evopilot_v01_activate` before original owner calls. The same Host session can
+continue without reopening Dashboard or installing a second plugin. A stopped
+result requires explicit operator startup before activation. Keep the original
+request after interruption; do not replace its ID or reset its journal. A
+completed replay is historical and does not prove fresh environment validity.
+
+Continue below for Project Lifecycle configuration; Workspace binding does not
+supply missing lifecycle fields, asset decisions or execution authority.
+
 Read `lifecycle.base.inspect` and `lifecycle.definition.inspect` for the selected
 project. The returned publisher pin, field policies, stages, slots and registered
 action digests are authoritative. Read an existing exact revision with

@@ -313,7 +313,11 @@
         "src/installation/workspace/bootstrap-owners.ts",
         "tests/e2e/workspace-bootstrap-v090.test.mjs",
         "src/installation/workspace/binding.ts",
-        "tests/e2e/workspace-binding-v090.test.mjs"
+        "tests/e2e/workspace-binding-v090.test.mjs",
+        "src/host/setup.ts",
+        "src/installation/setup-host.ts",
+        "src/installation/workspace/setup-operator.ts",
+        "tests/e2e/setup-host-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

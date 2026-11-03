@@ -24,7 +24,9 @@ export interface WorkspaceOperatorRoutes {
   requiresActiveSession:(name:string,input:unknown)=>boolean;
   deactivatesSession:(name:string)=>boolean;
   call:(name:string,input:unknown,signal?:AbortSignal)=>Promise<unknown>;
+  refreshesBinding?:(name:string)=>boolean;
 }
+export interface HostConnectionSelection {connectionRef:string;ownerConfigRef?:string;ownerConfigDigest?:string;}
 const absolute=(value:unknown)=>{const path=string(value,4096);if(!isAbsolute(path)||resolve(path)!==path||path===parse(path).root)reject('WORKSPACE_OPERATOR_CONFIGURATION','Use canonical absolute selected paths');return path;};
 const hash=(value:unknown)=>{if(!/^[a-f0-9]{64}$/.test(string(value,64)))reject('WORKSPACE_OPERATOR_CONFIGURATION','Expected a SHA256 binding');};
 function selectionFields(value:Record<string,unknown>):void {

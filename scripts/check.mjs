@@ -207,7 +207,7 @@ export async function checkSource() {
       if(path.endsWith('/src/adapters/artifacts.ts')&&specifier==='yauzl')continue;
       if (path.endsWith('/src/server/mcp.ts') && ['@modelcontextprotocol/sdk/server/index.js','@modelcontextprotocol/sdk/server/streamableHttp.js','@modelcontextprotocol/sdk/types.js'].includes(specifier)) continue;
       if (['/src/host/bridge.ts','/src/installation/workspace-host.ts'].some(file=>path.endsWith(file)) && ['@modelcontextprotocol/sdk/server/index.js','@modelcontextprotocol/sdk/server/stdio.js','@modelcontextprotocol/sdk/types.js'].includes(specifier)) continue;
-      if (['/src/host/legacy-tools.ts','/src/host/guide.ts','/src/host/workspace.ts','/src/installation/workspace/operator.ts'].some(file=>path.endsWith(file)) && specifier==='@modelcontextprotocol/sdk/types.js') continue;
+      if (['/src/host/legacy-tools.ts','/src/host/guide.ts','/src/host/workspace.ts','/src/installation/workspace/operator.ts','/src/installation/workspace/setup-operator.ts'].some(file=>path.endsWith(file)) && specifier==='@modelcontextprotocol/sdk/types.js') continue;
       if (specifier === 'yaml' && (path.endsWith('/src/asset-sources.mjs') || PRODUCT === 'ontology' && path.includes('/src/compat/'))) continue;
       if (PRODUCT === 'ontology' && path.includes('/src/compat/') && specifier === 'ajv/dist/2020.js') continue;
       assert(specifier.startsWith('.'), 'Undeclared import: ' + specifier);

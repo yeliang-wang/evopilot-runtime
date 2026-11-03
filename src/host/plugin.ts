@@ -5,6 +5,7 @@ import {readHostConnection} from '../server/security.js';
 import {readLegacyOwnerHostConfiguration} from './legacy-owners.js';
 import {readWorkspaceOperatorConfiguration} from './workspace.js';
 import {readLegacyBinding} from '../compat/gateway.js';
+import {readWorkspaceSetupConfiguration} from './setup.js';
 
 export const PLUGIN_NAME='evopilot-runtime';
 export const PLUGIN_STATIC_FILES=[
@@ -13,7 +14,7 @@ export const PLUGIN_STATIC_FILES=[
   ...['configuration','execution','recovery'].map(n=>'skills/evopilot-runtime-expert/references/'+n+'.md'),
 ] as const;
 export interface PluginMaterial {name:typeof PLUGIN_NAME;version:string;files:ReadonlyMap<string,Buffer>;transport:'streamable-http';credentialEmbedded:false;}
-export interface LegacyPluginSelection {ownerConfigRef?:string;ownerConfigDigest?:string;workspaceConfigRef?:string;workspaceConfigDigest?:string;}
+export interface LegacyPluginSelection {ownerConfigRef?:string;ownerConfigDigest?:string;workspaceConfigRef?:string;workspaceConfigDigest?:string;setupConfigRef?:string;setupConfigDigest?:string;}
 // Codex's helper field is a command string, not argv. Quote each fixed argument
 // independently; a filesystem path must never become shell syntax.
 export const quoteHelperArgument=(value:string):string=>"'"+value.replaceAll("'","'\"'\"'")+"'";
@@ -32,20 +33,25 @@ export function runtimePluginMaterial(packageRoot:string,connectionRef:string,no
   const helper=join(packageRoot,'dist/host/header-helper.js');if(!lstatSync(helper).isFile()||realpathSync(helper)!==helper)reject('PLUGIN_CONTENT','Compiled Runtime credential helper is missing');
   const servers:Record<string,unknown>={evopilot_runtime:{type:'http',url:connection.origin+'/mcp',http_headers_helper:[nodeExecutable,helper,'--connection-ref',connectionRef].map(quoteHelperArgument).join(' ')}};
   if(legacy){
-    exact(record(legacy),[],['ownerConfigRef','ownerConfigDigest','workspaceConfigRef','workspaceConfigDigest']);
-    const bridge=join(packageRoot,legacy.workspaceConfigRef?'dist/installation/workspace-host.js':'dist/host/bridge.js');if(!lstatSync(bridge).isFile()||realpathSync(bridge)!==bridge)reject('PLUGIN_CONTENT','Compiled compatibility entry is missing');
+    exact(record(legacy),[],['ownerConfigRef','ownerConfigDigest','workspaceConfigRef','workspaceConfigDigest','setupConfigRef','setupConfigDigest']);
+    const bridge=join(packageRoot,legacy.setupConfigRef?'dist/installation/setup-host.js':legacy.workspaceConfigRef?'dist/installation/workspace-host.js':'dist/host/bridge.js');if(!lstatSync(bridge).isFile()||realpathSync(bridge)!==bridge)reject('PLUGIN_CONTENT','Compiled compatibility entry is missing');
     const args=[bridge,'--connection-ref',connectionRef,'--legacy-only'];
+    if(legacy.setupConfigRef!==undefined||legacy.setupConfigDigest!==undefined){
+      const ref=string(legacy.setupConfigRef,4096),c=readWorkspaceSetupConfiguration(ref);
+      if(digest(c)!==legacy.setupConfigDigest||c.connectionRef!==connectionRef||c.workspaceId!==connection.workspaceId||c.serviceId!==connection.serviceId||c.serviceRoot!==resolve(connectionRef,'..')||c.connectionDigest!==digest(connection))reject('SETUP_CONFIGURATION','First-use selection belongs to another installation');
+      args.push('--setup-config-ref',ref,'--setup-config-digest',legacy.setupConfigDigest!);
+    }
     if(legacy.ownerConfigRef!==undefined||legacy.ownerConfigDigest!==undefined){
       const ref=string(legacy.ownerConfigRef,4096),config=readLegacyOwnerHostConfiguration(ref),binding=readLegacyBinding(config.legacyBindingRef);
       if(digest(config)!==legacy.ownerConfigDigest)reject('OWNER_HOST_CHANGED','Owner Host permission selection differs from its pinned digest',409);
       if(config.workspaceId!==connection.workspaceId||config.projectId!==connection.projectId||binding.workspaceId!==connection.workspaceId||binding.serviceId!==connection.serviceId)reject('OWNER_HOST_SCOPE','Owner Host registration belongs to another installed service',403);
-      args.push('--owner-config-ref',ref,'--owner-config-digest',legacy.ownerConfigDigest);
+      if(!legacy.setupConfigRef)args.push('--owner-config-ref',ref,'--owner-config-digest',legacy.ownerConfigDigest);
     }
     if(legacy.workspaceConfigRef!==undefined||legacy.workspaceConfigDigest!==undefined){
       const ref=string(legacy.workspaceConfigRef,4096),config=readWorkspaceOperatorConfiguration(ref);
       if(digest(config)!==legacy.workspaceConfigDigest)reject('WORKSPACE_OPERATOR_CHANGED','Local operator selection differs from its pinned digest',409);
       if(config.connectionRef!==connectionRef||config.selection.workspaceId!==connection.workspaceId||config.selection.serviceId!==connection.serviceId||config.selection.serviceRoot!==resolve(connectionRef,'..')||canonical(config.ownerHost)!==canonical(legacy.ownerConfigRef?{ownerConfigRef:legacy.ownerConfigRef,ownerConfigDigest:legacy.ownerConfigDigest}:{}))reject('WORKSPACE_OPERATOR_SCOPE','Local operator belongs to another installation',403);
-      args.push('--operator-config-ref',ref,'--operator-config-digest',legacy.workspaceConfigDigest!);
+      if(!legacy.setupConfigRef)args.push('--operator-config-ref',ref,'--operator-config-digest',legacy.workspaceConfigDigest!);
     }
     servers.evopilot_runtime_legacy={type:'stdio',command:nodeExecutable,args};
   }

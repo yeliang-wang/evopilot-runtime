@@ -8,6 +8,7 @@ import {pathToFileURL} from 'node:url';
 import {canonical,canonicalEvidence,digest,exact,record,reject,ServiceError,slug,string} from '../server/errors.js';
 import {authenticate,ensurePrivateRoot,initializeCredentials,privateFile,readPrivateJson,tokenDigest,type Permission} from '../server/security.js';
 import {validateWorkspaceOperatorGrant,type WorkspaceOperatorGrant} from '../host/workspace.js';
+import {validateWorkspaceSetupGrant,type WorkspaceSetupGrant} from '../host/setup.js';
 import {runtimePluginMaterial,type LegacyPluginSelection} from '../host/plugin.js';
 import {RuntimeStore} from '../server/store.js';
 import {readLegacyBinding} from '../compat/gateway.js';
@@ -28,6 +29,7 @@ export interface RuntimeInstallPlan {
   legacyOwnerHost?:{ref:string;digest:string}|null;
   legacyProviders?:{ref:string;digest:string}|null;
   workspaceOperator?:WorkspaceOperatorGrant|null;
+  workspaceSetup?:WorkspaceSetupGrant|null;
 }
 export type InstallerCommand='stage'|'install'|'start'|'stop'|'inspect'|'uninstall';
 const ROLES:Record<RuntimeInstallPlan['role'],Permission[]>={reader:['read'],editor:['read','draft.write'],activator:['read','draft.write','definition.activate']};
@@ -80,7 +82,7 @@ function verifyDistribution(root:string,manifest:Distribution,allowMissing=false
   if(!allowMissing){const p=record(JSON.parse(readFileSync(join(root,'package.json'),'utf8')));if(p.name!=='@evopilot-next/runtime'||p.version!==manifest.version)reject('INSTALLATION_DISTRIBUTION','Installed package identity mismatch');}
 }
 function validatePlan(plan:RuntimeInstallPlan):void{
-  exact(record(plan),['schema','root','distribution','nodeExecutable','nodeSha256','workspaceId','projectId','principalId','role','credentialExpiresAt','port','integrationsRef','codex'],['legacyMigration','legacyOwnerHost','legacyProviders','workspaceOperator']);
+  exact(record(plan),['schema','root','distribution','nodeExecutable','nodeSha256','workspaceId','projectId','principalId','role','credentialExpiresAt','port','integrationsRef','codex'],['legacyMigration','legacyOwnerHost','legacyProviders','workspaceOperator','workspaceSetup']);
   if(plan.schema!=='runtime-install-plan/v1'||!Object.hasOwn(ROLES,plan.role)||!Number.isSafeInteger(plan.port)||plan.port<1024||plan.port>65535)reject('INSTALLATION_PLAN','Invalid installation parameters');
   absolute(plan.root);existing(plan.nodeExecutable);hash(plan.nodeSha256);slug(plan.workspaceId);slug(plan.projectId);slug(plan.principalId);
   if(!Number.isFinite(Date.parse(plan.credentialExpiresAt)))reject('INSTALLATION_PLAN','Choose an explicit credential expiration');
@@ -93,6 +95,8 @@ function validatePlan(plan:RuntimeInstallPlan):void{
     if(roots.some((a,i)=>roots.some((b,j)=>i!==j&&(a===b||a.startsWith(b+sep)))))reject('MIGRATION_BACKUP_PATH','Installation, original workspace and backup must be separate');
   }
   if(plan.workspaceOperator!=null){validateWorkspaceOperatorGrant(plan.workspaceOperator);if(!plan.legacyMigration)reject('MIGRATION_REQUIRED','Workspace maintenance requires the exact managed installation selection');}
+  if(plan.workspaceSetup!=null){validateWorkspaceSetupGrant(plan.workspaceSetup);if(plan.legacyMigration||plan.legacyOwnerHost||plan.legacyProviders||plan.workspaceOperator)reject('SETUP_CONFIGURATION','First-use setup and an existing migration are separate installation selections');
+    for(const p of [plan.workspaceSetup.projectRoot,plan.workspaceSetup.workspaceRoot])if(p===plan.root||p.startsWith(plan.root+sep)||plan.root.startsWith(p+sep))reject('SETUP_CONFIGURATION','Setup locations must be separate from the service');}
   if(plan.legacyOwnerHost!=null){exact(record(plan.legacyOwnerHost),['ref','digest']);absolute(plan.legacyOwnerHost.ref);hash(plan.legacyOwnerHost.digest);if(!plan.legacyMigration)reject('MIGRATION_REQUIRED','Owner compatibility requires explicit migrated Runtime selection');}
   if(plan.legacyProviders!=null){exact(record(plan.legacyProviders),['ref','digest']);absolute(plan.legacyProviders.ref);hash(plan.legacyProviders.digest);if(!plan.legacyMigration)reject('MIGRATION_REQUIRED','Original providers require explicit migrated Runtime selection');}
 }
@@ -199,7 +203,14 @@ async function registerPlugin(plan:RuntimeInstallPlan,version:string):Promise<vo
 }
 function preparePlugin(plan:RuntimeInstallPlan,spec:UserServiceSpecification,serviceId:string):void{
   const connectionRef=join(plan.root,'connection.json');exactFile(connectionRef,canonical({schema:'runtime-host-connection/v1',origin:'http://127.0.0.1:'+plan.port,workspaceId:plan.workspaceId,projectId:plan.projectId,principalId:plan.principalId,serviceId,version:spec.version,tokenRef:spec.tokenRef})+'\n');
-  const legacy:LegacyPluginSelection|undefined=plan.legacyMigration?(plan.legacyOwnerHost?{ownerConfigRef:plan.legacyOwnerHost.ref,ownerConfigDigest:plan.legacyOwnerHost.digest}:{}):undefined;
+  let legacy:LegacyPluginSelection|undefined=plan.legacyMigration?(plan.legacyOwnerHost?{ownerConfigRef:plan.legacyOwnerHost.ref,ownerConfigDigest:plan.legacyOwnerHost.digest}:{}):undefined;
+  if(plan.workspaceSetup){
+    const grant=validateWorkspaceSetupGrant(plan.workspaceSetup);
+    if(Date.parse(grant.expiresAt)<=Date.now())reject('SETUP_EXPIRED','First-use operator grant expired',403);
+    if(grant.ownerHost){const owner=readLegacyOwnerHostConfiguration(grant.ownerHost.ref);if(digest(owner)!==grant.ownerHost.digest||owner.workspaceId!==plan.workspaceId||owner.projectId!==plan.projectId||owner.legacyBindingRef!==join(plan.root,'legacy-binding.json')||Object.entries(owner.owners).some(([name,value])=>value.packageRoot!==grant.owners[name as 'ontology'|'harness']))reject('OWNER_HOST_SCOPE','Setup owner routes differ from the selected installation');}
+    const config={schema:'runtime-workspace-setup-operator/v1',...grant,serviceRoot:plan.root,workspaceId:plan.workspaceId,serviceId,connectionRef,installationPlanDigest:digest(plan),specificationDigest:digest(spec),connectionDigest:digest(readPrivateJson(connectionRef))};
+    const ref=join(plan.root,'workspace-setup.json');exactFile(ref,canonical(config)+'\n');legacy={setupConfigRef:ref,setupConfigDigest:digest(config)};
+  }
   if(plan.workspaceOperator&&legacy){
     const grant=validateWorkspaceOperatorGrant(plan.workspaceOperator),binding=readLegacyBinding(spec.legacyRef!);
     const config={schema:'runtime-workspace-operator/v1',selection:{...binding,projectRoot:grant.projectRoot,serviceRoot:plan.root,referenceFiles:grant.referenceFiles},specificationDigest:digest(spec),connectionRef,owners:grant.owners,ownerHost:{...legacy},calls:grant.calls,expiresAt:grant.expiresAt};
