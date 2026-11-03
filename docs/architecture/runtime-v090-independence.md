@@ -1203,7 +1203,33 @@ append-only operation records. Exact local staging can resume missing package
 files; changed files, foreign directories, different plans and another active
 installer are rejected. Initial credentials grant only the explicit bootstrap
 role, never execution, decision or release authority. Existing credentials are
-not silently replaced. The installer does not migrate a 0.8.3 workspace.
+not silently replaced. An omitted or null `legacyMigration` leaves all legacy
+workspaces untouched. Explicit migration selects a separate `workspaceRoot`,
+`expectedSnapshotDigest`, `backupRoot` and `expectedBackupDigest`; the original
+workspace must have the installation's `workspaceId`. Prepare the closed-store
+snapshot and verified Runtime-owned backup using the migration API below before
+freezing this installation plan. Neither directories discovered on disk nor a
+passing package check select migration implicitly.
+
+`stage` verifies the selected backup and prepares the package/credentials without
+adopting the old store or starting a service. `start`/`install` hold the new
+store's writer lock while the existing migration API rechecks the source and
+commits its adoption seal. The installer retains `legacy-adoption.json` and
+`legacy-binding.json` before launching with that exact `--legacy-ref`. The
+binding uses the new store's durable service ID, never a caller-invented ID.
+Interrupted retention resumes from the committed seal under the same plan;
+conflicting retained files require inspection and are never overwritten.
+Newer records are not replaced by backup contents. An already-running service
+is observed without opening another writer, and its live migration digest must
+match the retained binding. Missing or corrupted binding material blocks startup
+or readiness but does not prevent stopping the exact owned launchd process.
+
+This operator integration migrates Runtime-owned state only. Before an actual
+workspace cutover, stop and verify the old writers, retain the separately
+verified complete workspace backup, and verify owner/provider dependencies and
+Host entry transition. These additional delivery obligations are not certified
+by this installation result. Stop/uninstall never downgrade or restore legacy
+data and retain both the migration receipt and original backup.
 
 The macOS service uses its own deterministic user `launchd` label, fixed argv,
 private stdout/stderr and umask. It does not invoke a shell or kill another
@@ -1267,7 +1293,7 @@ Relocating a backup without the original lineage procedure is rejected.
 This internal foundation grants no legacy HTTP mutation authority and does not
 enable a project definition or turn a historical UNKNOWN Run into success. Old
 tool/CLI routing, current permissions and applicable lifecycle admission, owner
-entry transition, operator migration integration and actual accurate-candidate
+entry transition and actual accurate-candidate
 cutover remain required. The managed-store tests are development evidence, not
 completion of E15 or the final acceptance catalog.
 

@@ -4,6 +4,7 @@ import {existsSync,lstatSync,readFileSync,realpathSync,writeFileSync} from 'node
 import {isAbsolute,join,resolve} from 'node:path';
 import {canonical,exact,record,reject,ServiceError,slug,string} from '../server/errors.js';
 import {ensurePrivateRoot,hostHeaders,privateFile,readPrivateJson,type HostConnection} from '../server/security.js';
+import {readLegacyBinding} from '../compat/gateway.js';
 
 /** Operator-only process management. This module is never imported by the HTTP
  * dispatcher, an execution adapter or the MCP service. No project can select a
@@ -12,6 +13,7 @@ export interface UserServiceSpecification {
   schema:'runtime-user-service/v1';root:string;packageRoot:string;version:string;
   nodeExecutable:string;nodeSha256:string;workspaceId:string;projectId:string;
   principalId:string;tokenRef:string;port:number;integrationsRef:string|null;
+  legacyRef?:string|null;
 }
 export interface LaunchdObservation {registered:boolean;running:boolean;pid:number|null;lastExitCode:number|null;label:string;}
 export interface UserServiceObservation extends LaunchdObservation {identity:Record<string,unknown>|null;url:string;}
@@ -20,7 +22,7 @@ const xml=(v:string)=>v.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAl
 const path=(v:string)=>{string(v,4096);if(!isAbsolute(v)||resolve(v)!==v||realpathSync(v)!==v)reject('INSTALLATION_PATH','Use canonical existing installation paths');return v;};
 export function userServiceLabel(spec:UserServiceSpecification):string{return'io.evopilot.runtime.'+slug(spec.workspaceId)+'.'+sha(spec.root).slice(0,16);}
 function validate(spec:UserServiceSpecification):void{
-  exact(record(spec),['schema','root','packageRoot','version','nodeExecutable','nodeSha256','workspaceId','projectId','principalId','tokenRef','port','integrationsRef']);
+  exact(record(spec),['schema','root','packageRoot','version','nodeExecutable','nodeSha256','workspaceId','projectId','principalId','tokenRef','port','integrationsRef'],['legacyRef']);
   if(spec.schema!=='runtime-user-service/v1'||process.platform!=='darwin'||!Number.isSafeInteger(spec.port)||spec.port<1024||spec.port>65535)reject('SERVICE_PLATFORM','This user service requires macOS and an explicit unprivileged port');
   ensurePrivateRoot(path(spec.root));path(spec.packageRoot);path(spec.nodeExecutable);path(spec.tokenRef);
   slug(spec.workspaceId);slug(spec.projectId);slug(spec.principalId);string(spec.version,128);
@@ -28,11 +30,14 @@ function validate(spec:UserServiceSpecification):void{
   const cli=join(spec.packageRoot,'dist/server/cli.js');path(cli);if(!lstatSync(cli).isFile()||!readFileSync(cli,'utf8').startsWith('#!/usr/bin/env node\n'))reject('SERVICE_EXECUTABLE_CHANGED','The compiled Runtime service entry is missing');
   const pkg=record(JSON.parse(readFileSync(join(spec.packageRoot,'package.json'),'utf8')));if(pkg.name!=='@evopilot-next/runtime'||pkg.version!==spec.version)reject('SERVICE_VERSION','The Runtime package version differs from the installation');
   if(spec.integrationsRef!==null){path(spec.integrationsRef);readPrivateJson(spec.integrationsRef);}
+  // Stop/inspection must still identify our own launchd job if the binding was
+  // lost or changed. Validate its contents only before startup/live readback.
+  if(spec.legacyRef!=null){string(spec.legacyRef,4096);if(!isAbsolute(spec.legacyRef)||resolve(spec.legacyRef)!==spec.legacyRef)reject('INSTALLATION_PATH','Use a canonical legacy binding reference');}
   // Validate the scoped credential without returning or recording its value.
   hostHeaders(connection(spec,'installation-pending'));
 }
 function connection(spec:UserServiceSpecification,serviceId:string):HostConnection{return{schema:'runtime-host-connection/v1',origin:'http://127.0.0.1:'+spec.port,workspaceId:spec.workspaceId,projectId:spec.projectId,principalId:spec.principalId,serviceId,version:spec.version,tokenRef:spec.tokenRef};}
-function args(spec:UserServiceSpecification):string[]{return[spec.nodeExecutable,join(spec.packageRoot,'dist/server/cli.js'),'serve','--state-root',join(spec.root,'data'),'--workspace-id',spec.workspaceId,'--port',String(spec.port),...(spec.integrationsRef===null?[]:['--integrations-ref',spec.integrationsRef])];}
+function args(spec:UserServiceSpecification):string[]{return[spec.nodeExecutable,join(spec.packageRoot,'dist/server/cli.js'),'serve','--state-root',join(spec.root,'data'),'--workspace-id',spec.workspaceId,'--port',String(spec.port),...(spec.integrationsRef===null?[]:['--integrations-ref',spec.integrationsRef]),...(spec.legacyRef==null?[]:['--legacy-ref',spec.legacyRef])];}
 export function userServicePlist(spec:UserServiceSpecification):string{
   validate(spec);
   return'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n'+
@@ -74,6 +79,10 @@ export async function observeUserService(spec:UserServiceSpecification):Promise<
   const text=new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks));
   const identity=record(record(JSON.parse(text)).result);
   if(identity.product!=='evopilot-runtime'||identity.contract!=='runtime-service/v1'||identity.workspaceId!==spec.workspaceId||identity.projectId!==spec.projectId||identity.version!==spec.version||identity.independentLlm!==false)reject('SERVICE_IDENTITY_CONFLICT','Live Runtime identity differs from the selected installation',409);
+  if(spec.legacyRef!=null){
+    const binding=readLegacyBinding(spec.legacyRef),legacy=record(identity.legacy);
+    if(binding.workspaceId!==spec.workspaceId||binding.serviceId!==identity.serviceId||legacy.bound!==true||legacy.migrationDigest!==binding.migrationDigest||legacy.revisionNamespace!=='original-family')reject('SERVICE_IDENTITY_CONFLICT','Live Runtime migration differs from the selected binding',409);
+  }else if(identity.legacy!==null)reject('SERVICE_IDENTITY_CONFLICT','An unselected legacy workspace is bound to this service',409);
   const log=join(spec.root,'service.stdout.log');privateFile(log);if(lstatSync(log).size>1048576)reject('SERVICE_LOG_LIMIT','Service startup log exceeds the inspection limit');
   const ready=readFileSync(log,'utf8').split('\n').filter(Boolean).map(line=>{try{return record(JSON.parse(line));}catch{return{};}}).filter(v=>v.ready===true).at(-1);
   if(!ready||ready.serviceId!==identity.serviceId||ready.workspaceId!==identity.workspaceId||ready.version!==identity.version||ready.url!==url)reject('SERVICE_IDENTITY_CONFLICT','Live service lacks the matching owned startup receipt',409);
@@ -85,6 +94,7 @@ function retainExact(path:string,bytes:string):void{
 }
 export async function startUserService(spec:UserServiceSpecification):Promise<UserServiceObservation>{
   validate(spec);retainExact(join(spec.root,'service-specification.json'),canonical(spec)+'\n');
+  if(spec.legacyRef!=null&&readLegacyBinding(spec.legacyRef).workspaceId!==spec.workspaceId)reject('SERVICE_IDENTITY_CONFLICT','Legacy binding belongs to another workspace',409);
   const before=await inspectUserService(spec);if(before.running)return observeUserService(spec);
   retainExact(plistPath(spec),userServicePlist(spec));for(const name of ['service.stdout.log','service.stderr.log'])privateFile(join(spec.root,name),true);
   const result=await launchctl(before.registered?['kickstart',target(spec)]:['bootstrap',domain(),plistPath(spec)]);

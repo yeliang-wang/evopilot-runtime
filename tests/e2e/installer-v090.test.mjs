@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,realpathSync,readFileSync,writeFileSync,existsSync,rmSync,chmodSync,mkdirSync,readdirSync,symlinkSync,lstatSync} from 'node:fs';
+import {mkdtempSync,realpathSync,readFileSync,writeFileSync,existsSync,rmSync,chmodSync,mkdirSync,readdirSync,symlinkSync,lstatSync,cpSync,readlinkSync} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {tmpdir} from 'node:os';
 import {fileURLToPath} from 'node:url';
@@ -14,6 +14,10 @@ import {RuntimeStore} from '../../dist/server/store.js';
 import {userServiceLabel,userServicePlist,inspectUserService,observeUserService,startUserService,stopUserService} from '../../dist/installation/service.js';
 import {lifecycle,yaml} from '../fixtures/lifecycle-v090.mjs';
 import {runInstaller,installerMain} from '../../dist/installation/installer.js';
+import {createRuntimeService as historicalFixture} from '../fixtures/historical-runtime-v020.mjs';
+import {createRuntimeService} from '../../dist/service.js';
+import {inspectLegacyWorkspace,createLegacyBackup,verifyLegacyBackup} from '../../dist/installation/migration.js';
+import {forwardLegacyRuntime} from '../../dist/host/legacy-tools.js';
 
 const repo=realpathSync(fileURLToPath(new URL('../../',import.meta.url))),node=realpathSync(process.execPath),nodeHash=createHash('sha256').update(readFileSync(node)).digest('hex');
 async function fixture(){
@@ -109,4 +113,85 @@ test('distribution links cannot escape the selected package and symlink ancestor
 test('operator installer CLI never accepts raw credentials or a shell command',async()=>{
  let output='';assert.equal(await installerMain(['install','--token','raw-secret'],{write:v=>output+=v}),1);assert.equal(JSON.parse(output).error.code,'INSTALLER_ARGUMENT');assert(!output.includes('raw-secret'));
  output='';assert.equal(await installerMain(['shell','--plan-ref','/invalid'],{write:v=>output+=v}),1);assert.equal(JSON.parse(output).error.code,'INSTALLER_ARGUMENT');
+});
+
+function legacyFixture(f){
+ const options={workspaceRoot:join(f.root,'original'),workspaceId:f.plan.workspaceId},scope={visibility:'private',projectId:f.plan.projectId};
+ const old=historicalFixture(options);old.initialize();
+ const original=old.execute({operation:'project.create',scope,input:{name:'Retained original'},requestId:'original-project',expectedRevision:0});old.close();
+ const snapshot=inspectLegacyWorkspace(options.workspaceRoot,options.workspaceId),backupRoot=join(f.root,'legacy-backup'),backup=createLegacyBackup(options.workspaceRoot,options.workspaceId,snapshot.snapshotDigest,backupRoot);
+ f.plan.legacyMigration={workspaceRoot:options.workspaceRoot,expectedSnapshotDigest:snapshot.snapshotDigest,backupRoot,expectedBackupDigest:backup.backupDigest};
+ // A read-only SQLite open can itself leave WAL sidecars. Inspect the closed
+ // header without opening a connection, as the migration protocol requires.
+ return{options,scope,original,backup,db:join(options.workspaceRoot,'state/runtime/runtime.db'),schema(){return readFileSync(this.db).readUInt32BE(60);}};
+}
+test('migration is explicit: staging verifies selected backup but does not adopt or change original records',async()=>{
+ const f=distributionFixture();try{
+  const legacy=legacyFixture(f),bytes=readFileSync(legacy.db),result=await runInstaller(f.plan,'stage');assert.equal(result.phase,'STAGED');assert.deepEqual(readFileSync(legacy.db),bytes);assert.equal(legacy.schema(),1);
+  const spec=JSON.parse(readFileSync(join(f.plan.root,'service-specification.json')));assert.equal(spec.legacyRef,join(f.plan.root,'legacy-binding.json'));assert(!existsSync(spec.legacyRef));assert(!existsSync(join(f.plan.root,'legacy-adoption.json')));assert(!existsSync(join(f.plan.root,'data/service.sqlite')));
+  if(process.platform==='darwin'){await runInstaller(f.plan,'uninstall');assert.deepEqual(readFileSync(legacy.db),bytes);}
+  const payload=join(f.plan.legacyMigration.backupRoot,'payload/state/runtime/runtime.db');writeFileSync(payload,'corrupted backup');await assert.rejects(()=>runInstaller(f.plan,'stage'),{code:'MIGRATION_BACKUP_CHANGED'});assert.deepEqual(readFileSync(legacy.db),bytes);
+ }finally{f.cleanup();}
+});
+test('migration rejects different scope, anchors and overlapping original/backup/installation paths',async()=>{
+ for(const mutation of ['scope','snapshot','backup','overlap']){
+  const f=distributionFixture();try{
+   const legacy=legacyFixture(f),bytes=readFileSync(legacy.db);
+   if(mutation==='scope')f.plan.workspaceId='other';
+   if(mutation==='snapshot')f.plan.legacyMigration.expectedSnapshotDigest='1'.repeat(64);
+   if(mutation==='backup')f.plan.legacyMigration.expectedBackupDigest='2'.repeat(64);
+   if(mutation==='overlap')f.plan.root=join(f.plan.legacyMigration.workspaceRoot,'installation');
+   await assert.rejects(()=>runInstaller(f.plan,'stage'),{code:mutation==='overlap'?'MIGRATION_BACKUP_PATH':'MIGRATION_BACKUP_CHANGED'});assert.deepEqual(readFileSync(legacy.db),bytes);assert(!existsSync(join(f.plan.root,'data/auth.json')));
+  }finally{f.cleanup();}
+ }
+});
+test('changed source or an active new writer cannot be adopted by installer startup',async()=>{
+ const f=distributionFixture();let store;try{
+  const legacy=legacyFixture(f);await runInstaller(f.plan,'stage');
+  if(process.platform!=='darwin'){await assert.rejects(()=>runInstaller(f.plan,'start'),{code:'SERVICE_PLATFORM'});return;}
+  store=new RuntimeStore(join(f.plan.root,'data'),f.plan.workspaceId);await assert.rejects(()=>runInstaller(f.plan,'start'),{code:'WRITER_ACTIVE'});assert.equal(legacy.schema(),1);store.close();store=null;
+  const old=historicalFixture(legacy.options);old.initialize();old.execute({operation:'goal.create',scope:legacy.scope,input:{id:'changed',description:'Preserve this newer data'},requestId:'later',expectedRevision:1});old.close();
+  const bytes=readFileSync(legacy.db);await assert.rejects(()=>runInstaller(f.plan,'start'),{code:'SNAPSHOT_DRIFT'});assert.deepEqual(readFileSync(legacy.db),bytes);assert.equal(legacy.schema(),1);assert(!existsSync(join(f.plan.root,'service.plist')));
+ }finally{store?.close();f.cleanup();}
+});
+
+/** Actual compiled development service and locked production dependencies. The
+ * synthetic archive anchor is explicitly not release/distribution acceptance. */
+function developmentDistribution(){
+ const f=distributionFixture();rmSync(f.source,{recursive:true});mkdirSync(f.source,{mode:0o700});
+ for(const name of ['package.json','dist','vendor','lifecycle','plugins'])cpSync(join(repo,name),join(f.source,name),{recursive:true});
+ const lock=JSON.parse(readFileSync(join(repo,'package-lock.json')));
+ for(const [name,pkg] of Object.entries(lock.packages).sort(([a],[b])=>a.localeCompare(b))){if(!name.startsWith('node_modules/')||pkg.dev||existsSync(join(f.source,name)))continue;mkdirSync(dirname(join(f.source,name)),{recursive:true,mode:0o700});cpSync(join(repo,name),join(f.source,name),{recursive:true});}
+ f.manifest.version=JSON.parse(readFileSync(join(repo,'package.json'))).version;f.manifest.files={};
+ function inventory(relative=''){for(const name of readdirSync(join(f.source,relative))){const key=relative?relative+'/'+name:name,path=join(f.source,key),stat=lstatSync(path);if(stat.isSymbolicLink())f.manifest.files[key]={type:'symlink',target:readlinkSync(path)};else if(stat.isDirectory()){chmodSync(path,0o700);inventory(key);}else{const bytes=readFileSync(path),mode=(stat.mode&0o111)?0o755:0o644;chmodSync(path,mode);f.manifest.files[key]={type:'file',sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length,mode};}}}
+ inventory();f.plan.distribution.manifestDigest=f.putManifest();return f;
+}
+test('actual installed service recovers committed adoption, preserves old receipts and restarts with one writer', {timeout:120000},async()=>{
+ if(process.platform!=='darwin')return;
+ const f=developmentDistribution();let spec;
+ try{
+  const legacy=legacyFixture(f);f.plan.role='editor';
+  const socket=createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');f.plan.port=socket.address().port;await new Promise(r=>socket.close(r));
+  await runInstaller(f.plan,'stage');spec=JSON.parse(readFileSync(join(f.plan.root,'service-specification.json')));
+  // Simulate interruption/conflicting local material between SQLite seal commit
+  // and binding retention. The original failure and committed seal must remain.
+  writeFileSync(spec.legacyRef,'retain conflicting material',{mode:0o600});await assert.rejects(()=>runInstaller(f.plan,'start'),{code:'INSTALLATION_CHANGED'});assert.equal(legacy.schema(),9);assert(!existsSync(join(f.plan.root,'service.plist')));
+  const receipt=readFileSync(join(f.plan.root,'legacy-adoption.json')),adopted=JSON.parse(receipt);assert.equal(adopted.authority,false);rmSync(spec.legacyRef);
+  const first=await runInstaller(f.plan,'install');assert.equal(first.phase,'AWAITING_HOST_VERIFICATION');assert.equal(first.hostRegistered,null);assert.equal(first.hostVerification,'NOT_EVALUATED');assert.equal(first.service.identity.serviceId,adopted.binding.serviceId);assert.equal(first.service.identity.legacy.migrationDigest,adopted.binding.migrationDigest);assert.deepEqual(readFileSync(join(f.plan.root,'legacy-adoption.json')),receipt);
+  assert(existsSync(join(f.plan.root,'plugin/.mcp.json')));assert.equal(verifyLegacyBackup(f.plan.legacyMigration.backupRoot,legacy.backup.backupDigest).backupDigest,legacy.backup.backupDigest);
+  const client=createRuntimeHttpClient(join(f.plan.root,'connection.json'));
+  const original=await forwardLegacyRuntime(client,'request',{operation:'receipt.inspect',scope:legacy.scope,input:{requestId:'original-project'}});assert.deepEqual(original.result,legacy.original);
+  const newer=await forwardLegacyRuntime(client,'request',{operation:'goal.create',scope:legacy.scope,input:{id:'new-goal',description:'Retain post-adoption data'},requestId:'new-goal',expectedRevision:1});assert.equal(newer.result.revision,2);
+  const repeat=await runInstaller(f.plan,'start');assert.equal(repeat.service.pid,first.service.pid);
+  writeFileSync(join(f.plan.root,'legacy-adoption.json'),JSON.stringify({...adopted,seal:{...adopted.seal,sealedAt:'2000-01-01T00:00:00Z'}}));await assert.rejects(()=>runInstaller(f.plan,'start'),{code:'MIGRATION_BINDING_CHANGED'});writeFileSync(join(f.plan.root,'legacy-adoption.json'),receipt);assert.equal((await inspectUserService(spec)).pid,first.service.pid);
+  assert.throws(()=>new RuntimeStore(join(f.plan.root,'data'),f.plan.workspaceId),{code:'WRITER_ACTIVE'});
+  const old=createRuntimeService(legacy.options);assert.throws(()=>old.initialize(),{code:'MANAGED_SERVICE_REQUIRED'});old.close();
+  await runInstaller(f.plan,'stop');rmSync(spec.legacyRef);rmSync(join(f.plan.root,'legacy-adoption.json'));const restarted=await runInstaller(f.plan,'start');assert.equal(restarted.service.identity.serviceId,first.service.identity.serviceId);assert.deepEqual(readFileSync(join(f.plan.root,'legacy-adoption.json')),receipt);
+  const retained=await forwardLegacyRuntime(client,'request',{operation:'receipt.inspect',scope:legacy.scope,input:{requestId:'new-goal'}});assert.deepEqual(retained.result,newer.result);
+  const binding=readFileSync(spec.legacyRef);writeFileSync(spec.legacyRef,JSON.stringify({...adopted.binding,migrationDigest:'1'.repeat(64)}));await assert.rejects(()=>observeUserService(spec),{code:'SERVICE_IDENTITY_CONFLICT'});
+  // Broken binding must not prevent stopping our exact owned process.
+  await runInstaller(f.plan,'stop');writeFileSync(spec.legacyRef,binding);
+  const removed=await runInstaller(f.plan,'uninstall');assert.equal(removed.phase,'UNINSTALLED');assert.equal(legacy.schema(),9);assert.deepEqual(readFileSync(join(f.plan.root,'legacy-adoption.json')),receipt);assert.equal(verifyLegacyBackup(f.plan.legacyMigration.backupRoot,legacy.backup.backupDigest).backupDigest,legacy.backup.backupDigest);
+  const failures=readdirSync(join(f.plan.root,'installation-audit')).filter(n=>n.endsWith('-failure.json'));assert.equal(failures.length,2);assert.deepEqual(failures.map(n=>JSON.parse(readFileSync(join(f.plan.root,'installation-audit',n))).code).sort(),['INSTALLATION_CHANGED','MIGRATION_BINDING_CHANGED']);
+ }finally{if(spec)await stopUserService(spec);f.cleanup();}
 });
