@@ -84,6 +84,11 @@ export class RuntimeStore {
     const rows=this.db.prepare("SELECT project_id,id FROM objects WHERE kind='stage-progress' AND json_extract(data,'$.terminal')=0 AND (project_id>? OR (project_id=? AND id>?)) ORDER BY project_id,id LIMIT 50").all(after?.projectId??'',after?.projectId??'',after?.id??'').map(r=>({projectId:String(r.project_id),id:String(r.id)}));
     return{rows,next:rows.length===50?rows.at(-1)!:null};
   }
+  monitorInstances(principal:Principal,projectId:string,after?:string):{rows:unknown[];nextAfter:string|null}{
+    this.guard();authorize(principal,projectId,'read');if(after!==undefined)string(after);
+    const rows=this.db.prepare("SELECT id,data FROM objects WHERE project_id=? AND kind='lifecycle-instance' AND id>? ORDER BY id LIMIT 51").all(projectId,after??'');
+    const page=rows.slice(0,50);return{rows:page.map(r=>JSON.parse(String(r.data)) as unknown),nextAfter:rows.length>50?String(page.at(-1)!.id):null};
+  }
   projects(principal: Principal, cursor?:string, limit=50): {projects:{ projectId: string; revision: number }[];nextCursor:string|null;hasMore:boolean} {
     this.guard();
     if(!principal.permissions.includes('read')||Date.parse(principal.expiresAt)<=Date.now())reject('FORBIDDEN','Current project read permission is required',403);

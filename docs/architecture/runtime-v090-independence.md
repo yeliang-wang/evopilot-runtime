@@ -1317,3 +1317,38 @@ prove owner compatibility after adoption. The dedicated owner-entry transition,
 remaining maintenance mapping, installer cutover and accurate-candidate Host
 qualification remain explicit M3/M5 work. Current transport tests and isolated
 published-owner consumption evidence do not close E15/N09 by themselves.
+
+### Browser authentication and monitor transport development
+
+The two-page Dashboard uses the same independent service, store and definition
+validator. It does not run a second server-side definition state machine. The
+browser surface is smaller than the Agent API: draft save and exact
+save-and-activate are its only configuration writes. It has no execution,
+decision, release, legacy or owner-authoring operations. Browser requests retain
+the original request ID, revision, validator result and receipt; a rejected
+activation keeps the draft and previous active version.
+
+An authenticated local client can request a one-use connection code for one
+authorized project. A same-origin browser POST exchanges that code within five
+minutes for an HttpOnly, SameSite=Strict cookie scoped to the Dashboard API.
+The service bearer never enters a URL, browser storage or cookie. The browser
+session expires within one hour or at the original credential expiry, whichever
+comes first. It rechecks the original credential and principal on requests and
+stream polls. Rotation, revocation, changed permissions and service restart
+require reconnecting. Cookie authentication cannot access the Agent API or MCP.
+All Dashboard POSTs require the exact Origin; authenticated POSTs also require
+their session's CSRF proof. This connection exchange is not a credential manager
+or an additional product page.
+
+The dedicated monitor snapshot returns each instance's pinned graph, original
+Goal/Target/Loop references, candidate digest and observed stage facts. It omits
+YAML, semantic configuration and editor payload. Pages are bounded and retain
+the original project revision; a concurrent revision change requires a fresh
+snapshot. The dedicated event stream retains authenticated cursor semantics but
+omits every event data body. It prompts state readback instead of interpreting
+events as completion or permission to dispatch. Credential revocation also ends
+the stream. Unknown and pending instance facts remain unknown and pending.
+
+These endpoints and their source regression tests are implementation evidence.
+React/SeeCode integration, actual browser interaction, all frozen UI variants,
+the installed candidate and full final acceptance remain required separately.

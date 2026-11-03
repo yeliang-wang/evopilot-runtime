@@ -18,6 +18,8 @@ import {createExtensionReviewService,EXTENSION_REVIEW_READS,EXTENSION_REVIEW_WRI
 import {createLegacyGateway,readLegacyBinding} from '../compat/gateway.js';
 import {LEGACY_READ,LEGACY_WRITE} from '../compat/catalog.js';
 import type {Providers as LegacyProviders} from '../service.js';
+import {createBrowserSessions} from './browser-session.js';
+import {dashboardEnvelope,monitorEvents,monitorSnapshot} from './dashboard.js';
 
 const VERSION = String(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version);
 export interface ServerOptions { stateRoot: string; workspaceId: string; port?: number; legacyBindingRef?:string; }
@@ -41,24 +43,25 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
   try{if(options.legacyBindingRef)legacy=createLegacyGateway(store,readLegacyBinding(options.legacyBindingRef),trustedLegacyProviders);}
   catch(error){await execution.close();store.close();throw error;}
   const streams = new Set<ServerResponse>();
+  const browserSessions=createBrowserSessions(id=>currentPrincipal(options.stateRoot,options.workspaceId,id));
   let port = 0, closing = false;
   const status = () => ({ product: 'evopilot-runtime', version: VERSION, developmentTarget: '0.9.0', contract: 'runtime-service/v1', workspaceId: options.workspaceId, serviceId: store.serviceId, transport: 'streamable-http', protocols: HTTP_PROTOCOLS, operations: [...READ_OPERATIONS,...WRITE_OPERATIONS], legacy:legacy?{bound:true,migrationDigest:legacy.inspect().migrationDigest,revisionNamespace:'original-family'}:null, independentLlm: false, productAcceptance: 'NOT_EVALUATED' });
   function principal(req: IncomingMessage) { return authenticate(options.stateRoot,options.workspaceId,req.headers.authorization); }
-  async function dispatch(req: IncomingMessage, value: unknown): Promise<unknown> {
+  async function dispatch(req: IncomingMessage, value: unknown,reauthenticate=()=>principal(req)): Promise<unknown> {
     const envelope = record(value); exact(envelope,['operation','projectId','input'],['requestId','expectedRevision']);
     const projectId = slug(envelope.projectId), operation = string(envelope.operation), input = record(envelope.input);
-    const actor = principal(req); authorize(actor,projectId,'read');
+    const actor = reauthenticate(); authorize(actor,projectId,'read');
     if(operation===LEGACY_READ||operation===LEGACY_WRITE){
       if(!legacy)reject('LEGACY_NOT_BOUND','No verified legacy migration is bound to this service',409);
-      if(operation===LEGACY_READ){exact(envelope,['operation','projectId','input']);return legacy.read(actor,projectId,input,()=>principal(req));}
+      if(operation===LEGACY_READ){exact(envelope,['operation','projectId','input']);return legacy.read(actor,projectId,input,reauthenticate);}
       exact(envelope,['operation','projectId','input','requestId','expectedRevision']);
       if(!Number.isSafeInteger(envelope.expectedRevision)||Number(envelope.expectedRevision)<0)reject('INVALID_REVISION','Use the original legacy family revision');
-      return legacy.write(actor,projectId,input,string(envelope.requestId),Number(envelope.expectedRevision),()=>principal(req));
+      return legacy.write(actor,projectId,input,string(envelope.requestId),Number(envelope.expectedRevision),reauthenticate);
     }
     if(WRITE_OPERATIONS.includes(operation as typeof WRITE_OPERATIONS[number])){
       exact(envelope,['operation','projectId','input','requestId','expectedRevision']);if(!Number.isSafeInteger(envelope.expectedRevision)||Number(envelope.expectedRevision)<0)reject('INVALID_REVISION','Expected a nonnegative revision');
       const service=EXTENSION_REVIEW_WRITES.includes(operation as typeof EXTENSION_REVIEW_WRITES[number])?extensionReviews:IMPLEMENTATION_REVIEW_WRITES.includes(operation as typeof IMPLEMENTATION_REVIEW_WRITES[number])?implementationReviews:AGENT_WRITES.includes(operation as typeof AGENT_WRITES[number])?agents:PREPARATION_WRITES.includes(operation as typeof PREPARATION_WRITES[number])?preparations:AUTHORITY_WRITES.includes(operation as typeof AUTHORITY_WRITES[number])?authorities:EXECUTION_WRITES.includes(operation as typeof EXECUTION_WRITES[number])?execution:definitions;
-      return service.write(actor,projectId,operation,input,string(envelope.requestId),Number(envelope.expectedRevision),()=>principal(req));
+      return service.write(actor,projectId,operation,input,string(envelope.requestId),Number(envelope.expectedRevision),reauthenticate);
     }
     exact(envelope,['operation','projectId','input']);
     if(DEFINITION_READS.includes(operation as typeof DEFINITION_READS[number]))return definitions.read(actor,projectId,operation,input);
@@ -98,7 +101,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     if (!['127.0.0.1:'+port,'localhost:'+port].includes(host ?? '')) reject('INVALID_HOST','Loopback Host required',403);
     const counts = new Map<string,number>();
     for (let i=0;i<req.rawHeaders.length;i+=2) { const name=req.rawHeaders[i].toLowerCase(); counts.set(name,(counts.get(name)??0)+1); }
-    if (['host','authorization','origin'].some(k => (counts.get(k)??0)>1)) reject('INVALID_HEADERS','Duplicate security header');
+    if (['host','authorization','origin','cookie','x-runtime-csrf'].some(k => (counts.get(k)??0)>1)) reject('INVALID_HEADERS','Duplicate security header');
     if (req.headers.origin && req.headers.origin !== 'http://'+host) reject('INVALID_ORIGIN','Same-origin access required',403);
     const url = new URL(req.url ?? '/','http://'+host);
     if (url.origin !== 'http://'+host) reject('INVALID_HOST','Absolute request target does not match the listener',403);
@@ -106,21 +109,22 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     if (req.headers['sec-fetch-site'] === 'cross-site') reject('CROSS_SITE','Cross-site access is not allowed',403);
     return url;
   }
-  function stream(req: IncomingMessage, res: ServerResponse, projectId: string, initial?: string) {
+  function stream(req: IncomingMessage, res: ServerResponse, projectId: string, initial?: string,reauthenticate=()=>principal(req),monitor=false) {
     if (streams.size >= 32) reject('STREAM_LIMIT','Too many event streams',429);
     let cursor = initial, stopped = false, timer: ReturnType<typeof setInterval> | undefined;
-    const first = store.events(principal(req), projectId, cursor); cursor = first.cursor;
+    const first = store.events(reauthenticate(), projectId, cursor); cursor = first.cursor;
     res.writeHead(200,{ 'content-type':'text/event-stream','cache-control':'no-store','connection':'keep-alive','x-accel-buffering':'no' });
     streams.add(res);
     const stop = () => { if(stopped)return;stopped=true;if(timer)clearInterval(timer);streams.delete(res);res.end(); };
     const send = (event: string, data: unknown) => {
       if (res.writableLength > 262144) { stop(); return; }
-      res.write('event: '+event+'\ndata: '+JSON.stringify(data)+'\n\n');
+      const output=monitor&&['snapshot','events','heartbeat'].includes(event)?monitorEvents(data as ReturnType<RuntimeStore['events']>):data;
+      res.write('event: '+event+'\ndata: '+JSON.stringify(output)+'\n\n');
     };
     send('snapshot',first);
     timer = setInterval(() => {
       try {
-        const next = store.events(principal(req),projectId,cursor); cursor=next.cursor;
+        const next = store.events(reauthenticate(),projectId,cursor); cursor=next.cursor;
         send(next.events.length ? 'events' : 'heartbeat',next);
       } catch (e) { send('error',{ code: e instanceof ServiceError ? e.code : 'SERVICE_UNAVAILABLE' }); stop(); }
     },1000);
@@ -132,7 +136,43 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     res.setHeader('content-security-policy',"default-src 'self'; frame-ancestors 'none'; base-uri 'none'");
     try {
       if(closing)reject('STOPPING','Service is stopping',503);
-      const url=boundary(req); principal(req);
+      const url=boundary(req);
+      if(url.pathname==='/api/v1/dashboard-code'&&req.method==='POST'){
+        const actor=principal(req),input=record(await body(req));exact(input,['projectId']);
+        const authorization=req.headers.authorization;
+        json(res,200,{requestId,result:browserSessions.issue(actor,slug(input.projectId),url.origin,()=>authenticate(options.stateRoot,options.workspaceId,authorization))});return;
+      }
+      if(url.pathname.startsWith('/api/v1/dashboard/')){
+        const origin=url.origin;
+        if(req.method==='POST'&&req.headers.origin!==origin)reject('CSRF','Dashboard POST requires its exact browser Origin',403);
+        if(url.pathname==='/api/v1/dashboard/session'&&req.method==='POST'){
+          const input=record(await body(req));exact(input,['code']);const result=browserSessions.exchange(input.code,origin),{cookie,...view}=result;
+          res.setHeader('set-cookie',cookie);json(res,200,{requestId,result:view});return;
+        }
+        const authenticated=()=>browserSessions.authenticate(req.headers.cookie,origin);
+        const session=authenticated();
+        if(url.pathname==='/api/v1/dashboard/session'&&req.method==='GET'){
+          json(res,200,{requestId,result:{projectId:session.projectId,principalId:session.actor.id,permissions:session.actor.permissions.filter(p=>['read','draft.write','definition.activate'].includes(p)),csrf:session.csrf,expiresAt:session.expiresAt,serviceId:store.serviceId,workspaceId:store.workspaceId}});return;
+        }
+        if(req.method==='POST')browserSessions.authenticate(req.headers.cookie,origin,session.projectId,string(req.headers['x-runtime-csrf'],128));
+        if(url.pathname==='/api/v1/dashboard/logout'&&req.method==='POST'){
+          exact(record(await body(req)),[]);res.setHeader('set-cookie',browserSessions.close(req.headers.cookie,origin,string(req.headers['x-runtime-csrf'],128)));json(res,200,{requestId,result:{disconnected:true}});return;
+        }
+        if(url.pathname==='/api/v1/dashboard/request'&&req.method==='POST'){
+          const envelope=dashboardEnvelope(await body(req),session.projectId),result=await dispatch(req,envelope,()=>authenticated().actor);
+          authenticated();json(res,200,{requestId,result},envelope.operation);return;
+        }
+        if(url.pathname==='/api/v1/dashboard/monitor'&&req.method==='GET'){
+          const input=Object.fromEntries(url.searchParams);exact(input,[],['after','revision']);
+          const result=monitorSnapshot(store,session.actor,session.projectId,{...(input.after?{after:input.after}:{}),...(input.revision!==undefined?{revision:Number(input.revision)}:{})});
+          json(res,200,{requestId,result});return;
+        }
+        if(url.pathname==='/api/v1/dashboard/events'&&req.method==='GET'){
+          exact(Object.fromEntries(url.searchParams),[],['cursor']);stream(req,res,session.projectId,url.searchParams.get('cursor')??undefined,()=>authenticated().actor,true);return;
+        }
+        reject('NOT_FOUND','Dashboard endpoint not found',404);
+      }
+      principal(req);
       if (url.pathname === '/mcp') {
         const protocol=req.headers['mcp-protocol-version'];
         if (protocol !== undefined && (Array.isArray(protocol) || !HTTP_PROTOCOLS.includes(protocol as typeof HTTP_PROTOCOLS[number]))) reject('UNSUPPORTED_PROTOCOL','Unsupported MCP protocol version');
@@ -164,7 +204,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
   port=address.port;
   const legacyIntentSource=legacy?.intentSource(actor=>{const current=currentPrincipal(options.stateRoot,options.workspaceId,actor.id);if(!current)reject('UNAUTHENTICATED','Original principal is no longer available',401);return current;});
   return Object.freeze({ url:'http://127.0.0.1:'+port,port,identity:status(),legacyIntentSource, async close(){
-    if(closing)return;closing=true;for(const res of streams)res.end();streams.clear();
+    if(closing)return;closing=true;browserSessions.clear();for(const res of streams)res.end();streams.clear();
     server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));await legacy?.close();await execution.close();store.close();
   }});
 }
