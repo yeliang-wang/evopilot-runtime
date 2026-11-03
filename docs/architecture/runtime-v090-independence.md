@@ -1371,9 +1371,20 @@ authenticated HTTP compatibility gateway. This path never opens a legacy Runtime
 database. Ontology receives only its exact public provider descriptors, distinct
 from Harness callbacks. The bridge supplies no model profile or LLM loop.
 
+Harness response prerequisites can read original `collection:<id>` and `run:<id>`
+evidence through that same Runtime HTTP gateway, or delegate a Harness reference
+to its own published `response.evidence.inspect`. Reads retain the exact scope,
+workspace and reference digest. Collection raw bytes are checked by the original
+Runtime reader; the Host checks its receipt/claim digest and original observation
+time. Run projections require retained collection references and both owner
+outcomes, using the oldest collection observation. `FAIL` and `UNKNOWN` are
+preserved. No read dispatches collection or retries a Run. Workspace governance
+references still need their separately bound project-ledger reader; unsupported
+owners do not become caller-asserted `PASS` evidence.
+
 This transport implementation and isolated real-owner validation do not establish
 the entire historical authoring or maintenance workflow. Trusted native/readiness
-authoring admission, remaining response/online providers, private project helpers,
+authoring admission, workspace response/online providers, private project helpers,
 old Runtime execution-provider wiring, full tool mapping, actual Codex journeys
 and accurate-candidate migration remain required before N09/E15 can pass. No
 unsupported owner capability is supplied by changing an owner product or importing
