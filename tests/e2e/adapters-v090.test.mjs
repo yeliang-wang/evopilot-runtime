@@ -16,9 +16,9 @@ import { READINESS_STANDARD_DIGEST, noReconstruction } from '../../vendor/compat
 import { createRegisteredBindings, openRegisteredBindings } from '../../dist/adapters/bindings.js';
 import { compileLifecycle } from '../../dist/lifecycle/compiler.js';
 import { validateBindings } from '../../dist/lifecycle/bindings.js';
-import { valueDigest } from '../../dist/lifecycle/base.js';
+import { valueDigest, loadPublisherBase } from '../../dist/lifecycle/base.js';
 import { registeredAuthorityPolicy } from '../../dist/adapters/authority.js';
-import { yaml } from '../fixtures/lifecycle-v090.mjs';
+import { yaml, extension } from '../fixtures/lifecycle-v090.mjs';
 import { inspectExternalAgent } from '../../dist/adapters/external-agent.js';
 import { createOwnerFeedbackDelivery, verifyOwnerFeedbackInbox } from '../../dist/adapters/feedback.js';
 import { RuntimeStore } from '../../dist/server/store.js';
@@ -610,4 +610,21 @@ test('feedback refuses changed registered event content and raw credentials with
     const secret={...body,observation:{apiKey:'synthetic-key-never-send'}};f.controls.source={...secret,digest:nativeSha256(secret)};
     await assert.rejects(()=>f.retain(),{code:'INLINE_SECRET'});assert.equal(f.calls.length,0);
   }finally{f.cleanup();}
+});
+
+for(const actionName of ['ontology','harness','artifact'])test(actionName+' extension admission rejects owner or mapping incompatibility before activation',async()=>{
+ const f=bindingFixture();try{
+  const owner=actionName==='ontology'?'ontology':'harness',e=extension('admission-'+actionName),a=loadPublisherBase().base.actions.find(a=>a.id==='runtime.check.'+actionName);e.actionRef=a.id;e.actionDigest=valueDigest(a);f.data.extensions=[e];
+  const d={kind:'check',owner,criterionId:owner==='ontology'?'scope':'H001',variantIds:['positive']},row={stage:e.id,checkId:e.requirementRefs[0],owner,criterionId:d.criterionId,variantIds:d.variantIds,source:'owner-receipt'},global=f.configuration.resources.find(r=>r.role==='config.verification.evidenceMappingRef').definition;
+  for(const[ref,role,definition]of [[e.parameters.checkRef,'extension.check',d],[e.requirementRefs[0],'extension.requirement',d],[e.evidenceMappingRef,'extension.mapping',{kind:'evidence-map',ontology:global.ontology,harness:global.harness,rows:[row]}]])f.configuration.resources.push({ref,role,workspaceId:'test',projectId:'alpha',revision:1,expiresAt:actor.expiresAt,definition:structuredClone(definition)});
+  global.rows.push(row);f.save();let result=await validateBindings(f.definition(),actor,f.provider);assert.equal(result.ready,true,JSON.stringify(result.issues));const original=structuredClone(f.configuration.resources);
+  for(const variation of ['other-owner','missing-row','wrong-source','global-mismatch']){
+   f.configuration.resources=structuredClone(original);const check=f.configuration.resources.find(r=>r.ref===e.parameters.checkRef),requirement=f.configuration.resources.find(r=>r.ref===e.requirementRefs[0]),local=f.configuration.resources.find(r=>r.ref===e.evidenceMappingRef),global=f.configuration.resources.find(r=>r.role==='config.verification.evidenceMappingRef');
+   if(variation==='other-owner'){const other=owner==='harness'?'ontology':'harness',criterion=other==='ontology'?'scope':'H001';for(const x of [check.definition,requirement.definition,local.definition.rows[0],global.definition.rows.at(-1)]){x.owner=other;x.criterionId=criterion;}}
+   if(variation==='missing-row')local.definition.rows=[];
+   if(variation==='wrong-source'){local.definition.rows[0].source='ci-artifact';global.definition.rows.at(-1).source='ci-artifact';}
+   if(variation==='global-mismatch')local.definition.rows[0].source='decision';
+   f.save();result=await validateBindings(f.definition(),actor,f.provider);assert.equal(result.ready,false,variation);assert(result.issues.some(i=>i.path==='extensions.'+e.id),JSON.stringify(result.issues));
+  }
+ }finally{f.cleanup();}
 });

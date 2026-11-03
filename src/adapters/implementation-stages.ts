@@ -31,7 +31,7 @@ export function readImplementationEvidence(store:RuntimeStore,r:StageRequest){
 /** The original coding request stays immutable. Explicit advance retains a
  * derived exact-source CI request under the same authority/deadline before any
  * CI effect. Restart observes that request; it cannot replace or redispatch it. */
-export function createImplementationStageAdapters(store:RuntimeStore,configPath:string,connections:NativeStageConnections,identify:typeof inspectExternalAgent=inspectExternalAgent):{implementation:StageAdapter;ci:StageAdapter}{
+export function createImplementationStageAdapters(store:RuntimeStore,configPath:string,connections:NativeStageConnections,identify:typeof inspectExternalAgent=inspectExternalAgent):{implementation:StageAdapter;ci:StageAdapter;source:(instance:LifecycleInstance,actor:Principal)=>VerifiedStageSource}{
   const reviews=createImplementationReviewService(store,registeredImplementationReview(configPath,store.workspaceId,connections),id=>currentPrincipal(store.root,store.workspaceId,id));
   const codex=createCodexStageAdapter(store,configPath,identify);
   function retain(r:StageRequest,kind:string,id:string,value:unknown){
@@ -83,5 +83,5 @@ export function createImplementationStageAdapters(store:RuntimeStore,configPath:
     // cancellation or process death must be reconciled, never dispatched again.
     return translated(r,base,d,await ci.dispatch(request,instance,permit,signal));
   }};
-  return{implementation,ci};
+  return{implementation,ci,source:completedSource};
 }

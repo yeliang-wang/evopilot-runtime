@@ -144,8 +144,8 @@ the fixed scope and plan stages and external Codex task handoff are also
 implemented. Reviewed implementation CI now composes the same native validators
 and supplies its verified source to candidate and verification stages. A bounded
 real GitLab probe has exercised scope through verification without seeded
-predecessors. The remaining native stages and full lifecycle acceptance remain
-M3 work.
+predecessors. Project review and CI preparation extensions, independent Host
+integration and full lifecycle acceptance remain M3 work.
 Unconfigured adapters fail closed; synthetic regression adapters are test
 fixtures only and cannot certify real asset usability or final E2E. The two
 Dashboard pages, independent installed Expert/plugin, migration and complete
@@ -554,6 +554,58 @@ The actual GitLab development readback verified the current Codex probe's exact
 two-file MR without any remote mutation. Both-provider regression tests exercise
 wrong base/head, byte mismatches, pagination and incomplete evidence; actual
 GitHub source-review and full lifecycle acceptance remain separate obligations.
+
+## Development project extension checks
+
+The registered executor implements `runtime.check.ontology`,
+`runtime.check.harness` and `runtime.check.artifact` in all four publisher-defined
+extension slots. Each check
+uses the exact published owner asset, native criterion/variant pairs, project
+requirement and evidence mappings, reviewed preparation, original passing
+predecessors and current execution authority. Local and global evidence mappings
+must agree at definition admission and execution; even a consistently renamed criterion is rejected when it is absent
+from the published asset. These checks consume owner APIs and do not author or
+publish assets.
+
+After-plan checks bind the reviewed preparation source. Later slots bind the
+verified completed implementation source; checks after candidate creation also
+bind the original candidate manifest and archive identity. Harness receives a
+`runtime-extension-observation/v1` containing this evidence under
+`values.runtimeExtension`. Ontology validates the exact published model in the
+same scoped native context. A successful baseline or registration alone cannot
+complete an extension. The native receipt must satisfy the fixed owner criteria
+with matching source, input, toolchain and configuration digests.
+
+The artifact action binds published Harness rules with `owner-receipt` mappings.
+Before native evaluation, Runtime independently verifies its fixed inputs:
+after-plan uses all exact reviewed preparation documents; before-candidate uses
+the original completed implementation CI archive; subsequent slots use the
+original candidate archive. Archive bytes, producer request, complete CI check
+set and all declared files must match. Runtime rehashes and parses the retained
+archive without extracting or executing files. It neither rebuilds nor dispatches
+another CI run. The exact observation reaches Harness as
+`runtimeExtension.artifacts`; missing inputs cannot become a passing rule result.
+
+Runtime retains each original native action before invoking its owner. If the
+response is lost, reconciliation reads that request's receipt and never submits
+a replacement validation. Running receipts are retained as immutable observations
+separately from the eventual terminal receipt, so restart can reconcile the same
+request through completion. Source, configuration, permission or toolchain drift
+prevents continuation. Every extension remains a required AND branch: unrun,
+unknown and failed branches block the successor base stage.
+
+`lifecycle.extension.evidence.read {stageRequestId}` returns scoped historical
+action, receipt and content-addressed evidence through both HTTP and MCP. This
+read creates no authority. Closure archives all three original records and
+rejects missing or altered records. Regression fixtures exercise four-slot
+joins, owner failures, response loss, restart, mapping/source drift, project
+isolation and archive integrity; their synthetic providers and owner decisions
+are not final-candidate acceptance evidence.
+
+The other publisher-registered actions (`runtime.review.scope`,
+`runtime.operation.ci-prepare`) and preparation-generated
+source propagation remain implementation obligations. Unsupported actions fail
+closed; their presence in the compiler registry does not establish an executor.
 
 ## Development implementation review decisions
 

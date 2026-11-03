@@ -1,3 +1,4 @@
+import {readExtensionEvidence} from './extension-stages.js';
 import {randomUUID} from 'node:crypto';
 import {constants,closeSync,existsSync,fsyncSync,lstatSync,mkdirSync,openSync,readFileSync,realpathSync,renameSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
@@ -142,6 +143,10 @@ export function createClosureStageAdapter(store:RuntimeStore,configPath:string,c
       for(const kind of ['scope-stage-evidence','plan-stage-input','implementation-ci-derivation','stage-evaluation-run','release-stage-material','publication-harness-input','publication-harness-action','publication-harness-receipt','stage-candidate-source','ci-stage-artifact','publication-ci-artifact'])addStored(kind,id);
       for(const kind of ['stage-native-action','stage-native-receipt','plan-stage-native-action','plan-stage-native-receipt'])for(const owner of ['ontology','harness'])addStored(kind,id+':'+owner);
       for(const check of record(record(progress.observation).outcome).checks as Record<string,unknown>[]){const expected=({plan:'plan-stage-evidence',implementation:'implementation-stage-evidence',candidate:'ci-stage-evidence',verification:'ci-stage-evidence',publication:'publication-evidence'} as Record<string,string>)[stageId];if(expected){const evidence=required(store,r.projectId,expected,string(check.evidenceRef,71));if(valueDigest(evidence)!==check.evidenceRef)reject('CLOSURE_ARCHIVE_INPUT','Original stage evidence digest changed',409);add(expected,string(check.evidenceRef,71),evidence);}else for(const kind of evidenceKinds)addStored(kind,string(check.evidenceRef));}
+      if(i.definition.nodes.find(n=>n.id===stageId)?.source==='project'){
+        const view=readExtensionEvidence(store,sr);if(!view.evidence||record(record(view.evidence).result).status!=='PASS'||(record(record(progress.observation).outcome).checks as Record<string,unknown>[]).some(c=>c.evidenceRef!==view.evidenceRef))reject('CLOSURE_ARCHIVE_INPUT','Every original extension requires its exact passing receipt',409);
+        add('extension-evidence',view.evidenceRef!,view.evidence);add('extension-native-action',id,view.action);add('extension-native-receipt',id,view.receipt);
+      }
       const artifact=store.object(r.projectId,'ci-stage-artifact',id);if(artifact)addZip(artifact);
       for(const ref of [sr.authorityRef,sr.releaseAuthorityRef])if(ref?.startsWith('authority:')){const decision=record(addStored('authority-decision',ref,true));if(decision.evidenceRef!==undefined)decisionDocument('runtime-decision',ref,decision.evidenceRef);}
       if(stageId==='implementation'){

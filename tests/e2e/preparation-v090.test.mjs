@@ -8,38 +8,47 @@ import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StreamableHTTPClientTransport} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import {startRuntimeServer} from '../../dist/server/http.js';
 import {initializeCredentials,tokenDigest} from '../../dist/server/security.js';
-import {byteDigest,valueDigest} from '../../dist/lifecycle/base.js';
+import {byteDigest,valueDigest,loadPublisherBase} from '../../dist/lifecycle/base.js';
+import {createNativeExtensionStageAdapter} from '../../dist/adapters/extension-stages.js';
 import {requiredChecksDigest} from '../../dist/lifecycle/instance.js';
 import {compileLifecycle} from '../../dist/lifecycle/compiler.js';
 import {registeredAuthorityPolicy} from '../../dist/adapters/authority.js';
 import {registeredPreparation,createScopeStageAdapter,createPlanStageAdapter} from '../../dist/adapters/preparation-stages.js';
 import {lifecycleBindingExample} from '../fixtures/adapters-v090.mjs';
-import {syntheticBindings,yaml} from '../fixtures/lifecycle-v090.mjs';
+import {syntheticBindings,yaml,extension,syntheticSourceTree} from '../fixtures/lifecycle-v090.mjs';
 import {syntheticDecisionEvidence} from '../fixtures/native/decision-evidence.mjs';
 import {ServiceError} from '../../dist/server/errors.js';
 import {nativeSha256,NATIVE_CONTRACT_DIGEST} from '../../vendor/compatibility/v1/native.mjs';
 
 // The actual HTTP/store/policy/scope adapters are exercised with explicit
 // synthetic asset admission and a read-only synthetic source platform.
-async function fixture({plan=false}={}){
+async function fixture({plan=false,extensions=[],extensionSlot='after-plan',missingCriterion=false}={}){
   const dir=mkdtempSync(join(realpathSync(tmpdir()),'runtime-preparation-')),root=join(dir,'state'),workspaceId='synthetic',projectId='alpha',path=join(dir,'integrations.json'),expiry='2030-01-01T00:00:00Z';
   const pin=owner=>({product:owner,id:'synthetic-'+owner,version:'1.0.0',specVersion:'v1',visibility:'private',digest:valueDigest(owner),standardDigest:valueDigest(owner+'-standard'),standardLockDigest:valueDigest(owner+'-lock'),producer:{product:owner,version:'0.3.0'},contractDigest:NATIVE_CONTRACT_DIGEST});
   const platform={ref:'binding:alpha/platform',workspaceId,projectId,provider:'github',host:'https://github.com',repository:'synthetic/project',repositoryId:'42',defaultBranch:'main',credentialRef:'credential:alpha/platform',revision:1,expiresAt:expiry,workflowPath:'.github/workflows/build.yml',runner:'ubuntu-latest'};
   const credentials={ref:platform.credentialRef,workspaceId,projectId,provider:platform.provider,host:platform.host,tokenFile:join(dir,'unused-token'),revision:1,expiresAt:expiry},owners=['ontology','harness'].map(owner=>({ref:'binding:alpha/'+owner,owner,packageRoot:dir,workspaceRoot:dir,workspaceId,projects:[projectId]}));
   const {configuration:config,data}=lifecycleBindingExample({root:dir,workspaceId,projectId,platform,credential:credentials,ownerRegistrations:owners,references:{ontology:pin('ontology'),harness:pin('harness')},assessmentId:'synthetic'});
+  if(extensions.length){data.config.verification.budget.timeoutSeconds=60;
+    data.extensions=extensions.map((kind,index)=>{const e=extension(kind+'-'+index,extensionSlot),action=loadPublisherBase().base.actions.find(a=>a.id==='runtime.check.'+kind);return{...e,actionRef:action.id,actionVersion:action.version,actionDigest:valueDigest(action),parameters:{checkRef:'binding:alpha/'+kind+'-check-'+index},scopeRef:'scope:'+projectId,budget:{...e.budget,timeoutSeconds:60}};});
+    for(const [index,e]of data.extensions.entries()){
+      const kind=extensions[index],definition={kind:'check',owner:kind,criterionId:missingCriterion?'not-published':kind==='ontology'?'scope':'H001',variantIds:['positive']},row={stage:e.id,checkId:e.requirementRefs[0],owner:kind,criterionId:definition.criterionId,variantIds:definition.variantIds,source:'owner-receipt'};
+      for(const [ref,role,d]of [[e.parameters.checkRef,'extension.check',definition],[e.requirementRefs[0],'extension.requirement',definition],[e.evidenceMappingRef,'extension.mapping',{kind:'evidence-map',ontology:pin('ontology'),harness:pin('harness'),rows:[row]}]])config.resources.push({ref,role,workspaceId,projectId,revision:1,expiresAt:expiry,definition:structuredClone(d)});
+      config.resources.find(r=>r.role==='config.verification.evidenceMappingRef').definition.rows.push(row);
+    }
+  }
   if(plan)data.config.plan.budget.timeoutSeconds=60; // Explicit synthetic recovery budget; no production grant is changed.
   config.resources.find(r=>r.role==='config.release-decision.authorityPolicyRef').definition.principalIds.push('other-decider');
   const save=()=>writeFileSync(path,JSON.stringify(config),{mode:0o600});save();
   const tokens=Object.fromEntries(['fixture','reader','other-decider','foreign'].map(id=>[id,randomBytes(32).toString('hex')]));
   const all=['read','draft.write','definition.activate','decision.record','execution.request'];
   initializeCredentials(root,workspaceId,Object.entries(tokens).map(([id,token])=>({id,projects:[id==='foreign'?'beta':projectId],permissions:id==='reader'||id==='foreign'?['read']:all,revision:1,expiresAt:expiry,tokenDigest:tokenDigest(token)})));
-  const state={commit:'a'.repeat(40),reads:0,fail:null,missing:false,context:false,lost:null,beforeWrite:false,afterWrite:null,manifest:valueDigest('toolchain-manifest')},calls=[],receipts=new Map(),toolchainLockDigest=valueDigest('toolchain-lock'),effectiveConfigDigest=valueDigest('native-config'),bindings=syntheticBindings(),validator=registeredPreparation(path,workspaceId),policy=registeredAuthorityPolicy(path,workspaceId);
-  const client={readiness:async()=>{state.reads++;return{provider:platform.provider,projectId,repositoryId:platform.repositoryId,bindingDigest:valueDigest(platform),commit:state.commit,factsDigest:valueDigest({commit:state.commit}),expiresAt:new Date(Date.now()+60000).toISOString()};}};
+  const state={commit:'a'.repeat(40),reads:0,pending:null,fail:null,missing:false,context:false,lost:null,beforeWrite:false,afterWrite:null,manifest:valueDigest('toolchain-manifest')},calls=[],receipts=new Map(),toolchainLockDigest=valueDigest('toolchain-lock'),effectiveConfigDigest=valueDigest('native-config'),bindings=syntheticBindings(),validator=registeredPreparation(path,workspaceId),policy=registeredAuthorityPolicy(path,workspaceId);
+  const client={sourceTree:async(_actor,{commit})=>syntheticSourceTree(platform,commit),readiness:async()=>{state.reads++;return{provider:platform.provider,projectId,repositoryId:platform.repositoryId,bindingDigest:valueDigest(platform),commit:state.commit,factsDigest:valueDigest({commit:state.commit}),expiresAt:new Date(Date.now()+60000).toISOString()};}};
   const ownerAdapters=Object.fromEntries(['ontology','harness'].map(kind=>['binding:alpha/'+kind,{owner:kind,workspaceId,capabilities:()=>({registrationDigest:valueDigest(kind+'registration')}),
-    readPackage:async()=>{const body={reference:pin('harness'),qualityStatus:'PASS',effectiveConfigDigest};return kind==='ontology'?{package:{manifest:{entrypoints:{cases:'cases.json'}},files:{'cases.json':JSON.stringify({cases:[{id:'positive',requirementIds:['scope']}]})}}}:{validation:{...body,reportDigest:nativeSha256(body)},package:{manifest:{entrypoints:{coverage:'coverage.json'}},files:{'coverage.json':JSON.stringify({requirements:[{id:'requirement-H001',caseIds:['positive']}]})}}};},
-    read:async(_a,_p,r)=>{if(r.operation==='workspace.inspect')return{revision:0};const receipt=receipts.get(r.input.requestId);if(!receipt)throw new ServiceError('NOT_FOUND','Synthetic missing native receipt',404);return structuredClone(receipt);},
+    readPackage:async()=>{const body={reference:pin('harness'),qualityStatus:'PASS',effectiveConfigDigest};return kind==='ontology'?{package:{manifest:{entrypoints:{cases:'cases.json'}},files:{'cases.json':JSON.stringify({cases:[{id:'positive',requirementIds:['scope']}]})}}}:{validation:{...body,reportDigest:nativeSha256(body)},package:{manifest:{entrypoints:{coverage:'coverage.json'}},files:{'coverage.json':JSON.stringify({requirements:[{id:'requirement-H001',ruleIds:['H001'],caseIds:['positive']}]})}}};},
+    read:async(_a,_p,r)=>{if(r.operation==='workspace.inspect')return{revision:0};const receipt=receipts.get(r.input.requestId);if(!receipt)throw new ServiceError('NOT_FOUND','Synthetic missing native receipt',404);return state.pending===kind?{...structuredClone(receipt),status:'RUNNING',result:{status:'RUNNING'}}:structuredClone(receipt);},
     mutate:async(_a,_p,r)=>{
-      calls.push({kind,request:r});const stored=activeStore.object(projectId,'plan-stage-native-action',activeRequest+':'+kind);assert(stored,'native action must be durable before any effect');
+      calls.push({kind,request:r});const stored=activeStore.object(projectId,r.requestId.startsWith('extension-native-')?'extension-native-action':'plan-stage-native-action',r.requestId.startsWith('extension-native-')?activeRequest:activeRequest+':'+kind);assert(stored,'native action must be durable before any effect');
       if(state.lost===kind&&state.beforeWrite)throw new ServiceError('SYNTHETIC_RESPONSE_LOST','Synthetic loss before owner result',503);
       const criteria=(kind==='ontology'?[{criterionId:'scope',variantId:'positive'}]:[{criterionId:'requirement-H001',variantId:'positive'},{criterionId:'requirement-H001',variantId:'actual-observation'}]).map(x=>({...x,status:state.fail===kind?'FAIL':'PASS',evidenceDigest:valueDigest(x)}));if(state.missing)criteria.pop();
       const context=state.context?{...r.input.context,inputDigest:valueDigest('wrong')}:r.input.context;
@@ -50,8 +59,18 @@ async function fixture({plan=false}={}){
   }]));
   let server,sequence=0,activeStore,activeRequest;const start=async()=>server=await startRuntimeServer({stateRoot:root,workspaceId},bindings.provider,undefined,policy,store=>{
     activeStore=store;const scope=createScopeStageAdapter(store,path,{platform:()=>client});if(!plan)return scope;
-    const adapter=createPlanStageAdapter(store,path,{platform:()=>client,owner:ref=>ownerAdapters[ref],toolchainLockDigest,toolchainManifestDigest:state.manifest});
-    return{prepare:(i,s,...a)=>(s==='scope'?scope:adapter).prepare(i,s,...a),dispatch:(r,...a)=>{activeRequest=r.id;return(r.stageId==='scope'?scope:adapter).dispatch(r,...a);},inspect:(r,...a)=>(r.stageId==='scope'?scope:adapter).inspect(r,...a),advance:(r,...a)=>{activeRequest=r.id;return(r.stageId==='scope'?scope:adapter).advance(r,...a);}};
+    const connections={platform:()=>client,owner:ref=>ownerAdapters[ref],toolchainLockDigest,toolchainManifestDigest:state.manifest,source:async()=>({commit:state.commit,evidenceRef:'synthetic:completed-source'})},adapter=createPlanStageAdapter(store,path,connections),nativeExtension=createNativeExtensionStageAdapter(store,path,connections);
+    // This source/candidate provider is deliberately synthetic. It exercises the
+    // real execution core and slot joins, not external Agent/CI qualification.
+    const syntheticBase={prepare:async(i,id)=>({adapterId:'synthetic-slot-predecessor',adapterDigest:valueDigest('synthetic-slot-predecessor'),action:'base.'+id,bindingDigest:valueDigest('synthetic'),parameters:{synthetic:true}}),dispatch:async(r,i,permit)=>{const actor=await permit();return syntheticBase.inspect(r,i,null,actor);},inspect:async(r,i,_progress,actor)=>{
+      const outcome={requestId:r.id,inputDigest:r.inputDigest,receiptRef:'synthetic:original-predecessor/'+r.id,status:'COMPLETE',expiresAt:r.deadlineAt,checks:i.definition.nodes.find(n=>n.id===r.stageId).checks.map(id=>({id,status:'PASS',evidenceRef:'synthetic:original-check/'+id}))};
+      if(r.stageId==='candidate'){outcome.candidate={schema:'runtime-candidate/v1',version:input.target.version,profile:'candidate-verification',sourceDigest:valueDigest({provider:platform.provider,repositoryId:platform.repositoryId,commit:state.commit}),buildDigest:valueDigest('synthetic build'),artifacts:[{name:'fixture.tgz',digest:valueDigest('synthetic artifact'),bytes:100}]};
+        const body={schema:'runtime-candidate-source-evidence/v1',requestId:r.id,requestDigest:r.digest,pinsDigest:i.pinsDigest,outcomeDigest:valueDigest(outcome),input:{schema:'runtime-ci-candidate-input/v1',manifest:outcome.candidate,archive:{provider:platform.provider,repositoryId:platform.repositoryId,runId:'1',artifactId:'1',jobId:null,archiveDigest:valueDigest('synthetic archive'),archiveBytes:100}}};
+        if(!activeStore.object(projectId,'stage-candidate-source',r.id))activeStore.mutate(actor,{projectId,operation:'synthetic.candidate',requestId:'synthetic-candidate-'+r.id,expectedRevision:activeStore.revision(projectId),input:{synthetic:true},permission:'read'},()=>({objects:[{kind:'stage-candidate-source',id:r.id,value:{...body,digest:valueDigest(body)}}],value:{synthetic:true},event:{type:'synthetic-candidate',data:{}}}));
+      }
+      return{requestId:r.id,inputDigest:r.inputDigest,adapterDigest:r.plan.adapterDigest,phase:'COMPLETE',handle:null,outcome};
+    }},select=id=>id==='scope'?scope:id==='plan'?adapter:id.startsWith('project.')?nativeExtension:syntheticBase;
+    return{prepare:(i,s,...a)=>select(s).prepare(i,s,...a),dispatch:(r,...a)=>{activeRequest=r.id;return select(r.stageId).dispatch(r,...a);},inspect:(r,...a)=>select(r.stageId).inspect(r,...a),advance:(r,...a)=>{activeRequest=r.id;return select(r.stageId).advance(r,...a);}};
   },validator);await start();
   async function request(operation,input={},write=false,actor='fixture',meta){
     if(write&&!meta){const status=await request('runtime.status',{},false,actor);meta={requestId:'prep-'+(++sequence),expectedRevision:status.result.revision};}
@@ -191,4 +210,61 @@ test('pending plan pins the actual validator manifest across service restart',as
   const f=await fixture({plan:true});try{
     f.state.lost='ontology';const id=await planStart(f);await waitStage(f,id,'UNKNOWN');f.state.lost=null;f.state.manifest=valueDigest('changed-tools');await f.restart();const r=await waitStage(f,id,'UNKNOWN');await new Promise(resolve=>setTimeout(resolve,1200));const current=await f.request('lifecycle.stage.request.inspect',{stageRequestId:id});assert.equal(current.result.progress.reason,'TOOLCHAIN_CHANGED');assert.equal(f.calls.length,1);
   }finally{await f.cleanup();}
+});
+
+for(const kind of ['ontology','harness'])test(kind+' extension uses its exact native owner, original predecessor and scoped evidence across restart',async()=>{
+ const f=await fixture({plan:true,extensions:[kind]});try{
+  const plan=await planStart(f);await waitStage(f,plan,'COMPLETE');assert.equal((await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:'implementation'},true)).error.code,'STAGE_BLOCKED');
+  const submitted=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:f.data.extensions[0].id},true);assert.equal(submitted.status,200,JSON.stringify(submitted));const id=submitted.result.result.stageRequestId;await waitStage(f,id,'COMPLETE');assert.equal(f.calls.length,3);assert.equal(f.calls.at(-1).kind,kind);
+  if(kind==='harness'){const observed=f.calls.at(-1).request.input.observation;assert.equal(observed.values.runtimeExtension.stageId,f.data.extensions[0].id);assert.equal(observed.values.runtimeExtension.source.commit,f.input.source.commit);assert.equal(observed.values.tests,undefined);assert.equal(observed.values.runtimeExtension.candidate,null);}
+  const evidence=await f.request('lifecycle.extension.evidence.read',{stageRequestId:id});assert.equal(evidence.status,200,JSON.stringify(evidence));assert.equal(evidence.result.evidence.result.status,'PASS');assert.equal(evidence.result.releaseAuthorized,false);assert.equal((await f.request('lifecycle.extension.evidence.read',{stageRequestId:id},false,'foreign')).status,403);
+  await f.restart();assert.deepEqual((await f.request('lifecycle.extension.evidence.read',{stageRequestId:id})).result,evidence.result);assert.equal((await f.request('lifecycle.stage.advance',{stageRequestId:id},true)).result.result.status,'TERMINAL');assert.equal(f.calls.length,3);
+ }finally{await f.cleanup();}
+});
+for(const failure of ['fail','missing','context'])test('extension '+failure+' evidence blocks the original AND successor',async()=>{
+ const f=await fixture({plan:true,extensions:['harness']});try{await waitStage(f,await planStart(f),'COMPLETE');f.state[failure]=failure==='fail'?'harness':true;const start=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:f.data.extensions[0].id},true);assert.equal(start.status,200,JSON.stringify(start));const r=await waitStage(f,start.result.result.stageRequestId,failure==='fail'?'FAILED':'UNKNOWN');assert.notEqual(r.progress.phase,'COMPLETE');assert.equal((await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:'implementation'},true)).error.code,'STAGE_BLOCKED');assert.equal(f.calls.length,3);}finally{await f.cleanup();}
+});
+for(const before of [true,false])test('extension lost response '+(before?'before':'after')+' owner effect preserves the original action across restart',async()=>{
+ const f=await fixture({plan:true,extensions:['harness']});try{await waitStage(f,await planStart(f),'COMPLETE');f.state.lost='harness';f.state.beforeWrite=before;const start=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:f.data.extensions[0].id},true);assert.equal(start.status,200,JSON.stringify(start));const id=start.result.result.stageRequestId;await waitStage(f,id,'UNKNOWN');const original=f.calls.at(-1).request.requestId;f.state.lost=null;await f.restart();await waitStage(f,id,before?'UNKNOWN':'COMPLETE');if(before){const advanced=await f.request('lifecycle.stage.advance',{stageRequestId:id},true);assert.equal(advanced.status,200,JSON.stringify(advanced));await waitStage(f,id,'UNKNOWN');}assert.equal(f.calls.length,3);assert.equal(f.calls.at(-1).request.requestId,original);}finally{await f.cleanup();}
+});
+for(const variation of ['owner','criterion','mapping','toolchain'])test('extension rejects '+variation+' binding drift before further native effects',async()=>{
+ const f=await fixture({plan:true,extensions:['harness']});try{await waitStage(f,await planStart(f),'COMPLETE');f.state.lost='harness';f.state.beforeWrite=true;const start=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:f.data.extensions[0].id},true);assert.equal(start.status,200,JSON.stringify(start));const id=start.result.result.stageRequestId;await waitStage(f,id,'UNKNOWN');f.state.lost=null;
+  if(variation==='toolchain')f.state.manifest=valueDigest('changed-manifest');else{const e=f.data.extensions[0];if(variation==='owner')f.config.resources.find(r=>r.ref===e.parameters.checkRef).definition.owner='ontology';if(variation==='criterion')f.config.resources.find(r=>r.ref===e.requirementRefs[0]).definition.criterionId='another';if(variation==='mapping')f.config.resources.find(r=>r.ref===e.evidenceMappingRef).definition.rows=[];f.save();}
+  await f.restart();const result=await f.request('lifecycle.stage.advance',{stageRequestId:id},true);if(variation==='toolchain'){assert.equal(result.status,200,JSON.stringify(result));let observed;for(let n=0;n<100;n++){observed=await f.request('lifecycle.stage.request.inspect',{stageRequestId:id});if(observed.result.progress.reason==='EXTENSION_PLAN_CHANGED')break;await new Promise(resolve=>setTimeout(resolve,20));}assert.equal(observed.result.progress.reason,'EXTENSION_PLAN_CHANGED');}else assert.equal(result.status,409,JSON.stringify(result));assert.equal(f.calls.length,3);
+ }finally{await f.cleanup();}
+});
+
+for(const slot of ['after-plan','before-candidate','candidate-checks','before-release-decision'])for(const fail of [false,true])test(slot+' native extensions enforce every AND branch '+(fail?'with one failure':'until both pass'),async()=>{
+ const f=await fixture({plan:true,extensions:['ontology','harness'],extensionSlot:slot});try{
+  await waitStage(f,await planStart(f),'COMPLETE');const predecessors={'after-plan':[],'before-candidate':['implementation'],'candidate-checks':['implementation','candidate'],'before-release-decision':['implementation','candidate','verification']},successor={'after-plan':'implementation','before-candidate':'candidate','candidate-checks':'verification','before-release-decision':'release-decision'}[slot];
+  for(const stageId of predecessors[slot]){const result=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId},true);assert.equal(result.status,200,JSON.stringify(result));await waitStage(f,result.result.result.stageRequestId,'COMPLETE');}
+  assert.equal((await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:successor},true)).error.code,'STAGE_BLOCKED');
+  let first=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:f.data.extensions[0].id},true);assert.equal(first.status,200,JSON.stringify(first));await waitStage(f,first.result.result.stageRequestId,'COMPLETE');
+  assert.equal((await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:successor},true)).error.code,'STAGE_BLOCKED');if(fail)f.state.fail='harness';
+  const second=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:f.data.extensions[1].id},true);assert.equal(second.status,200,JSON.stringify(second));await waitStage(f,second.result.result.stageRequestId,fail?'FAILED':'COMPLETE');
+  const view=await f.request('lifecycle.extension.evidence.read',{stageRequestId:second.result.result.stageRequestId});assert.equal(view.result.request.plan.parameters.node.stage,slot);assert.equal(Boolean(view.result.request.plan.parameters.candidateInput),['candidate-checks','before-release-decision'].includes(slot));
+  const next=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:successor},true);assert.equal(next.status,fail?409:200,JSON.stringify(next));if(fail)assert.equal(next.error.code,'STAGE_BLOCKED');
+  assert.equal(f.calls.filter(c=>c.request.requestId.startsWith('extension-native-')).length,2);
+ }finally{await f.cleanup();}
+});
+
+test('a consistently renamed but unpublished extension criterion cannot be blessed by native baseline PASS',async()=>{
+ const f=await fixture({plan:true,extensions:['harness'],missingCriterion:true});try{await waitStage(f,await planStart(f),'COMPLETE');const e=f.data.extensions[0];const result=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:e.id},true);assert.equal(result.status,409,JSON.stringify(result));assert.equal(result.error.code,'EXTENSION_MAPPING');assert.equal(f.calls.length,2);}finally{await f.cleanup();}
+});
+for(const slot of ['before-candidate','candidate-checks'])test(slot+' extension cannot reuse an unknown native action after source drift',async()=>{
+ const f=await fixture({plan:true,extensions:['harness'],extensionSlot:slot});try{await waitStage(f,await planStart(f),'COMPLETE');for(const stageId of slot==='before-candidate'?['implementation']:['implementation','candidate']){const start=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId},true);assert.equal(start.status,200,JSON.stringify(start));await waitStage(f,start.result.result.stageRequestId,'COMPLETE');}f.state.lost='harness';f.state.beforeWrite=true;const start=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:f.data.extensions[0].id},true);assert.equal(start.status,200,JSON.stringify(start));const id=start.result.result.stageRequestId;await waitStage(f,id,'UNKNOWN');f.state.commit='b'.repeat(40);f.state.lost=null;await f.restart();const advance=await f.request('lifecycle.stage.advance',{stageRequestId:id},true);assert.equal(advance.status,200,JSON.stringify(advance));let view;for(let n=0;n<100;n++){view=await f.request('lifecycle.stage.request.inspect',{stageRequestId:id});if(view.result.progress.reason==='EXTENSION_SOURCE_CHANGED')break;await new Promise(resolve=>setTimeout(resolve,20));}assert.equal(view.result.progress.reason,'EXTENSION_SOURCE_CHANGED');assert.equal(f.calls.length,3);}finally{await f.cleanup();}
+});
+test('actual Streamable MCP reads original extension evidence and cannot grant another project access',async()=>{
+ const f=await fixture({plan:true,extensions:['harness']}),client=new Client({name:'synthetic-extension-reader',version:'1'});try{await waitStage(f,await planStart(f),'COMPLETE');const start=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:f.data.extensions[0].id},true);assert.equal(start.status,200,JSON.stringify(start));const id=start.result.result.stageRequestId;await waitStage(f,id,'COMPLETE');await client.connect(new StreamableHTTPClientTransport(new URL(f.server.url+'/mcp'),{requestInit:{headers:{authorization:'Bearer '+f.tokens.fixture}}}));const result=await client.callTool({name:'runtime_read',arguments:{operation:'lifecycle.extension.evidence.read',projectId:'alpha',input:{stageRequestId:id}}});assert.notEqual(result.isError,true);const expected=await f.request('lifecycle.extension.evidence.read',{stageRequestId:id});assert.deepEqual(JSON.parse(result.content[0].text).result,expected.result);const foreign=await client.callTool({name:'runtime_read',arguments:{operation:'lifecycle.extension.evidence.read',projectId:'beta',input:{stageRequestId:id}}});assert.equal(foreign.isError,true);assert.equal(f.calls.length,3);}finally{await client.close();await f.cleanup();}
+});
+
+for(const kind of ['ontology','harness'])test(kind+' running extension receipt can complete the same original action after restart',async()=>{
+ const f=await fixture({plan:true,extensions:[kind]});try{
+  await waitStage(f,await planStart(f),'COMPLETE');f.state.pending=kind;
+  const start=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:f.data.extensions[0].id},true);assert.equal(start.status,200,JSON.stringify(start));const id=start.result.result.stageRequestId;await waitStage(f,id,'UNKNOWN');
+  const pending=await f.request('lifecycle.extension.evidence.read',{stageRequestId:id});assert.equal(pending.status,200,JSON.stringify(pending));assert.equal(pending.result.receipt.status,'RUNNING');assert.equal(pending.result.evidence.receiptTerminal,false);assert.equal(pending.result.evidence.result.status,'UNKNOWN');
+  assert.equal((await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:'implementation'},true)).error.code,'STAGE_BLOCKED');
+  await f.restart();assert.deepEqual((await f.request('lifecycle.extension.evidence.read',{stageRequestId:id})).result,pending.result);f.state.pending=null;await waitStage(f,id,'COMPLETE');
+  const complete=await f.request('lifecycle.extension.evidence.read',{stageRequestId:id});assert.equal(complete.status,200,JSON.stringify(complete));assert.equal(complete.result.evidence.receiptTerminal,true);assert.equal(complete.result.evidence.result.status,'PASS');assert.equal(complete.result.action.digest,pending.result.action.digest);assert.equal(f.calls.length,3);
+ }finally{await f.cleanup();}
 });

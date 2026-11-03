@@ -25,6 +25,7 @@ import { publicationTarget } from './distribution.js';
 import { createPublicationStageAdapter } from './publication-stage.js';
 import {readVerificationFeedback} from './stage-feedback.js';
 import {createClosureStageAdapter} from './closure-stage.js';
+import {createNativeExtensionStageAdapter} from './extension-stages.js';
 import type { PreparationValidator } from '../lifecycle/preparation.js';
 import { createPlanStageAdapter, createScopeStageAdapter, registeredPreparation } from './preparation-stages.js';
 import { registeredImplementationReview, type ImplementationReviewBindings } from '../lifecycle/implementation-review.js';
@@ -227,6 +228,15 @@ export function createRegisteredBindings(configPath:string,workspaceId:string,co
         for(const requirement of list(action.requirementRefs,64))facts.push(await inspectResource(requirement,'extension.requirement'));
         facts.push(await inspectResource(action.evidenceMappingRef,'extension.mapping'));
         for(const [key,v] of Object.entries(parameters))facts.push(await inspectResource(v,key==='checkRef'?'extension.check':key==='reviewRef'?'extension.review':'extension.workflow'));
+        if(['runtime.check.ontology','runtime.check.harness','runtime.check.artifact'].includes(String(action.actionRef))){
+          const kind=action.actionRef==='runtime.check.ontology'?'ontology':'harness',node=definition.nodes.find(n=>path==='extensions.'+n.id)!;
+          const check=resource(parameters.checkRef,'extension.check'),required=list(action.requirementRefs,64).map(ref=>resource(ref,'extension.requirement'));
+          if(check.definition.owner!==kind||required.some(r=>r.definition.owner!==kind)||!required.some(r=>same(r.definition,check.definition)))reject('EXTENSION_MAPPING','Extension checks must use their registered owner and required criterion');
+          const local=resource(action.evidenceMappingRef,'extension.mapping').definition,global=resource(atPath(definition.semantic,'config.verification.evidenceMappingRef'),'config.verification.evidenceMappingRef').definition;
+          const rows=(local.rows as Record<string,unknown>[]).filter(r=>r.stage===node.id),globalRows=(global.rows as Record<string,unknown>[]).filter(r=>r.stage===node.id),sorted=(rows:Record<string,unknown>[])=>[...rows].sort((a,b)=>String(a.checkId).localeCompare(String(b.checkId)));
+          if(rows.length!==node.checks.length||!same(rows.map(r=>r.checkId).sort(),[...node.checks].sort())||!same(sorted(rows),sorted(globalRows)))reject('EXTENSION_MAPPING','Local and global extension mappings must cover the same required checks');
+          for(const r of required){const row=rows.find(row=>row.checkId===r.ref)!;if(row.source!=='owner-receipt'||row.owner!==kind||row.criterionId!==r.definition.criterionId||!same([...(row.variantIds as string[])].sort(),[...(r.definition.variantIds as string[])].sort()))reject('EXTENSION_MAPPING','Each extension criterion must map to its exact native owner receipt');}
+        }
         return{value:facts.map(f=>f.value),expiresAt:new Date(Math.min(...facts.map(f=>Date.parse(f.expiresAt)))).toISOString()};
       }
       if(Array.isArray(value)){const facts=await Promise.all(value.map(v=>inspectResource(v,path)));return{value:facts.map(f=>f.value),expiresAt:new Date(Math.min(...facts.map(f=>Date.parse(f.expiresAt)))).toISOString()};}
@@ -300,12 +310,13 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
   return{provider,preparation:registeredPreparation(configPath,workspaceId),implementationReview:registeredImplementationReview(configPath,workspaceId,connections),executor(store,services){
     if(store.workspaceId!==workspaceId)reject('INTEGRATION_SCOPE','Stage executor must share the service workspace',403);
     if(serviceStore&&serviceStore!==store)reject('INTEGRATION_SCOPE','Owner feedback cannot switch to another service store',403);serviceStore=store;
-    let stages:ReturnType<typeof createImplementationStageAdapters>|undefined,scope:StageAdapter|undefined,plan:StageAdapter|undefined,release:StageAdapter|undefined,publication:StageAdapter|undefined,closure:StageAdapter|undefined;
+    let stages:ReturnType<typeof createImplementationStageAdapters>|undefined,scope:StageAdapter|undefined,plan:StageAdapter|undefined,release:StageAdapter|undefined,publication:StageAdapter|undefined,closure:StageAdapter|undefined,nativeExtension:StageAdapter|undefined;
     async function current(signal:AbortSignal,stageId:string):Promise<StageAdapter>{
       const config=await ensure(signal),toolchain=readRegisteredNativeToolchain(config);
       if(stageId==='scope'){scope??=createScopeStageAdapter(store,configPath,connections);return scope;}
       if(stageId==='plan'){plan??=createPlanStageAdapter(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest});return plan;}
       stages??=createImplementationStageAdapters(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest});
+      if(stageId.startsWith('project.')){nativeExtension??=createNativeExtensionStageAdapter(store,configPath,{...connections,toolchainLockDigest:toolchain.lockDigest,toolchainManifestDigest:config.nativeToolchain!.digest,source:async(instance,_stage,actor,signal)=>{signal.throwIfAborted();return stages!.source(instance,actor);}});return nativeExtension;}
       if(stageId==='release-decision'){
         if(!services.authorityPolicy)reject('AUTHORITY_POLICY_UNAVAILABLE','Release admission requires the service authority policy',409);
         release??=createReleaseStageAdapter(store,configPath,{platform:connections.platform,verification:stages.ci},services.releaseAuthority,services.authorityPolicy);return release;
