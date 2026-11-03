@@ -26,6 +26,7 @@ test('principal revision changed during awaited provider work prevents original 
 test('protected provider selection rejects missing migration binding, expired scope, caller programs and unknown fields before owner loading',async t=>{
  const f=await providerFixture(t),ownersRoot=join(f.root,'owners');mkdirSync(ownersRoot,{mode:0o700});const ref=join(f.root,'providers.json'),value={schema:'runtime-legacy-providers/v1',workspaceId:f.workspaceId,projects:['synthetic'],legacyBindingRef:f.bindingRef,projectRoot:f.projectRoot,expiresAt:'2030-01-01T00:00:00Z',owners:{ontology:{packageRoot:ownersRoot},harness:{packageRoot:ownersRoot}},nativeToolchain:{path:'/unused',digest:'unused',lockDigest:'unused'}};
  const put=v=>writeFileSync(ref,JSON.stringify(v),{mode:0o600});put(value);assert.deepEqual(readLegacyProviderConfiguration(ref),value);
+ await assert.rejects(()=>openRegisteredLegacyProviders(ref,f.bindingRef,f.workspaceId,'0'.repeat(64)),{code:'LEGACY_PROVIDER_CHANGED'});
  await assert.rejects(()=>openRegisteredLegacyProviders(ref,f.bindingRef,'other'),{code:'LEGACY_PROVIDER_SCOPE'});
  for(const mutation of [v=>v.projects=['*'],v=>v.expiresAt='2000-01-01T00:00:00Z',v=>v.program='/bin/sh',v=>v.collection={kind:'shell',executable:'/bin/sh',sha256:'a'.repeat(64)}]){const changed=structuredClone(value);mutation(changed);put(changed);assert.throws(()=>readLegacyProviderConfiguration(ref));}
 });

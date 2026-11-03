@@ -1489,7 +1489,7 @@ the same owned journal. An existing journal never authorizes another dispatch.
 Compiled CLI, migrated HTTP and local stdio development probes exercise actual
 published owner validation and isolated Node execution with explicitly synthetic
 source, assets and decisions. They grant no real-project or product acceptance.
-Installer registration, original feedback/response/online/reconstruction provider
+Original feedback/response/online/reconstruction provider
 composition, complete maintenance mapping and exact-candidate E15 qualification
 remain separate unfinished work.
 
@@ -1523,6 +1523,23 @@ snapshot. The dedicated event stream retains authenticated cursor semantics but
 omits every event data body. It prompts state readback instead of interpreting
 events as completion or permission to dispatch. Credential revocation also ends
 the stream. Unknown and pending instance facts remain unknown and pending.
+
+The controlled installer accepts optional `legacyProviders: {ref, digest}` only
+with an explicit legacy migration. The protected selection must match the
+installation workspace, project and exact future migration binding. Staging
+checks the selection without adopting old state, loading owner providers or
+granting execution. Startup passes both `--legacy-providers-ref` and
+`--legacy-providers-digest` to the installed CLI, which checks the pin again
+inside the new process. Changes to the selection reject startup and live
+readback; stopping the exact owned job remains possible if that configuration
+has disappeared or become invalid. Installation credentials retain their
+selected least-authority role.
+
+An isolated development installation exercised the installed stdio bridge,
+actual Node collection, public 0.8.3 owner validators, original domain/completion
+gates, and service restart with unchanged claim/receipt and no second collection.
+Its assets and decisions were synthetic. It did not register in the daily Codex
+or establish exact-candidate E15 qualification.
 
 ### Two-page Dashboard development implementation
 

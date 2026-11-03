@@ -42,14 +42,15 @@ export async function serviceMain(argv: string[], output: { write(value: string)
       print({initialized:true,workspaceId,projectId,principalId:id,role:flags.role,tokenRef,executionAuthorized:false,releaseAuthorized:false});return 0;
     }
     if(command==='serve'){
-      exact(flags,['state-root','workspace-id'],['port','integrations-ref','legacy-ref','legacy-providers-ref']);
+      exact(flags,['state-root','workspace-id'],['port','integrations-ref','legacy-ref','legacy-providers-ref','legacy-providers-digest']);
       if(flags['legacy-providers-ref']&&!flags['legacy-ref'])reject('LEGACY_PROVIDER_SCOPE','Original providers require an exact service migration binding');
+      if(flags['legacy-providers-digest']&&!flags['legacy-providers-ref'])reject('LEGACY_PROVIDER_SCOPE','An original provider digest requires its explicit registration');
       let legacyIntentSource:LegacyIntentSource|undefined;
       const managedIntent=flags['legacy-ref']?()=>{if(!legacyIntentSource)reject('RUNTIME_INTENT_STORE_MISSING','The managed Runtime intent source is not ready');return legacyIntentSource;}:undefined;
       const integrations=flags['integrations-ref']?await openRegisteredBindings(flags['integrations-ref'],flags['workspace-id'],managedIntent):undefined;
       let legacyProviders:Awaited<ReturnType<typeof openRegisteredLegacyProviders>>|undefined;
       try{
-        if(flags['legacy-providers-ref'])legacyProviders=await openRegisteredLegacyProviders(flags['legacy-providers-ref'],flags['legacy-ref'],flags['workspace-id']);
+        if(flags['legacy-providers-ref'])legacyProviders=await openRegisteredLegacyProviders(flags['legacy-providers-ref'],flags['legacy-ref'],flags['workspace-id'],flags['legacy-providers-digest']);
         const policy=flags['integrations-ref']?registeredAuthorityPolicy(flags['integrations-ref'],flags['workspace-id']):undefined;
         const server=await startRuntimeServer({stateRoot:flags['state-root'],workspaceId:flags['workspace-id'],port:flags.port===undefined?0:Number(flags.port),...(flags['legacy-ref']?{legacyBindingRef:flags['legacy-ref']}:{})},integrations?.provider,undefined,policy,integrations?.executor,integrations?.preparation,integrations?.implementationReview,integrations?.extensionReview,legacyProviders?.bind);
         legacyIntentSource=server.legacyIntentSource;

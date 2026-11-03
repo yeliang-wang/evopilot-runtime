@@ -167,6 +167,33 @@ test('owner Host selection requires migration and its exact scope/digest before 
  }finally{f.cleanup();}
 });
 
+function providerSelection(f){
+ const projectRoot=join(f.root,'project'),ownerRoot=join(f.root,'owners');mkdirSync(projectRoot,{mode:0o700});mkdirSync(ownerRoot,{mode:0o700});
+ const ref=join(f.root,'providers.json'),config={schema:'runtime-legacy-providers/v1',workspaceId:f.plan.workspaceId,projects:[f.plan.projectId],legacyBindingRef:join(f.plan.root,'legacy-binding.json'),projectRoot,expiresAt:'2030-01-01T00:00:00Z',owners:{ontology:{packageRoot:ownerRoot},harness:{packageRoot:ownerRoot}},nativeToolchain:{path:'/not-loaded-while-staging',digest:'synthetic',lockDigest:'synthetic'}};
+ writeFileSync(ref,JSON.stringify(config),{mode:0o600});f.plan.legacyProviders={ref,digest:digest(config)};return{ref,config};
+}
+test('installer pins provider selection before migration without loading owners or granting execution',async()=>{
+ const f=distributionFixture();try{
+  const legacy=legacyFixture(f),p=providerSelection(f),original=readFileSync(legacy.db);
+  const noMigration={...f.plan};delete noMigration.legacyMigration;await assert.rejects(()=>runInstaller(noMigration,'stage'),{code:'MIGRATION_REQUIRED'});
+  await runInstaller(f.plan,'stage');assert.deepEqual(readFileSync(legacy.db),original);assert.equal(legacy.schema(),1);assert(!existsSync(p.config.legacyBindingRef));
+  const spec=JSON.parse(readFileSync(join(f.plan.root,'service-specification.json')));assert.deepEqual(spec.legacyProviders,f.plan.legacyProviders);assert.deepEqual(JSON.parse(readFileSync(join(f.plan.root,'data/auth.json'))).principals[0].permissions,['read']);
+  if(process.platform==='darwin'){const plist=userServicePlist(spec);assert(plist.includes('<string>--legacy-providers-ref</string><string>'+p.ref+'</string>'));assert(!plist.includes('--eval'));}
+  writeFileSync(p.ref,JSON.stringify({...p.config,projects:['other']}));await assert.rejects(()=>runInstaller(f.plan,'start'),{code:'LEGACY_PROVIDER_CHANGED'});assert.deepEqual(readFileSync(legacy.db),original);
+  rmSync(p.ref);if(process.platform==='darwin'){assert.equal((await runInstaller(f.plan,'stop')).phase,'STOPPED');assert.equal((await runInstaller(f.plan,'uninstall')).phase,'UNINSTALLED');}assert.deepEqual(readFileSync(legacy.db),original);
+ }finally{f.cleanup();}
+});
+test('installer rejects provider scope and credential-shaped registration drift before source adoption',async()=>{
+ for(const mutation of ['workspace','project','binding','digest','unsafe']){
+  const f=distributionFixture();try{
+   const legacy=legacyFixture(f),p=providerSelection(f),original=readFileSync(legacy.db);
+   if(mutation==='workspace')p.config.workspaceId='other';if(mutation==='project')p.config.projects=['other'];if(mutation==='binding')p.config.legacyBindingRef=join(f.root,'foreign-binding.json');
+   writeFileSync(p.ref,JSON.stringify(p.config));f.plan.legacyProviders.digest=mutation==='digest'?'0'.repeat(64):digest(p.config);if(mutation==='unsafe')chmodSync(p.ref,0o644);
+   await assert.rejects(()=>runInstaller(f.plan,'stage'),{code:mutation==='digest'?'LEGACY_PROVIDER_CHANGED':mutation==='unsafe'?'UNSAFE_STATE':'LEGACY_PROVIDER_SCOPE'});assert.deepEqual(readFileSync(legacy.db),original);assert(!existsSync(join(f.plan.root,'data/auth.json')));
+  }finally{f.cleanup();}
+ }
+});
+
 /** Actual compiled development service and locked production dependencies. The
  * synthetic archive anchor is explicitly not release/distribution acceptance. */
 function developmentDistribution(){

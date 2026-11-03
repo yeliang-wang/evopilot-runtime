@@ -2,9 +2,10 @@ import {execFile} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {existsSync,lstatSync,readFileSync,realpathSync,writeFileSync} from 'node:fs';
 import {isAbsolute,join,resolve} from 'node:path';
-import {canonical,exact,record,reject,ServiceError,slug,string} from '../server/errors.js';
+import {canonical,digest,exact,record,reject,ServiceError,slug,string} from '../server/errors.js';
 import {ensurePrivateRoot,hostHeaders,privateFile,readPrivateJson,type HostConnection} from '../server/security.js';
 import {readLegacyBinding} from '../compat/gateway.js';
+import {readLegacyProviderConfiguration} from '../compat/registered-providers.js';
 
 /** Operator-only process management. This module is never imported by the HTTP
  * dispatcher, an execution adapter or the MCP service. No project can select a
@@ -14,6 +15,7 @@ export interface UserServiceSpecification {
   nodeExecutable:string;nodeSha256:string;workspaceId:string;projectId:string;
   principalId:string;tokenRef:string;port:number;integrationsRef:string|null;
   legacyRef?:string|null;
+  legacyProviders?:{ref:string;digest:string}|null;
 }
 export interface LaunchdObservation {registered:boolean;running:boolean;pid:number|null;lastExitCode:number|null;label:string;}
 export interface UserServiceObservation extends LaunchdObservation {identity:Record<string,unknown>|null;url:string;}
@@ -22,7 +24,7 @@ const xml=(v:string)=>v.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAl
 const path=(v:string)=>{string(v,4096);if(!isAbsolute(v)||resolve(v)!==v||realpathSync(v)!==v)reject('INSTALLATION_PATH','Use canonical existing installation paths');return v;};
 export function userServiceLabel(spec:UserServiceSpecification):string{return'io.evopilot.runtime.'+slug(spec.workspaceId)+'.'+sha(spec.root).slice(0,16);}
 function validate(spec:UserServiceSpecification):void{
-  exact(record(spec),['schema','root','packageRoot','version','nodeExecutable','nodeSha256','workspaceId','projectId','principalId','tokenRef','port','integrationsRef'],['legacyRef']);
+  exact(record(spec),['schema','root','packageRoot','version','nodeExecutable','nodeSha256','workspaceId','projectId','principalId','tokenRef','port','integrationsRef'],['legacyRef','legacyProviders']);
   if(spec.schema!=='runtime-user-service/v1'||process.platform!=='darwin'||!Number.isSafeInteger(spec.port)||spec.port<1024||spec.port>65535)reject('SERVICE_PLATFORM','This user service requires macOS and an explicit unprivileged port');
   ensurePrivateRoot(path(spec.root));path(spec.packageRoot);path(spec.nodeExecutable);path(spec.tokenRef);
   slug(spec.workspaceId);slug(spec.projectId);slug(spec.principalId);string(spec.version,128);
@@ -33,11 +35,18 @@ function validate(spec:UserServiceSpecification):void{
   // Stop/inspection must still identify our own launchd job if the binding was
   // lost or changed. Validate its contents only before startup/live readback.
   if(spec.legacyRef!=null){string(spec.legacyRef,4096);if(!isAbsolute(spec.legacyRef)||resolve(spec.legacyRef)!==spec.legacyRef)reject('INSTALLATION_PATH','Use a canonical legacy binding reference');}
+  if(spec.legacyProviders!=null){const p=record(spec.legacyProviders);exact(p,['ref','digest']);string(p.ref,4096);if(!spec.legacyRef||!isAbsolute(String(p.ref))||resolve(String(p.ref))!==p.ref||!/^[a-f0-9]{64}$/.test(string(p.digest,64)))reject('INSTALLATION_PLAN','Original providers require an exact migration binding and pinned configuration');}
   // Validate the scoped credential without returning or recording its value.
   hostHeaders(connection(spec,'installation-pending'));
 }
 function connection(spec:UserServiceSpecification,serviceId:string):HostConnection{return{schema:'runtime-host-connection/v1',origin:'http://127.0.0.1:'+spec.port,workspaceId:spec.workspaceId,projectId:spec.projectId,principalId:spec.principalId,serviceId,version:spec.version,tokenRef:spec.tokenRef};}
-function args(spec:UserServiceSpecification):string[]{return[spec.nodeExecutable,join(spec.packageRoot,'dist/server/cli.js'),'serve','--state-root',join(spec.root,'data'),'--workspace-id',spec.workspaceId,'--port',String(spec.port),...(spec.integrationsRef===null?[]:['--integrations-ref',spec.integrationsRef]),...(spec.legacyRef==null?[]:['--legacy-ref',spec.legacyRef])];}
+function args(spec:UserServiceSpecification):string[]{return[spec.nodeExecutable,join(spec.packageRoot,'dist/server/cli.js'),'serve','--state-root',join(spec.root,'data'),'--workspace-id',spec.workspaceId,'--port',String(spec.port),...(spec.integrationsRef===null?[]:['--integrations-ref',spec.integrationsRef]),...(spec.legacyRef==null?[]:['--legacy-ref',spec.legacyRef]),...(spec.legacyProviders==null?[]:['--legacy-providers-ref',spec.legacyProviders.ref,'--legacy-providers-digest',spec.legacyProviders.digest])];}
+function selectedProviders(spec:UserServiceSpecification):void{
+  if(!spec.legacyProviders)return;
+  const selected=readLegacyProviderConfiguration(spec.legacyProviders.ref);
+  if(digest(selected)!==spec.legacyProviders.digest)reject('LEGACY_PROVIDER_CHANGED','Original provider selection differs from the immutable service specification',409);
+  if(selected.workspaceId!==spec.workspaceId||!selected.projects.includes(spec.projectId)||selected.legacyBindingRef!==spec.legacyRef)reject('LEGACY_PROVIDER_SCOPE','Original provider selection belongs to a different service migration',403);
+}
 export function userServicePlist(spec:UserServiceSpecification):string{
   validate(spec);
   return'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n'+
@@ -69,6 +78,7 @@ export async function inspectUserService(spec:UserServiceSpecification):Promise<
 /** A live read proves service readiness only. Actual Codex plugin loading is a
  * separate installation check and cannot be inferred from this observation. */
 export async function observeUserService(spec:UserServiceSpecification):Promise<UserServiceObservation>{
+  selectedProviders(spec);
   const observed=await inspectUserService(spec),url=connection(spec,'installation-pending').origin;
   if(!observed.running)return{...observed,identity:null,url};
   const response=await fetch(url+'/api/v1/status?projectId='+encodeURIComponent(spec.projectId),{headers:hostHeaders(connection(spec,'installation-pending')),signal:AbortSignal.timeout(3000),redirect:'error'});
@@ -95,6 +105,7 @@ function retainExact(path:string,bytes:string):void{
 export async function startUserService(spec:UserServiceSpecification):Promise<UserServiceObservation>{
   validate(spec);retainExact(join(spec.root,'service-specification.json'),canonical(spec)+'\n');
   if(spec.legacyRef!=null&&readLegacyBinding(spec.legacyRef).workspaceId!==spec.workspaceId)reject('SERVICE_IDENTITY_CONFLICT','Legacy binding belongs to another workspace',409);
+  selectedProviders(spec);
   const before=await inspectUserService(spec);if(before.running)return observeUserService(spec);
   retainExact(plistPath(spec),userServicePlist(spec));for(const name of ['service.stdout.log','service.stderr.log'])privateFile(join(spec.root,name),true);
   const result=await launchctl(before.registered?['kickstart',target(spec)]:['bootstrap',domain(),plistPath(spec)]);

@@ -1,6 +1,6 @@
 import {lstatSync,realpathSync} from 'node:fs';
-import {join} from 'node:path';
-import {canonical,exact,record,reject,slug,string} from '../server/errors.js';
+import {isAbsolute,join,resolve} from 'node:path';
+import {canonical,digest,exact,record,reject,slug,string} from '../server/errors.js';
 import {readPrivateJson,authorize} from '../server/security.js';
 import {readLegacyBinding} from './gateway.js';
 import type {LegacyProviderFactory,LegacyProviderContext} from './provider-context.js';
@@ -22,7 +22,10 @@ export function readLegacyProviderConfiguration(ref:string):Configuration{
  canonicalPath(ref);const v=record(readPrivateJson(ref));exact(v,['schema','workspaceId','projects','legacyBindingRef','projectRoot','expiresAt','owners','nativeToolchain'],['collection']);
  if(v.schema!=='runtime-legacy-providers/v1')reject('LEGACY_PROVIDER_CONFIGURATION','Unknown original provider registration');slug(v.workspaceId);
  if(!Array.isArray(v.projects)||!v.projects.length||v.projects.length>1000||new Set(v.projects).size!==v.projects.length)reject('LEGACY_PROVIDER_CONFIGURATION','Exact registered projects required');v.projects.forEach(slug);
- canonicalPath(string(v.projectRoot,4096));canonicalPath(string(v.legacyBindingRef,4096));const st=lstatSync(String(v.projectRoot));if(!st.isDirectory()||st.uid!==process.getuid!()||(st.mode&0o777)!==0o700)reject('LEGACY_PROVIDER_CONFIGURATION','Protected project root required');
+ // Installation may select this configuration before the migration binding
+ // exists. Opening providers still requires readLegacyBinding's exact seal.
+ const bindingRef=string(v.legacyBindingRef,4096);if(!isAbsolute(bindingRef)||resolve(bindingRef)!==bindingRef)reject('LEGACY_PROVIDER_CONFIGURATION','Canonical migration binding path required');
+ canonicalPath(string(v.projectRoot,4096));const st=lstatSync(String(v.projectRoot));if(!st.isDirectory()||st.uid!==process.getuid!()||(st.mode&0o777)!==0o700)reject('LEGACY_PROVIDER_CONFIGURATION','Protected project root required');
  if(!Number.isFinite(Date.parse(string(v.expiresAt,128)))||Date.parse(String(v.expiresAt))<=Date.now())reject('LEGACY_PROVIDER_EXPIRED','Original provider registration has expired',403);
  const owners=record(v.owners);exact(owners,['ontology','harness']);for(const owner of Object.values(owners)){exact(record(owner),['packageRoot']);canonicalPath(string(record(owner).packageRoot,4096));}
  if(v.collection!==undefined){const c=record(v.collection);exact(c,['kind','executable','sha256']);if(c.kind!=='node'||canonicalPath(c.executable)!==realpathSync(process.execPath)||!/^[a-f0-9]{64}$/.test(string(c.sha256,64)))reject('LEGACY_COLLECTION_TOOLCHAIN','Only the exact current Node interpreter may be registered');pinnedFile(String(c.executable),String(c.sha256));}
@@ -30,8 +33,10 @@ export function readLegacyProviderConfiguration(ref:string):Configuration{
 }
 /** Local process registration. It supplies original Runtime consumers only;
  * it does not expose owner authoring, choose a Run or approve a claim. */
-export async function openRegisteredLegacyProviders(ref:string,expectedBindingRef:string,workspaceId:string):Promise<{bind:LegacyProviderFactory;close():void}>{
- const config=readLegacyProviderConfiguration(ref),original=canonical(config),binding=readLegacyBinding(config.legacyBindingRef),originalBinding=canonical(binding);
+export async function openRegisteredLegacyProviders(ref:string,expectedBindingRef:string,workspaceId:string,expectedDigest?:string):Promise<{bind:LegacyProviderFactory;close():void}>{
+ const config=readLegacyProviderConfiguration(ref),original=canonical(config);
+ if(expectedDigest!==undefined&&(!/^[a-f0-9]{64}$/.test(expectedDigest)||digest(config)!==expectedDigest))reject('LEGACY_PROVIDER_CHANGED','Original provider selection differs from the explicit startup pin',409);
+ const binding=readLegacyBinding(config.legacyBindingRef),originalBinding=canonical(binding);
  if(config.legacyBindingRef!==expectedBindingRef||config.workspaceId!==workspaceId||binding.workspaceId!==workspaceId)reject('LEGACY_PROVIDER_SCOPE','Provider registration must bind this exact service migration',403);
  for(const other of [binding.workspaceRoot,codeRoot,...Object.values(config.owners).map(o=>o.packageRoot)])if(config.projectRoot===other||config.projectRoot.startsWith(other+'/')||other.startsWith(config.projectRoot+'/'))reject('LEGACY_PROVIDER_SCOPE','Project root overlaps service or product state');
  let context:LegacyProviderContext|undefined,closed=false;const owners={} as Record<Owner,PublishedOwnerAdapter>;
