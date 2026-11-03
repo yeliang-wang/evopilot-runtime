@@ -178,6 +178,6 @@ test('unbound service does not advertise legacy stdio aliases and cannot initial
   const f=await fixture(t,{unbound:true}),stdio=new Client({name:'unbound',version:'1'});t.after(()=>stdio.close());
   await assert.rejects(()=>legacy(f.connections.editor.client,'request','workspace.inspect'),{code:'LEGACY_NOT_BOUND'});
   await stdio.connect(new StdioClientTransport({command:process.execPath,args:[join(repo,'dist/host/bridge.js'),'--connection-ref',f.connections.editor.connectionRef],stderr:'pipe'}));
-  assert(!(await stdio.listTools()).tools.some(tool=>tool.name.startsWith('evopilot_v01_')));
+  assert(!(await stdio.listTools()).tools.some(tool=>tool.name.startsWith('evopilot_v01_')&&tool.name!=='evopilot_v01_guide'));
   assert.equal((await f.connections.editor.client.status()).result.legacy,null);
 });

@@ -47,7 +47,7 @@ test('connection and credential files reject unsafe modes, links, wrong scope an
 test('stdio bridge and direct HTTP MCP use one service, revision and exact idempotent draft receipt',async()=>{
  const f=await fixture(),stdio=new Client({name:'synthetic-legacy-transport',version:'1'}),http=new Client({name:'synthetic-http',version:'1'});try{
   await stdio.connect(new StdioClientTransport({command:node,args:[bridge,'--connection-ref',f.connectionRef],stderr:'pipe'}));await http.connect(new StreamableHTTPClientTransport(new URL(f.server.url+'/mcp'),{requestInit:{headers:{authorization:'Bearer '+f.token}}}));
-  assert.deepEqual((await stdio.listTools()).tools,(await http.listTools()).tools);
+  assert.deepEqual((await stdio.listTools()).tools.filter(tool=>tool.name!=='evopilot_v01_guide'),(await http.listTools()).tools);
   const args=envelope('lifecycle.draft.save',{yaml:yaml(lifecycle())},{requestId:'draft-one',expectedRevision:0});const first=await stdio.callTool({name:'runtime_write',arguments:args});assert.notEqual(first.isError,true);const receipt=JSON.parse(first.content[0].text).result;
   const replay=await http.callTool({name:'runtime_write',arguments:args});assert.notEqual(replay.isError,true);assert.deepEqual(JSON.parse(replay.content[0].text).result,receipt);assert.equal((await f.client.status()).result.revision,1);
   const read=await f.client.request(envelope('lifecycle.definition.inspect'));assert.equal(read.result.draft.id,receipt.result.revisionId);assert.equal(read.result.active,null);
@@ -74,7 +74,7 @@ test('optional packaged legacy entry retains one plugin, HTTP primary and no dup
  const f=await fixture(),client=new Client({name:'synthetic-packaged-legacy-only',version:'1'});try{
   const material=runtimePluginMaterial(repo,f.connectionRef,node,{}),mcp=JSON.parse(material.files.get('.mcp.json')),legacy=mcp.mcpServers.evopilot_runtime_legacy;
   assert.deepEqual(Object.keys(mcp.mcpServers),['evopilot_runtime','evopilot_runtime_legacy']);assert.equal(mcp.mcpServers.evopilot_runtime.type,'http');assert.equal(legacy.command,node);assert.deepEqual(legacy.args,[bridge,'--connection-ref',f.connectionRef,'--legacy-only']);
-  await client.connect(new StdioClientTransport({...legacy,stderr:'pipe'}));assert.deepEqual((await client.listTools()).tools,[],'unbound service does not advertise legacy aliases');
+  await client.connect(new StdioClientTransport({...legacy,stderr:'pipe'}));assert.deepEqual((await client.listTools()).tools.map(tool=>tool.name),['evopilot_v01_guide'],'unbound service advertises only passive guidance');
   const rejected=await client.callTool({name:'runtime_read',arguments:envelope('runtime.status')});assert.equal(rejected.isError,true);assert.equal(JSON.parse(rejected.content[0].text).error.code,'UNKNOWN_TOOL');assert.equal((await f.client.status()).result.revision,0);
  }finally{await client.close();await f.cleanup();}
 });

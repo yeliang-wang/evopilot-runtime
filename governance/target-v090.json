@@ -243,7 +243,14 @@
         "provenance/legacy-execution.json",
         "src/compat/response-evidence.ts",
         "src/compat/response-providers.ts",
-        "tests/e2e/legacy-response-v090.test.mjs"
+        "tests/e2e/legacy-response-v090.test.mjs",
+        "src/host/guidance/guide.ts",
+        "src/host/guidance/readiness-guides.ts",
+        "src/host/guidance/scenarios.ts",
+        "src/host/guide.ts",
+        "docs/legacy-host.md",
+        "provenance/legacy-guidance.json",
+        "tests/e2e/legacy-guides-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

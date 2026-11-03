@@ -1,0 +1,30 @@
+{
+  "schema": "runtime-owned-source-provenance/v1",
+  "sourceRepository": "EvoPilot",
+  "sourceRevision": "c24aace7a0e73e41323d3bbb044924070e1595f1",
+  "license": "Apache-2.0",
+  "files": [
+    {
+      "source": "expert/core/guide.ts",
+      "sha256": "bbc04c058c57c80cc7faff0c7205824ae14b178b45071a784326100aefede093",
+      "ownedPath": "src/host/guidance/guide.ts"
+    },
+    {
+      "source": "expert/core/readiness-guides.ts",
+      "sha256": "14c7862db3773071fdacd4c63ec636a9bb1a7f4c31cabdb95cac411c4ed6cae2",
+      "ownedPath": "src/host/guidance/readiness-guides.ts"
+    },
+    {
+      "source": "expert/core/scenarios.ts",
+      "sha256": "2de5c6c618fc04bdcba3bc95e94d76e7f5f8915bb5d749db5c35144ca99c328f",
+      "ownedPath": "src/host/guidance/scenarios.ts"
+    }
+  ],
+  "adaptation": [
+    "Preserve v0.8.1 readiness overrides and all original scenario identifiers.",
+    "Resolve documentation through Runtime or explicit published owner roots; no sibling source imports.",
+    "Runtime-owned passive bridge startup; no parent daemon or implicit state access.",
+    "Historical scenario test paths are reference provenance, never current acceptance evidence."
+  ],
+  "productAcceptance": "NOT_EVALUATED"
+}
