@@ -286,4 +286,45 @@ package or the backup anchor.
 原请求 ID 和参数，可离线继续；已完成请求只返回历史回执，不覆盖后续数据。
 搬迁默认将新服务目录放在 `destinationStateRoot + '.evopilot-runtime'`，也可显式指定
 第三个目标目录。迁移保留授权范围和有效期。完整原有功能映射中的初始化、接入、
-模板升级、工具链准备及在线配置仍须继续完成；这些工具的开发测试不替代最终 E15。
+工具链准备及在线配置仍须继续完成；这些工具的开发测试不替代最终 E15。
+
+### Private project template upgrade / 私有项目模板升级
+
+An explicitly selected `workspace:template.upgrade` permission enables the
+existing `evopilot_v01_workspace_project` tool with `operation: template.upgrade`,
+`input: {expectedTemplateVersion, targetTemplateVersion}` and a stable outer
+`requestId`. It requires an active compatibility session and the current project
+Host registration. Other project helper permissions are not implied.
+
+The retained target template is **0.2.0**, independent of the Runtime version.
+Its six original files and provenance are packaged under
+`provenance/project-template-v02`; Runtime verifies the pinned manifest and every
+file before use, without reading a parent checkout or installation. The operation
+fills missing template files, preserves customized files and backs up the exact
+original project marker. It updates only the marker's template version. Assets,
+business evidence and Project Lifecycle activation are unaffected.
+
+The shared Host Workspace lease and a separate project-file transaction protect
+the operation. A durable plan records original/updated marker digests and the
+created/customized/unchanged file sets. After interruption, inspect and reuse the
+same request: exact partial files can resume, while changed generated files,
+foreign identities, unsafe paths and changed inputs fail without overwriting
+them. New files are published without replacing a destination that appeared
+after preflight; recovery only completes the retained request's exact staging
+links. A retry does not resolve a conflict or certify the current environment.
+
+New records use `runtime-template-upgrade/v1` and `templateDigest`, identifying
+the actual frozen template distribution. Historical
+`evopilot-template-upgrade/v1` records retain their original parent installation
+digest and are never rewritten or relabeled. A request ID belonging to a
+historical record cannot be reused for a new independent upgrade. Neither
+receipt confers semantic, execution or release authority.
+
+私有项目 Host 必须显式允许 `workspace:template.upgrade`，并激活当前兼容会话。
+工具名、操作名和输入保持原用法；目标模板版本仍为 `0.2.0`，不是 Runtime 版本。
+升级只补齐缺失模板、保留用户定制内容、备份原标记并更新模板版本，不修改本体资产、
+业务状态，也不激活 Project Lifecycle。
+
+模板六份原文件及来源随 Runtime 发布，不依赖父项目目录。中断后须沿用原请求并核对
+部分文件，已有内容变化会阻止覆盖。新记录明确使用独立模板摘要；历史父项目安装摘要
+和记录保持原义，不能复用历史请求 ID 将旧记录改写成新升级结果。

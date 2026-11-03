@@ -1,0 +1,12 @@
+.env
+.env.*
+*.pem
+*.key
+*.db
+*.db-*
+*.sqlite*
+.local/
+credentials/
+state/
+audit/
+*.evopilot-binding.json

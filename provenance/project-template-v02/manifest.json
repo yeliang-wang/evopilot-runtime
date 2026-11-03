@@ -1,0 +1,22 @@
+{
+  "schema": "runtime-project-template-provenance/v1",
+  "sourceRepository": "https://github.com/yeliang-wang/evopilot",
+  "sourceCommit": "c24aace7a0e73e41323d3bbb044924070e1595f1",
+  "releaseBaseline": "0.8.3",
+  "templateVersion": "0.2.0",
+  "license": "Apache-2.0",
+  "runtimeDependencyOnParent": false,
+  "templateBytesUnmodified": true,
+  "sourceOperation": {
+    "path": "integration/workspace/upgrade.ts",
+    "sha256": "dabbb15dbbe9783ea201964abcc84727e1f7ad0372058925484fa776a2299585"
+  },
+  "files": {
+    "README.md": "6bb4ef8c7b244bc4ef8b4e04ad94f405451906d0a184613186cc25b02b3d30d8",
+    ".gitignore": "2a0110bf2d060b6166715248fbf2f7352d794990a9a6fcfb207801260912026a",
+    "docs/storage.md": "02975533b912d56f1dde13a3ed111d5052c3d829d3ef13e06d9fffaeae709de2",
+    "examples/forward/README.md": "56af356c9f6b529cdb1a11f1184175187657b124ff5601bb8f919199713ba6da",
+    "examples/reverse/README.md": "3681543c0d9dce00b5538f5c705fcc39b1e70e460f5884d069eeb9ddc3e2fb83",
+    "examples/reverse/source.json": "bdf4f3d250eb32b9bec8c5756b101b0da263259497062854a1825f4e8d2d9045"
+  }
+}

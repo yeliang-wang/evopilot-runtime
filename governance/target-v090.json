@@ -298,7 +298,17 @@
         "src/host/workspace.ts",
         "src/installation/workspace/operator.ts",
         "src/installation/workspace-host.ts",
-        "tests/e2e/workspace-host-v090.test.mjs"
+        "tests/e2e/workspace-host-v090.test.mjs",
+        "src/compat/project/upgrade.ts",
+        "src/compat/project/templates.ts",
+        "tests/e2e/project-template-v090.test.mjs",
+        "provenance/project-template-v02/manifest.json",
+        "provenance/project-template-v02/README.md",
+        "provenance/project-template-v02/.gitignore",
+        "provenance/project-template-v02/docs/storage.md",
+        "provenance/project-template-v02/examples/forward/README.md",
+        "provenance/project-template-v02/examples/reverse/README.md",
+        "provenance/project-template-v02/examples/reverse/source.json"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

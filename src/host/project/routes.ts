@@ -1,6 +1,7 @@
 import {exact,record,reject,string} from '../../server/errors.js';
 import {createNativeProjectService,type NativeProjectContext,type NativeProjectTrusted} from '../../compat/project/native-project.js';
 import {projectOperation} from '../../compat/project/ledger.js';
+import {upgradeWorkspaceProject} from '../../compat/project/upgrade.js';
 import {codeRoot} from '../../compat/project/files.js';
 import {readWorkspaceResponseEvidence} from '../../compat/response-evidence.js';
 import {type NativeScope} from '../../../vendor/compatibility/v1/native.mjs';
@@ -8,7 +9,7 @@ import {type ResponseEvidenceRef,type ResponseEvidence} from '../../../vendor/co
 
 export const PROJECT_NATIVE_METHODS={preflight:'preflight',prepare:'prepare',freeze:'freeze',materialize:'materialize','review-domain':'reviewDomain',inspect:'inspect','check-layout':'checkLayout','candidate-location':'candidateLocation','prepare-execution':'prepareExecution',promote:'promote'} as const;
 export const PROJECT_LEDGER_OPERATIONS=['bind','inspect','drift','baseline.accept','campaign.write','campaign.inspect'] as const;
-export const PROJECT_CALLS=[...Object.keys(PROJECT_NATIVE_METHODS).map(v=>'native:'+v),...PROJECT_LEDGER_OPERATIONS.map(v=>'workspace:'+v)];
+export const PROJECT_CALLS=[...Object.keys(PROJECT_NATIVE_METHODS).map(v=>'native:'+v),...PROJECT_LEDGER_OPERATIONS.map(v=>'workspace:'+v),'workspace:template.upgrade'];
 export interface ProjectHostSelection {root:string;calls:string[];}
 export interface ProjectHostRoutes {
   native(operation:string,input:unknown):Promise<unknown>;
@@ -29,7 +30,13 @@ export function createProjectHostRoutes(context:NativeProjectContext,projectId:s
       const result=await (project[method] as (input:unknown)=>unknown)(input);current();return result;
     },
     async workspace(operation,value,requestId){
-      admitted('workspace',operation);const input=record(value);if(input.projectId!==projectId)reject('OWNER_HOST_SCOPE','Project ledger belongs to its registered project',403);
+      admitted('workspace',operation);const input=record(value);
+      if(operation==='template.upgrade'){
+        exact(input,['expectedTemplateVersion','targetTemplateVersion']);
+        if(input.targetTemplateVersion!=='0.2.0')reject('TEMPLATE_VERSION','Only the retained project template version is supported');
+        const result=await upgradeWorkspaceProject({...context,installationRoot:codeRoot,assertCurrent:current},{requestId:string(requestId,64),expectedTemplateVersion:string(input.expectedTemplateVersion,32),targetTemplateVersion:'0.2.0'});current();return result;
+      }
+      if(input.projectId!==projectId)reject('OWNER_HOST_SCOPE','Project ledger belongs to its registered project',403);
       if(!PROJECT_LEDGER_OPERATIONS.includes(operation as never))reject('PROJECT_OPERATION','Unknown ledger operation');
       const result=await projectOperation({...context,installationRoot:codeRoot,assertCurrent:current},operation as Parameters<typeof projectOperation>[1],input,string(requestId,64));current();return result;
     },

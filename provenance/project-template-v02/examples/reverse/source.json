@@ -1,0 +1,1 @@
+{"example":"synthetic-inventory","revision":"1","entities":[{"name":"Item","fields":{"sku":"string","quantity":"nonnegative integer"}}],"sample":{"sku":"book-001","quantity":3}}
