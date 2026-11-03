@@ -311,7 +311,9 @@
         "provenance/project-template-v02/examples/reverse/source.json",
         "src/installation/workspace/bootstrap.ts",
         "src/installation/workspace/bootstrap-owners.ts",
-        "tests/e2e/workspace-bootstrap-v090.test.mjs"
+        "tests/e2e/workspace-bootstrap-v090.test.mjs",
+        "src/installation/workspace/binding.ts",
+        "tests/e2e/workspace-binding-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

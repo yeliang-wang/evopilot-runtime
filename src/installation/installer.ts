@@ -150,6 +150,22 @@ function stage(plan:RuntimeInstallPlan):UserServiceSpecification{
   exactFile(join(plan.root,'service-specification.json'),canonical(spec)+'\n');return spec;
 }
 function specification(plan:RuntimeInstallPlan,version:string):UserServiceSpecification{return{schema:'runtime-user-service/v1',root:plan.root,packageRoot:join(plan.root,'package'),version,nodeExecutable:plan.nodeExecutable,nodeSha256:plan.nodeSha256,workspaceId:plan.workspaceId,projectId:plan.projectId,principalId:plan.principalId,tokenRef:join(plan.root,'client.json'),port:plan.port,integrationsRef:plan.integrationsRef,...(plan.legacyMigration?{legacyRef:join(plan.root,'legacy-binding.json')} :{}),...(plan.legacyProviders?{legacyProviders:plan.legacyProviders}:{})};}
+/** Read-only package verification for an explicitly selected configuration
+ * transition. The original plan and archive remain immutable; this never
+ * stages files, creates credentials, adopts data or starts a process. */
+export function verifyInstalledRuntimePackage(plan:RuntimeInstallPlan):UserServiceSpecification {
+  validatePlan(plan);
+  if(canonical(readPrivateJson(join(plan.root,'installation-plan.json')))!==canonical(plan))reject('INSTALLATION_CHANGED','Original installation plan differs',409);
+  exact(record(plan.distribution),['packageRoot','manifestRef','manifestDigest','archiveRef','archiveDigest']);hash(plan.distribution.manifestDigest);hash(plan.distribution.archiveDigest);
+  const ref=join(plan.root,'distribution-manifest.json');privateFile(ref);if(lstatSync(ref).size>8388608)reject('INSTALLATION_DISTRIBUTION','Installed manifest exceeds its bounded profile');
+  const raw=readFileSync(ref);if(sha(raw)!==plan.distribution.manifestDigest)reject('INSTALLATION_CHANGED','Installed manifest differs from the original distribution',409);
+  const manifest=record(JSON.parse(raw.toString()));exact(manifest,['schema','version','archiveDigest','files']);
+  if(manifest.schema!=='runtime-standalone-distribution/v1'||manifest.archiveDigest!==plan.distribution.archiveDigest)reject('INSTALLATION_CHANGED','Installed archive identity differs',409);
+  // Installed operation uses the original manifest anchor and installed bytes,
+  // never the source tree or the disposable download/unpack locations.
+  verifyDistribution(join(plan.root,'package'),manifest as unknown as Distribution);
+  return specification(plan,string(manifest.version,128));
+}
 function marketplaceName(root:string):string{return'evopilot-runtime-'+sha(root).slice(0,16);}
 async function codex(plan:RuntimeInstallPlan,args:string[]):Promise<Record<string,unknown>>{
   const host=plan.codex;if(!host)reject('HOST_NOT_CONFIGURED','A specific Codex installation is required');

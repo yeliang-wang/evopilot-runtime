@@ -186,7 +186,8 @@ export async function checkSource() {
     if (!path.endsWith('.mjs') && !path.endsWith('.ts') && !path.endsWith('.mts')) continue;
     const source = await readFile(path, 'utf8');
     if(!path.includes('/src/installation/'))assert.doesNotMatch(source,/from\s+['"][^'"]*installation\/[^'"]+['"]/,'Operator installation must not be reachable from Runtime service code');
-    const operatorHostReader=path.endsWith('/src/installation/installer.ts')||path.endsWith('/src/installation/workspace/configuration.ts');
+    const operatorHostReader=path.endsWith('/src/installation/installer.ts')||path.endsWith('/src/installation/workspace/configuration.ts')||path.endsWith('/src/installation/workspace/binding.ts');
+    if(path.endsWith('/src/installation/workspace/binding.ts'))assert.doesNotMatch(source,/\b(?:openLegacyOwnerRoutes|createLegacyOwnerProviders|createProjectHostRoutes)\b/,'Workspace binding may inspect protected Host configuration, not invoke Host work');
     if(path.endsWith('/src/installation/workspace/configuration.ts')){
       assert.match(source,/import\s*\{readLegacyOwnerHostConfiguration\}\s*from\s*['"]\.\.\/\.\.\/host\/legacy-owners\.js['"]/);
       assert.doesNotMatch(source,/\b(?:openLegacyOwnerRoutes|createLegacyOwnerProviders|createProjectHostRoutes)\b/,'Relocation assembly may inspect protected Host configuration, not invoke Host work');

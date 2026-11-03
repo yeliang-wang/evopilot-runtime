@@ -372,3 +372,40 @@ journey can be accepted.
 返回“已准备”不等于服务已启动、插件已安装或会话已激活。中断后沿用原请求；完成后
 重复读取返回历史证据，不覆盖新数据，也不证明当前环境已重验。Host 初始化／接入
 入口及安装／启动组合尚须继续接线，开发验证不能代替完整接入 E2E。
+
+### Binding prepared state to a stopped installation / 准备后的安装绑定
+
+`installation/workspace/binding.ts` consumes the exact retained setup result,
+original installation/connection/specification digests and an independently
+verified original Runtime backup. It binds that prepared Workspace to the same
+stopped independent service. A different existing binding cannot be replaced.
+Owner Host permissions and local maintenance operations are explicit protected
+selections; neither setup nor binding grants an asset or business decision.
+
+The operator holds the installation and service writer locks and the shared
+Workspace lease. It verifies service state on a temporary copy, retaining the
+original database bytes, service ID, credentials, connection and installation
+plan. Runtime adoption preserves original business records; owner databases are
+not rewritten. Installed package verification uses the retained distribution
+manifest and installed bytes, without requiring the original download directory.
+
+The request retains its original backup, adoption, configuration baseline and
+failures. A partial configuration switch resumes only the same request and exact
+old/new bytes; foreign edits are not overwritten. The service specification is
+published last, after plugin routing and the launchd configuration. Recovery of
+an already committed adoption uses its original seal, including after process
+death. Completed replay is historical and explicitly does not certify current
+environment validity.
+
+The result is **BOUND**, with `serviceStarted`, `hostRegistered`,
+`sessionActivated` and `businessWorkDispatched` all false. Startup must explicitly
+select the resulting current specification. The original installer plan remains
+immutable and cannot be replayed as a replacement for the changed configuration.
+This development core is still awaiting initialize/attach Host composition; it
+does not by itself complete the onboarding or final candidate acceptance.
+
+绑定使用已保留的准备结果、准确安装身份和已核验备份；原安装计划、服务身份、凭据、
+连接及业务记录保持不变。服务数据库在临时副本中核验，原库字节不会因核验而改变。
+中断后沿原请求恢复，配置仅接受准确的原值或预期新值，不覆盖其他修改；原失败保留。
+返回 `BOUND` 不代表启动服务、启用会话或执行业务。完整插件初始化／接入流程仍需
+后续组合与真实 E2E；旧安装计划不能冒充变更后的当前启动配置。
