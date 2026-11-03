@@ -104,9 +104,18 @@ Restore preserves pending work and returns `serviceStarted: false` and
 `businessWorkDispatched: false`. Startup remains a separate explicit operator
 step. A repeated completed request returns its historical restore receipt and
 cannot overwrite subsequent work; it does not certify the current environment.
-The Host maintenance aliases and location migration still require their own
+The Host maintenance aliases and complete location migration still require their own
 integration and acceptance. Neither this documentation nor source tests mark
 the complete legacy maintenance path or final product acceptance passed.
+
+The Runtime relocation core now preserves adopted schema-9 state using the
+existing signed same-host lineage. All business tables, their schema and the
+original adoption seal are included in the snapshot. A managed move returns a
+new location binding without rewriting that seal or any original claim/receipt.
+Plain directory copies, stale bindings, changed destination records and missing
+lineage keys are rejected. Service configuration cutover and the Host migration
+entry are separate remaining integration work; this core never starts a service
+or redispatches work.
 
 ## 中文说明
 
@@ -139,3 +148,8 @@ the complete legacy maintenance path or final product acceptance passed.
 恢复不会启动服务或重新派发业务。对已完成请求的重试只返回原恢复回执，不回滚
 后续新数据，也不代表当前环境重新验收通过。搬迁、Host 运维入口和最终产品验收
 仍须继续完成各自的集成及验收。
+
+Runtime 搬迁核心已支持由独立服务接管的 schema-9 数据库：快照覆盖全部业务表、
+表结构和原接管记录，新位置通过既有本机签名链取得新绑定。原接管记录及历史
+请求、claim、回执保持不变。普通复制、旧绑定、目标数据变化或缺失密钥均不能
+通过。完整服务配置切换和 Host 搬迁入口仍须集成；搬迁核心不会启动服务或重跑业务。

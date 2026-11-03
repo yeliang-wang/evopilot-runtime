@@ -7,6 +7,8 @@ import type { NativeSnapshot } from './native-snapshot.js';
 import { openState, validateState } from './state.js';
 import { hash, migrationFail, pathStat, privatePath, readIdentity, safeAncestors, readRelocations, inspectRecords, inspectBlobs, collectBindings, appendRelocation, writeRelocatedIdentity } from './location-lineage.js';
 import type { WorkspaceIdentity, BlobInventory, SnapshotRecords } from './location-lineage.js';
+import {migrationSeal,resolvedManagedBinding,type ManagedLegacyBinding} from './compat/managed-store.js';
+import {inspectAllTables,type TableInventory} from './compat/table-inventory.js';
 export type { WorkspaceIdentity } from './location-lineage.js';
 const product = 'runtime' as const;
 export interface SnapshotOptions { workspaceRoot: string; workspaceId: string }
@@ -16,9 +18,10 @@ export interface WorkspaceSnapshot {
   revision: number; stateDigest: string; receiptsDigest: string; auditDigest: string; recordsDigest: string;
   receiptCount: number; native?: NativeSnapshot; blobs: BlobInventory[]; blobsDigest: string; lineageDigest: string;
   requiredKeyIds: string[]; unresolved: UnresolvedItem[]; snapshotDigest: string;
+  managed?:{adoptionDigest:string;serviceId:string;businessTables:TableInventory;recordsDigest:string};
 }
 export interface RelocationOptions { sourceRoot: string; destinationRoot: string; workspaceId: string; expectedSnapshotDigest: string }
-export interface WorkspaceRelocationResult { schema: 'evopilot-owner-workspace-relocation-result/v1'; product: typeof product; from: WorkspaceIdentity; to: WorkspaceIdentity; sourceSnapshotDigest: string; relocationDigest: string; requiredKeyIds: string[]; snapshot: WorkspaceSnapshot; authority: false }
+export interface WorkspaceRelocationResult { schema: 'evopilot-owner-workspace-relocation-result/v1'; product: typeof product; from: WorkspaceIdentity; to: WorkspaceIdentity; sourceSnapshotDigest: string; relocationDigest: string; requiredKeyIds: string[]; snapshot: WorkspaceSnapshot; authority: false; managedBinding?:ManagedLegacyBinding }
 function options(value: SnapshotOptions): void {
   if (!value || stableSerialize(Object.keys(value).sort()) !== stableSerialize(['workspaceId', 'workspaceRoot']) || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(value.workspaceId)) migrationFail('INVALID_REQUEST', 'Exact workspace options required');
   const identity = readIdentity(value.workspaceRoot, value.workspaceId);
@@ -67,8 +70,16 @@ function verifyOwnerMaterials(state: unknown, blobs: BlobInventory[]): void {
     if (pointerDigest !== hash(subject)) migrationFail('CORRUPT_STATE', 'Catalog pointer differs');
   }
 }
-function snapshot(db: DatabaseSync, identity: WorkspaceIdentity, root: string): { manifest: WorkspaceSnapshot; records: SnapshotRecords } {
-  const records = inspectRecords(db, value => validateState(value as Parameters<typeof validateState>[0]));
+function managedRecords(db:DatabaseSync):WorkspaceSnapshot['managed'] {
+  const seal=migrationSeal(db);if(!seal)return undefined;
+  // Location attestation is the only mutable table. All later domain tables,
+  // their schema, binary/large integer values and the original adoption seal
+  // remain covered even when absent from the historical core/native summaries.
+  const businessTables=inspectAllTables(db,['workspace_relocations']);
+  return{adoptionDigest:seal.migrationDigest,serviceId:seal.serviceId,businessTables,recordsDigest:hash(businessTables)};
+}
+function snapshot(db: DatabaseSync, identity: WorkspaceIdentity, root: string,authorizeManaged?:()=>void): { manifest: WorkspaceSnapshot; records: SnapshotRecords } {
+  const records = inspectRecords(db, value => validateState(value as Parameters<typeof validateState>[0]),authorizeManaged);
   const native = inspectNativeSnapshot(db, root);
   if (native) records.state = {...records.state as Record<string, unknown>, runs: [...((records.state as {runs?:unknown[]}).runs ?? []), ...native.state.runs], collections:native.state.collections};
   const lineage = readRelocations(db, identity, product), blobs = [...inspectBlobs(root, product), ...(native?.blobs ?? [])].sort((a,b)=>a.path.localeCompare(b.path));
@@ -76,12 +87,13 @@ function snapshot(db: DatabaseSync, identity: WorkspaceIdentity, root: string): 
     if (stableSerialize(binding.workspace) !== stableSerialize(identity) && !lineage.some(record => record.bindings.some(retained => stableSerialize(retained) === stableSerialize(binding)))) migrationFail('CORRUPT_STATE', 'Unattested historical owner identity');
   }
   verifyOwnerMaterials(records.state, blobs);
-  const subject = { schema: 'evopilot-owner-workspace-snapshot/v1' as const, product, identity, revision: records.revision, stateDigest: records.stateDigest, receiptsDigest: records.receiptsDigest, auditDigest: records.auditDigest, recordsDigest: records.recordsDigest, receiptCount: records.receiptCount, ...(native ? {native:native.snapshot} : {}), blobs, blobsDigest: hash(blobs), lineageDigest: hash(lineage), requiredKeyIds: [...new Set(lineage.map(record => record.keyId))].sort(), unresolved: unresolved(records.state) };
+  const managed=managedRecords(db);
+  const subject = { schema: 'evopilot-owner-workspace-snapshot/v1' as const, product, identity, revision: records.revision, stateDigest: records.stateDigest, receiptsDigest: records.receiptsDigest, auditDigest: records.auditDigest, recordsDigest: records.recordsDigest, receiptCount: records.receiptCount, ...(native ? {native:native.snapshot} : {}),...(managed?{managed}:{}), blobs, blobsDigest: hash(blobs), lineageDigest: hash(lineage), requiredKeyIds: [...new Set(lineage.map(record => record.keyId))].sort(), unresolved: unresolved(records.state) };
   return { manifest: { ...subject, snapshotDigest: hash(subject) }, records };
 }
 export function inspectWorkspaceSnapshot(value: SnapshotOptions): WorkspaceSnapshot {
   options(value); const store = openState(value.workspaceRoot, value.workspaceId);
-  try { store.guard(); store.db.exec('BEGIN IMMEDIATE'); try { const result = snapshot(store.db, store.identity as WorkspaceIdentity, value.workspaceRoot).manifest; store.db.exec('COMMIT'); return result; } catch (error) { store.db.exec('ROLLBACK'); throw error; } }
+  try { store.guard(); store.db.exec('BEGIN IMMEDIATE'); try { const result = snapshot(store.db, store.identity as WorkspaceIdentity, value.workspaceRoot,()=>store.guard()).manifest; store.db.exec('COMMIT'); return result; } catch (error) { store.db.exec('ROLLBACK'); throw error; } }
   finally { store.db.close(); }
 }
 export function relocateWorkspaceSnapshot(value: RelocationOptions): WorkspaceRelocationResult {
@@ -93,30 +105,37 @@ export function relocateWorkspaceSnapshot(value: RelocationOptions): WorkspaceRe
   let target: DatabaseSync | undefined, sourceTransaction = false, targetTransaction = false;
   try {
     source.guard(); source.db.exec('BEGIN IMMEDIATE'); sourceTransaction = true;
-    const original = snapshot(source.db, source.identity as WorkspaceIdentity, sourceRoot);
+    const original = snapshot(source.db, source.identity as WorkspaceIdentity, sourceRoot,()=>source.guard());
     if (original.manifest.snapshotDigest !== value.expectedSnapshotDigest) migrationFail('SNAPSHOT_DRIFT', 'Source changed after snapshot');
     const from = original.manifest.identity, to: WorkspaceIdentity = { ...from, canonicalRoot: destinationRoot };
     const marker = readIdentity(destinationRoot, workspaceId);
     if (stableSerialize(marker) !== stableSerialize(from) && stableSerialize(marker) !== stableSerialize(to)) migrationFail('IDENTITY_MISMATCH', 'Copied identity differs');
     target = new DatabaseSync(databasePath(destinationRoot), { timeout: 1000, allowExtension: false }); target.enableDefensive(true);
     target.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; BEGIN IMMEDIATE'); targetTransaction = true;
+    const assertCopiedManaged=()=>{
+      source.guard();
+      if(!original.manifest.managed||stableSerialize(managedRecords(target!))!==stableSerialize(original.manifest.managed))migrationFail('SNAPSHOT_DRIFT','Copied managed tables or immutable adoption differ');
+    };
+    const binding=()=>resolvedManagedBinding(target!,to)??undefined;
     let previous: ReturnType<typeof readRelocations> = [];
     try { previous = readRelocations(target, to, product); } catch (error) { if ((error as { code?: string }).code !== 'INVALID_LINEAGE') throw error; }
     const completed = previous.at(-1);
     if (completed?.sourceSnapshotDigest === value.expectedSnapshotDigest && stableSerialize(completed.from) === stableSerialize(from) && stableSerialize(completed.to) === stableSerialize(to)) {
-      const restored = snapshot(target, to, destinationRoot).manifest;
+      const restored = snapshot(target, to, destinationRoot,assertCopiedManaged).manifest;
       if (restored.recordsDigest !== original.manifest.recordsDigest || restored.blobsDigest !== original.manifest.blobsDigest || stableSerialize(restored.native ?? null) !== stableSerialize(original.manifest.native ?? null)) migrationFail('SNAPSHOT_DRIFT', 'Relocated state changed; do not retry against stale source');
       target.exec('COMMIT'); targetTransaction = false; writeRelocatedIdentity(destinationRoot, to); source.db.exec('COMMIT'); sourceTransaction = false;
-      return { schema: 'evopilot-owner-workspace-relocation-result/v1', product, from, to, sourceSnapshotDigest: value.expectedSnapshotDigest, relocationDigest: completed.recordDigest, requiredKeyIds: restored.requiredKeyIds, snapshot: restored, authority: false };
+      const managedBinding=binding();return { schema: 'evopilot-owner-workspace-relocation-result/v1', product, from, to, sourceSnapshotDigest: value.expectedSnapshotDigest, relocationDigest: completed.recordDigest, requiredKeyIds: restored.requiredKeyIds, snapshot: restored, authority: false,...(managedBinding?{managedBinding}:{}) };
     }
-    const copied = snapshot(target, from, destinationRoot);
+    const copied = snapshot(target, from, destinationRoot,assertCopiedManaged);
     if (copied.manifest.snapshotDigest !== original.manifest.snapshotDigest) migrationFail('SNAPSHOT_DRIFT', 'Copied owner data differs');
-    const record = appendRelocation(target, product, from, to, value.expectedSnapshotDigest, copied.records);
-    const restored = snapshot(target, to, destinationRoot).manifest;
+    const adoption=original.manifest.managed;
+    const record = appendRelocation(target, product, from, to, value.expectedSnapshotDigest, copied.records,adoption?[{workspace:from,digest:'sha256:'+adoption.adoptionDigest}]:[]);
+    const restored = snapshot(target, to, destinationRoot,assertCopiedManaged).manifest;
+    if(stableSerialize(restored.managed??null)!==stableSerialize(original.manifest.managed??null))migrationFail('SNAPSHOT_DRIFT','Relocation changed managed business tables');
     target.exec('COMMIT'); targetTransaction = false;
     writeRelocatedIdentity(destinationRoot, to);
     source.db.exec('COMMIT'); sourceTransaction = false;
-    return { schema: 'evopilot-owner-workspace-relocation-result/v1', product, from, to, sourceSnapshotDigest: value.expectedSnapshotDigest, relocationDigest: record.recordDigest, requiredKeyIds: restored.requiredKeyIds, snapshot: restored, authority: false };
+    const managedBinding=binding();return { schema: 'evopilot-owner-workspace-relocation-result/v1', product, from, to, sourceSnapshotDigest: value.expectedSnapshotDigest, relocationDigest: record.recordDigest, requiredKeyIds: restored.requiredKeyIds, snapshot: restored, authority: false,...(managedBinding?{managedBinding}:{}) };
   } finally {
     if (targetTransaction) target!.exec('ROLLBACK'); if (sourceTransaction) source.db.exec('ROLLBACK'); target?.close(); source.db.close();
   }

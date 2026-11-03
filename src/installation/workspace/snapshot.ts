@@ -10,9 +10,10 @@ import {promisify} from 'node:util';
 import {DatabaseSync} from 'node:sqlite';
 import {canonicalPath,codeRoot,fail,fields,outsideGit,readRegular} from '../../compat/project/files.js';
 import {withWorkspaceLease} from '../../compat/workspace-lease.js';
-import {legacyWorkspace,migrationSeal,type ManagedLegacyBinding} from '../../compat/managed-store.js';
+import {legacyWorkspace,resolvedManagedBinding,type ManagedLegacyBinding} from '../../compat/managed-store.js';
 import {readIdentity,readRelocations} from '../../location-lineage.js';
 import {RuntimeStore} from '../../server/store.js';
+import {inspectAllTables} from '../../compat/table-inventory.js';
 import {copyMaintenanceFile,hashMaintenanceFile,inspectMaintenanceTree,maintenanceJSONDigest,type MaintenanceEntry} from './stream.js';
 
 export interface WorkspaceSelection extends ManagedLegacyBinding {
@@ -31,7 +32,6 @@ export interface ManagedWorkspaceSnapshot {
   coverage:'SELECTED_ROOTS_AND_REFERENCE_FILES';authority:false;snapshotDigest:string;
 }
 const execute=promisify(execFile),owners=['runtime','ontology','harness'] as const;
-const quote=(v:string)=>'"'+v.replaceAll('"','""')+'"';
 export function present(filename:string):boolean {
   try{fs.lstatSync(filename);return true;}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return false;throw error;}
 }
@@ -88,25 +88,6 @@ function references(selection:WorkspaceSelection):PreservedReference[] {
   }
   return result.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
 }
-function tableInventory(db:DatabaseSync):Pick<DatabaseInventory,'schemaDigest'|'tables'> {
-  if(db.prepare('PRAGMA quick_check').get()?.quick_check!=='ok')fail('MAINTENANCE_DATABASE');
-  const schema=db.prepare('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').all();
-  if(schema.length>256||schema.some(row=>!['table','index'].includes(String(row.type))||/\bVIRTUAL\s+TABLE\b/i.test(String(row.sql))))fail('MAINTENANCE_DATABASE');
-  const tables:DatabaseInventory['tables']=[];let bytes=0;
-  for(const row of schema.filter(v=>v.type==='table')){
-    const name=String(row.name),columns=db.prepare('PRAGMA table_info('+quote(name)+')').all().map(v=>String(v.name));
-    if(!columns.length||columns.length>64)fail('MAINTENANCE_DATABASE');
-    const query=db.prepare('SELECT * FROM '+quote(name)+' ORDER BY '+columns.map(quote).join(',')+' LIMIT 100001');query.setReadBigInts(true);
-    let rows=0;const hash=createHash('sha256');
-    for(const record of query.iterate()){
-      if(++rows>100000)fail('MAINTENANCE_LIMIT');
-      const encoded=JSON.stringify(columns.map(key=>{const v=record[key];return v instanceof Uint8Array?{blob:Buffer.from(v).toString('hex')}:typeof v==='bigint'?{integer:v.toString()}:v;}));
-      if((bytes+=Buffer.byteLength(encoded))>768*1024*1024)fail('MAINTENANCE_LIMIT');hash.update(encoded+'\n');
-    }
-    tables.push({name,rows,sha256:hash.digest('hex')});
-  }
-  return{schemaDigest:maintenanceJSONDigest(schema),tables};
-}
 function copyDatabase(source:string,destination:string,entry:MaintenanceEntry):void {
   quietDatabase(source);copyMaintenanceFile(source,destination,entry);
 }
@@ -124,9 +105,9 @@ function databases(selection:WorkspaceSelection,roots:ManagedWorkspaceSnapshot['
       const db=new DatabaseSync(copied,{readOnly:true,allowExtension:false});let inventory:DatabaseInventory;
       try{
         db.enableDefensive(true);db.exec('BEGIN');
-        const schemaVersion=Number(db.prepare('PRAGMA user_version').get()?.user_version),all=tableInventory(db);
+        const schemaVersion=Number(db.prepare('PRAGMA user_version').get()?.user_version),all=inspectAllTables(db);
         if(owner==='runtime'){
-          const seal=migrationSeal(db);if(!seal)fail('MAINTENANCE_IDENTITY');
+          const seal=resolvedManagedBinding(db,identity);if(!seal)fail('MAINTENANCE_IDENTITY');
           for(const key of ['workspaceRoot','workspaceId','serviceId','migrationDigest'] as const)if(seal[key]!==selection[key])fail('MAINTENANCE_IDENTITY');
         }
         const lineage=owner==='service'?[]:readRelocations(db,identity,owner);

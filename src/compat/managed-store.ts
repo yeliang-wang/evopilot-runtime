@@ -4,7 +4,7 @@ import {existsSync,lstatSync,mkdirSync} from 'node:fs';
 import {join} from 'node:path';
 import {canonical,digest,exact,record,reject,slug,string} from '../server/errors.js';
 import {privateFile} from '../server/security.js';
-import {privatePath,readIdentity,safeAncestors} from '../location-lineage.js';
+import {privatePath,readIdentity,readRelocations,safeAncestors,type WorkspaceIdentity} from '../location-lineage.js';
 
 /** Internal capability, never obtained from an HTTP request or a legacy envelope.
  * Schema 9 preserves the old domain tables and prevents a fresh 0.8.x writer
@@ -45,15 +45,34 @@ export function migrationSeal(db:DatabaseSync):LegacyMigrationSeal|null {
   if(digest(body)!==migrationDigest||canonical(value)!==rows[0].data)reject('MIGRATION_CORRUPT','Adoption record integrity differs');
   return value as unknown as LegacyMigrationSeal;
 }
-function matches(seal:LegacyMigrationSeal,binding:ManagedLegacyBinding):void {
-  for(const key of ['workspaceRoot','workspaceId','serviceId','migrationDigest'] as const)if(seal[key]!==binding[key])reject('MIGRATION_BINDING_CHANGED','Legacy store does not belong to this exact Runtime service',409);
+/** Metadata only, not an execution capability. An adopted location can change
+ * only through the existing same-host signed lineage, explicitly binding the
+ * immutable adoption digest. Ordinary copies and pre-adoption history do not
+ * acquire a new service binding. */
+export function resolvedManagedBinding(db:DatabaseSync,identity:WorkspaceIdentity):ManagedLegacyBinding|null {
+  const seal=migrationSeal(db);if(!seal)return null;
+  if(identity.id!==seal.workspaceId||identity.ownerUid!==process.getuid!())reject('MIGRATION_BINDING_CHANGED','Adoption workspace differs',409);
+  const lineage=readRelocations(db,identity,'runtime'),adoption='sha256:'+seal.migrationDigest;
+  const bound=(row:typeof lineage[number])=>row.bindings.some(b=>b.digest===adoption&&canonical(b.workspace)===canonical(row.from));
+  const first=lineage.findIndex(bound);
+  if(first<0){
+    if(identity.canonicalRoot!==seal.workspaceRoot)reject('MIGRATION_BINDING_CHANGED','No signed managed relocation binds this location',409);
+    return{workspaceRoot:seal.workspaceRoot,workspaceId:seal.workspaceId,serviceId:seal.serviceId,migrationDigest:seal.migrationDigest};
+  }
+  const managed=lineage.slice(first);
+  if(managed[0].from.canonicalRoot!==seal.workspaceRoot||managed.some(row=>!bound(row)))reject('MIGRATION_BINDING_CHANGED','Managed location lineage is incomplete',409);
+  const workspaceRoot=identity.canonicalRoot,migrationDigest=digest({schema:'runtime-managed-location/v1',adoptionDigest:seal.migrationDigest,serviceId:seal.serviceId,workspaceId:seal.workspaceId,workspaceRoot,relocationDigest:managed.at(-1)!.recordDigest});
+  return{workspaceRoot,workspaceId:seal.workspaceId,serviceId:seal.serviceId,migrationDigest};
+}
+function matches(actual:ManagedLegacyBinding,binding:ManagedLegacyBinding):void {
+  for(const key of ['workspaceRoot','workspaceId','serviceId','migrationDigest'] as const)if(actual[key]!==binding[key])reject('MIGRATION_BINDING_CHANGED','Legacy store does not belong to this exact Runtime service',409);
 }
 export function assertManagedStateAccess(db:DatabaseSync,root:string,id:string):LegacyMigrationSeal|null {
   if(![1,2,3,4,5,6,7,8,9].includes(Number(db.prepare('PRAGMA user_version').get()?.user_version)))reject('MIGRATION_CORRUPT','Unexpected managed database schema');
   const seal=migrationSeal(db);if(!seal)return null;
   const context=contexts.getStore();
   if(!context?.active||context.binding.workspaceRoot!==root||context.binding.workspaceId!==id)reject('MANAGED_SERVICE_REQUIRED','This database is owned by the independent Runtime service',409);
-  matches(seal,context.binding);
+  matches(resolvedManagedBinding(db,readIdentity(root,id))!,context.binding);
   context.authorize?.();
   const stat=lstatSync(legacyDatabasePath(root));
   if(stat.dev!==context.device||stat.ino!==context.inode)reject('MIGRATION_BINDING_CHANGED','Managed database file was replaced',409);
@@ -78,7 +97,7 @@ export function acquireManagedLegacyContext(input:ManagedLegacyBinding,authorize
   const binding=Object.freeze({...input}),lease=acquireLegacyWriterLease(binding.workspaceRoot,binding.workspaceId);
   try {
     const db=new DatabaseSync(legacyDatabasePath(binding.workspaceRoot),{readOnly:true,allowExtension:false});
-    try {const seal=migrationSeal(db);if(!seal)reject('MIGRATION_REQUIRED','Legacy store has not been adopted');matches(seal,binding);} finally {db.close();}
+    try {const actual=resolvedManagedBinding(db,readIdentity(binding.workspaceRoot,binding.workspaceId));if(!actual)reject('MIGRATION_REQUIRED','Legacy store has not been adopted');matches(actual,binding);} finally {db.close();}
     const stat=lstatSync(legacyDatabasePath(binding.workspaceRoot));
     const context:Context={binding,active:true,device:stat.dev,inode:stat.ino,authorize};
     return{run<T>(fn:()=>T):T{if(!context.active)reject('CLOSED','Managed legacy service is closed');return contexts.run(context,fn);},close(){if(context.active){context.active=false;lease.close();}}};

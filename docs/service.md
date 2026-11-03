@@ -80,6 +80,26 @@ First explicit native use adds separate native tables and marks SQLite `user_ver
 
 The parent must quiesce services and make a complete private copy. Relocation checks both the source and copied destination against the supplied snapshot, then adds signed same-host location lineage. It never rewrites business records, candidates, decisions, original claims or receipts. Existing original-location bindings remain readable only through that lineage. Pending old-location work requires new preparation and review; original claims may only reconcile. Retain local keys in `~/.local/share/evopilot/relocation-keys/`; cross-machine key import is not supported.
 
+For v0.9 adopted databases (schema 9), the Runtime relocation core requires the
+live, exact managed service context. Its snapshot additionally hashes every
+business table and its schema, including later feature tables and the immutable
+adoption record. Only signed location metadata may change. Each managed move
+binds that original adoption digest through the existing local HMAC lineage;
+the result includes `managedBinding` for the new location. The original adoption
+record, service identity and business history remain unchanged. Multiple moves
+must form a contiguous verified chain. Copying a directory, editing its marker,
+or reusing an old binding cannot grant access to the new location.
+
+An exact relocation retry succeeds only while source and destination business
+content still match its original snapshot. New destination writes make that old
+request stale; they are never replaced by a repeated copy. Missing local keys,
+altered schema or records, and invalid signatures fail closed. Existing UNKNOWN
+claims remain UNKNOWN and require reconciliation; relocation does not dispatch
+work or grant an execution decision. This owner API is only the relocation core:
+the independent operator must still coordinate stopped services, all owner
+stores, both writer leases, service configuration and explicit startup. Passing
+the core API tests does not certify that complete cutover workflow.
+
 ## Evidence and acceptance
 
 The Runtime tests exercise its public API using synthetic owner receipts and real isolated child processes. They verify native parsing, immutable decisions, raw integrity, fixed completion requirements, crash/restart and relocation. Historical fixture tests are explicitly labeled and do not prove current native behavior. Full product acceptance additionally requires real Ontology/Harness validators, parent integration, independently frozen acceptance instances and the exact Desktop candidate. Passing this repository's tests does not establish complete product acceptance or release authority. The parent [v0.6 response Target](https://github.com/yeliang-wang/evopilot/blob/main/governance/response-v06.json) defines 36 fixed variants for the current response, transport and language scope; the historical v0.3 standards-correction denominator remains separate.

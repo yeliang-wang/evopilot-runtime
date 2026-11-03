@@ -133,8 +133,13 @@ export function acceptsWorkspace(db: DatabaseSync, identity: WorkspaceIdentity, 
   if (stableSerialize(identity) === stableSerialize(historical)) return true;
   return readRelocations(db, identity, product).some(record => record.bindings.some(binding => stableSerialize(binding.workspace) === stableSerialize(historical) && binding.digest === digest));
 }
-export function inspectRecords(db: DatabaseSync, validateState: (value: unknown) => unknown): SnapshotRecords {
-  if (db.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok' || ![1,2,3,4,5,6,7,8].includes(Number(db.prepare('PRAGMA user_version').get()?.user_version))) migrationFail('CORRUPT_STATE', 'Invalid owner database');
+export function inspectRecords(db: DatabaseSync, validateState: (value: unknown) => unknown, authorizeManaged?:()=>void): SnapshotRecords {
+  const version=Number(db.prepare('PRAGMA user_version').get()?.user_version);
+  if (db.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok' || ![1,2,3,4,5,6,7,8,9].includes(version)) migrationFail('CORRUPT_STATE', 'Invalid owner database');
+  // Schema9 is not a blanket extension of the historical API. Its caller must
+  // establish the current managed capability, or the exact authorized copy
+  // under a guarded source relocation, before decoding any preserved records.
+  if(version===9){if(!authorizeManaged)migrationFail('MANAGED_SERVICE_REQUIRED','Managed snapshot authorization required');authorizeManaged();}
   const row = db.prepare('SELECT revision,data FROM state WHERE singleton=1').get();
   if (!row || typeof row.revision !== 'number' || !Number.isSafeInteger(row.revision) || row.revision < 0 || typeof row.data !== 'string' || Buffer.byteLength(row.data) > 8388608) migrationFail('CORRUPT_STATE', 'Invalid owner state');
   const state = validateState(JSON.parse(row.data));
@@ -167,10 +172,12 @@ export function collectBindings(state: unknown): HistoricalBinding[] {
   for (const revision of (value.catalogRevisions ?? []) as { workspace: unknown; pointer: { workspace: unknown; pointerDigest: string } }[]) { add(revision.workspace, revision.pointer.pointerDigest); add(revision.pointer.workspace, revision.pointer.pointerDigest); }
   return [...bindings.values()].sort((a, b) => stableSerialize(a).localeCompare(stableSerialize(b)));
 }
-export function appendRelocation(db: DatabaseSync, product: string, from: WorkspaceIdentity, to: WorkspaceIdentity, snapshotDigest: string, records: SnapshotRecords): RelocationRecord {
+export function appendRelocation(db: DatabaseSync, product: string, from: WorkspaceIdentity, to: WorkspaceIdentity, snapshotDigest: string, records: SnapshotRecords, additionalBindings:HistoricalBinding[]=[]): RelocationRecord {
   const previous = readRelocations(db, from, product).at(-1);
+  for(const binding of additionalBindings)if(stableSerialize(binding.workspace)!==stableSerialize(from)||!/^sha256:[a-f0-9]{64}$/.test(binding.digest))migrationFail('INVALID_LINEAGE','Additional location binding differs');
+  const bindings=[...new Map([...collectBindings(records.state),...additionalBindings].map(binding=>[stableSerialize(binding),binding])).values()].sort((a,b)=>stableSerialize(a).localeCompare(stableSerialize(b)));
   const keyId = previous?.keyId ?? newKey();
-  const subject = { schema: 'evopilot-workspace-relocation/v1' as const, product, from, to, sourceSnapshotDigest: snapshotDigest, historyRevision: records.revision, receiptsDigest: records.receiptsDigest, auditDigest: records.auditDigest, bindings: collectBindings(records.state), previousDigest: previous?.recordDigest ?? null, hostDigest: hostDigest(), keyId, at: new Date().toISOString() };
+  const subject = { schema: 'evopilot-workspace-relocation/v1' as const, product, from, to, sourceSnapshotDigest: snapshotDigest, historyRevision: records.revision, receiptsDigest: records.receiptsDigest, auditDigest: records.auditDigest, bindings, previousDigest: previous?.recordDigest ?? null, hostDigest: hostDigest(), keyId, at: new Date().toISOString() };
   const record = { ...subject, recordDigest: hash(subject), signature: createHmac('sha256', readKey(keyId)).update(stableSerialize(subject)).digest('hex') };
   db.exec('CREATE TABLE IF NOT EXISTS workspace_relocations (sequence INTEGER PRIMARY KEY, record TEXT NOT NULL)');
   db.prepare('INSERT INTO workspace_relocations(record) VALUES(?)').run(stableSerialize(record)); return record;
