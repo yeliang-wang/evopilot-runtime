@@ -317,7 +317,9 @@
         "src/host/setup.ts",
         "src/installation/setup-host.ts",
         "src/installation/workspace/setup-operator.ts",
-        "tests/e2e/setup-host-v090.test.mjs"
+        "tests/e2e/setup-host-v090.test.mjs",
+        "src/installation/toolchain/preparation.ts",
+        "tests/e2e/toolchain-host-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

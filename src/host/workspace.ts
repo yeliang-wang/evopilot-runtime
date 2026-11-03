@@ -6,7 +6,7 @@ import {exact,record,reject,slug,string} from '../server/errors.js';
 import {readPrivateJson} from '../server/security.js';
 import type {ManagedLegacyBinding} from '../compat/managed-store.js';
 
-export const WORKSPACE_CALLS=['workspace_inspect','workspace_capacity','workspace_backup','workspace_backup_inspect','workspace_restore','workspace_migrate'] as const;
+export const WORKSPACE_CALLS=['workspace_inspect','workspace_capacity','workspace_backup','workspace_backup_inspect','workspace_restore','workspace_migrate','toolchain_inspect','toolchain_prepare'] as const;
 export type WorkspaceCall=typeof WORKSPACE_CALLS[number];
 export interface WorkspaceOperatorGrant {
   projectRoot:string;referenceFiles:string[];owners:{ontology:string;harness:string};

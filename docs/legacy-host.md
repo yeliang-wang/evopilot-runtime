@@ -451,3 +451,33 @@ still a separate requirement.
 绑定及选定的服务状态。原安装计划与凭据不变。中断沿原请求恢复，失败记录独立保留。
 同一会话可刷新工具后显式激活并继续使用，无需安装第二个插件。工作区接入成功不代表
 生命周期已启用、业务已执行或软件已获准发布。
+
+## Retained native dependency preparation
+
+An installed local operator grant can explicitly select `toolchain_inspect` and
+`toolchain_prepare`. Existing grants do not acquire these calls implicitly.
+Inspection verifies the bundled lock and current selected Workspace cache without
+creating files or downloading. A historical successful receipt alone does not
+establish current readiness; changed dependency bytes fail integrity checks.
+
+Preparation accepts only a stable request ID. Under the shared Workspace lease it
+stops the exact independent Runtime, verifies that other workers are stopped and
+holds the original writer exclusion while preparing the bundled dependencies.
+It returns admission before downloads finish and deactivates the compatibility
+session. The caller cannot select a URL, executable, cache location or new lock.
+Inspect with backoff. A repeated ID returns its retained result; RUNNING or UNKNOWN
+blocks replacement requests. A failed original remains failed even if a later
+explicit preparation succeeds. Host loss preserves UNKNOWN rather than silently
+repeating the download. The original v1 journal format remains readable.
+
+Dependency readiness, installed owner bindings and service readiness are separate.
+Preparation leaves the independent service stopped; explicit operator startup
+uses its current verified specification before session activation. It does not
+change owner/toolchain registrations, dispatch a Run or grant acceptance. Final
+candidate Codex onboarding must verify the complete preparation, binding and
+startup sequence; isolated SDK tests do not substitute for that journey.
+
+本机维护权限可明确开放原有的工具链检查、准备入口；旧权限不会自动增加新调用。
+检查不下载，准备只使用固定依赖清单，并在停机及工作区互斥保护下执行。准备调用
+先返回原请求状态；进程退出后的 UNKNOWN 不能当作重试许可。失败回执不会被后续
+成功覆盖。依赖就绪不等于服务已启动或 owner 已绑定，后续需要按准确配置显式启动。
