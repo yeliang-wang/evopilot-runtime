@@ -99,7 +99,7 @@
       "productAcceptance": "NOT_EVALUATED"
     },
     "M3": {
-      "purpose": "Implement the approved independent Runtime Expert/HTTP plugin, controlled installer, thin same-service stdio bridge, protected configuration, published 0.8.3 owner API consumers and governed GitHub/GitLab/external Codex execution. No owner authoring, daily cutover or product Release is conferred by this implementation binding.",
+      "purpose": "Implement the approved independent Runtime Expert/HTTP plugin, controlled installer, thin same-service stdio bridge and historical Host owner routes, protected configuration, published 0.8.3 owner API consumers and governed GitHub/GitLab/external Codex execution. Historical Host owner routes delegate to published owner APIs under separately scoped operator configuration; Runtime HTTP consumers never obtain owner authoring authority. No owner product evolution, daily cutover or product Release is conferred by this binding.",
       "paths": [
         "src/adapters/config.ts",
         "src/adapters/published-owners.ts",
@@ -204,7 +204,10 @@
         "src/compat/gateway.ts",
         "src/host/legacy-tools.ts",
         "tests/e2e/legacy-http-v090.test.mjs",
-        "src/cli.ts"
+        "src/cli.ts",
+        "src/host/legacy-owners.ts",
+        "src/host/legacy-owner-providers.ts",
+        "tests/e2e/legacy-owners-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

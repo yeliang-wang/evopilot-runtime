@@ -1330,6 +1330,40 @@ service. The legacy CLI's `request` and `native-request` support the protected
 `--connection-ref` alternative to direct workspace arguments. Direct opening of
 an adopted store remains rejected; connection failure never selects local mode.
 
+An optional `--owner-config-ref` on that Host bridge preserves the historical
+`request`/`native` owner selector. Its protected
+`runtime-legacy-owner-host/v1` registration binds one workspace/project, the
+exact `legacyBindingRef`, expiration, both publisher-verified 0.8.3 package roots,
+and explicit `request:<operation>` / `native:<operation>` allowlists for each
+owner. Optional `nativeToolchain` uses the existing pinned validator registration.
+No wildcard, arbitrary import path or owner method name is accepted. Owner stores
+must already exist and match the original workspace identity. The registration
+selects allowed Host calls; it is not semantic approval or publication authority.
+
+These calls execute through the published owner public API in the Host process,
+outside Runtime's HTTP operation dispatcher. Each owner retains its own input
+validation, original request ID/revision, domain decisions and receipts. The
+primary Runtime HTTP service still has no asset authoring/publication operation.
+The protected registration and migration binding are reread before each call;
+expiration, scope drift, unexpected package bytes or disconnected Runtime fail
+closed. A lost/failed call is never automatically repeated. Inspect the original
+owner receipt instead of substituting Runtime's project revision or a new ID.
+
+Host provider wiring resolves published native dependencies, feedback material,
+Ontology readiness projections and the original Runtime modeling intent.
+Runtime intent/feedback/repair/execution/reconstruction reads use the same
+authenticated HTTP compatibility gateway. This path never opens a legacy Runtime
+database. Ontology receives only its exact public provider descriptors, distinct
+from Harness callbacks. The bridge supplies no model profile or LLM loop.
+
+This transport implementation and isolated real-owner validation do not establish
+the entire historical authoring or maintenance workflow. Trusted native/readiness
+authoring admission, remaining response/online providers, private project helpers,
+old Runtime execution-provider wiring, full tool mapping, actual Codex journeys
+and accurate-candidate migration remain required before N09/E15 can pass. No
+unsupported owner capability is supplied by changing an owner product or importing
+parent implementation modules. The original component split scope is unchanged.
+
 Registered Ontology/Harness consumption uses the managed service's scoped intent
 reader when `--legacy-ref` is present. It verifies the same workspace/root and
 cannot fall back to another Runtime handle when that reader is unavailable.
