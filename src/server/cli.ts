@@ -65,6 +65,6 @@ export async function serviceMain(argv: string[], output: { write(value: string)
       }
     }
     reject('UNKNOWN_COMMAND','Unsupported Runtime service command');
-  }catch(e){const error=e instanceof ServiceError?e:new ServiceError('OPERATION_FAILED','Local service operation failed',500);print({error:{code:error.code,message:error.message}});return 1;}
+  }catch(e){const error=e instanceof ServiceError?e:e&&typeof e==='object'&&'code'in e&&e.code==='EADDRINUSE'?new ServiceError('PORT_IN_USE','The selected Runtime port is already in use',409):new ServiceError('OPERATION_FAILED','Local service operation failed',500);print({error:{code:error.code,message:error.message}});return 1;}
 }
 if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href)process.exitCode=await serviceMain(process.argv.slice(2));

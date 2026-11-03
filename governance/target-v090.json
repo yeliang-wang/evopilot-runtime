@@ -99,7 +99,7 @@
       "productAcceptance": "NOT_EVALUATED"
     },
     "M3": {
-      "purpose": "Implement approved protected configuration, published 0.8.3 owner API consumers, GitHub/GitLab adapters, exact existing execution authority and requested external action/reconciliation. No owner authoring/publication capability, private daily migration or software Release is conferred. Expert/plugin/install paths will be bound as a subsequent technical elaboration under the same accepted scope.",
+      "purpose": "Implement the approved independent Runtime Expert/HTTP plugin, controlled installer, thin same-service stdio bridge, protected configuration, published 0.8.3 owner API consumers and governed GitHub/GitLab/external Codex execution. No owner authoring, daily cutover or product Release is conferred by this implementation binding.",
       "paths": [
         "src/adapters/config.ts",
         "src/adapters/published-owners.ts",
@@ -178,7 +178,22 @@
         "src/lifecycle/extension-review.ts",
         "tests/e2e/extension-review-v090.test.mjs",
         "src/adapters/ci-preparation.ts",
-        "tests/e2e/ci-preparation-v090.test.mjs"
+        "tests/e2e/ci-preparation-v090.test.mjs",
+        "src/host/client.ts",
+        "src/host/bridge.ts",
+        "src/host/plugin.ts",
+        "src/host/header-helper.ts",
+        "src/installation/installer.ts",
+        "src/installation/service.ts",
+        "plugins/codex/.codex-plugin/plugin.json",
+        "plugins/codex/mcp.template.json",
+        "plugins/codex/skills/evopilot-runtime-expert/SKILL.md",
+        "plugins/codex/skills/evopilot-runtime-expert/agents/openai.yaml",
+        "plugins/codex/skills/evopilot-runtime-expert/references/configuration.md",
+        "plugins/codex/skills/evopilot-runtime-expert/references/execution.md",
+        "plugins/codex/skills/evopilot-runtime-expert/references/recovery.md",
+        "tests/e2e/host-v090.test.mjs",
+        "tests/e2e/installer-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",
@@ -208,6 +223,6 @@
   "implementationBindings": {
     "governance/lifecycle-contract-v090.json": "5b18d80a73ec6ce249254aef2f78318aaac3c797d9b39d113993a4a66de966a1",
     "governance/parameter-matrix-v090.json": "27e01ab86483a5adf379f15c8987a4ba40017b222a5b31b699a5246143d43367",
-    "governance/environment-contract-v090.json": "8f36a63233974f1f6996c0bcdafbb34713081c4b7911f85499ab430ef20c7a66"
+    "governance/environment-contract-v090.json": "75b1fca11835c8d67de6d92e28a175ebd19d1c7d15ad13058edb2c207cda9a91"
   }
 }

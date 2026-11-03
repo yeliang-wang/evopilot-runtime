@@ -11,6 +11,7 @@
     "src",
     "vendor",
     "lifecycle",
+    "plugins",
     "README.md",
     "README_CN.md",
     "CONTRIBUTING.md",
@@ -51,6 +52,7 @@
   "license": "Apache-2.0",
   "bin": {
     "evopilot-runtime": "dist/server/cli.js",
+    "evopilot-runtime-install": "dist/installation/installer.js",
     "evopilot-next-runtime": "dist/cli.js"
   },
   "devDependencies": {

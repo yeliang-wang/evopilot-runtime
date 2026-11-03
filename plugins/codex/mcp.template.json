@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "evopilot_runtime": {
+      "type": "http",
+      "url": "${runtimeOrigin}/mcp",
+      "http_headers_helper": "${nodeExecutable} ${headerHelperPath} --connection-ref ${connectionRef}"
+    }
+  }
+}

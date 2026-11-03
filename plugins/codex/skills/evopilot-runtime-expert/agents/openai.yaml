@@ -1,0 +1,6 @@
+interface:
+  display_name: "EvoPilot Runtime Expert"
+  short_description: "Configure and follow a project's governed lifecycle"
+  default_prompt: "Use $evopilot-runtime-expert to configure or continue my project's lifecycle."
+policy:
+  allow_implicit_invocation: false

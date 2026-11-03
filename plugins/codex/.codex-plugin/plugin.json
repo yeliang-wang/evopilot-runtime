@@ -1,0 +1,11 @@
+{
+  "name": "evopilot-runtime",
+  "version": "0.8.3",
+  "description": "Independent EvoPilot Runtime lifecycle configuration, governed execution and retained evidence.",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "EvoPilot Runtime Preview",
+    "shortDescription": "Project lifecycle configuration and governed execution"
+  }
+}

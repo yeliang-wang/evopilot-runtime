@@ -24,6 +24,7 @@ const expected = {
     "src",
     "vendor",
     "lifecycle",
+    "plugins",
     "README.md",
     "README_CN.md",
     "CONTRIBUTING.md",
@@ -52,6 +53,7 @@ const expected = {
   "license": "Apache-2.0",
   "bin": {
     "evopilot-runtime": "dist/server/cli.js",
+    "evopilot-runtime-install": "dist/installation/installer.js",
     "evopilot-next-runtime": "dist/cli.js"
   },
   "devDependencies": {
@@ -96,7 +98,10 @@ export async function checkSource() {
   const pkg = JSON.parse(await readFile(resolve(ROOT, 'package.json'), 'utf8'));
   for (const [key, value] of Object.entries(expected)) assert.deepEqual(key === 'dependencies' ? pkg[key] ?? {} : pkg[key], value, key);
   for (const key of ['peerDependencies', 'optionalDependencies']) assert.deepEqual(pkg[key] ?? {}, {});
-  assert.deepEqual(pkg.bin, { 'evopilot-next-runtime': 'dist/cli.js', 'evopilot-runtime': 'dist/server/cli.js' });
+  assert.deepEqual(pkg.bin, { 'evopilot-next-runtime': 'dist/cli.js', 'evopilot-runtime': 'dist/server/cli.js', 'evopilot-runtime-install': 'dist/installation/installer.js' });
+  const installerPath=resolve(ROOT,pkg.bin['evopilot-runtime-install']);
+  assert((await readFile(installerPath,'utf8')).startsWith('#!/usr/bin/env node\n'));
+  assert((await lstat(installerPath)).isFile()&&((await lstat(installerPath)).mode&0o111)===0o111);
   const serviceCliPath=resolve(ROOT,pkg.bin['evopilot-runtime']);
   assert((await readFile(serviceCliPath,'utf8')).startsWith('#!/usr/bin/env node\n'));
   assert((await lstat(serviceCliPath)).isFile() && ((await lstat(serviceCliPath)).mode & 0o111)===0o111);
@@ -178,6 +183,7 @@ export async function checkSource() {
   for (const path of sources) {
     if (!path.endsWith('.mjs') && !path.endsWith('.ts') && !path.endsWith('.mts')) continue;
     const source = await readFile(path, 'utf8');
+    if(!path.includes('/src/installation/'))assert.doesNotMatch(source,/from\s+['"][^'"]*installation\/(?:installer|service)\.js['"]/,'Operator installation must not be reachable from Runtime service code');
     if (path.endsWith('.mjs')) {
     const syntax = spawnSync(process.execPath, ['--check', path], { encoding: 'utf8' });
     assert.ifError(syntax.error); assert.equal(syntax.status, 0, syntax.stderr);
@@ -191,6 +197,7 @@ export async function checkSource() {
       if((path.endsWith('/src/lifecycle/compiler.ts')||path.endsWith('/src/adapters/github.ts')||path.endsWith('/src/adapters/gitlab.ts'))&&specifier==='yaml')continue;
       if(path.endsWith('/src/adapters/artifacts.ts')&&specifier==='yauzl')continue;
       if (path.endsWith('/src/server/mcp.ts') && ['@modelcontextprotocol/sdk/server/index.js','@modelcontextprotocol/sdk/server/streamableHttp.js','@modelcontextprotocol/sdk/types.js'].includes(specifier)) continue;
+      if (path.endsWith('/src/host/bridge.ts') && ['@modelcontextprotocol/sdk/server/index.js','@modelcontextprotocol/sdk/server/stdio.js','@modelcontextprotocol/sdk/types.js'].includes(specifier)) continue;
       if (specifier === 'yaml' && (path.endsWith('/src/asset-sources.mjs') || PRODUCT === 'ontology' && path.includes('/src/compat/'))) continue;
       if (PRODUCT === 'ontology' && path.includes('/src/compat/') && specifier === 'ajv/dist/2020.js') continue;
       assert(specifier.startsWith('.'), 'Undeclared import: ' + specifier);

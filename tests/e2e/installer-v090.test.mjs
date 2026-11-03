@@ -1,0 +1,112 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,realpathSync,readFileSync,writeFileSync,existsSync,rmSync,chmodSync,mkdirSync,readdirSync,symlinkSync,lstatSync} from 'node:fs';
+import {join,dirname} from 'node:path';
+import {tmpdir} from 'node:os';
+import {fileURLToPath} from 'node:url';
+import {randomBytes,createHash} from 'node:crypto';
+import {createServer} from 'node:http';
+import {once} from 'node:events';
+import {DatabaseSync} from 'node:sqlite';
+import {initializeCredentials,tokenDigest} from '../../dist/server/security.js';
+import {createRuntimeHttpClient} from '../../dist/host/client.js';
+import {RuntimeStore} from '../../dist/server/store.js';
+import {userServiceLabel,userServicePlist,inspectUserService,observeUserService,startUserService,stopUserService} from '../../dist/installation/service.js';
+import {lifecycle,yaml} from '../fixtures/lifecycle-v090.mjs';
+import {runInstaller,installerMain} from '../../dist/installation/installer.js';
+
+const repo=realpathSync(fileURLToPath(new URL('../../',import.meta.url))),node=realpathSync(process.execPath),nodeHash=createHash('sha256').update(readFileSync(node)).digest('hex');
+async function fixture(){
+ const root=mkdtempSync(join(realpathSync(tmpdir()),'runtime-installer-')),workspaceId='installer-test',projectId='alpha',token=randomBytes(32).toString('base64url'),tokenRef=join(root,'client.json');
+ initializeCredentials(join(root,'data'),workspaceId,[{id:'host',projects:[projectId],permissions:['read','draft.write'],revision:1,expiresAt:'2030-01-01T00:00:00Z',tokenDigest:tokenDigest(token)}]);
+ writeFileSync(tokenRef,JSON.stringify({schema:'runtime-client-credential/v1',workspaceId,projectId,principalId:'host',token}),{mode:0o600});
+ const occupied=createServer((_req,res)=>res.end('foreign port owner'));occupied.listen(0,'127.0.0.1');await once(occupied,'listening');const port=occupied.address().port;
+ const spec={schema:'runtime-user-service/v1',root,packageRoot:repo,version:JSON.parse(readFileSync(join(repo,'package.json'))).version,nodeExecutable:node,nodeSha256:nodeHash,workspaceId,projectId,principalId:'host',tokenRef,port,integrationsRef:null};
+ return{root,spec,occupied,async freePort(){if(occupied.listening)await new Promise(r=>occupied.close(r));},async cleanup(){if(process.platform==='darwin')await stopUserService(spec);if(occupied.listening)await new Promise(r=>occupied.close(r));rmSync(root,{recursive:true,force:true});}};
+}
+test('operator user-service specification fixes executable, scope, own label and protected files',async()=>{
+ const f=await fixture();try{
+  if(process.platform!=='darwin'){assert.throws(()=>userServicePlist(f.spec),{code:'SERVICE_PLATFORM'});return;}
+  const plist=userServicePlist(f.spec);assert(plist.includes('<key>KeepAlive</key><false/>'));assert(plist.includes('<key>Umask</key><integer>63</integer>'));assert(plist.includes(userServiceLabel(f.spec)));assert(!plist.includes(JSON.parse(readFileSync(f.spec.tokenRef)).token));
+  for(const change of [{port:80},{port:65536},{port:1.5}])assert.throws(()=>userServicePlist({...f.spec,...change}),{code:'SERVICE_PLATFORM'});
+  assert.throws(()=>userServicePlist({...f.spec,nodeSha256:'0'.repeat(64)}),{code:'SERVICE_EXECUTABLE_CHANGED'});
+  assert.throws(()=>userServicePlist({...f.spec,version:'999.0.0'}),{code:'SERVICE_VERSION'});
+  assert.throws(()=>userServicePlist({...f.spec,projectId:'other'}),{code:'CREDENTIAL_SCOPE'});
+  chmodSync(f.spec.tokenRef,0o644);assert.throws(()=>userServicePlist(f.spec),{code:'UNSAFE_STATE'});chmodSync(f.spec.tokenRef,0o600);
+  assert.notEqual(userServiceLabel(f.spec),userServiceLabel({...f.spec,root:f.root+'-other'}));
+ }finally{await f.cleanup();}
+});
+test('actual own launchd service survives transport exit, rejects duplicate writer and preserves receipts across stop/restart', {timeout:120000},async()=>{
+ const f=await fixture();try{
+  if(process.platform!=='darwin'){await assert.rejects(()=>startUserService(f.spec),{code:'SERVICE_PLATFORM'});return;}
+  await f.freePort();const first=await startUserService(f.spec);assert.equal(first.running,true);assert(first.pid);assert.equal(first.identity.workspaceId,f.spec.workspaceId);
+  const ref=join(f.root,'connection.json');writeFileSync(ref,JSON.stringify({schema:'runtime-host-connection/v1',origin:first.url,workspaceId:f.spec.workspaceId,projectId:'alpha',principalId:'host',serviceId:first.identity.serviceId,version:f.spec.version,tokenRef:f.spec.tokenRef}),{mode:0o600});
+  const client=createRuntimeHttpClient(ref),draft={operation:'lifecycle.draft.save',projectId:'alpha',input:{yaml:yaml(lifecycle())},requestId:'retained-draft',expectedRevision:0};const original=await client.request(draft);assert.equal(original.result.revision,1);
+  const repeated=await startUserService(f.spec);assert.equal(repeated.pid,first.pid);assert.equal(repeated.identity.serviceId,first.identity.serviceId);assert.equal((await observeUserService(f.spec)).identity.revision,1);
+  assert.throws(()=>new RuntimeStore(join(f.root,'data'),f.spec.workspaceId),{code:'WRITER_ACTIVE'});
+  await assert.rejects(()=>startUserService({...f.spec,port:f.spec.port===65535?65534:f.spec.port+1}),{code:'INSTALLATION_CHANGED'});
+  assert.equal((await stopUserService(f.spec)).registered,false);assert.equal((await stopUserService(f.spec)).registered,false);assert(existsSync(join(f.root,'data/service.sqlite')));assert(existsSync(join(f.root,'service-specification.json')));
+  const restarted=await startUserService(f.spec);assert.equal(restarted.identity.serviceId,first.identity.serviceId);assert.equal(restarted.identity.revision,1);const replay=await client.request(draft);assert.deepEqual(replay.result,original.result);assert.equal((await inspectUserService(f.spec)).pid,restarted.pid);
+ }finally{await f.cleanup();}
+});
+test('port conflict preserves foreign listener and retained failure, then recovers only the owned launchd item', {timeout:120000},async()=>{
+ const f=await fixture();try{
+  if(process.platform!=='darwin'){await assert.rejects(()=>startUserService(f.spec),{code:'SERVICE_PLATFORM'});return;}
+  await assert.rejects(()=>startUserService(f.spec),e=>['SERVICE_NOT_READY','SERVICE_IDENTITY_CONFLICT'].includes(e.code));assert.equal(await(await fetch('http://127.0.0.1:'+f.spec.port)).text(),'foreign port owner');
+  const log=readFileSync(join(f.root,'service.stdout.log'),'utf8');assert(log.includes('PORT_IN_USE'));assert(existsSync(join(f.root,'data/service.sqlite')));
+  await f.freePort();const recovered=await startUserService(f.spec);assert.equal(recovered.running,true);assert.equal(recovered.identity.workspaceId,f.spec.workspaceId);assert(readFileSync(join(f.root,'service.stdout.log'),'utf8').startsWith(log));
+ }finally{await f.cleanup();}
+});
+
+function distributionFixture(){
+ const root=mkdtempSync(join(realpathSync(tmpdir()),'runtime-distribution-')),source=join(root,'source');mkdirSync(source,{mode:0o700});
+ const content={'package.json':JSON.stringify({name:'@evopilot-next/runtime',version:'0.8.3'}),'dist/server/cli.js':'#!/usr/bin/env node\n// synthetic staged inventory; never executed\n','dist/host/header-helper.js':'// synthetic staged helper; never executed\n','plugins/codex/.codex-plugin/plugin.json':'{}\n','plugins/codex/mcp.template.json':'{}\n'},files={};
+ for(const [name,body] of Object.entries(content)){mkdirSync(dirname(join(source,name)),{recursive:true,mode:0o700});writeFileSync(join(source,name),body,{mode:0o644});files[name]={type:'file',sha256:createHash('sha256').update(body).digest('hex'),bytes:Buffer.byteLength(body),mode:0o644};}
+ const archiveRef=join(root,'synthetic-archive'),archive=Buffer.from('Explicit synthetic package inventory test, not a published release');writeFileSync(archiveRef,archive,{mode:0o600});
+ const manifest={schema:'runtime-standalone-distribution/v1',version:'0.8.3',archiveDigest:createHash('sha256').update(archive).digest('hex'),files},manifestRef=join(root,'manifest.json');
+ const putManifest=()=>{const bytes=JSON.stringify(manifest);writeFileSync(manifestRef,bytes,{mode:0o600});return createHash('sha256').update(bytes).digest('hex');};
+ const plan={schema:'runtime-install-plan/v1',root:join(root,'installed'),distribution:{packageRoot:source,manifestRef,manifestDigest:putManifest(),archiveRef,archiveDigest:manifest.archiveDigest},nodeExecutable:node,nodeSha256:nodeHash,workspaceId:'installer-test',projectId:'alpha',principalId:'reader',role:'reader',credentialExpiresAt:new Date(Date.now()+86400000).toISOString(),port:33331,integrationsRef:null,codex:null};
+ return{root,source,plan,manifest,putManifest,content,cleanup(){rmSync(root,{recursive:true,force:true});}};
+}
+test('operator stages exact distribution and least-authority credential without starting service or enabling a Host',async()=>{
+ const f=distributionFixture();try{
+  const first=await runInstaller(f.plan,'stage');assert.equal(first.phase,'STAGED');assert.equal(first.serviceStarted,false);assert.equal(first.hostRegistered,false);assert.equal(first.productAcceptance,'NOT_EVALUATED');
+  const auth=readFileSync(join(f.plan.root,'data/auth.json')),credential=readFileSync(join(f.plan.root,'client.json'));assert.deepEqual(JSON.parse(auth).principals[0].permissions,['read']);assert.equal(lstatSync(join(f.plan.root,'client.json')).mode&0o777,0o600);assert(!existsSync(join(f.plan.root,'service.plist')));assert(!existsSync(join(f.plan.root,'plugin')));
+  const second=await runInstaller(f.plan,'stage');assert.equal(second.phase,'STAGED');assert.notEqual(first.operation,second.operation);assert.deepEqual(readFileSync(join(f.plan.root,'data/auth.json')),auth);assert.deepEqual(readFileSync(join(f.plan.root,'client.json')),credential);
+  const logs=readdirSync(join(f.plan.root,'installation-audit')).map(n=>readFileSync(join(f.plan.root,'installation-audit',n),'utf8')).join('');assert(!logs.includes(JSON.parse(credential).token));
+  if(process.platform==='darwin'){const removed=await runInstaller(f.plan,'uninstall');assert.equal(removed.phase,'UNINSTALLED');assert.equal(removed.dataRetained,true);assert.deepEqual(readFileSync(join(f.plan.root,'data/auth.json')),auth);}
+ }finally{f.cleanup();}
+});
+test('failed archive or source digest never installs unchecked bytes; recovery retains original failure',async()=>{
+ const f=distributionFixture();try{
+  writeFileSync(join(f.source,'dist/server/cli.js'),'changed');await assert.rejects(()=>runInstaller(f.plan,'stage'),{code:'INSTALLATION_DISTRIBUTION'});assert(!existsSync(join(f.plan.root,'data/auth.json')));
+  const failures=readdirSync(join(f.plan.root,'installation-audit')).filter(n=>n.endsWith('-failure.json'));assert.equal(failures.length,1);
+  writeFileSync(join(f.source,'dist/server/cli.js'),f.content['dist/server/cli.js']);await runInstaller(f.plan,'stage');assert(existsSync(join(f.plan.root,'installation-audit',failures[0])));
+  writeFileSync(f.plan.distribution.archiveRef,'changed archive');await assert.rejects(()=>runInstaller(f.plan,'stage'),{code:'INSTALLATION_DIGEST'});
+ }finally{f.cleanup();}
+});
+test('installer preserves foreign directories, conflicting plans and changed installed files',async()=>{
+ const f=distributionFixture();try{
+  mkdirSync(f.plan.root,{mode:0o700});writeFileSync(join(f.plan.root,'foreign-record'),'retain',{mode:0o600});await assert.rejects(()=>runInstaller(f.plan,'stage'),{code:'INSTALLATION_NOT_OWNED'});assert.equal(readFileSync(join(f.plan.root,'foreign-record'),'utf8'),'retain');rmSync(join(f.plan.root,'foreign-record'));
+  await runInstaller(f.plan,'stage');const auth=readFileSync(join(f.plan.root,'data/auth.json'));
+  await assert.rejects(()=>runInstaller({...f.plan,role:'activator'},'stage'),{code:'INSTALLATION_CHANGED'});assert.deepEqual(readFileSync(join(f.plan.root,'data/auth.json')),auth);
+  writeFileSync(join(f.plan.root,'package/dist/server/cli.js'),'changed installed file');await assert.rejects(()=>runInstaller(f.plan,'stage'),{code:'INSTALLATION_DISTRIBUTION'});assert.equal(readFileSync(join(f.plan.root,'package/dist/server/cli.js'),'utf8'),'changed installed file');
+ }finally{f.cleanup();}
+});
+test('partial package recovery preserves credentials and serializes local installers',async()=>{
+ const f=distributionFixture();let lock;try{
+  await runInstaller(f.plan,'stage');const auth=readFileSync(join(f.plan.root,'data/auth.json'));rmSync(join(f.plan.root,'package/dist/host/header-helper.js'));await runInstaller(f.plan,'stage');assert.equal(readFileSync(join(f.plan.root,'package/dist/host/header-helper.js'),'utf8'),f.content['dist/host/header-helper.js']);assert.deepEqual(readFileSync(join(f.plan.root,'data/auth.json')),auth);
+  lock=new DatabaseSync(join(f.plan.root,'installer-lock.sqlite'));lock.exec('BEGIN EXCLUSIVE');await assert.rejects(()=>runInstaller(f.plan,'stage'),{code:'INSTALLER_ACTIVE'});lock.close();lock=null;
+  rmSync(join(f.plan.root,'client.json'));await assert.rejects(()=>runInstaller(f.plan,'stage'),{code:'INSTALLATION_CREDENTIAL'});assert.deepEqual(readFileSync(join(f.plan.root,'data/auth.json')),auth);
+ }finally{lock?.close();f.cleanup();}
+});
+test('distribution links cannot escape the selected package and symlink ancestors cannot redirect installation',async()=>{
+ const f=distributionFixture();try{
+  symlinkSync('../synthetic-archive',join(f.source,'outside'));f.manifest.files.outside={type:'symlink',target:'../synthetic-archive'};f.plan.distribution.manifestDigest=f.putManifest();await assert.rejects(()=>runInstaller(f.plan,'stage'),{code:'INSTALLATION_DISTRIBUTION'});
+  const alias=join(f.root,'alias');symlinkSync(f.source,alias);const other={...f.plan,root:join(f.root,'other'),distribution:{...f.plan.distribution,packageRoot:alias}};await assert.rejects(()=>runInstaller(other,'stage'),{code:'INSTALLATION_PATH'});
+ }finally{f.cleanup();}
+});
+test('operator installer CLI never accepts raw credentials or a shell command',async()=>{
+ let output='';assert.equal(await installerMain(['install','--token','raw-secret'],{write:v=>output+=v}),1);assert.equal(JSON.parse(output).error.code,'INSTALLER_ARGUMENT');assert(!output.includes('raw-secret'));
+ output='';assert.equal(await installerMain(['shell','--plan-ref','/invalid'],{write:v=>output+=v}),1);assert.equal(JSON.parse(output).error.code,'INSTALLER_ARGUMENT');
+});

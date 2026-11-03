@@ -1153,3 +1153,77 @@ sequential/parallel preparation, native input mismatch and full closure with
 downstream checks/reviews. Their synthetic providers and the separate read-only
 GitLab probe do not establish actual source-changing workflow qualification or
 final candidate acceptance.
+
+## Independent Expert and Host transport development
+
+The Runtime package includes one `evopilot-runtime` Codex plugin containing its
+Expert Skill and HTTP MCP configuration. The Skill resolves the selected project,
+guides the eight mandatory stages and completes configuration activation in the
+same conversation. Existing applicable authorization persists across follow-ups.
+The Skill cannot grant permissions or replace the service's checks. Ontology and
+Harness authoring remain at their existing owner entries.
+
+An operator-generated `runtime-host-connection/v1` fixes the loopback origin,
+workspace, project, principal, service identity, package version and protected
+credential reference. The HTTP helper reads that scoped credential directly for
+Codex; no token appears in the public plugin, URL, arguments or project YAML.
+Codex expects `http_headers_helper` to be a command string. Each fixed path and
+argument is independently shell-quoted, including paths with apostrophes or
+metacharacters. This configuration was loaded by the actual Codex plugin parser
+and used for a real read over HTTP in an isolated development probe.
+
+The stdio bridge forwards the same current `runtime_read` and `runtime_write`
+tools to the independent service. It opens no Runtime database, starts no service
+and grants no additional authority. Scope, CAS and original request IDs survive
+forwarding. Lost, malformed or incomplete write responses remain unknown and are
+not automatically retried. This transport test does **not** establish the full
+0.8.3 legacy tool mapping or owner transition; those remain separate E15 work.
+
+## Operator installer development
+
+`evopilot-runtime-install <command> --plan-ref <protected-file>` is a separate
+local operator executable. Commands are `stage`, `install`, `start`, `inspect`,
+`stop` and `uninstall`. It is not an HTTP/MCP operation and is not reachable from
+the Runtime execution dispatcher. Source guards preserve that boundary.
+
+The exact `runtime-install-plan/v1` binds a private installation directory,
+selected distribution and archive SHA256 values, a complete prepared-package
+inventory including locked production dependencies, Node identity, workspace,
+initial project and principal, explicit reader/editor/activator role, bounded
+credential expiration, port and optional existing integration reference. A
+`runtime-standalone-distribution/v1` manifest binds the original archive and all
+prepared regular files/internal links. These operator-supplied pins must come
+from the separately reviewed release material; matching hashes are not release
+authority. The installer checks and copies this prepared distribution; it does
+not download arbitrary dependencies or infer a trusted manifest from a directory.
+
+Installation retains its original plan, credentials, distribution inventory and
+append-only operation records. Exact local staging can resume missing package
+files; changed files, foreign directories, different plans and another active
+installer are rejected. Initial credentials grant only the explicit bootstrap
+role, never execution, decision or release authority. Existing credentials are
+not silently replaced. The installer does not migrate a 0.8.3 workspace.
+
+The macOS service uses its own deterministic user `launchd` label, fixed argv,
+private stdout/stderr and umask. It does not invoke a shell or kill another
+process by port. A repeated start checks the existing label, executable, argv,
+startup receipt and live identity. Stop removes that exact launchd item and
+confirms the original process has exited. The plist is kept under the private
+installation directory and explicitly bootstrapped; automatic login registration
+is not inferred. Uninstall retains user data, packages, credentials and audit.
+
+The optional exact Codex executable is digest/version checked. `install` uses
+Codex's supported marketplace/plugin commands for this one installation and
+reads back the installed identity; it reconciles an existing exact registration
+before a retry. With no Codex registration selected, the plugin is only staged.
+Both paths return `AWAITING_HOST_VERIFICATION`: file creation, registration and
+HTTP readiness alone do not prove a current chat loaded the plugin. Actual Host
+readback, isolated release-bundle installation, legacy migration and final
+candidate qualification remain required before installation acceptance.
+
+Development tests exercise actual own-label launchd start/stop/restart on macOS,
+duplicate-writer protection, port-conflict recovery with a foreign listener,
+retained draft receipts, staged-package corruption/recovery and scoped secrets.
+On non-macOS the launchd cases assert the explicit unsupported-platform guard;
+that result is not macOS process acceptance. These source and transport results
+do not mark any final 664-instance acceptance result as passed.

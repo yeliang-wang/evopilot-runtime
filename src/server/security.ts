@@ -82,3 +82,28 @@ export function authorize(principal: Principal, projectId: string, permission: P
   slug(projectId);
   if (Date.parse(principal.expiresAt) <= now || !principal.projects.includes(projectId) || !principal.permissions.includes(permission)) reject('FORBIDDEN', 'Current project permission is required', 403);
 }
+
+export interface HostConnection {
+  schema:'runtime-host-connection/v1';origin:string;workspaceId:string;projectId:string;
+  principalId:string;serviceId:string;version:string;tokenRef:string;
+}
+export function localOrigin(value:unknown):string{
+  let url:URL;try{url=new URL(string(value,2048));}catch{return reject('INVALID_URL','Use the exact loopback Runtime origin');}
+  if(url.protocol!=='http:'||!['127.0.0.1','localhost'].includes(url.hostname)||url.username||url.password||url.search||url.hash||url.pathname!=='/'||!url.port)reject('INVALID_URL','Use the exact loopback Runtime origin');
+  return url.origin;
+}
+function protectedPath(path:string):void{
+  if(!isAbsolute(path)||resolve(path)!==path||realpathSync(path)!==path)reject('UNSAFE_AUTH','Use a canonical protected local configuration file',503);
+}
+export function readHostConnection(path:string):HostConnection{
+  protectedPath(path);const v=record(readPrivateJson(path));exact(v,['schema','origin','workspaceId','projectId','principalId','serviceId','version','tokenRef']);
+  if(v.schema!=='runtime-host-connection/v1'||localOrigin(v.origin)!==v.origin)reject('INVALID_CONNECTION','Invalid Runtime Host connection');
+  slug(v.workspaceId);slug(v.projectId);slug(v.principalId);string(v.serviceId,128);string(v.version,128);protectedPath(string(v.tokenRef,4096));return v as unknown as HostConnection;
+}
+/** Credentials stay in their protected file. No token is part of the plugin
+ * manifest, a URL, an argument, project YAML, or a returned service identity. */
+export function hostHeaders(connection:HostConnection):{Authorization:string}{
+  protectedPath(connection.tokenRef);const c=record(readPrivateJson(connection.tokenRef));exact(c,['schema','workspaceId','principalId','projectId','token']);
+  if(c.schema!=='runtime-client-credential/v1'||c.workspaceId!==connection.workspaceId||c.projectId!==connection.projectId||c.principalId!==connection.principalId||! /^[A-Za-z0-9_-]{32,256}$/.test(string(c.token,256)))reject('CREDENTIAL_SCOPE','Runtime credential differs from the exact connection',403);
+  return{Authorization:'Bearer '+c.token};
+}

@@ -9,7 +9,7 @@
     "2025-11-25"
   ],
   "sdk": "@modelcontextprotocol/sdk@1.32.2",
-  "packageLockDigest": "0bc2d2598fe70271a93e870ad7d0a60745c97e80ba88cd7d290c85600eb9c312",
+  "packageLockDigest": "21e986ad476a741e537fce4f131fb827a23e3a33061ea20cb15f5fb4ca9edc7c",
   "platformBranches": [
     "github-actions",
     "gitlab-ci"
