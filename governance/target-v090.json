@@ -230,7 +230,17 @@
         "src/compat/project/project-navigation.ts",
         "src/compat/project/native-project.ts",
         "src/compat/project/ledger.ts",
-        "src/compat/project/campaign.ts"
+        "src/compat/project/campaign.ts",
+        "src/compat/provider-context.ts",
+        "src/compat/registered-providers.ts",
+        "src/compat/native-providers.ts",
+        "src/compat/collection/local.ts",
+        "src/compat/collection/worker.ts",
+        "src/compat/collection/types.ts",
+        "tests/e2e/legacy-collection-v090.test.mjs",
+        "tests/e2e/legacy-providers-v090.test.mjs",
+        "tests/fixtures/legacy-provider-v090.mjs",
+        "provenance/legacy-execution.json"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

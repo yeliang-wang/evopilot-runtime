@@ -1446,6 +1446,53 @@ remaining maintenance mapping, installer cutover and accurate-candidate Host
 qualification remain explicit M3/M5 work. Current transport tests and isolated
 published-owner consumption evidence do not close E15/N09 by themselves.
 
+### Registered original Runtime providers
+
+The compiled development `serve` command accepts an optional
+`--legacy-providers-ref <protected-json-file>` together with `--legacy-ref`.
+Without that explicit registration, original execution providers remain absent.
+The `runtime-legacy-providers/v1` file binds `workspaceId`, an exact `projects`
+allowlist, `legacyBindingRef`, canonical private `projectRoot`, `expiresAt`,
+both `owners.<ontology|harness>.packageRoot` values and the existing pinned
+`nativeToolchain` registration. Optional `collection` has exactly
+`kind: "node"`, the canonical current Node `executable` and its raw hexadecimal
+`sha256`. No request may register programs, modules or owner methods.
+
+This composition reuses the original Runtime project readers, fixed requirements
+and project verifier. Native Run execution resolves the exact published 0.8.3
+assets, validates them through the existing scoped owner consumer adapters and
+reads both original owner receipts. Deterministic owner request IDs, validation
+context, claim/input digests, standard pins and the original family revision
+remain unchanged. Reconciliation reads existing receipts; it does not validate
+again. New v2 content assessment reads remain separate from reconstruction.
+
+Provider callbacks receive an authenticated invocation context and a read-only
+view of the same managed Runtime. There is no ambient service principal, second
+Runtime handle or caller-supplied PASS. Reads reject another project and all
+write operations. Current principal revision/permission, operator registration,
+workspace identity and native-toolchain manifest are rechecked across awaits.
+Configuration changes require a deliberate reconnect, and grants still do not
+replace original collection/Run decisions or project completion review.
+
+The optional collector uses the original macOS isolation profile and durable
+request/process/result journal. It pins the reviewed source and registered Node
+bytes, denies writes outside the execution copy and permits only explicitly
+reviewed loopback networking. Existing host file-read access is retained; this
+is not a confidentiality sandbox for untrusted programs. Raw stdout/stderr and
+declared output digests remain protected evidence. Timeout, cancellation,
+changed pins and output limits cannot become success. Termination is requested
+once per owned process group so buffered output cannot trigger a second signal
+after exit and lose the final receipt. A failed signal is recorded as failure;
+an unresolved result remains UNKNOWN. Revocation requests cancellation through
+the same owned journal. An existing journal never authorizes another dispatch.
+
+Compiled CLI, migrated HTTP and local stdio development probes exercise actual
+published owner validation and isolated Node execution with explicitly synthetic
+source, assets and decisions. They grant no real-project or product acceptance.
+Installer registration, original feedback/response/online/reconstruction provider
+composition, complete maintenance mapping and exact-candidate E15 qualification
+remain separate unfinished work.
+
 ### Browser authentication and monitor transport development
 
 The two-page Dashboard uses the same independent service, store and definition

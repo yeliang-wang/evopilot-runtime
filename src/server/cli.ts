@@ -10,6 +10,7 @@ import { startRuntimeServer } from './http.js';
 import { openRegisteredBindings } from '../adapters/bindings.js';
 import { registeredAuthorityPolicy } from '../adapters/authority.js';
 import type {LegacyIntentSource} from '../compat/gateway.js';
+import {openRegisteredLegacyProviders} from '../compat/registered-providers.js';
 
 export async function serviceMain(argv: string[], output: { write(value: string): unknown } = process.stdout): Promise<number> {
   const print=(v:unknown)=>output.write(canonical(v)+'\n');
@@ -41,20 +42,23 @@ export async function serviceMain(argv: string[], output: { write(value: string)
       print({initialized:true,workspaceId,projectId,principalId:id,role:flags.role,tokenRef,executionAuthorized:false,releaseAuthorized:false});return 0;
     }
     if(command==='serve'){
-      exact(flags,['state-root','workspace-id'],['port','integrations-ref','legacy-ref']);
+      exact(flags,['state-root','workspace-id'],['port','integrations-ref','legacy-ref','legacy-providers-ref']);
+      if(flags['legacy-providers-ref']&&!flags['legacy-ref'])reject('LEGACY_PROVIDER_SCOPE','Original providers require an exact service migration binding');
       let legacyIntentSource:LegacyIntentSource|undefined;
       const managedIntent=flags['legacy-ref']?()=>{if(!legacyIntentSource)reject('RUNTIME_INTENT_STORE_MISSING','The managed Runtime intent source is not ready');return legacyIntentSource;}:undefined;
       const integrations=flags['integrations-ref']?await openRegisteredBindings(flags['integrations-ref'],flags['workspace-id'],managedIntent):undefined;
+      let legacyProviders:Awaited<ReturnType<typeof openRegisteredLegacyProviders>>|undefined;
       try{
+        if(flags['legacy-providers-ref'])legacyProviders=await openRegisteredLegacyProviders(flags['legacy-providers-ref'],flags['legacy-ref'],flags['workspace-id']);
         const policy=flags['integrations-ref']?registeredAuthorityPolicy(flags['integrations-ref'],flags['workspace-id']):undefined;
-        const server=await startRuntimeServer({stateRoot:flags['state-root'],workspaceId:flags['workspace-id'],port:flags.port===undefined?0:Number(flags.port),...(flags['legacy-ref']?{legacyBindingRef:flags['legacy-ref']}:{})},integrations?.provider,undefined,policy,integrations?.executor,integrations?.preparation,integrations?.implementationReview,integrations?.extensionReview);
+        const server=await startRuntimeServer({stateRoot:flags['state-root'],workspaceId:flags['workspace-id'],port:flags.port===undefined?0:Number(flags.port),...(flags['legacy-ref']?{legacyBindingRef:flags['legacy-ref']}:{})},integrations?.provider,undefined,policy,integrations?.executor,integrations?.preparation,integrations?.implementationReview,integrations?.extensionReview,legacyProviders?.bind);
         legacyIntentSource=server.legacyIntentSource;
         print({ready:true,url:server.url,...server.identity});
         await new Promise<void>(resolve=>{
           const stop=()=>{process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop);void server.close().then(resolve);};
           process.once('SIGINT',stop);process.once('SIGTERM',stop);
         });return 0;
-      }finally{integrations?.close();}
+      }finally{legacyProviders?.close();integrations?.close();}
     }
     if(command==='status'||command==='request'){
       exact(flags,command==='status'?['url','token-ref','project']:['url','token-ref','project','request-ref']);

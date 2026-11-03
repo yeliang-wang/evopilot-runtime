@@ -9,6 +9,7 @@ import { valueDigest } from '../lifecycle/base.js';
 import { nativeSha256, nativeStableSerialize, referenceForPackage, validateNativeReference, type NativePackage, type NativeReference, type NativeScope, type NativeToolchain } from '../../vendor/compatibility/v1/native.mjs';
 import { READINESS_STANDARD_DIGEST, validateReadinessIntent, verifyReadinessProjection, type ReadinessIntentRecord, type ReadinessProjection } from '../../vendor/compatibility/usability/v2/contract.mjs';
 import { validateFeedbackEvent, type FeedbackEvent } from '../../vendor/compatibility/feedback/v1/feedback.mjs';
+import {validateStandardPins,NATIVE_CONTRACT_DIGEST,type StandardPins,type NativeJSON} from '../../vendor/compatibility/v1/native.mjs';
 
 export type Owner = 'ontology'|'harness';
 const MANIFESTS = {
@@ -95,6 +96,21 @@ export interface PublishedOwnerAdapter {
   readPackage(actor:Principal,projectId:string,scope:NativeScope,reference:NativeReference):Promise<Record<string,unknown>>;
   mutate(actor:Principal,projectId:string,request:OwnerRequest,permit:OwnerMutationPermit):Promise<unknown>;
   close():void;
+}
+/** Fixed read-only public inspectors used by retained Runtime composition. */
+export async function openPublishedOwnerInspectors(owner:Owner,packageRoot:string){
+  verifyOwnerDistribution(owner,packageRoot);
+  const module=await import(pathToFileURL(join(packageRoot, 'dist/index.js')).href) as Record<string,unknown>;
+  const name=owner==='ontology'?'inspectOntologyStandard':'inspectHarnessStandard',inspect=module[name];
+  if(typeof inspect!=='function')reject('OWNER_CAPABILITY','Published standard inspector is missing');
+  const standard=record(inspect());validateStandardPins({standardDigest:standard.standardDigest,standardLockDigest:standard.standardLockDigest});
+  if(standard.contractDigest!==NATIVE_CONTRACT_DIGEST)reject('OWNER_CONTRACT','Published native contract differs');
+  const standardPins={standardDigest:standard.standardDigest,standardLockDigest:standard.standardLockDigest} as StandardPins;
+  return{standardPins,parameters(pkg:NativePackage):{parameters:Record<string,NativeJSON>;effectiveConfigDigest:string}{
+    verifyOwnerDistribution(owner,packageRoot);const fn=module.inspectHarnessPackage;
+    if(owner!=='harness'||typeof fn!=='function')reject('OWNER_CAPABILITY','Published Harness inspector is missing');
+    const value=record(fn(pkg));return{parameters:record(value.parameters) as Record<string,NativeJSON>,effectiveConfigDigest:string(value.effectiveConfigDigest,128)};
+  }};
 }
 export async function openPublishedOwner(configuration:OwnerConfiguration,toolchain?:NativeToolchain,ontology?:PublishedOwnerAdapter,readIntent?:OwnerIntentReader,readFeedback?:OwnerFeedbackReader):Promise<PublishedOwnerAdapter>{
   const config=JSON.parse(canonical(configuration)) as OwnerConfiguration;

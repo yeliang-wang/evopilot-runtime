@@ -1,0 +1,34 @@
+{
+  "schema": "runtime-legacy-execution-provenance/v1",
+  "sourceRepository": "https://github.com/yeliang-wang/evopilot",
+  "sourceCommit": "c24aace7a0e73e41323d3bbb044924070e1595f1",
+  "releaseBaseline": "0.8.3",
+  "license": "Apache-2.0",
+  "runtimeDependencyOnParent": false,
+  "sourceFiles": {
+    "src/compat/collection/local.ts": {
+      "sourcePath": "integration/collection/local.ts",
+      "sourceSha256": "499eae14054d2c1ba858bf2e70573892dc6a17ad44ce8d358fd6fe6d4f966674"
+    },
+    "src/compat/collection/worker.ts": {
+      "sourcePath": "integration/collection/worker.ts",
+      "sourceSha256": "1eb7de839526938ad555da946fe6fd777cc3d8b70829f76f88fe02e9b2488dec"
+    },
+    "src/compat/collection/types.ts": {
+      "sourcePath": "integration/collection/types.ts",
+      "sourceSha256": "a69a5708261fb9b3de19a98027a18ca9ec4f4fb0d28fa0db694c61401770d7de"
+    },
+    "tests/e2e/legacy-collection-v090.test.mjs": {
+      "sourcePath": "integration/e2e/native-collection.test.mjs",
+      "sourceSha256": "d14e2f1a23f7cfad1e92a8959f50d94ef4c8dc36fd867102dbf0504ec5c135f2"
+    },
+    "src/compat/native-providers.ts": {
+      "sourcePath": "integration/native-composition.ts",
+      "sourceSha256": "bcc986d8d2ce6dc61cc7a3b10af8c1cf5d465150fc729c353e64e1fd567d8941"
+    }
+  },
+  "adaptations": [
+    "Owned module/type imports, authenticated current invocation, published owner consumer adapters, protected operator registration and currentness checks.",
+    "Preserve original claim and receipt identities, fixed collection isolation and no redispatch."
+  ]
+}

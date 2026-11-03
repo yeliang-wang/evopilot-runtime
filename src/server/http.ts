@@ -18,13 +18,14 @@ import {createExtensionReviewService,EXTENSION_REVIEW_READS,EXTENSION_REVIEW_WRI
 import {createLegacyGateway,readLegacyBinding} from '../compat/gateway.js';
 import {LEGACY_READ,LEGACY_WRITE} from '../compat/catalog.js';
 import type {Providers as LegacyProviders} from '../service.js';
+import type {LegacyProviderFactory} from '../compat/provider-context.js';
 import {createBrowserSessions} from './browser-session.js';
 import {dashboardEnvelope,monitorEvents,monitorSnapshot} from './dashboard.js';
 import {serveDashboard} from './static-ui.js';
 
 const VERSION = String(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version);
 export interface ServerOptions { stateRoot: string; workspaceId: string; port?: number; legacyBindingRef?:string; }
-export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver, trustedPolicy?:AuthorityPolicyProvider, trustedExecutor?:StageAdapter|((store:RuntimeStore,services:StageServices)=>StageAdapter), trustedPreparation?:PreparationValidator, trustedImplementationReview?:ImplementationReviewBindings, trustedExtensionReview?:((store:RuntimeStore)=>ExtensionReviewBindings), trustedLegacyProviders?:LegacyProviders) {
+export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver, trustedPolicy?:AuthorityPolicyProvider, trustedExecutor?:StageAdapter|((store:RuntimeStore,services:StageServices)=>StageAdapter), trustedPreparation?:PreparationValidator, trustedImplementationReview?:ImplementationReviewBindings, trustedExtensionReview?:((store:RuntimeStore)=>ExtensionReviewBindings), trustedLegacyProviders?:LegacyProviders|LegacyProviderFactory) {
   const config = record(options); exact(config,['stateRoot','workspaceId'],['port','legacyBindingRef']);
   string(options.stateRoot,4096); slug(options.workspaceId);
   if(options.legacyBindingRef!==undefined)string(options.legacyBindingRef,4096);

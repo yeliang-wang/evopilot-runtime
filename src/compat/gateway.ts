@@ -8,6 +8,7 @@ import type {Providers,ReadinessIntentRecord,Scope} from '../service.js';
 import {createManagedLegacyService} from './managed-service.js';
 import type {ManagedLegacyBinding} from './managed-store.js';
 import {LEGACY_CATALOG,LEGACY_READ,LEGACY_WRITE,legacyOperation,type LegacyPermission} from './catalog.js';
+import type {LegacyProviderFactory,LegacyProviderContext} from './provider-context.js';
 
 export function readLegacyBinding(ref:string):ManagedLegacyBinding {
   string(ref,4096);if(!isAbsolute(ref)||resolve(ref)!==ref||realpathSync(ref)!==ref)reject('UNSAFE_LEGACY_BINDING','Use the canonical private legacy binding reference');
@@ -25,7 +26,7 @@ export interface LegacyIntentSource {
  * existing owner validators still check every domain input, decision and claim.
  * Providers are trusted process configuration, never request-supplied programs.
  * Owner authoring APIs are deliberately not routed through this server. */
-export function createLegacyGateway(store:RuntimeStore,binding:ManagedLegacyBinding,providers:Providers={}) {
+export function createLegacyGateway(store:RuntimeStore,binding:ManagedLegacyBinding,providers:Providers|LegacyProviderFactory={}) {
   if(binding.workspaceId!==store.workspaceId||binding.serviceId!==store.serviceId)reject('LEGACY_SERVICE_MISMATCH','Legacy adoption belongs to another service',409);
   const invocations=new AsyncLocalStorage<Invocation>();let initializing=true,closing=false;
   const guard=()=>{
@@ -34,8 +35,20 @@ export function createLegacyGateway(store:RuntimeStore,binding:ManagedLegacyBind
     const current=invocation.refresh();
     if(current.id!==invocation.actor.id||current.revision!==invocation.actor.revision)reject('AUTHORITY_CHANGED','Reauthenticate the original principal before further work',403);
     authorize(current,invocation.projectId,'read');authorize(current,invocation.projectId,invocation.permission);
+    return current;
   };
-  const legacy=createManagedLegacyService(binding,providers,guard);initializing=false;
+  let legacy:ReturnType<typeof createManagedLegacyService>;
+  const providerContext:LegacyProviderContext={
+    current(){const actor=guard(),invocation=invocations.getStore();if(!actor||!invocation)reject('LEGACY_CONTEXT_REQUIRED','Provider access requires an authenticated invocation',403);return{actor,projectId:invocation.projectId,permission:invocation.permission};},
+    async read(family,request){
+      const current=providerContext.current(),op=legacyOperation(family,request.operation);
+      if(!op||op.write||!['native','feedback','readiness','response','online','reconstruction'].includes(family))reject('LEGACY_PROVIDER_READ','Providers may only read original Runtime evidence',403);
+      if(request.scope.projectId!==current.projectId)reject('LEGACY_SCOPE','Provider evidence belongs to another project',403);
+      const result=await (legacy[family] as (input:unknown)=>Promise<unknown>)(request);providerContext.current();return result;
+    },
+  };
+  const resolved=typeof providers==='function'?providers(providerContext):providers;
+  legacy=createManagedLegacyService(binding,resolved,guard);initializing=false;
   const pending=new Set<Promise<unknown>>();
   function inspect(){return{schema:'runtime-legacy-gateway/v1',workspaceId:binding.workspaceId,serviceId:binding.serviceId,migrationDigest:binding.migrationDigest,revisionNamespace:'original-family',families:LEGACY_CATALOG,ownerAuthoring:false,softwareLifecycleAuthority:false};}
   async function invoke(actor:Principal,projectId:string,operation:string,input:Record<string,unknown>,requestId:string|undefined,expectedRevision:number|undefined,refresh:()=>Principal):Promise<unknown> {

@@ -15,6 +15,10 @@ file digests. Original project standard bytes remain unchanged under
 provenance/project-standard-v1. Runtime does not import or require the parent
 installation; owner validators remain in their published public packages.
 
+Original isolated Node collection and Runtime native provider composition are
+also migrated from EvoPilot 0.8.3; provenance/legacy-execution.json records their
+Apache-2.0 source attribution. Owner products remain independent dependencies.
+
 The public documentation layout draws inspiration from OpenHands:
 https://github.com/All-Hands-AI/OpenHands
 The documentation content is independently written for EvoPilot Runtime.
