@@ -1,0 +1,20 @@
+{
+  "schema": "runtime-owned-source-provenance/v1",
+  "sourceRepository": "EvoPilot",
+  "sourceRevision": "c24aace7a0e73e41323d3bbb044924070e1595f1",
+  "license": "Apache-2.0",
+  "files": [
+    {
+      "source": "integration/workspace/lock.ts",
+      "sha256": "44395ff8d42a6c039951e00023384e4fd9dbb9ca7a1e229fef1af03d1a1da43b",
+      "ownedPath": "src/compat/workspace-lease.ts"
+    }
+  ],
+  "adaptation": [
+    "Preserve original workspace coordination path and SQLite transaction identity.",
+    "Use Runtime-owned path helpers and scope; no parent configuration or daemon import.",
+    "Abort queued Host calls before dispatch; reopen and close exact published owner sessions only inside the lease.",
+    "Complete backup/restore/relocation and Host operational aliases remain separate integration work."
+  ],
+  "productAcceptance": "NOT_EVALUATED"
+}

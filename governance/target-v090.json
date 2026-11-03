@@ -274,7 +274,10 @@
         "provenance/native-toolchain/licenses/python-LICENSE",
         "provenance/native-toolchain/licenses/packaging-4-LICENSE",
         "provenance/native-toolchain/licenses/rdflib-0-LICENSE",
-        "provenance/native-toolchain/licenses/prettytable-0-LICENSE"
+        "provenance/native-toolchain/licenses/prettytable-0-LICENSE",
+        "src/compat/workspace-lease.ts",
+        "tests/e2e/workspace-lease-v090.test.mjs",
+        "provenance/legacy-maintenance.json"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

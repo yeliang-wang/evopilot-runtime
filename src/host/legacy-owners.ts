@@ -19,6 +19,8 @@ import type {ProjectOwnerValidation} from '../compat/project/native-project.js';
 import type {NativeProject} from '../native-types.js';
 import {forwardLegacyRuntime} from './legacy-tools.js';
 import {nativeBytesDigest,nativeSha256} from '../../vendor/compatibility/v1/native.mjs';
+import {randomUUID} from 'node:crypto';
+import {withWorkspaceLease} from '../compat/workspace-lease.js';
 
 export type LegacyOwnerEntry='request'|'native';
 interface Registration {packageRoot:string;calls:string[];}
@@ -67,7 +69,7 @@ export async function openLegacyOwnerRoutes(configRef:string,client:RuntimeHttpC
   const config=readLegacyOwnerHostConfiguration(configRef),original=canonical(config),binding=readLegacyBinding(config.legacyBindingRef),bindingBytes=canonical(binding);
   if(expectedDigest!==undefined&&digest(config)!==expectedDigest)reject('OWNER_HOST_CHANGED','Owner Host configuration differs from the installed permission selection',409);
   if(config.workspaceId!==client.connection.workspaceId||config.projectId!==client.connection.projectId||binding.workspaceId!==config.workspaceId||binding.serviceId!==client.connection.serviceId)reject('OWNER_HOST_SCOPE','Owner Host and Runtime connection must share the exact migrated workspace/service/project',403);
-  const services=new Map<Owner,OwnerService>(),capabilities=new Map<Owner,Record<string,unknown>>(),calls=new AsyncLocalStorage<Call>(),pending=new Set<Promise<unknown>>();let closing=false;
+  const services=new Map<Owner,OwnerService>(),factories=new Map<Owner,()=>OwnerService>(),capabilities=new Map<Owner,Record<string,unknown>>(),calls=new AsyncLocalStorage<Call>(),pending=new Set<Promise<unknown>>();let closing=false;
   let projectRoutes:ProjectHostRoutes|undefined;
   const validatorModules=new Map<Owner,Record<string,unknown>>();
   const currentToolchain=()=>config.nativeToolchain?readRegisteredNativeToolchain({schema:'runtime-integrations/v1',workspaceId:config.workspaceId,revision:1,platforms:[],credentials:[],owners:[],resources:[],nativeToolchain:config.nativeToolchain}):undefined;
@@ -96,6 +98,16 @@ export async function openLegacyOwnerRoutes(configRef:string,client:RuntimeHttpC
     const supported=cap?.[selected.catalog];if(!service||!Array.isArray(supported)||!supported.includes(operation)||typeof service[selected.method]!=='function')reject('OWNER_CAPABILITY','Selected published owner does not support this historical call',409);
     const value=await service[selected.method]!(envelope);fresh();context.signal?.throwIfAborted();return value;
   }
+  function closeServices():void {let failure:unknown;for(const service of services.values())try{service.close();}catch(error){failure??=error;}services.clear();if(failure)throw failure;}
+  async function scopedCall<T>(scope:Call['scope'],signal:AbortSignal|undefined,action:()=>Promise<T>|T):Promise<T>{
+    return withWorkspaceLease({workspaceRoot:binding.workspaceRoot,workspaceId:config.workspaceId},'host-'+randomUUID(),async()=>{
+      // A call queued behind maintenance must recheck the live service and
+      // configuration before opening owners or performing any project write.
+      await connected(signal);
+      try{for(const [owner,factory]of factories){const service=factory();services.set(owner,service);service.initialize();}return await calls.run({scope,signal},action);}
+      finally{closeServices();}
+    },signal);
+  }
   try{
     await connected();
     const toolchain=currentToolchain();
@@ -113,10 +125,13 @@ export async function openLegacyOwnerRoutes(configRef:string,client:RuntimeHttpC
       const factory=module[owner==='ontology'?'createOntologyService':'createHarnessService'];if(typeof factory!=='function')reject('OWNER_CAPABILITY','Published owner public factory is missing');
       const providers=createLegacyOwnerProviders({workspaceId:config.workspaceId,projectId:config.projectId,client,guard:()=>{fresh();const context=calls.getStore();if(!context)reject('OWNER_HOST_SCOPE','Provider access requires a current Host call',403);return context;},readOwner:(other,envelope)=>invoke(other,'native',envelope,true),...(config.project?{readWorkspaceEvidence:(request:Parameters<ProjectHostRoutes['readWorkspaceEvidence']>[0])=>{if(!projectRoutes)reject('OWNER_HOST_SCOPE','Current project preparation required');return projectRoutes.readWorkspaceEvidence(request);}}:{})},owner);
       const admission=config.project?{resolveNativeAuthoring:(request:Parameters<ProjectHostRoutes['providers']['resolveNativeAuthoring']>[0])=>{fresh();if(!calls.getStore()||!projectRoutes||canonical(request.scope)!==canonical(calls.getStore()!.scope))reject('OWNER_HOST_SCOPE','Current project preparation required');return projectRoutes.providers.resolveNativeAuthoring(request);},resolveReadinessAuthoring:(request:Parameters<ProjectHostRoutes['providers']['resolveReadinessAuthoring']>[0])=>{fresh();if(!calls.getStore()||!projectRoutes||canonical(request.scope)!==canonical(calls.getStore()!.scope))reject('OWNER_HOST_SCOPE','Current project preparation required');return projectRoutes.providers.resolveReadinessAuthoring(request);}}:{};
-      const service=(factory as (options:{workspaceRoot:string;workspaceId:string},providers:Record<string,unknown>)=>OwnerService)({workspaceRoot:binding.workspaceRoot,workspaceId:config.workspaceId},{...providers,...admission,...(toolchain?{nativeToolchain:toolchain}:{})});services.set(owner,service);
+      const make=()=>(factory as (options:{workspaceRoot:string;workspaceId:string},providers:Record<string,unknown>)=>OwnerService)({workspaceRoot:binding.workspaceRoot,workspaceId:config.workspaceId},{...providers,...admission,...(toolchain?{nativeToolchain:toolchain}:{})});factories.set(owner,make);
+      const service=make();services.set(owner,service);
       const cap=record(service.capabilities());if(cap.product!==owner||cap.version!==identity.version)reject('OWNER_CAPABILITY','Published owner API identity differs from its verified package');capabilities.set(owner,cap);
       for(const call of config.owners[owner].calls){const at=call.indexOf(':'),operation=call.slice(at+1),selected=route(owner,call.slice(0,at) as LegacyOwnerEntry,operation);if(!Array.isArray(cap[selected.catalog])||!(cap[selected.catalog] as unknown[]).includes(operation)||typeof service[selected.method]!=='function')reject('OWNER_CAPABILITY','A registered call is not supported by the selected published owner');}
-      service.initialize();
+      // Construction/capability discovery is pure in these exact published
+      // owners. Persist only inside a leased call and close before releasing it.
+      service.close();services.delete(owner);
     }
     if(config.project){
       const current=()=>{fresh();const call=calls.getStore();if(!call)reject('OWNER_HOST_SCOPE','Current scoped project helper required');call.signal?.throwIfAborted();for(const owner of ['ontology','harness'] as const)verifyOwnerDistribution(owner,config.owners[owner].packageRoot);};
@@ -130,7 +145,7 @@ export async function openLegacyOwnerRoutes(configRef:string,client:RuntimeHttpC
     }
     return{...(projectRoutes?{project:{calls:[...config.project!.calls],async call(family:'native'|'workspace',operation:string,value:unknown,requestId?:string,signal?:AbortSignal){
       fresh();const input=JSON.parse(canonicalEvidence(value)) as Record<string,unknown>,scope=family==='native'?guardScope(operation==='preflight'?record(input.project).scope:input.scope):guardScope({projectId:input.projectId,visibility:'private'});
-      const task=(async()=>{await connected(signal);return calls.run({scope,signal},()=>family==='native'?projectRoutes!.native(operation,input):projectRoutes!.workspace(operation,input,string(requestId,64)));})();pending.add(task);try{return await task;}catch(error){throw hostError(error);}finally{pending.delete(task);}
+      const task=scopedCall(scope,signal,()=>family==='native'?projectRoutes!.native(operation,input):projectRoutes!.workspace(operation,input,string(requestId,64)));pending.add(task);try{return await task;}catch(error){throw hostError(error);}finally{pending.delete(task);}
     }}}:{}),capabilities(){fresh();return{schema:'runtime-legacy-owner-host-capabilities/v1',workspaceId:config.workspaceId,projectId:config.projectId,owners:Object.fromEntries((['ontology','harness'] as const).map(owner=>[owner,{version:capabilities.get(owner)!.version,calls:[...config.owners[owner].calls]}])),projectCalls:config.project?.calls??[],transport:'local-published-owner-api',runtimeHttpAuthoring:false,semanticApproval:false,softwareRelease:false};},
       async call(owner,entry,value,signal){
         if(!['ontology','harness'].includes(owner)||!['request','native'].includes(entry))reject('OWNER_HOST_SCOPE','Unknown historical owner entry');
@@ -138,9 +153,9 @@ export async function openLegacyOwnerRoutes(configRef:string,client:RuntimeHttpC
         if(!config.owners[owner].calls.includes(entry+':'+operation))reject('OWNER_HOST_CALL_FORBIDDEN','This owner call is not included in the protected Host registration',403);
         if(Object.hasOwn(envelope,'requestId')!==Object.hasOwn(envelope,'expectedRevision'))reject('INVALID_FIELDS','Owner writes retain both original request ID and owner revision');
         if(Object.hasOwn(envelope,'requestId')){string(envelope.requestId,128);if(!Number.isSafeInteger(envelope.expectedRevision)||Number(envelope.expectedRevision)<0)reject('INVALID_REVISION','Owner revision must be an original nonnegative integer');}
-        const task=(async()=>{await connected(signal);return calls.run({scope,signal},()=>invoke(owner,entry,envelope));})();pending.add(task);
+        const task=scopedCall(scope,signal,()=>invoke(owner,entry,envelope));pending.add(task);
         try{return await task;}catch(error){throw hostError(error);}finally{pending.delete(task);}
-      },async close(){if(closing)return;closing=true;await Promise.allSettled([...pending]);for(const service of services.values())service.close();},
+      },async close(){if(closing)return;closing=true;await Promise.allSettled([...pending]);closeServices();},
     };
-  }catch(error){for(const service of services.values())service.close();throw error;}
+  }catch(error){closeServices();throw error;}
 }
