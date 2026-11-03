@@ -16,6 +16,7 @@ import {initializeCredentials,tokenDigest} from '../../dist/server/security.js';
 import {createRuntimeHttpClient,hostHeaders,readHostConnection,localOrigin} from '../../dist/host/client.js';
 import {runtimePluginMaterial,quoteHelperArgument} from '../../dist/host/plugin.js';
 import {lifecycle,yaml,syntheticBindings} from '../fixtures/lifecycle-v090.mjs';
+import {digest} from '../../dist/server/errors.js';
 
 const repo=realpathSync(fileURLToPath(new URL('../../',import.meta.url))),node=realpathSync(process.execPath),bridge=join(repo,'dist/host/bridge.js');
 async function fixture({reader=false}={}){
@@ -67,6 +68,25 @@ test('one Runtime plugin contains Expert and HTTP configuration without embeddin
   for(const bytes of material.files.values())assert(!bytes.toString().includes(f.token));
   const helper=mcp.mcpServers.evopilot_runtime.http_headers_helper,result=spawnSync('/bin/sh',['-c',helper],{encoding:'utf8',timeout:5000});assert.equal(result.status,0);assert.deepEqual(JSON.parse(result.stdout),{Authorization:'Bearer '+f.token});assert.equal(result.stderr,'');
   f.put(f.connectionRef,{...f.connection,version:'99.0.0'});assert.throws(()=>runtimePluginMaterial(repo,f.connectionRef,node),{code:'PLUGIN_VERSION_MISMATCH'});
+ }finally{await f.cleanup();}
+});
+test('optional packaged legacy entry retains one plugin, HTTP primary and no duplicate modern tools',async()=>{
+ const f=await fixture(),client=new Client({name:'synthetic-packaged-legacy-only',version:'1'});try{
+  const material=runtimePluginMaterial(repo,f.connectionRef,node,{}),mcp=JSON.parse(material.files.get('.mcp.json')),legacy=mcp.mcpServers.evopilot_runtime_legacy;
+  assert.deepEqual(Object.keys(mcp.mcpServers),['evopilot_runtime','evopilot_runtime_legacy']);assert.equal(mcp.mcpServers.evopilot_runtime.type,'http');assert.equal(legacy.command,node);assert.deepEqual(legacy.args,[bridge,'--connection-ref',f.connectionRef,'--legacy-only']);
+  await client.connect(new StdioClientTransport({...legacy,stderr:'pipe'}));assert.deepEqual((await client.listTools()).tools,[],'unbound service does not advertise legacy aliases');
+  const rejected=await client.callTool({name:'runtime_read',arguments:envelope('runtime.status')});assert.equal(rejected.isError,true);assert.equal(JSON.parse(rejected.content[0].text).error.code,'UNKNOWN_TOOL');assert.equal((await f.client.status()).result.revision,0);
+ }finally{await client.close();await f.cleanup();}
+});
+test('packaged owner routes pin exact permission config and migrated service without embedding secrets',async()=>{
+ const f=await fixture();try{
+  const ref=join(f.root,'owners.json'),legacyBindingRef=join(f.root,'legacy.json');
+  f.put(legacyBindingRef,{workspaceRoot:f.root,workspaceId:f.connection.workspaceId,serviceId:f.connection.serviceId,migrationDigest:'a'.repeat(64)});
+  const config={schema:'runtime-legacy-owner-host/v1',workspaceId:f.connection.workspaceId,projectId:'alpha',legacyBindingRef,expiresAt:'2030-01-01T00:00:00Z',owners:Object.fromEntries(['ontology','harness'].map(owner=>[owner,{packageRoot:join(f.root,owner),calls:['request:workspace.inspect']}]))};f.put(ref,config);
+  const selection={ownerConfigRef:ref,ownerConfigDigest:digest(config)},material=runtimePluginMaterial(repo,f.connectionRef,node,selection),mcp=JSON.parse(material.files.get('.mcp.json'));
+  assert.deepEqual(mcp.mcpServers.evopilot_runtime_legacy.args.slice(-4),['--owner-config-ref',ref,'--owner-config-digest',selection.ownerConfigDigest]);for(const bytes of material.files.values())assert(!bytes.toString().includes(f.token));
+  f.put(ref,{...config,expiresAt:'2031-01-01T00:00:00Z'});assert.throws(()=>runtimePluginMaterial(repo,f.connectionRef,node,selection),{code:'OWNER_HOST_CHANGED'});f.put(ref,config);
+  f.put(legacyBindingRef,{workspaceRoot:f.root,workspaceId:f.connection.workspaceId,serviceId:'another-service',migrationDigest:'a'.repeat(64)});assert.throws(()=>runtimePluginMaterial(repo,f.connectionRef,node,selection),{code:'OWNER_HOST_SCOPE'});
  }finally{await f.cleanup();}
 });
 test('helper command arguments preserve quotes and shell metacharacters as literal path bytes',()=>{

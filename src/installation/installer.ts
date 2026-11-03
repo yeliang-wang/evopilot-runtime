@@ -10,6 +10,7 @@ import {authenticate,ensurePrivateRoot,initializeCredentials,privateFile,readPri
 import {runtimePluginMaterial} from '../host/plugin.js';
 import {RuntimeStore} from '../server/store.js';
 import {readLegacyBinding} from '../compat/gateway.js';
+import {readLegacyOwnerHostConfiguration} from '../host/legacy-owners.js';
 import {adoptLegacyWorkspace,verifyLegacyBackup} from './migration.js';
 import {inspectUserService,observeUserService,startUserService,stopUserService,type UserServiceSpecification} from './service.js';
 
@@ -22,6 +23,7 @@ export interface RuntimeInstallPlan {
   role:'reader'|'editor'|'activator';credentialExpiresAt:string;port:number;integrationsRef:string|null;
   codex:{executable:string;sha256:string;version:string}|null;
   legacyMigration?:{workspaceRoot:string;expectedSnapshotDigest:string;backupRoot:string;expectedBackupDigest:string}|null;
+  legacyOwnerHost?:{ref:string;digest:string}|null;
 }
 export type InstallerCommand='stage'|'install'|'start'|'stop'|'inspect'|'uninstall';
 const ROLES:Record<RuntimeInstallPlan['role'],Permission[]>={reader:['read'],editor:['read','draft.write'],activator:['read','draft.write','definition.activate']};
@@ -74,7 +76,7 @@ function verifyDistribution(root:string,manifest:Distribution,allowMissing=false
   if(!allowMissing){const p=record(JSON.parse(readFileSync(join(root,'package.json'),'utf8')));if(p.name!=='@evopilot-next/runtime'||p.version!==manifest.version)reject('INSTALLATION_DISTRIBUTION','Installed package identity mismatch');}
 }
 function validatePlan(plan:RuntimeInstallPlan):void{
-  exact(record(plan),['schema','root','distribution','nodeExecutable','nodeSha256','workspaceId','projectId','principalId','role','credentialExpiresAt','port','integrationsRef','codex'],['legacyMigration']);
+  exact(record(plan),['schema','root','distribution','nodeExecutable','nodeSha256','workspaceId','projectId','principalId','role','credentialExpiresAt','port','integrationsRef','codex'],['legacyMigration','legacyOwnerHost']);
   if(plan.schema!=='runtime-install-plan/v1'||!Object.hasOwn(ROLES,plan.role)||!Number.isSafeInteger(plan.port)||plan.port<1024||plan.port>65535)reject('INSTALLATION_PLAN','Invalid installation parameters');
   absolute(plan.root);existing(plan.nodeExecutable);hash(plan.nodeSha256);slug(plan.workspaceId);slug(plan.projectId);slug(plan.principalId);
   if(!Number.isFinite(Date.parse(plan.credentialExpiresAt)))reject('INSTALLATION_PLAN','Choose an explicit credential expiration');
@@ -86,6 +88,7 @@ function validatePlan(plan:RuntimeInstallPlan):void{
     const roots=[plan.root,migration.workspaceRoot,migration.backupRoot];
     if(roots.some((a,i)=>roots.some((b,j)=>i!==j&&(a===b||a.startsWith(b+sep)))))reject('MIGRATION_BACKUP_PATH','Installation, original workspace and backup must be separate');
   }
+  if(plan.legacyOwnerHost!=null){exact(record(plan.legacyOwnerHost),['ref','digest']);absolute(plan.legacyOwnerHost.ref);hash(plan.legacyOwnerHost.digest);if(!plan.legacyMigration)reject('MIGRATION_REQUIRED','Owner compatibility requires explicit migrated Runtime selection');}
 }
 function selectedBackup(plan:RuntimeInstallPlan):void{
   const migration=plan.legacyMigration;if(!migration)return;
@@ -129,6 +132,7 @@ function bootstrap(plan:RuntimeInstallPlan):void{
 }
 function stage(plan:RuntimeInstallPlan):UserServiceSpecification{
   selectedBackup(plan);
+  if(plan.legacyOwnerHost){const selected=readLegacyOwnerHostConfiguration(plan.legacyOwnerHost.ref);if(digest(selected)!==plan.legacyOwnerHost.digest)reject('OWNER_HOST_CHANGED','Owner Host selection differs from this immutable installation plan',409);if(selected.workspaceId!==plan.workspaceId||selected.projectId!==plan.projectId||selected.legacyBindingRef!==join(plan.root,'legacy-binding.json'))reject('OWNER_HOST_SCOPE','Owner Host selection must bind this exact installation migration',403);}
   const manifest=readDistribution(plan),dest=join(plan.root,'package');
   if(!existsSync(dest))mkdirSync(dest,{mode:0o700});verifyDistribution(dest,manifest,true);
   const entries=Object.entries(manifest.files).sort((a,b)=>Number(a[1].type==='symlink')-Number(b[1].type==='symlink'));
@@ -171,7 +175,7 @@ async function registerPlugin(plan:RuntimeInstallPlan,version:string):Promise<vo
 }
 function preparePlugin(plan:RuntimeInstallPlan,spec:UserServiceSpecification,serviceId:string):void{
   const connectionRef=join(plan.root,'connection.json');exactFile(connectionRef,canonical({schema:'runtime-host-connection/v1',origin:'http://127.0.0.1:'+plan.port,workspaceId:plan.workspaceId,projectId:plan.projectId,principalId:plan.principalId,serviceId,version:spec.version,tokenRef:spec.tokenRef})+'\n');
-  const material=runtimePluginMaterial(spec.packageRoot,connectionRef,plan.nodeExecutable);
+  const material=runtimePluginMaterial(spec.packageRoot,connectionRef,plan.nodeExecutable,plan.legacyMigration?(plan.legacyOwnerHost?{ownerConfigRef:plan.legacyOwnerHost.ref,ownerConfigDigest:plan.legacyOwnerHost.digest}:{}):undefined);
   for(const [name,bytes] of material.files){const p=join(plan.root,'plugin',name);mkdirSync(dirname(p),{recursive:true,mode:0o700});exactFile(p,bytes);}
   const catalog=join(plan.root,'.agents/plugins/marketplace.json');mkdirSync(dirname(catalog),{recursive:true,mode:0o700});exactFile(catalog,canonical({name:marketplaceName(plan.root),plugins:[{name:'evopilot-runtime',source:{source:'local',path:'./plugin'},policy:{installation:'AVAILABLE',authentication:'ON_INSTALL'}}]})+'\n');
 }

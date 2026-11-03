@@ -18,6 +18,9 @@ import {createRuntimeService as historicalFixture} from '../fixtures/historical-
 import {createRuntimeService} from '../../dist/service.js';
 import {inspectLegacyWorkspace,createLegacyBackup,verifyLegacyBackup} from '../../dist/installation/migration.js';
 import {forwardLegacyRuntime} from '../../dist/host/legacy-tools.js';
+import {digest} from '../../dist/server/errors.js';
+import {Client} from '@modelcontextprotocol/sdk/client/index.js';
+import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
 
 const repo=realpathSync(fileURLToPath(new URL('../../',import.meta.url))),node=realpathSync(process.execPath),nodeHash=createHash('sha256').update(readFileSync(node)).digest('hex');
 async function fixture(){
@@ -154,6 +157,15 @@ test('changed source or an active new writer cannot be adopted by installer star
   const bytes=readFileSync(legacy.db);await assert.rejects(()=>runInstaller(f.plan,'start'),{code:'SNAPSHOT_DRIFT'});assert.deepEqual(readFileSync(legacy.db),bytes);assert.equal(legacy.schema(),1);assert(!existsSync(join(f.plan.root,'service.plist')));
  }finally{store?.close();f.cleanup();}
 });
+test('owner Host selection requires migration and its exact scope/digest before old state adoption',async()=>{
+ const f=distributionFixture();try{
+  const legacy=legacyFixture(f),ref=join(f.root,'owners.json'),config={schema:'runtime-legacy-owner-host/v1',workspaceId:f.plan.workspaceId,projectId:f.plan.projectId,legacyBindingRef:join(f.plan.root,'legacy-binding.json'),expiresAt:'2030-01-01T00:00:00Z',owners:Object.fromEntries(['ontology','harness'].map(owner=>[owner,{packageRoot:join(f.root,owner),calls:['request:workspace.inspect']}]))};writeFileSync(ref,JSON.stringify(config),{mode:0o600});f.plan.legacyOwnerHost={ref,digest:digest(config)};
+  const noMigration={...f.plan};delete noMigration.legacyMigration;await assert.rejects(()=>runInstaller(noMigration,'stage'),{code:'MIGRATION_REQUIRED'});
+  await runInstaller(f.plan,'stage');assert.equal(legacy.schema(),1);assert(!existsSync(config.legacyBindingRef));
+  writeFileSync(ref,JSON.stringify({...config,expiresAt:'2031-01-01T00:00:00Z'}));await assert.rejects(()=>runInstaller(f.plan,'stage'),{code:'OWNER_HOST_CHANGED'});assert.equal(legacy.schema(),1);
+  if(process.platform==='darwin')await runInstaller(f.plan,'stop');
+ }finally{f.cleanup();}
+});
 
 /** Actual compiled development service and locked production dependencies. The
  * synthetic archive anchor is explicitly not release/distribution acceptance. */
@@ -168,7 +180,7 @@ function developmentDistribution(){
 }
 test('actual installed service recovers committed adoption, preserves old receipts and restarts with one writer', {timeout:120000},async()=>{
  if(process.platform!=='darwin')return;
- const f=developmentDistribution();let spec;
+ const f=developmentDistribution();let spec,stdio;
  try{
   const legacy=legacyFixture(f);f.plan.role='editor';
   const socket=createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');f.plan.port=socket.address().port;await new Promise(r=>socket.close(r));
@@ -179,6 +191,9 @@ test('actual installed service recovers committed adoption, preserves old receip
   const receipt=readFileSync(join(f.plan.root,'legacy-adoption.json')),adopted=JSON.parse(receipt);assert.equal(adopted.authority,false);rmSync(spec.legacyRef);
   const first=await runInstaller(f.plan,'install');assert.equal(first.phase,'AWAITING_HOST_VERIFICATION');assert.equal(first.hostRegistered,null);assert.equal(first.hostVerification,'NOT_EVALUATED');assert.equal(first.service.identity.serviceId,adopted.binding.serviceId);assert.equal(first.service.identity.legacy.migrationDigest,adopted.binding.migrationDigest);assert.deepEqual(readFileSync(join(f.plan.root,'legacy-adoption.json')),receipt);
   assert(existsSync(join(f.plan.root,'plugin/.mcp.json')));assert.equal(verifyLegacyBackup(f.plan.legacyMigration.backupRoot,legacy.backup.backupDigest).backupDigest,legacy.backup.backupDigest);
+  const mcp=JSON.parse(readFileSync(join(f.plan.root,'plugin/.mcp.json'))),legacyTransport=mcp.mcpServers.evopilot_runtime_legacy;assert.equal(mcp.mcpServers.evopilot_runtime.type,'http');assert(legacyTransport.args.includes('--legacy-only'));
+  stdio=new Client({name:'synthetic-installed-legacy-entry',version:'1'});await stdio.connect(new StdioClientTransport({...legacyTransport,stderr:'pipe'}));const tools=(await stdio.listTools()).tools;assert.equal(tools.length,8);assert(!tools.some(tool=>tool.name==='runtime_read'||tool.name==='runtime_write'));
+  await stdio.callTool({name:'evopilot_v01_activate',arguments:{}});const viaInstalled=await stdio.callTool({name:'evopilot_v01_request',arguments:{owner:'runtime',envelope:{operation:'receipt.inspect',scope:legacy.scope,input:{requestId:'original-project'}}}});assert.deepEqual(JSON.parse(viaInstalled.content[0].text).result,legacy.original);await stdio.close();stdio=null;
   const client=createRuntimeHttpClient(join(f.plan.root,'connection.json'));
   const original=await forwardLegacyRuntime(client,'request',{operation:'receipt.inspect',scope:legacy.scope,input:{requestId:'original-project'}});assert.deepEqual(original.result,legacy.original);
   const newer=await forwardLegacyRuntime(client,'request',{operation:'goal.create',scope:legacy.scope,input:{id:'new-goal',description:'Retain post-adoption data'},requestId:'new-goal',expectedRevision:1});assert.equal(newer.result.revision,2);
@@ -193,5 +208,5 @@ test('actual installed service recovers committed adoption, preserves old receip
   await runInstaller(f.plan,'stop');writeFileSync(spec.legacyRef,binding);
   const removed=await runInstaller(f.plan,'uninstall');assert.equal(removed.phase,'UNINSTALLED');assert.equal(legacy.schema(),9);assert.deepEqual(readFileSync(join(f.plan.root,'legacy-adoption.json')),receipt);assert.equal(verifyLegacyBackup(f.plan.legacyMigration.backupRoot,legacy.backup.backupDigest).backupDigest,legacy.backup.backupDigest);
   const failures=readdirSync(join(f.plan.root,'installation-audit')).filter(n=>n.endsWith('-failure.json'));assert.equal(failures.length,2);assert.deepEqual(failures.map(n=>JSON.parse(readFileSync(join(f.plan.root,'installation-audit',n))).code).sort(),['INSTALLATION_CHANGED','MIGRATION_BINDING_CHANGED']);
- }finally{if(spec)await stopUserService(spec);f.cleanup();}
+ }finally{await stdio?.close();if(spec)await stopUserService(spec);f.cleanup();}
 });

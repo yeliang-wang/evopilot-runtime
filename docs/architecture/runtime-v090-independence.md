@@ -1231,6 +1231,18 @@ Host entry transition. These additional delivery obligations are not certified
 by this installation result. Stop/uninstall never downgrade or restore legacy
 data and retain both the migration receipt and original backup.
 
+A migrated installation adds a fixed `evopilot_runtime_legacy` stdio entry to the
+same plugin beside its primary HTTP entry. This bridge uses `--legacy-only`:
+it advertises original aliases, not another `runtime_read`/`runtime_write` pair.
+An optional `legacyOwnerHost: {ref, digest}` in the immutable installation plan
+selects the protected historical owner registration. Its digest is SHA256 of
+canonical JSON. Stage verifies the exact project/workspace and this installation's
+future `legacy-binding.json` path before adoption. The generated plugin passes
+the same configuration digest to the bridge, so even a new Host process rejects
+changed permission selections. No owner selector is enabled merely by migrating
+Runtime. An expired or changed owner selection cannot prevent stopping the owned
+service. Preparing these files is not current-chat or final installation acceptance.
+
 The macOS service uses its own deterministic user `launchd` label, fixed argv,
 private stdout/stderr and umask. It does not invoke a shell or kill another
 process by port. A repeated start checks the existing label, executable, argv,
@@ -1339,6 +1351,9 @@ owner. Optional `nativeToolchain` uses the existing pinned validator registratio
 No wildcard, arbitrary import path or owner method name is accepted. Owner stores
 must already exist and match the original workspace identity. The registration
 selects allowed Host calls; it is not semantic approval or publication authority.
+`--owner-config-digest` optionally pins this selection for manual bridge startup
+and is mandatory in installer-generated owner entries. Capability output lists
+the selected public routes, not proof that every required provider is ready.
 
 These calls execute through the published owner public API in the Host process,
 outside Runtime's HTTP operation dispatcher. Each owner retains its own input

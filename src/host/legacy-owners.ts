@@ -6,7 +6,7 @@ import {AsyncLocalStorage} from 'node:async_hooks';
 import {lstatSync,realpathSync} from 'node:fs';
 import {isAbsolute,join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {canonical,canonicalEvidence,exact,record,reject,ServiceError,slug,string} from '../server/errors.js';
+import {canonical,canonicalEvidence,digest,exact,record,reject,ServiceError,slug,string} from '../server/errors.js';
 import {readPrivateJson} from '../server/security.js';
 import {readLegacyBinding} from '../compat/gateway.js';
 import {verifyOwnerDistribution,type Owner} from '../adapters/published-owners.js';
@@ -36,7 +36,7 @@ export interface LegacyOwnerRoutes {
   call(owner:Owner,entry:LegacyOwnerEntry,envelope:unknown,signal?:AbortSignal):Promise<unknown>;
   close():Promise<void>;
 }
-function configuration(ref:string):Configuration {
+export function readLegacyOwnerHostConfiguration(ref:string):Configuration {
   string(ref,4096);if(!isAbsolute(ref)||resolve(ref)!==ref||realpathSync(ref)!==ref)reject('OWNER_HOST_CONFIGURATION','Use an exact protected owner Host configuration');
   const value=record(readPrivateJson(ref));exact(value,['schema','workspaceId','projectId','legacyBindingRef','expiresAt','owners'],['nativeToolchain']);
   if(value.schema!=='runtime-legacy-owner-host/v1')reject('OWNER_HOST_CONFIGURATION','Unsupported owner Host configuration');
@@ -54,13 +54,14 @@ function route(owner:Owner,entry:LegacyOwnerEntry,operation:string):{method:Meth
   const prefixes:Record<string,{method:Method;catalog:string}>={readiness:{method:'readiness',catalog:'readinessOperations'},readable:{method:'readable',catalog:'readableOperations'},feedback:{method:'feedback',catalog:'feedbackOperations'},response:{method:'response',catalog:'responseOperations'},online:{method:'online',catalog:'onlineOperations'},usability:{method:'usability',catalog:'usabilityOperations'}};
   return prefixes[operation.split('.')[0]]??{method:'native',catalog:'nativeOperations'};
 }
-export async function openLegacyOwnerRoutes(configRef:string,client:RuntimeHttpClient):Promise<LegacyOwnerRoutes>{
-  const config=configuration(configRef),original=canonical(config),binding=readLegacyBinding(config.legacyBindingRef),bindingBytes=canonical(binding);
+export async function openLegacyOwnerRoutes(configRef:string,client:RuntimeHttpClient,expectedDigest?:string):Promise<LegacyOwnerRoutes>{
+  const config=readLegacyOwnerHostConfiguration(configRef),original=canonical(config),binding=readLegacyBinding(config.legacyBindingRef),bindingBytes=canonical(binding);
+  if(expectedDigest!==undefined&&digest(config)!==expectedDigest)reject('OWNER_HOST_CHANGED','Owner Host configuration differs from the installed permission selection',409);
   if(config.workspaceId!==client.connection.workspaceId||config.projectId!==client.connection.projectId||binding.workspaceId!==config.workspaceId||binding.serviceId!==client.connection.serviceId)reject('OWNER_HOST_SCOPE','Owner Host and Runtime connection must share the exact migrated workspace/service/project',403);
   const services=new Map<Owner,OwnerService>(),capabilities=new Map<Owner,Record<string,unknown>>(),calls=new AsyncLocalStorage<Call>(),pending=new Set<Promise<unknown>>();let closing=false;
   function fresh():void {
     if(closing)reject('CLOSED','Owner Host compatibility is closing',503);
-    if(canonical(configuration(configRef))!==original||canonical(readLegacyBinding(config.legacyBindingRef))!==bindingBytes)reject('OWNER_HOST_CHANGED','Reconnect after an explicit owner Host binding change',409);
+    if(canonical(readLegacyOwnerHostConfiguration(configRef))!==original||canonical(readLegacyBinding(config.legacyBindingRef))!==bindingBytes)reject('OWNER_HOST_CHANGED','Reconnect after an explicit owner Host binding change',409);
   }
   async function connected(signal?:AbortSignal):Promise<void>{
     fresh();const identity=record((await client.status(signal)).result),legacy=record(identity.legacy);
