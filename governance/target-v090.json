@@ -277,7 +277,11 @@
         "provenance/native-toolchain/licenses/prettytable-0-LICENSE",
         "src/compat/workspace-lease.ts",
         "tests/e2e/workspace-lease-v090.test.mjs",
-        "provenance/legacy-maintenance.json"
+        "provenance/legacy-maintenance.json",
+        "src/installation/workspace/stream.ts",
+        "src/installation/workspace/snapshot.ts",
+        "src/installation/workspace/backup.ts",
+        "tests/e2e/workspace-backup-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",
