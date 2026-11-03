@@ -288,7 +288,9 @@
         "src/workspace-migration.ts",
         "src/compat/table-inventory.ts",
         "tests/e2e/managed-relocation-v090.test.mjs",
-        "docs/service.md"
+        "docs/service.md",
+        "src/installation/workspace/configuration.ts",
+        "tests/e2e/relocation-configuration-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

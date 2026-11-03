@@ -14,6 +14,7 @@ export interface HistoricalBinding { workspace: WorkspaceIdentity; digest: strin
 export interface RelocationRecord {
   schema: 'evopilot-workspace-relocation/v1'; product: string; from: WorkspaceIdentity; to: WorkspaceIdentity;
   sourceSnapshotDigest: string; historyRevision: number; receiptsDigest: string; auditDigest: string;
+  nativeAuditDigest?:string;
   bindings: HistoricalBinding[]; previousDigest: string | null; hostDigest: string; keyId: string; at: string;
   recordDigest: string; signature: string;
 }
@@ -101,10 +102,15 @@ function hostDigests(): string[] {
 }
 const hostDigest = (): string => hostDigests()[0]!;
 function hasLineage(db: DatabaseSync): boolean { return !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='workspace_relocations'").get(); }
-function prefix(db: DatabaseSync, revision: number) {
+function prefix(db: DatabaseSync, revision: number, product: string) {
   const receipts = db.prepare('SELECT scope,request_id,digest,receipt FROM receipts WHERE CAST(json_extract(receipt,\'$.revision\') AS INTEGER)<=? ORDER BY scope,request_id').all(revision);
   const audit = db.prepare('SELECT revision,uid,operation,request_digest,result_digest FROM audit WHERE revision<=? ORDER BY revision').all(revision);
-  return { receiptsDigest: hash(receipts), auditDigest: hash(audit) };
+  // Physical preservation of published 0.8.3 owner records uses their original
+  // signed format. Ontology mirrors native receipts in its legacy table but
+  // signs those in native_audit separately. Runtime's own prefix is unchanged.
+  const legacy=product==='ontology'?receipts.filter(row=>!String((JSON.parse(String(row.receipt)) as {operation:unknown}).operation).startsWith('native.')):receipts;
+  const native=(product==='ontology'||product==='harness')&&db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='native_audit'").get()?db.prepare('SELECT revision,scope,request_id,receipt FROM native_audit WHERE revision<=? ORDER BY revision').all(revision):[];
+  return { receiptsDigest: hash(legacy), auditDigest: hash(audit),...(native.length?{nativeAuditDigest:hash(native)}:{}) };
 }
 export function readRelocations(db: DatabaseSync, identity: WorkspaceIdentity, product: string): RelocationRecord[] {
   if (!hasLineage(db)) return [];
@@ -121,8 +127,8 @@ export function readRelocations(db: DatabaseSync, identity: WorkspaceIdentity, p
     for (const location of [record.from, record.to]) if (location.schema !== identity.schema || location.id !== identity.id || location.ownerUid !== identity.ownerUid || !isAbsolute(location.canonicalRoot) || resolve(location.canonicalRoot) !== location.canonicalRoot) migrationFail('INVALID_LINEAGE', 'Relocation scope differs');
     const previous = records.at(-1);
     if (record.previousDigest !== (previous?.recordDigest ?? null) || (previous && stableSerialize(record.from) !== stableSerialize(previous.to)) || stableSerialize(record.from) === stableSerialize(record.to)) migrationFail('INVALID_LINEAGE', 'Relocation chain differs');
-    const saved = prefix(db, record.historyRevision);
-    if (saved.receiptsDigest !== record.receiptsDigest || saved.auditDigest !== record.auditDigest) migrationFail('INVALID_LINEAGE', 'Historical receipts or audit changed');
+    const saved = prefix(db, record.historyRevision, product);
+    if (saved.receiptsDigest !== record.receiptsDigest || saved.auditDigest !== record.auditDigest || (product==='ontology'||product==='harness')&&saved.nativeAuditDigest!==record.nativeAuditDigest) migrationFail('INVALID_LINEAGE', 'Historical receipts or audit changed');
     for (const binding of record.bindings) if (binding.workspace.id !== identity.id || binding.workspace.ownerUid !== identity.ownerUid || !/^sha256:[a-f0-9]{64}$/.test(binding.digest)) migrationFail('INVALID_LINEAGE', 'Historical binding differs');
     records.push(record);
   }

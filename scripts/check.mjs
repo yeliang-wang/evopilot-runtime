@@ -185,8 +185,13 @@ export async function checkSource() {
   for (const path of sources) {
     if (!path.endsWith('.mjs') && !path.endsWith('.ts') && !path.endsWith('.mts')) continue;
     const source = await readFile(path, 'utf8');
-    if(!path.includes('/src/installation/'))assert.doesNotMatch(source,/from\s+['"][^'"]*installation\/(?:installer|service|migration)\.js['"]/,'Operator installation must not be reachable from Runtime service code');
-    if(!path.includes('/src/host/')&&!path.endsWith('/src/installation/installer.ts'))assert.doesNotMatch(source,/from\s+['"][^'"]*host\/(?:legacy-owner(?:s|-providers)\.js|project\/[^'"]+)['"]/,'Historical owner/project Host delegation must not be reachable from Runtime HTTP consumers');
+    if(!path.includes('/src/installation/'))assert.doesNotMatch(source,/from\s+['"][^'"]*installation\/[^'"]+['"]/,'Operator installation must not be reachable from Runtime service code');
+    const operatorHostReader=path.endsWith('/src/installation/installer.ts')||path.endsWith('/src/installation/workspace/configuration.ts');
+    if(path.endsWith('/src/installation/workspace/configuration.ts')){
+      assert.match(source,/import\s*\{readLegacyOwnerHostConfiguration\}\s*from\s*['"]\.\.\/\.\.\/host\/legacy-owners\.js['"]/);
+      assert.doesNotMatch(source,/\b(?:openLegacyOwnerRoutes|createLegacyOwnerProviders|createProjectHostRoutes)\b/,'Relocation assembly may inspect protected Host configuration, not invoke Host work');
+    }
+    if(!path.includes('/src/host/')&&!operatorHostReader)assert.doesNotMatch(source,/from\s+['"][^'"]*host\/(?:legacy-owner(?:s|-providers)\.js|project\/[^'"]+)['"]/,'Historical owner/project Host delegation must not be reachable from Runtime HTTP consumers');
     if (path.endsWith('.mjs')) {
     const syntax = spawnSync(process.execPath, ['--check', path], { encoding: 'utf8' });
     assert.ifError(syntax.error); assert.equal(syntax.status, 0, syntax.stderr);

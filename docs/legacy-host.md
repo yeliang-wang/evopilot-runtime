@@ -108,6 +108,13 @@ The Host maintenance aliases and complete location migration still require their
 integration and acceptance. Neither this documentation nor source tests mark
 the complete legacy maintenance path or final product acceptance passed.
 
+Physical preservation checks retain each published owner's signed audit format:
+Ontology's mirrored native receipt rows are covered by its separate native audit
+digest, while Harness also binds that native audit alongside its legacy ledger.
+Runtime's original ledger format stays unchanged. The operator checks these on
+private copies, including signatures, retained keys and the complete table
+inventory; it does not reinterpret owner business outcomes or rewrite records.
+
 The Runtime relocation core now preserves adopted schema-9 state using the
 existing signed same-host lineage. All business tables, their schema and the
 original adoption seal are included in the snapshot. A managed move returns a
@@ -116,6 +123,24 @@ Plain directory copies, stale bindings, changed destination records and missing
 lineage keys are rejected. Service configuration cutover and the Host migration
 entry are separate remaining integration work; this core never starts a service
 or redispatches work.
+
+The operator configuration assembler can prepare the new service, connection,
+scoped provider/owner Host registrations, plugin and launchd material after the
+exact copied workspace has acquired its signed location binding. Assembly is
+read-only: the caller must hold maintenance leases, retain a durable request and
+apply the reviewed bytes before explicit startup. It preserves service identity,
+ports, principals, permission selections, expiry, credentials, resource
+definitions, immutable adoption and original installation history. Only declared
+operational paths move; arbitrary strings inside definitions and old claims do
+not. Published owner packages, native toolchain dependencies and other external
+references remain required at their retained locations unless explicitly copied.
+
+The prepared material contains hashes and configuration bytes with credential
+references. It contains no client or platform token values and cannot renew
+authority or register Codex. Changed copied credentials, service state, package
+files or original Host permissions are rejected. Prepared bytes do not make old
+execution claims current or authorize restarting them. The complete journaled
+operator apply/recovery path and Host maintenance aliases still need integration.
 
 ## 中文说明
 
@@ -153,3 +178,9 @@ Runtime 搬迁核心已支持由独立服务接管的 schema-9 数据库：快�
 表结构和原接管记录，新位置通过既有本机签名链取得新绑定。原接管记录及历史
 请求、claim、回执保持不变。普通复制、旧绑定、目标数据变化或缺失密钥均不能
 通过。完整服务配置切换和 Host 搬迁入口仍须集成；搬迁核心不会启动服务或重跑业务。
+
+配置准备器可为已有签名搬迁绑定生成新服务、连接、provider、Host、插件和 launchd
+配置。它只读，不写入配置、不启动服务、不注册 Codex。账号、权限、有效期、凭据、
+服务身份、资源定义和原安装记录保持不变，只调整声明的运行路径；历史 claim 中的
+路径不改写。材料只含凭据引用及摘要，不含密钥，也不延长授权。最终写入仍需接入
+持锁、有持久化请求及中断恢复的完整运维流程。

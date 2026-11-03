@@ -49,6 +49,11 @@ function selectedProviders(spec:UserServiceSpecification):void{
 }
 export function userServicePlist(spec:UserServiceSpecification):string{
   validate(spec);
+  return renderUserServicePlist(spec);
+}
+/** Pure material renderer for an operator-validated configuration transition.
+ * It grants no startup authority; every live service entry still validates. */
+export function renderUserServicePlist(spec:UserServiceSpecification):string{
   return'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n'+
     '<key>Label</key><string>'+xml(userServiceLabel(spec))+'</string>\n<key>ProgramArguments</key><array>'+args(spec).map(v=>'<string>'+xml(v)+'</string>').join('')+'</array>\n'+
     '<key>WorkingDirectory</key><string>'+xml(spec.packageRoot)+'</string>\n<key>RunAtLoad</key><true/>\n<key>KeepAlive</key><false/>\n<key>Umask</key><integer>63</integer>\n'+

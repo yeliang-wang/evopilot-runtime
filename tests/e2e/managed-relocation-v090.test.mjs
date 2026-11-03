@@ -5,11 +5,13 @@ import fs from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {DatabaseSync} from 'node:sqlite';
+import {createHmac} from 'node:crypto';
 import {workspaceMaintenanceFixture as fixture} from '../fixtures/workspace-maintenance-v090.mjs';
 import {inspectWorkspaceSnapshot,relocateWorkspaceSnapshot} from '../../dist/workspace-migration.js';
 import {acquireManagedLegacyContext,migrationSeal,resolvedManagedBinding} from '../../dist/compat/managed-store.js';
 import {inspectAllTables} from '../../dist/compat/table-inventory.js';
-import {inspectRecords,keyDirectory,readIdentity} from '../../dist/location-lineage.js';
+import {inspectRecords,keyDirectory,readIdentity,readRelocations,appendRelocation,hash} from '../../dist/location-lineage.js';
+import {stableSerialize} from '../../vendor/compatibility/v1/reference.mjs';
 import {createRuntimeService} from '../../dist/service.js';
 import {createRuntimeService as historicalFixture} from '../fixtures/historical-runtime-v020.mjs';
 import {createManagedLegacyService} from '../../dist/compat/managed-service.js';
@@ -116,4 +118,22 @@ test('an original UNKNOWN claim and dispatch receipt survive managed relocation 
   const moved=relocate(t,binding,join(root,'relocated'));assert(moved.result.snapshot.unresolved.some(v=>v.id==='original-run'&&v.status==='UNKNOWN'&&v.nextAction==='RECONCILE_OR_CANCEL'));
   const service=createManagedLegacyService(moved.result.managedBinding,{execute:()=>{executions++;throw new Error('Relocation cannot execute work');}});
   try{assert.deepEqual(read(service,'run.inspect',{id:'original-run'}),retained);assert.deepEqual(read(service,'receipt.inspect',{requestId:'original-dispatch'}),receipt);assert.equal(executions,1);}finally{service.close();}
+});
+
+for(const owner of ['ontology','harness'])test('physical preservation verifies the published '+owner+' receipt prefix and its separately signed native audit',t=>{
+ const db=new DatabaseSync(':memory:');t.after(()=>db.close());
+ db.exec('CREATE TABLE receipts(scope TEXT,request_id TEXT,digest TEXT,receipt TEXT); CREATE TABLE audit(revision INTEGER,uid INTEGER,operation TEXT,request_digest TEXT,result_digest TEXT); CREATE TABLE native_audit(revision INTEGER,scope TEXT,request_id TEXT,receipt TEXT);');
+ db.prepare('INSERT INTO receipts VALUES(?,?,?,?)').run('synthetic','legacy',hash('legacy'),JSON.stringify({revision:1,operation:'project.create'}));
+ db.prepare('INSERT INTO receipts VALUES(?,?,?,?)').run('synthetic','native',hash('native'),JSON.stringify({revision:2,operation:'native.asset.publish'}));
+ db.prepare('INSERT INTO audit VALUES(?,?,?,?,?)').run(1,process.getuid(),'project.create',hash('request'),hash('result'));
+ db.prepare('INSERT INTO native_audit VALUES(?,?,?,?)').run(2,'synthetic','native',JSON.stringify({synthetic:true,revision:2}));
+ const receipts=db.prepare('SELECT scope,request_id,digest,receipt FROM receipts ORDER BY scope,request_id').all(),audit=db.prepare('SELECT revision,uid,operation,request_digest,result_digest FROM audit ORDER BY revision').all(),native=db.prepare('SELECT revision,scope,request_id,receipt FROM native_audit ORDER BY revision').all();
+ const from={schema:'evopilot-workspace/v1',id:'synthetic',canonicalRoot:'/synthetic-before',ownerUid:process.getuid()},to={...from,canonicalRoot:'/synthetic-after'};
+ const raw=appendRelocation(db,owner,from,to,hash('synthetic-snapshot'),{revision:2,state:{},receiptsDigest:hash(owner==='ontology'?receipts.filter(r=>r.request_id==='legacy'):receipts),auditDigest:hash(audit),stateDigest:hash({}),recordsDigest:hash({}),receiptCount:2});
+ t.after(()=>fs.rmSync(join(keyDirectory(),raw.keyId+'.key'),{force:true}));
+ const sign=subject=>{const row={...subject,recordDigest:hash(subject),signature:createHmac('sha256',fs.readFileSync(join(keyDirectory(),raw.keyId+'.key'))).update(stableSerialize(subject)).digest('hex')};db.prepare('UPDATE workspace_relocations SET record=?').run(stableSerialize(row));return row;};
+ const {recordDigest,signature,...subject}=raw,record=sign({...subject,nativeAuditDigest:hash(native)});
+ assert.deepEqual(readRelocations(db,to,owner),[record]);
+ db.exec("UPDATE native_audit SET receipt='changed'");assert.throws(()=>readRelocations(db,to,owner),{code:'INVALID_LINEAGE'});
+ db.prepare('UPDATE native_audit SET receipt=?').run(native[0].receipt);sign(subject);assert.throws(()=>readRelocations(db,to,owner),{code:'INVALID_LINEAGE'});
 });
