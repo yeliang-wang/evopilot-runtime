@@ -84,3 +84,9 @@ test('monitor pagination exposes the remaining instances without requesting defi
  await f.activate();for(let n=0;n<51;n++)await f.createInstance('instance-'+String(n).padStart(3,'0'));
  const operations=[];page.on('request',r=>{if(r.method()==='POST'&&r.url().endsWith('/request'))operations.push(r.postDataJSON().operation);});await login(page,'/monitor','reader');await expect(page.getByRole('button',{name:'加载更多实例'})).toBeVisible();await page.getByRole('button',{name:'加载更多实例'}).click();await expect(page.locator('#instance option')).toHaveCount(51);await page.getByLabel('生命周期实例',{exact:true}).selectOption('instance-050');await expect(page.locator('tbody .status.PENDING')).toHaveCount(8);await expect(page.getByRole('button',{name:'加载更多实例'})).toHaveCount(0);expect(operations).toEqual([]);
 });
+
+test('a concurrent revision after commit but before readback cannot silently authorize the next overwrite',async({page})=>{
+ await login(page);await valid(page);const local=f.initialSource+'\n# local committed source',concurrent=f.initialSource+'\n# later agent source';await source(page).fill(local);
+ await page.route('**/api/v1/dashboard/request',async route=>{if(route.request().postDataJSON().operation==='lifecycle.draft.save'){const response=await route.fetch();expect(response.status()).toBe(200);await f.write('lifecycle.draft.save',{yaml:concurrent});await route.fulfill({response});}else await route.continue();});
+ await page.getByRole('button',{name:'保存草稿',exact:true}).click();await expect(page.getByRole('button',{name:'重新读取',exact:true})).toBeVisible();await expect(source(page)).toHaveValue(local);await expect(page.getByRole('button',{name:'保存草稿',exact:true})).toBeDisabled();expect(await f.source((await f.call('lifecycle.definition.inspect')).draft.id)).toBe(concurrent);
+});
