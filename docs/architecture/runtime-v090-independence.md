@@ -1227,3 +1227,45 @@ retained draft receipts, staged-package corruption/recovery and scoped secrets.
 On non-macOS the launchd cases assert the explicit unsupported-platform guard;
 that result is not macOS process acceptance. These source and transport results
 do not mark any final 664-instance acceptance result as passed.
+
+## Managed legacy store development
+
+The compatibility foundation retains Runtime's original domain representation
+behind an internal managed service. Rewriting old records into lifecycle objects
+would unnecessarily change revision and receipt semantics; a historical reader
+alone would not meet the accepted ownership migration. The chosen incremental
+path preserves the existing owned implementation and adds an explicit service
+binding. It does not import the parent daemon or another owner's source.
+
+The operator-only migration API inventories a closed legacy workspace, checks its
+identity, retained ledger, native evidence and relocation lineage, and hashes all
+original SQLite tables. To avoid the side effects of opening a WAL database even
+with a read-only connection, original inspection opens a private scratch copy.
+It checks source bytes again and requires a separate, digest-anchored backup
+before adoption. Database files, Runtime blob roots, empty owned directories and
+workspace identity are retained. Ontology/Harness data, credentials and external
+evidence references are not copied by this owner-specific backup. A complete
+workspace cutover still needs the separately verified full backup and dependencies.
+
+Adoption adds one immutable migration record and schema version 9 without
+rewriting original records, counters, decisions, budgets or receipt identities.
+The seal binds the workspace, independent service identity, original snapshot and
+verified backup. Current direct legacy entry points reject adopted databases;
+managed calls require the matching internal context and one OS-held SQLite writer
+lease. An exact adoption retry reads the original seal and cannot restore an old
+snapshot over newer evidence. Readiness writes preserve the managed schema.
+
+A new 0.8.x process rejects schema 9. This does not revoke an already-open old
+binary: the operator must stop and verify original writers before cutover. Active
+WAL sidecars reject original snapshot preparation; they are never deleted to make
+a live database look quiescent. No in-place schema downgrade or automatic restore
+is provided. Isolated rollback tests retain the entire newer managed directory
+separately and restore the verified old backup at its original canonical identity.
+Relocating a backup without the original lineage procedure is rejected.
+
+This internal foundation grants no legacy HTTP mutation authority and does not
+enable a project definition or turn a historical UNKNOWN Run into success. Old
+tool/CLI routing, current permissions and applicable lifecycle admission, owner
+entry transition, operator migration integration and actual accurate-candidate
+cutover remain required. The managed-store tests are development evidence, not
+completion of E15 or the final acceptance catalog.

@@ -13,7 +13,7 @@ export function createRuntimeReadiness(store:Store,providers:ReadinessRuntimePro
   const get=<T>(scope:Scope,kind:string,id:string):T=>{const r=records.get<T>(scope,'readiness-'+kind,id);if(!r)fail('READINESS_NOT_FOUND');return r;};
   function intent(scope:Scope,digest:string){nativeDigest(digest);const r=get<ReadinessIntentRecord>(scope,'intent',digest);if(nativeSha256(r.definition)!==digest||r.definition.workspaceId!==store.identity.id||nativeStableSerialize(r.definition.scope)!==nativeStableSerialize(scope))fail('READINESS_INTEGRITY');return r;}
   function current(scope:Scope,digest:string){const r=intent(scope,digest),head=get<{digest:string}>(scope,'intent-head',r.definition.id);if(head.digest!==digest)fail('READINESS_INTENT_STALE');return r;}
-  function mutate(request:FeedbackEnvelope,fn:()=>unknown){return records.mutate(request,()=>{store.db.exec('PRAGMA user_version=8');return fn();});}
+  function mutate(request:FeedbackEnvelope,fn:()=>unknown){return records.mutate(request,()=>{if(Number(store.db.prepare('PRAGMA user_version').get()?.user_version)<8)store.db.exec('PRAGMA user_version=8');return fn();});}
   function validateAssessment(assessment:ReadinessResult,scope:Scope,intentDigest:string){
     boundedReadiness(assessment);const {digest,...body}=assessment;
     if(digest!==nativeSha256(body)||assessment.schema!=='evopilot-asset-readiness-result/v2'||assessment.standardVersion!=='v2'||assessment.standardDigest!==READINESS_STANDARD_DIGEST||assessment.workspaceId!==store.identity.id||nativeStableSerialize(assessment.scope)!==nativeStableSerialize(scope)||assessment.intentDigest!==intentDigest||assessment.authority!==false||assessment.softwareRelease!==false)fail('READINESS_INTEGRITY');

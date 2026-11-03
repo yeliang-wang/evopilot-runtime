@@ -193,7 +193,13 @@
         "plugins/codex/skills/evopilot-runtime-expert/references/execution.md",
         "plugins/codex/skills/evopilot-runtime-expert/references/recovery.md",
         "tests/e2e/host-v090.test.mjs",
-        "tests/e2e/installer-v090.test.mjs"
+        "tests/e2e/installer-v090.test.mjs",
+        "src/compat/managed-store.ts",
+        "src/compat/managed-service.ts",
+        "src/installation/migration.ts",
+        "src/state.ts",
+        "src/readiness.ts",
+        "tests/e2e/legacy-managed-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

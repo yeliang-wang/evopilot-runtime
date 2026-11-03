@@ -1,4 +1,5 @@
 import { readRelocations, acceptsWorkspace as acceptRelocatedWorkspace } from './location-lineage.js';
+import { assertManagedStateAccess } from './compat/managed-store.js';
 import type { State, Scope, Workspace, Project, Goal, Run } from './types.js';
 import { DatabaseSync } from 'node:sqlite';
 import { constants, lstatSync, mkdirSync, readdirSync, readFileSync, openSync, closeSync, writeFileSync, fsyncSync } from 'node:fs';
@@ -138,7 +139,7 @@ export function openState(root: string, id: string) {
     for (const d of dirs) checked(d, uid, true);
     for (const p of [dbPath, dbPath + '-wal', dbPath + '-shm', dbPath + '-journal']) checked(p, uid, false, true);
     checked(dbPath, uid, false);
-    if (db) readRelocations(db, identity, 'runtime');
+    if (db) { assertManagedStateAccess(db,root,id); readRelocations(db, identity, 'runtime'); }
   }
   try {
     db = new DatabaseSync(dbPath, { timeout: 1000, allowExtension: false });
@@ -146,8 +147,9 @@ export function openState(root: string, id: string) {
     if (existed) {
       if (db.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok') fail('CORRUPT_STATE', 'SQLite integrity check failed');
       const version=db.prepare('PRAGMA user_version').get()?.user_version;
-      if (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8) fail('CORRUPT_STATE', 'Unknown state schema');
-      if(version===2 || version===3 || version===4 || version===5 || version===6 || version===7 || version===8){const identity=db.prepare('SELECT contract_digest,producer FROM native_runtime_identity WHERE singleton=1').get();if(identity?.contract_digest!==NATIVE_CONTRACT_DIGEST||identity?.producer!=='runtime@0.3.0')fail('CORRUPT_STATE','Unknown corrected native state identity');}
+      if (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9) fail('CORRUPT_STATE', 'Unknown state schema');
+      const adoption=assertManagedStateAccess(db,root,id);
+      if((Number(version)>=2&&version!==9)||(adoption&&(adoption.sourceSchemaVersion>=2||db.prepare("SELECT name FROM sqlite_master WHERE name='native_runtime_identity'").get()))){const identity=db.prepare('SELECT contract_digest,producer FROM native_runtime_identity WHERE singleton=1').get();if(identity?.contract_digest!==NATIVE_CONTRACT_DIGEST||identity?.producer!=='runtime@0.3.0')fail('CORRUPT_STATE','Unknown corrected native state identity');}
       const row = db.prepare('SELECT revision, data FROM state WHERE singleton = 1').get();
       if (!row || typeof row.revision !== 'number' || typeof row.data !== 'string' || !Number.isSafeInteger(row.revision) || row.revision < 0 || Buffer.byteLength(row.data)>LIMITS.stateBytes || !validateState(JSON.parse(row.data))) fail('CORRUPT_STATE', 'Invalid state');
       db.prepare('SELECT scope, request_id, digest, receipt FROM receipts LIMIT 1').all();
@@ -157,7 +159,7 @@ export function openState(root: string, id: string) {
     if (!existed) db.exec("BEGIN IMMEDIATE; CREATE TABLE state (singleton INTEGER PRIMARY KEY CHECK(singleton=1), revision INTEGER NOT NULL, data TEXT NOT NULL); INSERT INTO state VALUES(1,0,'{\"projects\":[],\"goals\":[],\"runs\":[]}'); CREATE TABLE receipts (scope TEXT NOT NULL, request_id TEXT NOT NULL, digest TEXT NOT NULL, receipt TEXT NOT NULL, PRIMARY KEY(scope,request_id)); CREATE TABLE audit (revision INTEGER PRIMARY KEY, uid INTEGER NOT NULL, operation TEXT NOT NULL, request_digest TEXT NOT NULL, result_digest TEXT NOT NULL); PRAGMA user_version=1; COMMIT;");
     readRelocations(db, identity, 'runtime');
     guard();
-  } catch (e) { if (db) db.close(); if (['INVALID_LINEAGE','MISSING_RELOCATION_KEY'].includes(errorCode(e) ?? '')) throw e; fail('CORRUPT_STATE', 'Cannot open verified Runtime state: ' + (errorCode(e) || 'invalid database')); }
+  } catch (e) { if (db) db.close(); if (['INVALID_LINEAGE','MISSING_RELOCATION_KEY','MANAGED_SERVICE_REQUIRED','MIGRATION_BINDING_CHANGED','MIGRATION_CORRUPT','MIGRATION_DOWNGRADE'].includes(errorCode(e) ?? '')) throw e; fail('CORRUPT_STATE', 'Cannot open verified Runtime state: ' + (errorCode(e) || 'invalid database')); }
   return {db,uid,identity,guard,acceptsWorkspace: (value: unknown, digest: string) => acceptRelocatedWorkspace(db, identity, 'runtime', value, digest)};
 }
 
