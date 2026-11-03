@@ -10,7 +10,7 @@ import {promisify} from 'node:util';
 import {DatabaseSync} from 'node:sqlite';
 import {canonicalPath,codeRoot,fail,fields,outsideGit,readRegular} from '../../compat/project/files.js';
 import {withWorkspaceLease} from '../../compat/workspace-lease.js';
-import {legacyWorkspace,resolvedManagedBinding,type ManagedLegacyBinding} from '../../compat/managed-store.js';
+import {legacyWorkspace,resolvedManagedBinding,acquireQuiescentManagedContext,type ManagedLegacyBinding} from '../../compat/managed-store.js';
 import {readIdentity,readRelocations} from '../../location-lineage.js';
 import {RuntimeStore} from '../../server/store.js';
 import {inspectAllTables} from '../../compat/table-inventory.js';
@@ -134,21 +134,25 @@ async function onlineWorkerStopped(selection:WorkspaceSelection):Promise<void> {
   fail('ONLINE_WORKER_ACTIVE','Stop the separately owned online worker before maintenance');
 }
 /** Both normal capture and recovery hold the same original writer locks. */
-async function withWriterLocks<T>(selection:WorkspaceSelection,callback:(capture:()=>ManagedWorkspaceSnapshot)=>T|Promise<T>,signal?:AbortSignal):Promise<T> {
+type ManagedRunner=<T>(callback:()=>T)=>T;
+async function withWriterLocks<T>(selection:WorkspaceSelection,callback:(capture:()=>ManagedWorkspaceSnapshot,managed:ManagedRunner)=>T|Promise<T>,signal?:AbortSignal,managed=false):Promise<T> {
     const originalLock=path.join(selection.workspaceRoot,'state/runtime-service/writer-lock.sqlite');
     const lockPath=path.join(selection.serviceRoot,'data/writer-lock.sqlite');
-    for(const file of [originalLock,lockPath]){
+    const installer=path.join(selection.serviceRoot,'installer-lock.sqlite');
+    const lockFiles=[originalLock,lockPath,...(present(installer)?[installer]:[])];
+    for(const file of lockFiles){
       privateDirectory(path.dirname(file));
       const st=fs.lstatSync(canonicalPath(file));if(!st.isFile()||st.uid!==process.getuid!()||st.nlink!==1||(st.mode&0o777)!==0o600||st.size!==0)fail('MAINTENANCE_PERMISSIONS');
       for(const suffix of ['-wal','-shm','-journal'])if(present(file+suffix)){
         const sidecar=fs.lstatSync(canonicalPath(file+suffix));if(!sidecar.isFile()||sidecar.uid!==process.getuid!()||sidecar.nlink!==1||(sidecar.mode&0o777)!==0o600||sidecar.size>1048576)fail('MAINTENANCE_PERMISSIONS');
       }
     }
-    const locks:DatabaseSync[]=[];let active=true;
+    const locks:DatabaseSync[]=[];let active=true,context:ReturnType<typeof acquireQuiescentManagedContext>|undefined;
     try{
-      for(const [i,file] of [originalLock,lockPath].entries()){
+      for(const [i,file] of lockFiles.entries()){
+        if(i===0&&managed){const {workspaceRoot,workspaceId,serviceId,migrationDigest}=selection;context=acquireQuiescentManagedContext({workspaceRoot,workspaceId,serviceId,migrationDigest});continue;}
         const lock=new DatabaseSync(file,{allowExtension:false});locks.push(lock);lock.enableDefensive(true);
-        try{lock.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE');}catch{fail(i===0?'LEGACY_WRITER_ACTIVE':'WRITER_ACTIVE','Stop Runtime writers before maintenance');}
+        try{lock.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE');}catch{fail(i===0?'LEGACY_WRITER_ACTIVE':i===1?'WRITER_ACTIVE':'INSTALLER_ACTIVE','Stop Runtime writers and installers before maintenance');}
       }
       const capture=():ManagedWorkspaceSnapshot=>{
         if(!active)fail('MAINTENANCE_CLOSED');
@@ -156,18 +160,19 @@ async function withWriterLocks<T>(selection:WorkspaceSelection,callback:(capture
         for(const owner of owners)quietDatabase(path.join(selection.workspaceRoot,'state',owner,owner+'.db'));
         quietDatabase(path.join(selection.serviceRoot,'data/service.sqlite'));
         // BEGIN EXCLUSIVE on an empty lock file creates a temporary journal
-        // with a fresh SQLite nonce. These two live lease journals contain no
+        // with a fresh SQLite nonce. These live writer/installer lease journals contain no
         // business state and must not be copied into a stopped backup. Keep
         // every other file, including the zero-byte lock files themselves.
-        const transientExclusions={workspace:['state/runtime-service/writer-lock.sqlite-journal'],service:['data/writer-lock.sqlite-journal']};
+        const transientExclusions={workspace:['state/runtime-service/writer-lock.sqlite-journal'],service:['data/writer-lock.sqlite-journal',...(present(installer)?['installer-lock.sqlite-journal']:[])]};
         const trees=()=>({project:inspectMaintenanceTree(selection.projectRoot),workspace:inspectMaintenanceTree(selection.workspaceRoot).filter(e=>!transientExclusions.workspace.includes(e.path)),service:inspectMaintenanceTree(selection.serviceRoot).filter(e=>!transientExclusions.service.includes(e.path))});
         const roots=trees(),refs=references(selection),dbs=databases(selection,roots);
         if(maintenanceJSONDigest(roots)!==maintenanceJSONDigest(trees())||maintenanceJSONDigest(refs)!==maintenanceJSONDigest(references(selection)))fail('MAINTENANCE_DRIFT');
         const body={schema:'runtime-managed-workspace-snapshot/v1' as const,selection:structuredClone(selection),roots,databases:dbs,references:refs,requiredKeyIds:[...new Set(dbs.flatMap(d=>d.requiredKeyIds))].sort(),transientExclusions,coverage:'SELECTED_ROOTS_AND_REFERENCE_FILES' as const,authority:false as const};
         return{...body,snapshotDigest:maintenanceJSONDigest(body)};
       };
-      return await callback(capture);
-    }finally{active=false;for(const lock of locks.reverse())lock.close();}
+      const run:ManagedRunner=fn=>{if(!active||!context)fail('MAINTENANCE_CLOSED');return context.run(fn);};
+      return await callback(capture,run);
+    }finally{active=false;for(const lock of locks.reverse())lock.close();context?.close();}
 }
 
 /** No automatic stop/restart. The operator first stops the exact owned service. */
@@ -201,4 +206,50 @@ export async function withRestoringWorkspace<T>(input:WorkspaceSelection,request
 }
 export async function inspectManagedWorkspace(selection:WorkspaceSelection,requestId:string,signal?:AbortSignal):Promise<ManagedWorkspaceSnapshot> {
   return withQuiescentWorkspace(selection,requestId,capture=>capture(),signal);
+}
+
+export interface RelocatingWorkspaceContext {
+  captureSource:()=>ManagedWorkspaceSnapshot;
+  captureDestination:(binding:ManagedLegacyBinding)=>ManagedWorkspaceSnapshot;
+  runSource:ManagedRunner;
+}
+/** Operator composition only. Hold both shared leases in canonical order, then
+ * the original managed writer, both service writers and available installer
+ * locks. The callback may copy/attest destination data; it cannot keep a usable
+ * managed capability after the leases are closed. No service is stopped here. */
+export async function withRelocatingWorkspaces<T>(sourceInput:WorkspaceSelection,destinationInput:WorkspaceSelection,requestId:string,prepare:()=>void,callback:(context:RelocatingWorkspaceContext)=>T|Promise<T>,signal?:AbortSignal):Promise<T> {
+  const source=structuredClone(sourceInput),destination=structuredClone(destinationInput);
+  validateSelection(source);selectionLocations(destination,true);
+  if(source.workspaceId!==destination.workspaceId||source.serviceId!==destination.serviceId)fail('MAINTENANCE_IDENTITY');
+  separateRoots([source.projectRoot,source.workspaceRoot,source.serviceRoot,destination.projectRoot,destination.workspaceRoot,destination.serviceRoot]);
+  const ordered=[source,destination].sort((a,b)=>a.workspaceRoot.localeCompare(b.workspaceRoot));
+  const lease=(i:number,fn:()=>Promise<T>)=>withWorkspaceLease({workspaceRoot:ordered[i].workspaceRoot,workspaceId:ordered[i].workspaceId},requestId,fn,signal);
+  return lease(0,()=>lease(1,async()=>{
+    await requireRecoveryServicesStopped(source);await requireRecoveryServicesStopped(destination);signal?.throwIfAborted();
+    return withWriterLocks(source,(captureSource,runSource)=>{
+      prepare();signal?.throwIfAborted();
+      return withWriterLocks(destination,capture=>callback({captureSource,runSource,captureDestination(binding){
+        fields(binding,['workspaceRoot','workspaceId','serviceId','migrationDigest']);
+        if(binding.workspaceRoot!==destination.workspaceRoot||binding.workspaceId!==destination.workspaceId||binding.serviceId!==destination.serviceId||!/^[a-f0-9]{64}$/.test(binding.migrationDigest))fail('MAINTENANCE_IDENTITY');
+        destination.migrationDigest=binding.migrationDigest;return capture();
+      }}),signal);
+    },signal,true);
+  }));
+}
+
+/** The earlier v1 manifest listed only the two writer journals. Adding an
+ * installer lease changes no preserved payload. Permit only that exact metadata
+ * difference; selections, every file/table/reference and all other fields match. */
+export function preservationSnapshotMatches(actual:ManagedWorkspaceSnapshot,expected:ManagedWorkspaceSnapshot):boolean {
+  if(actual.snapshotDigest===expected.snapshotDigest)return true;
+  if(maintenanceJSONDigest(actual.transientExclusions.workspace)!==maintenanceJSONDigest(expected.transientExclusions.workspace))return false;
+  const expectedService=expected.transientExclusions.service,actualService=actual.transientExclusions.service;
+  if(expectedService.length!==1||expectedService[0]!=='data/writer-lock.sqlite-journal'||actualService.length!==2||actualService[0]!==expectedService[0]||actualService[1]!=='installer-lock.sqlite-journal')return false;
+  const {snapshotDigest,...body}=actual;
+  return maintenanceJSONDigest({...body,transientExclusions:expected.transientExclusions})===expected.snapshotDigest;
+}
+export function heldMaintenanceTransients(snapshot:ManagedWorkspaceSnapshot,role:'workspace'|'service'):string[] {
+  const paths=[...snapshot.transientExclusions[role]];
+  if(role==='service'&&snapshot.roots.service.some(e=>e.path==='installer-lock.sqlite'&&e.kind==='file'&&e.bytes===0&&e.mode===0o600)&&!paths.includes('installer-lock.sqlite-journal'))paths.push('installer-lock.sqlite-journal');
+  return paths;
 }

@@ -290,7 +290,11 @@
         "tests/e2e/managed-relocation-v090.test.mjs",
         "docs/service.md",
         "src/installation/workspace/configuration.ts",
-        "tests/e2e/relocation-configuration-v090.test.mjs"
+        "tests/e2e/relocation-configuration-v090.test.mjs",
+        "src/installation/workspace/relocation.ts",
+        "src/installation/workspace/owners.ts",
+        "tests/e2e/workspace-relocation-v090.test.mjs",
+        "tests/fixtures/relocation-configuration-v090.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

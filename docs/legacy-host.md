@@ -72,8 +72,8 @@ or an arbitrary ancestor directory to become a maintenance root.
 
 All database tables and selected payload files are preserved. SQLite validation
 uses disposable copies, and the new service's receipt/audit/event ledger is
-checked there. Business WAL/SHM/journal files block capture. Only the two temporary
-journals created by the held, empty writer-lock files are excluded, with their
+checked there. Business WAL/SHM/journal files block capture. Only temporary journals created by the held, empty writer and installer
+lock files are excluded, with their
 exact paths recorded in `transientExclusions`; the empty lock files are retained.
 An unchanged workspace produces the same snapshot digest across acquisitions.
 
@@ -104,8 +104,8 @@ Restore preserves pending work and returns `serviceStarted: false` and
 `businessWorkDispatched: false`. Startup remains a separate explicit operator
 step. A repeated completed request returns its historical restore receipt and
 cannot overwrite subsequent work; it does not certify the current environment.
-The Host maintenance aliases and complete location migration still require their own
-integration and acceptance. Neither this documentation nor source tests mark
+The durable location operator is described below; Host maintenance aliases and
+final migration acceptance remain separate. Neither this documentation nor source tests mark
 the complete legacy maintenance path or final product acceptance passed.
 
 Physical preservation checks retain each published owner's signed audit format:
@@ -120,8 +120,8 @@ existing signed same-host lineage. All business tables, their schema and the
 original adoption seal are included in the snapshot. A managed move returns a
 new location binding without rewriting that seal or any original claim/receipt.
 Plain directory copies, stale bindings, changed destination records and missing
-lineage keys are rejected. Service configuration cutover and the Host migration
-entry are separate remaining integration work; this core never starts a service
+lineage keys are rejected. The durable operator below composes service configuration cutover. The Host
+migration entry remains separate integration work; this core never starts a service
 or redispatches work.
 
 The operator configuration assembler can prepare the new service, connection,
@@ -139,8 +139,8 @@ The prepared material contains hashes and configuration bytes with credential
 references. It contains no client or platform token values and cannot renew
 authority or register Codex. Changed copied credentials, service state, package
 files or original Host permissions are rejected. Prepared bytes do not make old
-execution claims current or authorize restarting them. The complete journaled
-operator apply/recovery path and Host maintenance aliases still need integration.
+execution claims current or authorize restarting them. The durable operator below applies these bytes under its retained journal and
+leases. Host maintenance aliases still need integration.
 
 ## 中文说明
 
@@ -156,7 +156,7 @@ operator apply/recovery path and Host maintenance aliases still need integration
 独立服务的运维快照与备份现已覆盖明确选择的私有项目、两方资产和历史状态、
 新服务安装目录及选定的外部配置文件。须先停止对应服务和独立在线 worker；
 备份持有工作区与双写入锁，保留所有数据库表和业务文件。数据库校验只在临时
-副本进行，发现业务 WAL 等残留时拒绝执行。仅持锁期间产生的两个临时锁日志
+副本进行，发现业务 WAL 等残留时拒绝执行。仅持锁期间产生的写锁与安装锁临时日志
 不复制，排除路径会记入清单；这不豁免任何业务数据。
 
 外部源码、工具链缓存、两方发行包和迁移签名密钥不会因 JSON 中出现路径就被
@@ -171,16 +171,56 @@ operator apply/recovery path and Host maintenance aliases still need integration
 恢复完成前会核对全部所选文件、数据库表和引用；未决业务请求仍保持原样。
 
 恢复不会启动服务或重新派发业务。对已完成请求的重试只返回原恢复回执，不回滚
-后续新数据，也不代表当前环境重新验收通过。搬迁、Host 运维入口和最终产品验收
+后续新数据，也不代表当前环境重新验收通过。搬迁运维流程见下文；Host 运维入口和最终产品验收
 仍须继续完成各自的集成及验收。
 
 Runtime 搬迁核心已支持由独立服务接管的 schema-9 数据库：快照覆盖全部业务表、
 表结构和原接管记录，新位置通过既有本机签名链取得新绑定。原接管记录及历史
 请求、claim、回执保持不变。普通复制、旧绑定、目标数据变化或缺失密钥均不能
-通过。完整服务配置切换和 Host 搬迁入口仍须集成；搬迁核心不会启动服务或重跑业务。
+通过。下文的运维流程已组合服务配置切换，Host 搬迁入口仍须集成；搬迁核心不会启动服务或重跑业务。
 
 配置准备器可为已有签名搬迁绑定生成新服务、连接、provider、Host、插件和 launchd
 配置。它只读，不写入配置、不启动服务、不注册 Codex。账号、权限、有效期、凭据、
 服务身份、资源定义和原安装记录保持不变，只调整声明的运行路径；历史 claim 中的
-路径不改写。材料只含凭据引用及摘要，不含密钥，也不延长授权。最终写入仍需接入
-持锁、有持久化请求及中断恢复的完整运维流程。
+路径不改写。材料只含凭据引用及摘要，不含密钥，也不延长授权。最终写入由下文
+持锁、有持久化请求及中断恢复的运维流程负责。
+
+
+### Durable stopped-workspace relocation / 可恢复的工作区搬迁
+
+The operator-only `relocateManagedWorkspace` entry composes a verified,
+externally anchored same-host backup, exact three-root copying, public published
+Ontology/Harness location attestations, managed Runtime lineage and the prepared
+service/Host configuration. Supply the exact source selection, three new roots,
+backup reference/digest, published owner package paths, original Host selection
+and a stable request ID. Stop both Runtime user jobs and online workers first.
+No HTTP request or project YAML can select this operator operation.
+
+Both workspace coordination leases, managed/service writer locks and existing
+installer locks remain held during the operation. A nonterminal lifecycle
+stage or an owner `RECONCILE_OR_CANCEL` item blocks relocation. The source
+snapshot must remain unchanged, every non-location database table/schema is
+compared, and credentials, immutable adoption, original installation plans and
+source directories are retained. Only declared operational configuration paths
+change. The original backup and its anchor are retained at their original
+locations; the result records that reference, rather than inventing a new backup.
+
+The protected request journal preserves copied/attested/configuration progress.
+Retry the **same request**, after inspecting its failure. Exact partial copies
+and prepared configuration bytes may resume; different input, foreign files,
+changed domain tables or new writes are refused. A completed retry returns the
+original historical receipt without replacing newer target data. A VERIFIED
+result starts no service, registers no Codex plugin and dispatches no business
+request. Explicit attachment/start and Host maintenance aliases remain separate
+integration work. Source regressions are not final E15 or the 664-case acceptance.
+
+操作入口 `relocateManagedWorkspace` 复用带独立摘要锚点的本机备份，在原位置和
+目标位置的共享锁、写锁及已有安装锁内，完成三目录复制、三个组件各自的位置证明和
+精确配置切换。必须先停用两处 Runtime 服务及在线 worker；存在未结束的 lifecycle
+请求或需要核对／取消的 owner 请求时拒绝搬迁。所有非位置数据库表及其结构、凭据、
+原始接入决定与安装记录保持不变；原目录、备份及锚点保留。
+
+中断后沿用原请求 ID 恢复。日志只允许续做原来的精确部分副本与配置；遇到新数据、
+外来文件或输入变化时拒绝覆盖。完成后的重复调用只返回历史回执，不重新验证当前状态。
+操作本身不启动服务、不启用 Codex 插件、不重新派发业务任务。Host 运维入口接线、
+显式接入／启动以及正式候选 E15 和 664 项验收仍需单独完成。

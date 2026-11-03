@@ -7,7 +7,7 @@ import {isDeepStrictEqual as equal} from 'node:util';
 import {canonicalPath,fail,fields,outsideGit,readRegular} from '../../compat/project/files.js';
 import {keyDirectory} from '../../location-lineage.js';
 import {copyMaintenanceFile,hashMaintenanceFile,inspectMaintenanceTree,maintenanceJSONDigest,writeMaintenanceJSON,type MaintenanceEntry} from './stream.js';
-import {maintenanceLocation,present,privateDirectory,separateRoots,withQuiescentWorkspace,withRestoringWorkspace,type ManagedWorkspaceSnapshot,type WorkspaceSelection,type PreservedReference} from './snapshot.js';
+import {maintenanceLocation,preservationSnapshotMatches,heldMaintenanceTransients,present,privateDirectory,separateRoots,withQuiescentWorkspace,withRestoringWorkspace,type ManagedWorkspaceSnapshot,type WorkspaceSelection,type PreservedReference} from './snapshot.js';
 
 export interface ManagedBackup {
   schema:'runtime-managed-workspace-backup/v1';requestId:string;createdAt:string;ownerUid:number;
@@ -19,13 +19,13 @@ interface BackupJournal {
 }
 const roles=['project','workspace','service'] as const;
 const fileKey=(name:string)=>createHash('sha256').update(name).digest('hex');
-function syncDirectory(root:string):void {
+export function syncDirectory(root:string):void {
   const fd=fs.openSync(root,fs.constants.O_RDONLY|fs.constants.O_DIRECTORY);try{fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
 }
-function mkdir(root:string):void {
+export function mkdir(root:string):void {
   canonicalPath(root,true);if(!present(root)){fs.mkdirSync(root,{mode:0o700});syncDirectory(path.dirname(root));}privateDirectory(root);
 }
-function save(filename:string,value:unknown,replace=true):void {
+export function save(filename:string,value:unknown,replace=true):void {
   canonicalPath(filename,true);
   if(present(filename)){
     readRegular(filename,32*1048576,true);
@@ -40,7 +40,7 @@ function safeRelative(value:string):void {
   if(typeof value!=='string'||!value||path.isAbsolute(value)||value.includes('\\')||value.includes('\0')||value.split('/').some(part=>!part||part==='.'||part==='..'))fail('MAINTENANCE_PATH');
 }
 /** Resume only an exact retained prefix. Foreign partials are never erased. */
-function copyInventory(source:string,destination:string,entries:MaintenanceEntry[],requestId:string,transients:string[]=[]):void {
+export function copyInventory(source:string,destination:string,entries:MaintenanceEntry[],requestId:string,transients:string[]=[]):void {
   mkdir(destination);const stageName='.evopilot-copy-'+requestId,stage=path.join(destination,stageName);
   const expected=new Map<string,MaintenanceEntry>();
   for(const entry of entries){safeRelative(entry.path);if(entry.path===stageName||entry.path.startsWith(stageName+'/')||expected.has(entry.path))fail('MAINTENANCE_PARTIAL_CONFLICT');expected.set(entry.path,entry);}
@@ -251,17 +251,17 @@ export async function restoreManagedWorkspaceBackup(backupRoot:string,expectedBa
     // Existing partial content is checked exactly by copyInventory below.
     for(const root of [selection.projectRoot,selection.workspaceRoot,selection.serviceRoot])mkdir(root);
     for(const root of [path.join(selection.workspaceRoot,'state'),path.join(selection.workspaceRoot,'state/runtime-service'),path.join(selection.serviceRoot,'data')])mkdir(root);
-    for(const file of [path.join(selection.workspaceRoot,'state/runtime-service/writer-lock.sqlite'),path.join(selection.serviceRoot,'data/writer-lock.sqlite')]){
+    for(const file of [path.join(selection.workspaceRoot,'state/runtime-service/writer-lock.sqlite'),path.join(selection.serviceRoot,'data/writer-lock.sqlite'),...(snapshot.roots.service.some(e=>e.path==='installer-lock.sqlite'&&e.kind==='file'&&e.bytes===0&&e.mode===0o600)?[path.join(selection.serviceRoot,'installer-lock.sqlite')]:[])]){
       canonicalPath(file,true);if(!present(file)){const fd=fs.openSync(file,fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_EXCL|fs.constants.O_NOFOLLOW,0o600);try{fs.fsyncSync(fd);}finally{fs.closeSync(fd);}syncDirectory(path.dirname(file));}
     }
   },capture=>{
     try{
       const retained=journal!;retained.status='COPYING';retained.lastError=null;save(journalPath,retained);
       verifyManagedWorkspaceBackup(backupRoot,expectedBackupDigest);
-      for(const role of roles){signal?.throwIfAborted();copyInventory(path.join(backupRoot,role),selection[role==='workspace'?'workspaceRoot':role==='project'?'projectRoot':'serviceRoot'],snapshot.roots[role],requestId,role==='project'?[]:snapshot.transientExclusions[role]);}
+      for(const role of roles){signal?.throwIfAborted();copyInventory(path.join(backupRoot,role),selection[role==='workspace'?'workspaceRoot':role==='project'?'projectRoot':'serviceRoot'],snapshot.roots[role],requestId,role==='project'?[]:heldMaintenanceTransients(snapshot,role));}
       for(const ref of snapshot.references){signal?.throwIfAborted();restoreReference(backupRoot,ref,requestId,expectedBackupDigest,retained.missingReferences.includes(ref.path));}
       retained.status='VERIFYING';save(journalPath,retained);signal?.throwIfAborted();
-      if(capture().snapshotDigest!==snapshot.snapshotDigest)fail('MAINTENANCE_RESTORE_DIFFERENT');
+      if(!preservationSnapshotMatches(capture(),snapshot))fail('MAINTENANCE_RESTORE_DIFFERENT');
       verifyManagedWorkspaceBackup(backupRoot,expectedBackupDigest);
       const body={schema:'runtime-managed-workspace-restore/v1' as const,requestId,backupRoot,backupDigest:expectedBackupDigest,selection,snapshotDigest:snapshot.snapshotDigest,completedAt:new Date().toISOString(),status:'VERIFIED' as const,serviceStarted:false as const,businessWorkDispatched:false as const,authority:false as const};
       const result={...body,resultDigest:maintenanceJSONDigest(body)};

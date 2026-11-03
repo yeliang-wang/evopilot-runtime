@@ -1,6 +1,7 @@
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {DatabaseSync} from 'node:sqlite';
-import {existsSync,lstatSync,mkdirSync} from 'node:fs';
+import {existsSync,lstatSync,mkdirSync,mkdtempSync,copyFileSync,rmSync,realpathSync} from 'node:fs';
+import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {canonical,digest,exact,record,reject,slug,string} from '../server/errors.js';
 import {privateFile} from '../server/security.js';
@@ -91,15 +92,29 @@ export function acquireLegacyWriterLease(root:string,id:string):{close:()=>void}
   catch {lock.close();reject('LEGACY_WRITER_ACTIVE','This legacy store already has a managed writer or migration',409);}
   let closed=false;return{close(){if(!closed){lock.close();closed=true;}}};
 }
-export function acquireManagedLegacyContext(input:ManagedLegacyBinding,authorize?:()=>void):{run:<T>(fn:()=>T)=>T;close:()=>void} {
+function acquireManagedContext(input:ManagedLegacyBinding,authorize:(()=>void)|undefined,quiescent:boolean):{run:<T>(fn:()=>T)=>T;close:()=>void} {
   exact(record(input),['workspaceRoot','workspaceId','serviceId','migrationDigest']);
   string(input.serviceId,128);string(input.migrationDigest,64);
   const binding=Object.freeze({...input}),lease=acquireLegacyWriterLease(binding.workspaceRoot,binding.workspaceId);
   try {
-    const db=new DatabaseSync(legacyDatabasePath(binding.workspaceRoot),{readOnly:true,allowExtension:false});
-    try {const actual=resolvedManagedBinding(db,readIdentity(binding.workspaceRoot,binding.workspaceId));if(!actual)reject('MIGRATION_REQUIRED','Legacy store has not been adopted');matches(actual,binding);} finally {db.close();}
+    const original=legacyDatabasePath(binding.workspaceRoot);
+    let scratch:string|undefined;
+    try {
+      let file=original;
+      if(quiescent){
+        for(const suffix of ['-wal','-shm','-journal'])if(existsSync(original+suffix))reject('MAINTENANCE_NOT_QUIESCENT','Close original SQLite writers before relocation');
+        scratch=mkdtempSync(join(realpathSync(tmpdir()),'runtime-quiescent-binding-'));file=join(scratch,'state.db');copyFileSync(original,file);
+      }
+      const db=new DatabaseSync(file,{readOnly:true,allowExtension:false});
+      try {const actual=resolvedManagedBinding(db,readIdentity(binding.workspaceRoot,binding.workspaceId));if(!actual)reject('MIGRATION_REQUIRED','Legacy store has not been adopted');matches(actual,binding);} finally {db.close();}
+    } finally {if(scratch)rmSync(scratch,{recursive:true,force:true});}
     const stat=lstatSync(legacyDatabasePath(binding.workspaceRoot));
     const context:Context={binding,active:true,device:stat.dev,inode:stat.ino,authorize};
     return{run<T>(fn:()=>T):T{if(!context.active)reject('CLOSED','Managed legacy service is closed');return contexts.run(context,fn);},close(){if(context.active){context.active=false;lease.close();}}};
   } catch(error) {lease.close();throw error;}
 }
+
+export function acquireManagedLegacyContext(input:ManagedLegacyBinding,authorize?:()=>void){return acquireManagedContext(input,authorize,false);}
+/** Stopped operator path only: validate an isolated copy under the same writer
+ * lease, keeping original WAL databases unopened until their public owner API. */
+export function acquireQuiescentManagedContext(input:ManagedLegacyBinding){return acquireManagedContext(input,undefined,true);}
