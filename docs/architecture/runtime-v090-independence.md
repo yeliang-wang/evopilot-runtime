@@ -1412,9 +1412,13 @@ project read through authenticated HTTP; custom files and original evidence are
 retained. The Target/Loop ledger remains structural `authority:false` evidence.
 Its optional response reader checks exact file/loop digests and preserves the
 original observation sentinel `1`; a structural PASS cannot become a fresh
-operational prerequisite. `prepare-execution` retains its original requirement
-for a registered collection toolchain. The Host composition does not yet supply
-that execution registration and fails closed when it is absent.
+operational prerequisite. `prepare-execution` retains its original fixed `node`
+toolchain: the current Host interpreter's canonical path and exact bytes are
+pinned before copying reviewed source into a separate execution directory.
+Unregistered toolchains, changed tool bytes or an altered existing copy are
+rejected. This helper neither runs the copy nor registers a collection executor
+in the HTTP service; original approved claims and execution-provider composition
+remain separate prerequisites.
 
 This transport implementation and isolated real-owner validation do not establish
 the entire historical authoring or maintenance workflow. Online providers,

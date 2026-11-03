@@ -103,6 +103,17 @@ test('project identity revoked during native validation blocks materialization i
  }finally{f.cleanup();}
 });
 
+test('execution preparation copies only reviewed source with exact tool pins and cannot replace an altered copy',async()=>{
+ const f=projectFixture();try{
+  await f.freeze();const tool=join(f.root,'synthetic-tool');put(tool,'synthetic tool bytes; never executed');const toolFiles=[{path:tool,sha256:nativeBytesDigest(readFileSync(tool)).slice(7)}],toolchain={toolFiles,toolchainLockDigest:hash(toolFiles),readRoots:[]};f.trusted.toolchains={node:toolchain};
+  const input={scope:f.scope,id:f.input.id,executionId:'isolated-copy',toolchainId:'node'},original=readFileSync(join(f.source,'ontology.txt'));
+  await assert.rejects(()=>f.service.prepareExecution({...input,toolchainId:'unregistered'}),{code:'TOOLCHAIN_NOT_READY'});
+  const prepared=await f.service.prepareExecution(input);assert.notEqual(prepared.cwd,f.source);assert.deepEqual(prepared.toolFiles,toolFiles);assert.equal(prepared.toolchainLockDigest,toolchain.toolchainLockDigest);assert.deepEqual(readFileSync(join(prepared.cwd,'ontology.txt')),original);assert.deepEqual(await f.service.prepareExecution(input),prepared);
+  put(join(prepared.cwd,'ontology.txt'),'different execution copy');await assert.rejects(()=>f.service.prepareExecution(input),{code:'PROJECT_SOURCE_CHANGED'});assert.deepEqual(readFileSync(join(f.source,'ontology.txt')),original);
+  put(tool,'changed tool bytes');await assert.rejects(()=>f.service.prepareExecution({...input,executionId:'new-copy'}),{code:'COLLECTION_BINDING'});assert(!existsSync(join(f.stateRoot,'state/project-standards/private/synthetic/execution/new-copy')));
+ }finally{f.cleanup();}
+});
+
 for(const boundary of ['partial-stage','old-renamed','new-renamed'])test(`retained promotion resumes ${boundary} with original bytes, journal and immutable receipt`,()=>{
  const f=projectFixture();try{
   const current=join(f.root,'current'),candidate=join(f.root,'candidate'),archiveRoot=join(f.root,'archive'),retained=join(f.root,'retained');for(const p of [current,candidate,archiveRoot,retained])mkdirSync(p,{mode:0o700});

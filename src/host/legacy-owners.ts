@@ -3,7 +3,7 @@
  * decisions/receipts. The bridge neither opens Runtime state nor implements
  * owner authoring algorithms or grants their semantic/publication approval. */
 import {AsyncLocalStorage} from 'node:async_hooks';
-import {lstatSync,realpathSync} from 'node:fs';
+import {lstatSync,realpathSync,readFileSync} from 'node:fs';
 import {isAbsolute,join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {canonical,canonicalEvidence,digest,exact,record,reject,ServiceError,slug,string} from '../server/errors.js';
@@ -18,6 +18,7 @@ import {canonicalPath,codeRoot} from './project/files.js';
 import type {ProjectOwnerValidation} from './project/native-project.js';
 import type {NativeProject} from '../native-types.js';
 import {forwardLegacyRuntime} from './legacy-tools.js';
+import {nativeBytesDigest,nativeSha256} from '../../vendor/compatibility/v1/native.mjs';
 
 export type LegacyOwnerEntry='request'|'native';
 interface Registration {packageRoot:string;calls:string[];}
@@ -121,7 +122,11 @@ export async function openLegacyOwnerRoutes(configRef:string,client:RuntimeHttpC
       const current=()=>{fresh();const call=calls.getStore();if(!call)reject('OWNER_HOST_SCOPE','Current scoped project helper required');call.signal?.throwIfAborted();for(const owner of ['ontology','harness'] as const)verifyOwnerDistribution(owner,config.owners[owner].packageRoot);};
       function validator(owner:Owner,name:string):(...args:unknown[])=>unknown {const method=validatorModules.get(owner)?.[name];if(typeof method!=='function')reject('OWNER_CAPABILITY','Published owner validation API missing');return(...args)=>{current();return method(...args);};}
       const ownerValidation={validateOntologyPackage:validator('ontology','validateOntologyPackage'),inspectHarnessPackage:validator('harness','inspectHarnessPackage'),validateNativeOntology:validator('ontology','validateNativeOntology')} as ProjectOwnerValidation;
-      projectRoutes=createProjectHostRoutes({projectRoot:config.project.root,stateRoot:binding.workspaceRoot,workspaceId:config.workspaceId},config.projectId,config.project,{ownerValidation,...(toolchain?{nativeToolchain:()=>toolchain}:{}),readCompletedProject:async(scope,id)=>{current();const result=await forwardLegacyRuntime(client,'native',{operation:'project.inspect',scope,input:{id}},calls.getStore()?.signal);current();return result.result as NativeProject;}},current);
+      // Preserve the original fixed local Node preparation. This only pins the
+      // current interpreter and copies reviewed source; it dispatches no work.
+      const executable=realpathSync(process.execPath),toolFiles=[{path:executable,sha256:nativeBytesDigest(readFileSync(executable)).slice(7)}];
+      const toolchains={node:{toolchainLockDigest:nativeSha256(toolFiles),toolFiles,readRoots:[]}};
+      projectRoutes=createProjectHostRoutes({projectRoot:config.project.root,stateRoot:binding.workspaceRoot,workspaceId:config.workspaceId},config.projectId,config.project,{ownerValidation,toolchains,...(toolchain?{nativeToolchain:()=>toolchain}:{}),readCompletedProject:async(scope,id)=>{current();const result=await forwardLegacyRuntime(client,'native',{operation:'project.inspect',scope,input:{id}},calls.getStore()?.signal);current();return result.result as NativeProject;}},current);
     }
     return{...(projectRoutes?{project:{calls:[...config.project!.calls],async call(family:'native'|'workspace',operation:string,value:unknown,requestId?:string,signal?:AbortSignal){
       fresh();const input=JSON.parse(canonicalEvidence(value)) as Record<string,unknown>,scope=family==='native'?guardScope(operation==='preflight'?record(input.project).scope:input.scope):guardScope({projectId:input.projectId,visibility:'private'});
