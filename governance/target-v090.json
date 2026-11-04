@@ -409,6 +409,25 @@
         "Real accurate candidate browser/Host/platform and all664 final instances remain required."
       ],
       "productAcceptance": "NOT_EVALUATED"
+    },
+    "M5": {
+      "purpose": "Implement and execute the fixed candidate-bound acceptance collectors. Preparatory subset runs remain explicitly partial; no missing case, synthetic binding shortcut, development package or source-only regression can establish final acceptance. Remaining M3 compatibility stays open.",
+      "paths": [
+        "tests/acceptance/v090/support.mjs",
+        "tests/acceptance/v090/e03.test.mjs",
+        "docs/acceptance-v090.md"
+      ],
+      "prerequisiteBindings": [
+        "governance/acceptance-v090.json",
+        "governance/parameter-matrix-v090.json",
+        "governance/lifecycle-contract-v090.json",
+        "governance/environment-contract-v090.json"
+      ],
+      "evidencePrerequisites": [
+        "Exact selected installed package and distribution digest, authenticated same-service connection, isolated project and protected evidence output",
+        "Prior actual independent HTTP/CLI/Host/package and owner/platform development evidence; complete final qualification still requires all remaining integration work"
+      ],
+      "productAcceptance": "NOT_EVALUATED"
     }
   },
   "beforeProductImplementation": [
