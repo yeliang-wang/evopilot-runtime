@@ -23,7 +23,19 @@ const put=(file,v)=>{fs.mkdirSync(dirname(file),{recursive:true,mode:0o700});fs.
 const node=fs.realpathSync(process.execPath);
 const read=file=>JSON.parse(fs.readFileSync(file));
 function prepare(f){return prepareRelocationConfiguration(f.source,f.destination,f.ownerHost);}
-function apply(f,material){for(const p of material.patches)put(join(f.destination.serviceRoot,p.path),p.bytes);}
+function apply(f,material){for(const p of material.patches){const ref=join(p.role==='workspace'?f.destination.workspaceRoot:f.destination.serviceRoot,p.path);put(ref,p.bytes);if(p.mode)fs.chmodSync(ref,p.mode);}}
+
+test('a native descriptor with moved internal dependencies cannot silently retain obsolete executable paths',t=>{
+ const f=fixture(t),descriptor=read(f.providers.nativeToolchain.path);
+ descriptor.environmentRoot=join(f.source.workspaceRoot,'unregistered-native');put(f.providers.nativeToolchain.path,descriptor);
+ const providers={...f.providers,nativeToolchain:{...f.providers.nativeToolchain,digest:'sha256:'+createHash('sha256').update(fs.readFileSync(f.providers.nativeToolchain.path)).digest('hex')}};
+ put(f.spec.legacyProviders.ref,providers);
+ const spec={...f.spec,legacyProviders:{ref:f.spec.legacyProviders.ref,digest:digest(providers)}};
+ for(const selection of [f.source,f.destination])put(join(selection.serviceRoot,'service-specification.json'),spec);
+ const before=inspectMaintenanceTree(f.destination.workspaceRoot);
+ assert.throws(()=>prepare(f),{code:'RELOCATION_CONFIGURATION_CHANGED'});
+ assert.deepEqual(inspectMaintenanceTree(f.destination.workspaceRoot),before);
+});
 
 test('read-only relocation material preserves scope, expiry, credentials and original histories while rebinding exact operational paths',t=>{
  const f=fixture(t),before=Object.fromEntries(['source','destination'].map(k=>[k,['projectRoot','workspaceRoot','serviceRoot'].map(p=>inspectMaintenanceTree(f[k][p]))]));

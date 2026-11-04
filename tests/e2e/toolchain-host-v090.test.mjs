@@ -10,7 +10,7 @@ import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
-import {inspectWorkspaceToolchain,inspectToolchainPreparation,startToolchainPreparation} from '../../dist/installation/toolchain/preparation.js';
+import {inspectWorkspaceToolchain,inspectToolchainPreparation,startToolchainPreparation,prepareToolchainHistoryDigest} from '../../dist/installation/toolchain/preparation.js';
 import {openWorkspaceOperator} from '../../dist/installation/workspace/operator.js';
 import {acquireManagedLegacyContext} from '../../dist/compat/managed-store.js';
 import {inspectMaintenanceTree} from '../../dist/installation/workspace/stream.js';
@@ -65,6 +65,23 @@ test('historical receipts stay readable but cannot authorize a changed installat
  await assert.rejects(startToolchainPreparation(c,'old',maintain),{code:'REQUEST_CONFLICT'});
  write(path.join(root,'old.json'),{...old,workspaceId:'other'});assert.throws(()=>inspectToolchainPreparation(c),{code:'TOOLCHAIN_PREPARATION_IDENTITY'});
  write(path.join(root,'old.json'),{...old,status:'RUNNING',completedAt:old.completedAt});assert.throws(()=>inspectToolchainPreparation(c),{code:'TOOLCHAIN_PREPARATION_INVALID'});
+});
+
+test('relocation reads only exact bound historical preparation bytes and preserves current readiness checks',async t=>{
+ const original=fixture(t),moved=fixture(t),again=fixture(t),from=path.join(original.workspaceRoot,'native-toolchain-preparation');fs.mkdirSync(from,{mode:0o700});
+ const old={schema:'evopilot-toolchain-preparation/v1',...original,requestId:'original',lockDigest:inspectWorkspaceToolchain(original).lock.lockDigest,status:'SUCCEEDED',startedAt:'2026-01-01T00:00:00Z',completedAt:'2026-01-01T00:01:00Z',diagnostic:null};write(path.join(from,'original.json'),old);
+ const to=path.join(moved.workspaceRoot,'native-toolchain-preparation');fs.cpSync(from,to,{recursive:true});fs.chmodSync(to,0o700);
+ assert.throws(()=>inspectToolchainPreparation(moved),{code:'TOOLCHAIN_PREPARATION_IDENTITY'});
+ const bound={...moved,installationDigest:'b'.repeat(64),historicalRecordsDigest:prepareToolchainHistoryDigest(original)},bytes=fs.readFileSync(path.join(to,'original.json'));
+ assert.equal(inspectToolchainPreparation(bound).historical,true);assert.equal(inspectToolchainPreparation(bound).workspaceRoot,original.workspaceRoot);
+ assert.equal(inspectWorkspaceToolchain(bound).ready,false,'historical success cannot replace current dependency inspection');
+ await assert.rejects(startToolchainPreparation(bound,'original',maintain),{code:'REQUEST_CONFLICT'});
+ write(path.join(to,'original.json'),{...old,diagnostic:null,completedAt:'2026-01-01T00:02:00Z'});assert.throws(()=>inspectToolchainPreparation(bound),{code:'TOOLCHAIN_PREPARATION_IDENTITY'});fs.writeFileSync(path.join(to,'original.json'),bytes);
+ write(path.join(to,'new.json'),{...old,workspaceRoot:moved.workspaceRoot,installationDigest:bound.installationDigest,requestId:'new',startedAt:'2026-01-02T00:00:00Z',completedAt:'2026-01-02T00:01:00Z'});
+ assert.equal(inspectToolchainPreparation(bound).historical,false);
+ const next={...again,historicalRecordsDigest:prepareToolchainHistoryDigest(bound)};fs.cpSync(to,path.join(again.workspaceRoot,'native-toolchain-preparation'),{recursive:true});fs.chmodSync(path.join(again.workspaceRoot,'native-toolchain-preparation'),0o700);assert.equal(inspectToolchainPreparation(next).historical,true);
+ fs.unlinkSync(path.join(to,'original.json'));assert.throws(()=>inspectToolchainPreparation(bound),{code:'TOOLCHAIN_PREPARATION_IDENTITY'});
+ assert.deepEqual(fs.readFileSync(path.join(from,'original.json')),bytes);
 });
 
 test('protected Host aliases reject arbitrary paths/downloads and do not widen existing grants',async t=>{

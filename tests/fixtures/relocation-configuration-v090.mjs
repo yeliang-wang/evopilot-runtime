@@ -24,7 +24,11 @@ export function relocationConfigurationFixture(t,withOwners=true,move=true,withO
  put(join(s.serviceRoot,'client.json'),{schema:'runtime-client-credential/v1',workspaceId:s.workspaceId,projectId:'synthetic',principalId:'synthetic',token});
  initializeCredentials(join(s.serviceRoot,'data'),s.workspaceId,[{id:'synthetic',projects:['synthetic'],permissions:['read'],revision:1,expiresAt,tokenDigest:tokenDigest(token)}]);
  const owners=Object.fromEntries(['ontology','harness'].map(o=>[o,{packageRoot:join(f.root,o+'-package')}]));for(const o of Object.values(owners))fs.mkdirSync(o.packageRoot,{mode:0o700});
- const nativeToolchain={path:f.reference,digest:'sha256:'+'a'.repeat(64),lockDigest:'sha256:'+'b'.repeat(64)};
+ // A structurally valid external descriptor is retained unchanged. This is
+ // synthetic configuration evidence and is never a prepared native toolchain.
+ const tool={executable:join(f.root,'external-native','python'),version:'synthetic',sha256:'a'.repeat(64)};
+ put(f.reference,{schema:'evopilot-native-toolchain/v1',platform:process.platform,arch:process.arch,lockDigest:'sha256:'+'b'.repeat(64),dependencyLockDigest:'sha256:'+'c'.repeat(64),environmentRoot:join(f.root,'external-native'),dependencyFiles:[{path:tool.executable,sha256:tool.sha256}],tools:{python:tool,pyshacl:tool,opa:tool,conftest:tool},timeoutMs:60000,maxInputBytes:1048576,maxPackageBytes:1048576});
+ const nativeToolchain={path:f.reference,digest:'sha256:'+sha(fs.readFileSync(f.reference)),lockDigest:'sha256:'+'b'.repeat(64)};
  const integrations={schema:'runtime-integrations/v1',workspaceId:s.workspaceId,revision:3,platforms:[],credentials:[{ref:'credential:synthetic',workspaceId:s.workspaceId,projectId:'synthetic',provider:'github',host:'https://github.com',tokenFile:join(s.serviceRoot,'synthetic-platform.token'),revision:2,expiresAt}],owners:['ontology','harness'].map(o=>({ref:'binding:'+o,owner:o,...owners[o],workspaceRoot:s.workspaceRoot,workspaceId:s.workspaceId,projects:['synthetic']})),resources:[{ref:'binding:source',workspaceId:s.workspaceId,projectId:'synthetic',role:'source',revision:4,expiresAt,definition:{path:join(s.projectRoot,'immutable-reference.txt')}}]};
  put(join(s.serviceRoot,'synthetic-platform.token'),'synthetic-platform-not-a-real-secret');put(join(f.root,'integrations.json'),integrations);
  let ownerHost={},providers;

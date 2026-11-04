@@ -551,3 +551,26 @@ does not approve assets, dispatch business work or establish product acceptance.
 在线 worker 已停止；原权限、有效期、凭据、安装计划及历史回执保持不变。中断后检查
 并恢复同一份材料，其他配置修改会被拒绝。完成后的重复调用只返回历史回执，不启动
 服务。随后选择新的当前服务配置、显式启动、重连插件并激活，再执行已授权的原生验证。
+
+## Prepared dependencies during relocation
+
+The stopped relocation operator verifies a selected bundled native cache against
+its fixed archives at both locations. It derives the destination Python venv
+location fields and a new current native manifest; the original cache, manifests
+and preparation receipts remain unchanged. The existing relocation journal
+includes the exact venv configuration patch and owner/provider/integration
+references, accepting only their original or intended bytes on recovery.
+Dependency binaries and unrelated Workspace files are not rewritten. External
+dependency locations outside the selected roots remain external prerequisites.
+
+The new protected operator configuration binds the exact historical preparation
+record bytes. Inspection can display their original workspace and installation
+with `historical: true` after a move, including subsequent moves. Changed or
+missing retained history is rejected. Current readiness still inspects the
+actual destination dependencies; a historical `SUCCEEDED` receipt cannot make
+a missing cache ready or authorize replacement execution under an old request.
+
+已准备依赖随工作区迁移时，运维流程核对固定依赖字节，只生成目标 Python 环境路径
+配置及新的当前清单，并沿用原迁移日志恢复。原缓存、清单、准备回执和业务历史不改写。
+新的受保护配置绑定历史准备回执的准确字节；搬迁后仍显示其原目录与安装身份，并标明
+`historical: true`。历史成功不能替代目标目录中的实际依赖检查，回执缺失或变化会被拒绝。

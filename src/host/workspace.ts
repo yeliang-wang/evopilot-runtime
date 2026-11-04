@@ -17,6 +17,7 @@ export interface WorkspaceOperatorConfiguration {
   selection:ManagedLegacyBinding&{projectRoot:string;serviceRoot:string;referenceFiles:string[]};
   specificationDigest:string;connectionRef:string;owners:WorkspaceOperatorGrant['owners'];
   ownerHost:{ownerConfigRef?:string;ownerConfigDigest?:string};calls:WorkspaceCall[];expiresAt:string;
+  toolchainPreparationHistoryDigest?:string;
 }
 export interface WorkspaceOperatorRoutes {
   readonly definitions:Tool[];
@@ -41,7 +42,8 @@ export function validateWorkspaceOperatorGrant(value:unknown):WorkspaceOperatorG
   const grant=record(value);exact(grant,['projectRoot','referenceFiles','owners','calls','expiresAt']);selectionFields(grant);return structuredClone(grant) as unknown as WorkspaceOperatorGrant;
 }
 export function readWorkspaceOperatorConfiguration(ref:string):WorkspaceOperatorConfiguration {
-  absolute(ref);const config=record(readPrivateJson(ref));exact(config,['schema','selection','specificationDigest','connectionRef','owners','ownerHost','calls','expiresAt']);
+  absolute(ref);const config=record(readPrivateJson(ref));exact(config,['schema','selection','specificationDigest','connectionRef','owners','ownerHost','calls','expiresAt'],['toolchainPreparationHistoryDigest']);
+  if(config.toolchainPreparationHistoryDigest!==undefined)hash(config.toolchainPreparationHistoryDigest);
   if(config.schema!=='runtime-workspace-operator/v1')reject('WORKSPACE_OPERATOR_CONFIGURATION','Unsupported workspace operator schema');
   const selection=record(config.selection);exact(selection,['workspaceRoot','workspaceId','serviceRoot','serviceId','migrationDigest','projectRoot','referenceFiles']);
   selectionFields({...config,projectRoot:selection.projectRoot,referenceFiles:selection.referenceFiles});

@@ -8,12 +8,21 @@ import {createHash} from 'node:crypto';
 import {gzipSync} from 'node:zlib';
 import {spawnSync} from 'node:child_process';
 import {archivePath,readTarGz,readWheel} from '../../dist/installation/toolchain/archive.js';
-import {inspectBundledToolchainLock,inspectNativeToolchain,prepareNativeToolchain} from '../../dist/installation/toolchain/locked.js';
+import {inspectBundledToolchainLock,inspectNativeToolchain,prepareNativeToolchain,prepareNativeToolchainRelocation} from '../../dist/installation/toolchain/locked.js';
 import {toolchainCommand} from '../../dist/installation/toolchain/cli.js';
 
 const repo=fs.realpathSync(fileURLToPath(new URL('../../',import.meta.url))),base=join(repo,'provenance/native-toolchain');
 const temporary=()=>fs.mkdtempSync(join(fs.realpathSync(tmpdir()),'runtime-locked-toolchain-'));
 const supported=process.platform==='darwin'&&process.arch==='arm64';
+
+test('relocation material requires separate verified original and copied caches and never prepares missing dependencies',()=>{
+ const root=temporary();
+ try{
+  for(const destination of [root,join(root,'nested')])assert.throws(()=>prepareNativeToolchainRelocation(root,destination),{code:'TOOLCHAIN_PATH'});
+  assert.throws(()=>prepareNativeToolchainRelocation(join(root,'source'),join(root,'destination')),{code:supported?'TOOLCHAIN_NOT_READY':'TOOLCHAIN_UNSUPPORTED_PLATFORM'});
+  assert.deepEqual(fs.readdirSync(root),[]);
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
 
 test('independent toolchain preserves every original dependency and license pin',()=>{
   const provenance=JSON.parse(fs.readFileSync(join(repo,'provenance/legacy-toolchain.json'),'utf8'));

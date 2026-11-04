@@ -3,13 +3,14 @@
  * for the entire task. Losing the Host never grants permission to redispatch. */
 import fs from 'node:fs';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import {canonicalPath,readRegular} from '../../compat/project/files.js';
-import {exact,record,reject,string} from '../../server/errors.js';
+import {canonicalEvidence,exact,record,reject,string} from '../../server/errors.js';
 import {save} from '../workspace/backup.js';
 import {inspectBundledToolchainLock,inspectNativeToolchain,prepareNativeToolchain} from './locked.js';
 
-export interface ToolchainPreparationContext {workspaceRoot:string;workspaceId:string;installationDigest:string;}
-interface Preparation extends ToolchainPreparationContext {
+export interface ToolchainPreparationContext {workspaceRoot:string;workspaceId:string;installationDigest:string;historicalRecordsDigest?:string;}
+interface Preparation extends Omit<ToolchainPreparationContext,'historicalRecordsDigest'> {
   schema:'evopilot-toolchain-preparation/v1';requestId:string;lockDigest:string;
   status:'RUNNING'|'SUCCEEDED'|'FAILED';startedAt:string;completedAt:string|null;diagnostic:string|null;
 }
@@ -24,25 +25,38 @@ function directory(root:string,create=false):void {
   if(!stat.isDirectory()||stat.uid!==process.getuid!()||(stat.mode&0o777)!==0o700)reject('TOOLCHAIN_PREPARATION_UNSAFE','Expected a protected toolchain journal');
 }
 function rootFor(c:ToolchainPreparationContext):string {
-  exact(record(c),['workspaceRoot','workspaceId','installationDigest']);slug(c.workspaceId);canonicalPath(c.workspaceRoot);
+  exact(record(c),['workspaceRoot','workspaceId','installationDigest'],['historicalRecordsDigest']);slug(c.workspaceId);canonicalPath(c.workspaceRoot);
+  if(c.historicalRecordsDigest!==undefined&&!/^[a-f0-9]{64}$/.test(c.historicalRecordsDigest))reject('TOOLCHAIN_PREPARATION_IDENTITY','Expected the exact retained history binding');
   if(!/^[a-f0-9]{64}$/.test(c.installationDigest))reject('TOOLCHAIN_PREPARATION_IDENTITY','Select an exact installation');
   directory(c.workspaceRoot);return path.join(c.workspaceRoot,'native-toolchain-preparation');
 }
+const sha=(v:Buffer|string)=>createHash('sha256').update(v).digest('hex');
+function historyDigest(root:string,rows:Preparation[]):string {
+  return sha(canonicalEvidence(rows.map(r=>({requestId:r.requestId,sha256:sha(readRegular(path.join(root,r.requestId+'.json'),16384,true))})).sort((a,b)=>a.requestId.localeCompare(b.requestId))));
+}
 function records(root:string,c:ToolchainPreparationContext):Preparation[] {
-  canonicalPath(root,true);if(!fs.existsSync(root))return[];directory(root);
+  canonicalPath(root,true);if(!fs.existsSync(root)){if(c.historicalRecordsDigest)reject('TOOLCHAIN_PREPARATION_IDENTITY','Retained history is missing');return[];}directory(root);
   const names=fs.readdirSync(root);if(names.length>1000)reject('TOOLCHAIN_PREPARATION_LIMIT','Retained preparation limit reached');
-  return names.map(name=>{
+  const rows=names.map(name=>{
     if(!/^[a-z0-9][a-z0-9-]{0,63}\.json$/.test(name))reject('TOOLCHAIN_PREPARATION_UNSAFE','Unexpected preparation entry');
     const r=record(JSON.parse(readRegular(path.join(root,name),16384,true).toString()));
     exact(r,['schema','requestId','workspaceId','workspaceRoot','installationDigest','lockDigest','status','startedAt','completedAt','diagnostic']);
     if(r.schema!=='evopilot-toolchain-preparation/v1'||name!==r.requestId+'.json'||!['RUNNING','SUCCEEDED','FAILED'].includes(String(r.status))||!Number.isFinite(Date.parse(String(r.startedAt)))||!/^sha256:[a-f0-9]{64}$/.test(String(r.lockDigest))||!/^[a-f0-9]{64}$/.test(String(r.installationDigest))||
       (r.status==='RUNNING'?(r.completedAt!==null||r.diagnostic!==null):!Number.isFinite(Date.parse(String(r.completedAt))))||
       (r.status==='FAILED'?!/^TOOLCHAIN_[A-Z0-9_]+$/.test(String(r.diagnostic)):r.diagnostic!==null))reject('TOOLCHAIN_PREPARATION_INVALID','Malformed retained preparation');
-    if(r.workspaceRoot!==c.workspaceRoot||r.workspaceId!==c.workspaceId)reject('TOOLCHAIN_PREPARATION_IDENTITY','Retained preparation belongs to another Workspace');
+    if(r.workspaceId!==c.workspaceId||typeof r.workspaceRoot!=='string'||!path.isAbsolute(r.workspaceRoot)||path.normalize(r.workspaceRoot)!==r.workspaceRoot)reject('TOOLCHAIN_PREPARATION_IDENTITY','Retained preparation belongs to another Workspace');
     return r as unknown as Preparation;
   }).sort((a,b)=>a.startedAt.localeCompare(b.startedAt)||a.requestId.localeCompare(b.requestId));
+  const historical=rows.filter(r=>r.workspaceRoot!==c.workspaceRoot);
+  if((historical.length||c.historicalRecordsDigest)&&historyDigest(root,historical)!==c.historicalRecordsDigest)reject('TOOLCHAIN_PREPARATION_IDENTITY','Historical preparation differs from the selected relocation binding');
+  return rows;
 }
-const publicRecord=(root:string,r:Preparation)=>({...r,status:r.status==='RUNNING'&&!active.has(path.join(root,r.requestId))?'UNKNOWN':r.status,nextAction:r.status==='FAILED'?'review_failure_before_new_request':'toolchain_inspect',authority:false});
+/** Only the verified relocation assembler places this read-only byte binding
+ * into the new protected operator configuration. No receipt is rewritten. */
+export function prepareToolchainHistoryDigest(c:ToolchainPreparationContext):string|undefined {
+  const root=rootFor(c),all=records(root,c);return all.length?historyDigest(root,all):undefined;
+}
+const publicRecord=(root:string,r:Preparation)=>({...r,historical:r.workspaceRoot!==path.dirname(root),status:r.status==='RUNNING'&&!active.has(path.join(root,r.requestId))?'UNKNOWN':r.status,nextAction:r.status==='FAILED'?'review_failure_before_new_request':'toolchain_inspect',authority:false});
 export function inspectToolchainPreparation(c:ToolchainPreparationContext){
   const root=rootFor(c),all=records(root,c);return all.length?publicRecord(root,all.at(-1)!):null;
 }
@@ -79,7 +93,7 @@ export async function startToolchainPreparation(c:ToolchainPreparationContext,re
     if(current.some(r=>r.status==='RUNNING'))reject('TOOLCHAIN_PREPARATION_UNCERTAIN','Another original preparation remains unresolved');
     if(current.some(r=>r.requestId===requestId))reject('REQUEST_CONFLICT','Preparation was concurrently recorded');
     if(current.length>=1000)reject('TOOLCHAIN_PREPARATION_LIMIT','Retained preparation limit reached');
-    const r:Preparation={schema:'evopilot-toolchain-preparation/v1',...c,requestId,lockDigest:lock.lockDigest,status:'RUNNING',startedAt:new Date().toISOString(),completedAt:null,diagnostic:null};
+    const r:Preparation={schema:'evopilot-toolchain-preparation/v1',workspaceRoot:c.workspaceRoot,workspaceId:c.workspaceId,installationDigest:c.installationDigest,requestId,lockDigest:lock.lockDigest,status:'RUNNING',startedAt:new Date().toISOString(),completedAt:null,diagnostic:null};
     save(path.join(root,requestId+'.json'),r,false);admit();
     try{await prepareNativeToolchain({cacheRoot:path.join(c.workspaceRoot,'native-toolchain')});r.status='SUCCEEDED';}
     catch(error){r.status='FAILED';r.diagnostic=diagnostic(error);}

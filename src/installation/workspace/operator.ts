@@ -81,7 +81,7 @@ export function openWorkspaceOperator(ref:string,expectedDigest:string):Workspac
         if(!tools.some(t=>t.name===name))reject('WORKSPACE_OPERATOR_FORBIDDEN','This local operation was not selected',403);
         if(action==='toolchain_inspect'||action==='toolchain_prepare'){
           exact(args,action==='toolchain_prepare'?['requestId']:[]);validateSelection(c.selection);const spec=specification(c);
-          const context={workspaceRoot:c.selection.workspaceRoot,workspaceId:c.selection.workspaceId,installationDigest:digest({specificationDigest:c.specificationDigest,configurationDigest:expectedDigest})};
+          const context={workspaceRoot:c.selection.workspaceRoot,workspaceId:c.selection.workspaceId,installationDigest:digest({specificationDigest:c.specificationDigest,configurationDigest:expectedDigest}),...(c.toolchainPreparationHistoryDigest?{historicalRecordsDigest:c.toolchainPreparationHistoryDigest}:{})};
           if(action==='toolchain_inspect'){const result=inspectWorkspaceToolchain(context);fresh();return result;}
           const result=await startToolchainPreparation(context,string(args.requestId,64),work=>withWorkspaceLease({workspaceRoot:context.workspaceRoot,workspaceId:context.workspaceId},String(args.requestId),async()=>{
             fresh();signal?.throwIfAborted();await stopUserService(spec);fresh();await requireRecoveryServicesStopped(c.selection);fresh();signal?.throwIfAborted();

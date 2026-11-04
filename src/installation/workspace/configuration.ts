@@ -7,7 +7,7 @@ import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {isDeepStrictEqual as equal} from 'node:util';
-import {canonical,digest,exact,record,reject} from '../../server/errors.js';
+import {canonical,canonicalEvidence,digest,exact,record,reject} from '../../server/errors.js';
 import {readHostConnection,readPrivateJson} from '../../server/security.js';
 import {readWorkspaceOperatorConfiguration} from '../../host/workspace.js';
 import {readWorkspaceSetupConfiguration} from '../../host/setup.js';
@@ -17,13 +17,15 @@ import {readIdentity} from '../../location-lineage.js';
 import {RuntimeStore} from '../../server/store.js';
 import {readLegacyProviderConfiguration} from '../../compat/registered-providers.js';
 import {readLegacyOwnerHostConfiguration} from '../../host/legacy-owners.js';
-import {readIntegrationConfiguration} from '../../adapters/config.js';
+import {readIntegrationConfiguration,readRegisteredNativeToolchain,type NativeToolchainRegistration} from '../../adapters/config.js';
+import {prepareNativeToolchainRelocation} from '../toolchain/locked.js';
+import {prepareToolchainHistoryDigest} from '../toolchain/preparation.js';
 import {runtimePluginMaterial,quoteHelperArgument,type LegacyPluginSelection} from '../../host/plugin.js';
 import {userServicePlist,renderUserServicePlist,type UserServiceSpecification} from '../service.js';
 import {hashMaintenanceFile,inspectMaintenanceTree,maintenanceJSONDigest} from './stream.js';
 import {separateRoots,validateSelection,type WorkspaceSelection} from './snapshot.js';
 
-export interface RelocationConfigurationPatch {path:string;previousSha256:string|null;sha256:string;bytes:Buffer;}
+export interface RelocationConfigurationPatch {path:string;previousSha256:string|null;sha256:string;bytes:Buffer;role?:'workspace';mode?:number;}
 export interface RelocationConfigurationMaterial {
   schema:'runtime-relocation-configuration/v1';source:WorkspaceSelection;destination:WorkspaceSelection;
   specification:UserServiceSpecification;ownerHost:LegacyPluginSelection;
@@ -89,12 +91,30 @@ export function prepareRelocationConfiguration(sourceInput:WorkspaceSelection,de
   }
   if(!equal(inspectMaintenanceTree(original.packageRoot),inspectMaintenanceTree(path.join(destination.serviceRoot,'package'))))fail();
   const specification:UserServiceSpecification={...original,root:destination.serviceRoot,packageRoot:path.join(destination.serviceRoot,'package'),tokenRef:path.join(destination.serviceRoot,'client.json'),legacyRef:path.join(destination.serviceRoot,'legacy-binding.json')};
+  const registrations=new Map<string,NativeToolchainRegistration>();
+  const native=(registration:NativeToolchainRegistration):NativeToolchainRegistration=>{
+    const key=canonical(registration),existing=registrations.get(key);if(existing)return existing;
+    const descriptor=json(registration.path,()=>readRegisteredNativeToolchain({schema:'runtime-integrations/v1',workspaceId:source.workspaceId,revision:1,platforms:[],credentials:[],owners:[],resources:[],nativeToolchain:registration}));
+    if(map(descriptor.environmentRoot!)===descriptor.environmentRoot)return{...registration,path:mappedFile(registration.path)};
+    const cache=path.join(source.workspaceRoot,'native-toolchain');
+    if(!descriptor.environmentRoot!.startsWith(cache+path.sep))fail();
+    const material=prepareNativeToolchainRelocation(cache,path.join(destination.workspaceRoot,'native-toolchain'));
+    if(!equal(descriptor,material.original))fail();
+    const patch={...material.patch,path:'native-toolchain/'+material.patch.path,role:'workspace' as const};
+    pin(path.join(source.workspaceRoot,patch.path));
+    const prior=patches.find(p=>p.role==='workspace'&&p.path===patch.path);
+    if(prior&&!equal(prior,patch))fail();if(!prior)patches.push(patch);
+    const content=canonicalEvidence(material.relocated)+'\n',name='relocated-native-toolchain-'+sha(content)+'.json';
+    if(!patches.some(p=>p.path===name&&!p.role))add(name,content);
+    const moved={path:path.join(destination.serviceRoot,name),digest:'sha256:'+sha(content),lockDigest:registration.lockDigest};
+    registrations.set(key,moved);return moved;
+  };
   addJSON('legacy-binding.json',binding(destination));
   if(original.integrationsRef!==null){
     const current=structuredClone(json(original.integrationsRef,file=>readIntegrationConfiguration(file,source.workspaceId)));
     // Only declared operational path fields change. Resource definitions and
     // their review/registration revisions remain exact historical selections.
-    const config={...current,credentials:current.credentials.map(c=>({...c,tokenFile:mappedFile(c.tokenFile)})),owners:current.owners.map(o=>({...o,packageRoot:map(o.packageRoot),workspaceRoot:map(o.workspaceRoot)})),...(current.nativeToolchain?{nativeToolchain:{...current.nativeToolchain,path:mappedFile(current.nativeToolchain.path)}}:{})};
+    const config={...current,credentials:current.credentials.map(c=>({...c,tokenFile:mappedFile(c.tokenFile)})),owners:current.owners.map(o=>({...o,packageRoot:map(o.packageRoot),workspaceRoot:map(o.workspaceRoot)})),...(current.nativeToolchain?{nativeToolchain:native(current.nativeToolchain)}:{})};
     const name='relocated-integrations.json';addJSON(name,config);specification.integrationsRef=path.join(destination.serviceRoot,name);
   }
   if(original.legacyProviders){
@@ -102,7 +122,7 @@ export function prepareRelocationConfiguration(sourceInput:WorkspaceSelection,de
     if(digest(config)!==original.legacyProviders.digest||config.legacyBindingRef!==original.legacyRef||config.projectRoot!==source.projectRoot||config.workspaceId!==source.workspaceId||!config.projects.includes(original.projectId))fail();
     config.legacyBindingRef=specification.legacyRef!;config.projectRoot=destination.projectRoot;
     for(const owner of Object.values(config.owners))owner.packageRoot=map(owner.packageRoot);
-    config.nativeToolchain={...config.nativeToolchain,path:mappedFile(config.nativeToolchain.path)};
+    config.nativeToolchain=native(config.nativeToolchain);
     const name='relocated-providers.json';addJSON(name,config);specification.legacyProviders={ref:path.join(destination.serviceRoot,name),digest:digest(config)};
   }
   let relocatedHost:LegacyPluginSelection={};
@@ -111,13 +131,14 @@ export function prepareRelocationConfiguration(sourceInput:WorkspaceSelection,de
     if(digest(config)!==ownerHost.ownerConfigDigest||config.legacyBindingRef!==original.legacyRef||config.workspaceId!==source.workspaceId||config.projectId!==original.projectId||config.project&&config.project.root!==source.projectRoot)fail();
     config.legacyBindingRef=specification.legacyRef!;if(config.project)config.project.root=destination.projectRoot;
     for(const owner of Object.values(config.owners))owner.packageRoot=map(owner.packageRoot);
-    if(config.nativeToolchain)config.nativeToolchain={...config.nativeToolchain,path:mappedFile(config.nativeToolchain.path)};
+    if(config.nativeToolchain)config.nativeToolchain=native(config.nativeToolchain);
     const name='relocated-owner-host.json';addJSON(name,config);relocatedHost={ownerConfigRef:path.join(destination.serviceRoot,name),ownerConfigDigest:digest(config)};
   }
   if(ownerHost.workspaceConfigRef){
     const config=json(ownerHost.workspaceConfigRef,readWorkspaceOperatorConfiguration);
     if(digest(config)!==ownerHost.workspaceConfigDigest||!equal(config.selection,source)||config.specificationDigest!==digest(original)||!equal(config.ownerHost,ownerHost.ownerConfigRef?{ownerConfigRef:ownerHost.ownerConfigRef,ownerConfigDigest:ownerHost.ownerConfigDigest}:{}))fail();
-    const moved={...config,selection:destination,specificationDigest:digest(specification),connectionRef:path.join(destination.serviceRoot,'connection.json'),owners:{ontology:map(config.owners.ontology),harness:map(config.owners.harness)},ownerHost:{...relocatedHost}};
+    const history=prepareToolchainHistoryDigest({workspaceRoot:source.workspaceRoot,workspaceId:source.workspaceId,installationDigest:digest({specificationDigest:config.specificationDigest,configurationDigest:ownerHost.workspaceConfigDigest}),...(config.toolchainPreparationHistoryDigest?{historicalRecordsDigest:config.toolchainPreparationHistoryDigest}:{})});
+    const moved={...config,selection:destination,specificationDigest:digest(specification),connectionRef:path.join(destination.serviceRoot,'connection.json'),owners:{ontology:map(config.owners.ontology),harness:map(config.owners.harness)},ownerHost:{...relocatedHost},...(history?{toolchainPreparationHistoryDigest:history}:{})};
     const name='relocated-workspace-operator.json';addJSON(name,moved);relocatedHost={...relocatedHost,workspaceConfigRef:path.join(destination.serviceRoot,name),workspaceConfigDigest:digest(moved)};
   }
   const connection=json(path.join(source.serviceRoot,'connection.json'),readHostConnection);

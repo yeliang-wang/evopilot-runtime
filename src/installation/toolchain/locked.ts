@@ -162,6 +162,9 @@ function assertTree(root: string, prefix: string, expected: Set<string>) {
 }
 /** Reconstruct expected bytes from pinned archives; an editable inventory is never trust evidence. */
 export function inspectNativeToolchain(options: ToolchainOptions): NativeToolchain {
+  return inspectEnvironment(options);
+}
+function inspectEnvironment(options: ToolchainOptions, configuration?: Buffer): NativeToolchain {
   const { lock, platform, platformKey, lockDigest } = readLock();
   const environmentRoot = installedRoot(options, lockDigest, platformKey), downloads = path.join(options.cacheRoot, 'downloads');
   if (!fs.existsSync(environmentRoot) || !fs.existsSync(downloads)) fail('TOOLCHAIN_NOT_READY', 'Prepare the native toolchain before validation');
@@ -180,7 +183,7 @@ export function inspectNativeToolchain(options: ToolchainOptions): NativeToolcha
   }
   for (const prefix of ['python', 'conftest', 'bin', platform.pythonSite]) assertTree(environmentRoot, prefix, names);
   // The standard venv configuration is bound to this base interpreter, never global packages.
-  const cfgPath = path.join(environmentRoot, 'venv/pyvenv.cfg'), cfg = regular(cfgPath, 16384);
+  const cfgPath = path.join(environmentRoot, 'venv/pyvenv.cfg'), cfg = configuration ?? regular(cfgPath, 16384);
   const fields = Object.fromEntries(cfg.toString().trim().split('\n').map(row => { const i = row.indexOf(' = '); if (i < 1) fail('TOOLCHAIN_INTEGRITY', 'Malformed venv configuration'); return [row.slice(0, i), row.slice(i + 3)]; }));
   if (Object.keys(fields).sort().join('|') !== 'command|executable|home|include-system-site-packages|version'
     || fields.home !== path.join(environmentRoot, path.dirname(platform.pythonBase)) || fields['include-system-site-packages'] !== 'false'
@@ -196,6 +199,35 @@ export function inspectNativeToolchain(options: ToolchainOptions): NativeToolcha
   tools.pyshacl = { ...tools.python, version: platform.versions.pyshacl };
   return { schema: 'evopilot-native-toolchain/v1', lockDigest, platform: process.platform, arch: process.arch, tools,
     dependencyLockDigest: nativeSha256(dependencyFiles), environmentRoot, dependencyFiles, ...lock.limits };
+}
+/** Read-only material for an already copied, stopped environment. Only the
+ * fixed venv location fields change; binaries and preparation history do not.
+ * The durable Workspace relocation operator owns publication and recovery. */
+export function prepareNativeToolchainRelocation(sourceCache: string, destinationCache: string) {
+  absolute(sourceCache); absolute(destinationCache);
+  if (sourceCache === destinationCache || sourceCache.startsWith(destinationCache + path.sep) || destinationCache.startsWith(sourceCache + path.sep))
+    fail('TOOLCHAIN_PATH', 'Relocation requires separate selected caches');
+  const original = inspectNativeToolchain({cacheRoot: sourceCache});
+  const {platform, platformKey, lockDigest} = readLock();
+  const environmentRoot = installedRoot({cacheRoot: destinationCache}, lockDigest, platformKey);
+  const relative = path.relative(sourceCache, path.join(original.environmentRoot!, 'venv/pyvenv.cfg'));
+  const from = path.join(sourceCache, relative), to = path.join(destinationCache, relative);
+  controlledDirectory(path.dirname(to));
+  const before = regular(from, 16384), actual = regular(to, 16384);
+  const replacements: Record<string,string> = {
+    home: path.join(environmentRoot, path.dirname(platform.pythonBase)),
+    executable: path.join(environmentRoot, platform.pythonBase),
+    command: `${path.join(environmentRoot, platform.pythonBase)} -m venv --without-pip ${path.join(environmentRoot, 'venv')}`,
+  };
+  const after = Buffer.from(before.toString().split('\n').map(row => {
+    const i = row.indexOf(' = '), key = row.slice(0, i);
+    return i > 0 && replacements[key] ? key + ' = ' + replacements[key] : row;
+  }).join('\n'));
+  const mode = fs.statSync(from).mode & 0o777;
+  if ((!actual.equals(before) && !actual.equals(after)) || (fs.statSync(to).mode & 0o777) !== mode)
+    fail('TOOLCHAIN_INTEGRITY', 'Copied environment differs from original or exact relocation material');
+  const relocated = inspectEnvironment({cacheRoot: destinationCache}, after);
+  return {original, relocated, patch: {path: relative, previousSha256: sha(before), sha256: sha(after), bytes: after, mode}};
 }
 /** Explicit installer step. Validation/doctor never performs a network download. */
 export async function prepareNativeToolchain(options: ToolchainOptions): Promise<NativeToolchain> {

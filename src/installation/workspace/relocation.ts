@@ -78,8 +78,8 @@ function compareTrees(source:ManagedWorkspaceSnapshot,destination:WorkspaceSelec
       if(role==='workspace'&&(e.path==='workspace.json'||ownerNames.some(o=>e.path==='state/'+o+'/'+o+'.db'||['-wal','-shm','-journal'].some(s=>e.path==='state/'+o+'/'+o+'.db'+s)))){
         if(e.kind!=='file'||e.mode!==0o600)fail('MAINTENANCE_PARTIAL_CONFLICT');expected.delete(e.path);continue;
       }
-      const patch=role==='service'?material?.patches.find(p=>p.path===e.path):undefined;
-      if(patch){if(e.kind!=='file'||e.mode!==0o600||![patch.previousSha256,patch.sha256].includes(e.sha256))fail('MAINTENANCE_PARTIAL_CONFLICT');expected.delete(e.path);continue;}
+      const patch=material?.patches.find(p=>(p.role??'service')===role&&p.path===e.path);
+      if(patch){if(e.kind!=='file'||e.mode!==(patch.mode??0o600)||![patch.previousSha256,patch.sha256].includes(e.sha256))fail('MAINTENANCE_PARTIAL_CONFLICT');expected.delete(e.path);continue;}
       if(role==='service'&&material&&(e.path==='.evopilot-relocation-'+requestId||e.path.startsWith('.evopilot-relocation-'+requestId+'/')))continue;
       if(!equal(expected.get(e.path),e))fail('MAINTENANCE_PARTIAL_CONFLICT');expected.delete(e.path);
     }
@@ -88,18 +88,19 @@ function compareTrees(source:ManagedWorkspaceSnapshot,destination:WorkspaceSelec
 }
 function applyConfiguration(destination:WorkspaceSelection,material:RelocationConfigurationMaterial,requestId:string,signal?:AbortSignal):void {
   const stage=path.join(destination.serviceRoot,'.evopilot-relocation-'+requestId);mkdir(stage);
-  const names=new Set(material.patches.map(p=>sha(p.path)));
+  const stageName=(p:RelocationConfigurationMaterial['patches'][number])=>sha(p.role==='workspace'?'workspace:'+p.path:p.path);
+  const names=new Set(material.patches.map(stageName));
   if(fs.readdirSync(stage).some(name=>!names.has(name)))fail('MAINTENANCE_PARTIAL_CONFLICT');
   for(const patch of material.patches){
-    signal?.throwIfAborted();const file=path.join(destination.serviceRoot,patch.path),temporary=path.join(stage,sha(patch.path));canonicalPath(file,true);
+    signal?.throwIfAborted();const file=path.join(patch.role==='workspace'?destination.workspaceRoot:destination.serviceRoot,patch.path),temporary=path.join(stage,stageName(patch)),mode=patch.mode??0o600;canonicalPath(file,true);
     const current=present(file)?hashMaintenanceFile(file):null;
-    if(current&&current.sha256===patch.sha256){if(current.mode!==0o600)fail('MAINTENANCE_PARTIAL_CONFLICT');if(present(temporary)){const bytes=readRegular(temporary,1048576,true);if(!bytes.equals(patch.bytes))fail('MAINTENANCE_PARTIAL_CONFLICT');fs.unlinkSync(temporary);}continue;}
+    if(current&&current.sha256===patch.sha256){if(current.mode!==mode)fail('MAINTENANCE_PARTIAL_CONFLICT');if(present(temporary)){const bytes=readRegular(temporary,2097152,mode===0o600);if(!bytes.equals(patch.bytes))fail('MAINTENANCE_PARTIAL_CONFLICT');fs.unlinkSync(temporary);}continue;}
     if((current?.sha256??null)!==patch.previousSha256)fail('MAINTENANCE_PARTIAL_CONFLICT');
-    privateDirectory(path.dirname(file));
-    const prior=present(temporary)?readRegular(temporary,1048576,true):Buffer.alloc(0);
+    if(patch.role==='workspace'){if(current?.mode!==mode)fail('MAINTENANCE_PARTIAL_CONFLICT');canonicalPath(path.dirname(file));}else privateDirectory(path.dirname(file));
+    const prior=present(temporary)?readRegular(temporary,2097152,mode===0o600):Buffer.alloc(0);
     if(prior.length>patch.bytes.length||!prior.equals(patch.bytes.subarray(0,prior.length)))fail('MAINTENANCE_PARTIAL_CONFLICT');
     const fd=fs.openSync(temporary,fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_NOFOLLOW,0o600);
-    try{let offset=prior.length;while(offset<patch.bytes.length)offset+=fs.writeSync(fd,patch.bytes,offset,patch.bytes.length-offset,offset);fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+    try{let offset=prior.length;while(offset<patch.bytes.length)offset+=fs.writeSync(fd,patch.bytes,offset,patch.bytes.length-offset,offset);fs.fchmodSync(fd,mode);fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
     fs.renameSync(temporary,file);syncDirectory(path.dirname(file));syncDirectory(stage);
   }
   fs.rmdirSync(stage);syncDirectory(destination.serviceRoot);
