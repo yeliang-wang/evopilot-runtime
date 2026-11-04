@@ -2,6 +2,15 @@
 
 Runtime coordinates exact project candidates, collection recipes, decisions, claims, receipts and completion. Ontology owns RDF/SHACL meaning and Harness owns Rego policy evaluation. The corrected `specifications/v1` flow uses the current shared native contract revision **1.1.0**, its content digest and each owner's exact standard/lock digests. A directory named `v1` is not sufficient identity.
 
+For the independent v0.9 service, installed process control belongs to the local
+installer, not an HTTP business operation. After binding or relocation, use
+`evopilot-runtime-install service select --root …` followed by explicit
+`service inspect|start|stop --selection-ref …`; see
+[current installed service control](legacy-host.md#control-the-current-installed-service).
+The original installation plan remains immutable. These commands verify installed
+bytes and current identity, do not register a plugin or dispatch business work,
+and do not replace final candidate acceptance.
+
 Import `createRuntimeService` from `@evopilot-next/runtime/service`. Construction and `capabilities()` do not initialize a Workspace. Call `initialize()` explicitly before operations, and `close()` when done. Node 24.14.0 or later is required. Source maintainers run `npm ci --ignore-scripts`, `npm run build`, `npm run check`, then `npm test`. Package exports include strict TypeScript declarations; installed distributions contain compiled code and omit development tests/scripts.
 
 ## Workspace and trust

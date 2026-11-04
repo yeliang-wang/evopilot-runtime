@@ -77,3 +77,27 @@ test('relocation retains exact local maintenance permissions and rebinds only it
  const plugin=runtimePluginMaterial(join(f.destination.serviceRoot,'package'),config.connectionRef,node,material.ownerHost);assert.deepEqual(plugin.files.get('.mcp.json'),fs.readFileSync(join(f.destination.serviceRoot,'plugin/.mcp.json')));
  assert.equal(prepare(f).materialDigest,material.materialDigest);
 });
+
+function firstUseFixture(t){
+ const f=fixture(t,true,true,true),ref=join(f.source.serviceRoot,'workspace-setup.json'),c=f.operatorConfig;
+ const config={schema:'runtime-workspace-setup-operator/v1',projectRoot:f.source.projectRoot,workspaceRoot:f.source.workspaceRoot,owners:c.owners,ownerHost:{ref:f.ownerHost.ownerConfigRef,digest:f.ownerHost.ownerConfigDigest},workspaceOperator:{projectRoot:c.selection.projectRoot,referenceFiles:c.selection.referenceFiles,owners:c.owners,calls:c.calls,expiresAt:c.expiresAt},serviceAfterSetup:'running',expiresAt:c.expiresAt,serviceRoot:f.source.serviceRoot,workspaceId:f.source.workspaceId,serviceId:f.source.serviceId,connectionRef:c.connectionRef,installationPlanDigest:'a'.repeat(64),specificationDigest:'b'.repeat(64),connectionDigest:digest(read(c.connectionRef))};
+ for(const s of [f.source,f.destination]){put(join(s.serviceRoot,'workspace-setup.json'),config);put(join(s.serviceRoot,'package/dist/installation/setup-host.js'),'// synthetic first-use entry, never executed\n');}
+ const material=runtimePluginMaterial(join(f.source.serviceRoot,'package'),c.connectionRef,node,{...f.ownerHost,setupConfigRef:ref,setupConfigDigest:digest(config)});
+ for(const [name,bytes] of material.files)for(const s of [f.source,f.destination])put(join(s.serviceRoot,'plugin',name),bytes);
+ return{...f,setup:config,setupRef:ref};
+}
+
+test('completed first-use Host relocates to its bound maintenance entry without weakening owner or maintenance permissions',t=>{
+ const f=firstUseFixture(t),sourcePlugin=fs.readFileSync(join(f.source.serviceRoot,'plugin/.mcp.json')),m=prepare(f);apply(f,m);
+ const moved=read(join(f.destination.serviceRoot,'plugin/.mcp.json')).mcpServers.evopilot_runtime_legacy;
+ assert.equal(moved.args[0],join(f.destination.serviceRoot,'package/dist/installation/workspace-host.js'));assert(!moved.args.includes('--setup-config-ref'));
+ const operator=read(m.ownerHost.workspaceConfigRef);assert.deepEqual(operator.calls,f.operatorConfig.calls);assert.equal(operator.expiresAt,f.operatorConfig.expiresAt);
+ assert.equal(read(m.ownerHost.ownerConfigRef).expiresAt,f.setup.expiresAt);assert(m.sourcePins.some(p=>p.path===f.setupRef));
+ assert.deepEqual(fs.readFileSync(join(f.source.serviceRoot,'plugin/.mcp.json')),sourcePlugin);assert.equal(prepare(f).materialDigest,m.materialDigest);
+});
+
+test('first-use relocation rejects changed setup roots or grants even if plugin material is regenerated',t=>{
+ const f=firstUseFixture(t),config={...f.setup,workspaceRoot:join(f.root,'foreign-state')};put(f.setupRef,config);
+ const material=runtimePluginMaterial(join(f.source.serviceRoot,'package'),f.operatorConfig.connectionRef,node,{...f.ownerHost,setupConfigRef:f.setupRef,setupConfigDigest:digest(config)});put(join(f.source.serviceRoot,'plugin/.mcp.json'),material.files.get('.mcp.json'));
+ assert.throws(()=>prepare(f),{code:'RELOCATION_CONFIGURATION_CHANGED'});
+});

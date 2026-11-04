@@ -481,3 +481,36 @@ startup sequence; isolated SDK tests do not substitute for that journey.
 检查不下载，准备只使用固定依赖清单，并在停机及工作区互斥保护下执行。准备调用
 先返回原请求状态；进程退出后的 UNKNOWN 不能当作重试许可。失败回执不会被后续
 成功覆盖。依赖就绪不等于服务已启动或 owner 已绑定，后续需要按准确配置显式启动。
+
+## Control the current installed service
+
+After Workspace binding or relocation, use the installed operator's current
+selection rather than replaying the original installation plan. The original
+plan, adoption receipt and distribution manifest remain unchanged. Selection is
+a passive identity snapshot, not permission to execute business work or publish.
+
+```sh
+umask 077
+evopilot-runtime-install service select --root /absolute/current-service > /absolute/current-service-selection.json
+evopilot-runtime-install service inspect --selection-ref /absolute/current-service-selection.json
+evopilot-runtime-install service start --selection-ref /absolute/current-service-selection.json
+evopilot-runtime-install service stop --selection-ref /absolute/current-service-selection.json
+```
+
+Each operation rechecks the selected original plan, complete installed package,
+manifest, current configuration, credentials and connection identity. Start also
+checks the stopped original ledger and signed managed binding before launching
+the exact service. Replaced data, a competing writer or changed configuration
+fails closed. Selecting a new snapshot does not repair or approve the change.
+Read the retained failure and review the intended configuration first.
+
+The commands do not re-download, restage, register a Host, rewrite an old plan,
+start an online worker or dispatch a business Run. Startup and stop are explicit
+and retain their own local audit; inspection never starts a service. A relocated
+installation can verify its retained package after the old service root and
+temporary downloads have been removed. Separately selected external configuration
+and dependency locations must still exist when the current service uses them.
+
+工作区绑定或迁移之后，使用上述当前服务入口。`select` 只输出准确安装身份；配置
+变化会使旧选择失效，不会自动覆盖原安装计划。`start`、`stop` 分别显式启停选中的
+服务，保留本机操作记录；不会派发业务任务、启动在线 worker 或重新安装 Codex 插件。

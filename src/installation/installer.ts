@@ -16,6 +16,7 @@ import {readLegacyOwnerHostConfiguration} from '../host/legacy-owners.js';
 import {readLegacyProviderConfiguration} from '../compat/registered-providers.js';
 import {adoptLegacyWorkspace,verifyLegacyBackup} from './migration.js';
 import {inspectUserService,observeUserService,startUserService,stopUserService,type UserServiceSpecification} from './service.js';
+import {serviceControlCommand} from './service-control.js';
 
 type FilePin={type:'file';sha256:string;bytes:number;mode:number}|{type:'symlink';target:string};
 interface Distribution {schema:'runtime-standalone-distribution/v1';version:string;archiveDigest:string;files:Record<string,FilePin>;}
@@ -81,13 +82,13 @@ function verifyDistribution(root:string,manifest:Distribution,allowMissing=false
   walk(root);if(!allowMissing&&count!==Object.keys(manifest.files).length)reject('INSTALLATION_DISTRIBUTION','Installed distribution is incomplete');
   if(!allowMissing){const p=record(JSON.parse(readFileSync(join(root,'package.json'),'utf8')));if(p.name!=='@evopilot-next/runtime'||p.version!==manifest.version)reject('INSTALLATION_DISTRIBUTION','Installed package identity mismatch');}
 }
-function validatePlan(plan:RuntimeInstallPlan):void{
+function validatePlan(plan:RuntimeInstallPlan,retained=false):void{
   exact(record(plan),['schema','root','distribution','nodeExecutable','nodeSha256','workspaceId','projectId','principalId','role','credentialExpiresAt','port','integrationsRef','codex'],['legacyMigration','legacyOwnerHost','legacyProviders','workspaceOperator','workspaceSetup']);
   if(plan.schema!=='runtime-install-plan/v1'||!Object.hasOwn(ROLES,plan.role)||!Number.isSafeInteger(plan.port)||plan.port<1024||plan.port>65535)reject('INSTALLATION_PLAN','Invalid installation parameters');
-  absolute(plan.root);existing(plan.nodeExecutable);hash(plan.nodeSha256);slug(plan.workspaceId);slug(plan.projectId);slug(plan.principalId);
+  absolute(plan.root);(retained?absolute:existing)(plan.nodeExecutable);hash(plan.nodeSha256);slug(plan.workspaceId);slug(plan.projectId);slug(plan.principalId);
   if(!Number.isFinite(Date.parse(plan.credentialExpiresAt)))reject('INSTALLATION_PLAN','Choose an explicit credential expiration');
-  if(plan.integrationsRef!==null){existing(plan.integrationsRef);readPrivateJson(plan.integrationsRef);}
-  if(plan.codex!==null){exact(record(plan.codex),['executable','sha256','version']);existing(plan.codex.executable);hash(plan.codex.sha256);string(plan.codex.version,128);}
+  if(plan.integrationsRef!==null){(retained?absolute:existing)(plan.integrationsRef);if(!retained)readPrivateJson(plan.integrationsRef);}
+  if(plan.codex!==null){exact(record(plan.codex),['executable','sha256','version']);(retained?absolute:existing)(plan.codex.executable);hash(plan.codex.sha256);string(plan.codex.version,128);}
   if(plan.legacyMigration!=null){
     const migration=plan.legacyMigration;exact(record(migration),['workspaceRoot','expectedSnapshotDigest','backupRoot','expectedBackupDigest']);
     absolute(migration.workspaceRoot);absolute(migration.backupRoot);hash(migration.expectedSnapshotDigest);hash(migration.expectedBackupDigest);
@@ -157,17 +158,17 @@ function specification(plan:RuntimeInstallPlan,version:string):UserServiceSpecif
 /** Read-only package verification for an explicitly selected configuration
  * transition. The original plan and archive remain immutable; this never
  * stages files, creates credentials, adopts data or starts a process. */
-export function verifyInstalledRuntimePackage(plan:RuntimeInstallPlan):UserServiceSpecification {
-  validatePlan(plan);
-  if(canonical(readPrivateJson(join(plan.root,'installation-plan.json')))!==canonical(plan))reject('INSTALLATION_CHANGED','Original installation plan differs',409);
+export function verifyInstalledRuntimePackage(plan:RuntimeInstallPlan,installedRoot=plan.root):UserServiceSpecification {
+  validatePlan(plan,true);existing(installedRoot);
+  if(canonical(readPrivateJson(join(installedRoot,'installation-plan.json')))!==canonical(plan))reject('INSTALLATION_CHANGED','Original installation plan differs',409);
   exact(record(plan.distribution),['packageRoot','manifestRef','manifestDigest','archiveRef','archiveDigest']);hash(plan.distribution.manifestDigest);hash(plan.distribution.archiveDigest);
-  const ref=join(plan.root,'distribution-manifest.json');privateFile(ref);if(lstatSync(ref).size>8388608)reject('INSTALLATION_DISTRIBUTION','Installed manifest exceeds its bounded profile');
+  const ref=join(installedRoot,'distribution-manifest.json');privateFile(ref);if(lstatSync(ref).size>8388608)reject('INSTALLATION_DISTRIBUTION','Installed manifest exceeds its bounded profile');
   const raw=readFileSync(ref);if(sha(raw)!==plan.distribution.manifestDigest)reject('INSTALLATION_CHANGED','Installed manifest differs from the original distribution',409);
   const manifest=record(JSON.parse(raw.toString()));exact(manifest,['schema','version','archiveDigest','files']);
   if(manifest.schema!=='runtime-standalone-distribution/v1'||manifest.archiveDigest!==plan.distribution.archiveDigest)reject('INSTALLATION_CHANGED','Installed archive identity differs',409);
   // Installed operation uses the original manifest anchor and installed bytes,
   // never the source tree or the disposable download/unpack locations.
-  verifyDistribution(join(plan.root,'package'),manifest as unknown as Distribution);
+  verifyDistribution(join(installedRoot,'package'),manifest as unknown as Distribution);
   return specification(plan,string(manifest.version,128));
 }
 function marketplaceName(root:string):string{return'evopilot-runtime-'+sha(root).slice(0,16);}
@@ -261,6 +262,9 @@ export async function runInstaller(plan:RuntimeInstallPlan,command:InstallerComm
 }
 export async function installerMain(argv:string[],output:{write(v:string):unknown}=process.stdout):Promise<number>{
   try{
+    if(argv[0]==='service'){
+      output.write(canonicalEvidence(await serviceControlCommand(argv.slice(1)))+'\n');return 0;
+    }
     const [command,flag,ref,...extra]=argv;if(extra.length||flag!=='--plan-ref'||!ref||!['stage','install','start','stop','inspect','uninstall'].includes(command))reject('INSTALLER_ARGUMENT','Use stage|install|start|stop|inspect|uninstall --plan-ref <protected exact plan>');
     existing(ref);const result=await runInstaller(readPrivateJson(ref) as RuntimeInstallPlan,command as InstallerCommand);output.write(canonicalEvidence(result)+'\n');return 0;
   }catch(error){output.write(canonical({error:{code:error instanceof ServiceError?error.code:'INSTALLATION_FAILED',message:error instanceof ServiceError?error.message:'Inspect the retained installation evidence before continuing'}})+'\n');return 1;}

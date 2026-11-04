@@ -10,6 +10,7 @@ import {isDeepStrictEqual as equal} from 'node:util';
 import {canonical,digest,exact,record,reject} from '../../server/errors.js';
 import {readHostConnection,readPrivateJson} from '../../server/security.js';
 import {readWorkspaceOperatorConfiguration} from '../../host/workspace.js';
+import {readWorkspaceSetupConfiguration} from '../../host/setup.js';
 import {readLegacyBinding} from '../../compat/gateway.js';
 import {resolvedManagedBinding,type ManagedLegacyBinding} from '../../compat/managed-store.js';
 import {readIdentity} from '../../location-lineage.js';
@@ -122,7 +123,23 @@ export function prepareRelocationConfiguration(sourceInput:WorkspaceSelection,de
   const connection=json(path.join(source.serviceRoot,'connection.json'),readHostConnection);
   if(connection.workspaceId!==source.workspaceId||connection.projectId!==original.projectId||connection.principalId!==original.principalId||connection.serviceId!==source.serviceId||connection.version!==original.version||connection.tokenRef!==original.tokenRef||connection.origin!=='http://127.0.0.1:'+original.port)fail();
   addJSON('connection.json',{...connection,tokenRef:specification.tokenRef});
-  const oldPlugin=runtimePluginMaterial(original.packageRoot,path.join(source.serviceRoot,'connection.json'),original.nodeExecutable,ownerHost);
+  // A completed first-use installation still runs its setup bootstrap, which
+  // delegates to this exact bound maintenance grant. Verify that original
+  // wrapper and retain its bytes as history; the relocated installation is
+  // already bound and uses the normal current maintenance entry.
+  let sourceHost={...ownerHost};
+  const installedServers=record(record(read('plugin/.mcp.json')).mcpServers),installedLegacy=record(installedServers.evopilot_runtime_legacy);
+  if(Array.isArray(installedLegacy.args)&&installedLegacy.args[0]===path.join(original.packageRoot,'dist/installation/setup-host.js')){
+    const ref=path.join(source.serviceRoot,'workspace-setup.json'),setup=json(ref,readWorkspaceSetupConfiguration);
+    if(setup.serviceRoot!==source.serviceRoot||setup.workspaceRoot!==source.workspaceRoot||setup.projectRoot!==source.projectRoot||setup.workspaceId!==source.workspaceId||setup.serviceId!==source.serviceId||setup.connectionRef!==path.join(source.serviceRoot,'connection.json')||!equal(setup.ownerHost,ownerHost.ownerConfigRef?{ref:ownerHost.ownerConfigRef,digest:ownerHost.ownerConfigDigest}:null))fail();
+    if(ownerHost.workspaceConfigRef){
+      const current=json(ownerHost.workspaceConfigRef,readWorkspaceOperatorConfiguration);
+      const grant={projectRoot:current.selection.projectRoot,referenceFiles:current.selection.referenceFiles,owners:current.owners,calls:current.calls,expiresAt:current.expiresAt};
+      if(!equal(setup.workspaceOperator,grant))fail();
+    }else if(setup.workspaceOperator!==null)fail();
+    sourceHost={...sourceHost,setupConfigRef:ref,setupConfigDigest:digest(setup)};
+  }
+  const oldPlugin=runtimePluginMaterial(original.packageRoot,path.join(source.serviceRoot,'connection.json'),original.nodeExecutable,sourceHost);
   for(const [name,bytes] of oldPlugin.files){const file=path.join(source.serviceRoot,'plugin',name);if(pin(file).sha256!==sha(bytes))fail();}
   const helper=path.join(specification.packageRoot,'dist/host/header-helper.js'),args=[path.join(specification.packageRoot,relocatedHost.workspaceConfigRef?'dist/installation/workspace-host.js':'dist/host/bridge.js'),'--connection-ref',path.join(destination.serviceRoot,'connection.json'),'--legacy-only'];
   if(relocatedHost.ownerConfigRef)args.push('--owner-config-ref',relocatedHost.ownerConfigRef,'--owner-config-digest',relocatedHost.ownerConfigDigest!);
