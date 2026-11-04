@@ -12,11 +12,14 @@ import {readHostConnection,readPrivateJson} from '../../server/security.js';
 import {readWorkspaceOperatorConfiguration} from '../../host/workspace.js';
 import {readWorkspaceSetupConfiguration} from '../../host/setup.js';
 import {readLegacyBinding} from '../../compat/gateway.js';
+import {readRegular} from '../../compat/project/files.js';
 import {resolvedManagedBinding,type ManagedLegacyBinding} from '../../compat/managed-store.js';
 import {readIdentity} from '../../location-lineage.js';
 import {RuntimeStore} from '../../server/store.js';
 import {readLegacyProviderConfiguration} from '../../compat/registered-providers.js';
 import {readLegacyOwnerHostConfiguration} from '../../host/legacy-owners.js';
+import {readOnlineConfiguration,type OnlineRegistration} from '../../host/online.js';
+import {nativeSha256} from '../../../vendor/compatibility/v1/native.mjs';
 import {readIntegrationConfiguration,readRegisteredNativeToolchain,type NativeToolchainRegistration} from '../../adapters/config.js';
 import {prepareNativeToolchainRelocation} from '../toolchain/locked.js';
 import {prepareToolchainHistoryDigest} from '../toolchain/preparation.js';
@@ -72,7 +75,7 @@ export function prepareRelocationConfiguration(sourceInput:WorkspaceSelection,de
   if(original.schema!=='runtime-user-service/v1'||original.root!==source.serviceRoot||original.packageRoot!==path.join(source.serviceRoot,'package')||original.workspaceId!==source.workspaceId||original.legacyRef!==path.join(source.serviceRoot,'legacy-binding.json')||original.tokenRef!==path.join(source.serviceRoot,'client.json'))fail();
   if(!equal(json(original.legacyRef,readLegacyBinding),binding(source)))fail();
   const map=(file:string):string=>{for(const role of ['projectRoot','workspaceRoot','serviceRoot'] as const)if(file===source[role]||file.startsWith(source[role]+path.sep))return destination[role]+file.slice(source[role].length);return file;};
-  const mappedFile=(file:string):string=>{const to=map(file);if(to!==file){const before=pin(file),after=hashMaintenanceFile(to);if(before.sha256!==after.sha256||before.bytes!==after.bytes||before.mode!==after.mode)fail();}return to;};
+  const mappedFile=(file:string):string=>{const to=map(file),before=pin(file);if(to!==file){const after=hashMaintenanceFile(to);if(before.sha256!==after.sha256||before.bytes!==after.bytes||before.mode!==after.mode)fail();}return to;};
   const patches:RelocationConfigurationPatch[]=[];
   const add=(relative:string,bytes:Buffer|string)=>{
     if(path.isAbsolute(relative)||relative.split('/').some(s=>!s||s==='.'||s==='..')||patches.some(p=>p.path===relative))fail();
@@ -109,6 +112,35 @@ export function prepareRelocationConfiguration(sourceInput:WorkspaceSelection,de
     const moved={path:path.join(destination.serviceRoot,name),digest:'sha256:'+sha(content),lockDigest:registration.lockDigest};
     registrations.set(key,moved);return moved;
   };
+  const onlineRegistrations=new Map<string,OnlineRegistration>();
+  const online=(registration:OnlineRegistration):OnlineRegistration=>{
+    const key=canonical(registration),existing=onlineRegistrations.get(key);if(existing)return existing;
+    const current=json(registration.ref,()=>readOnlineConfiguration(registration,source.workspaceId));
+    const secret=(ref:string)=>{readRegular(ref,1048576,true);return mappedFile(ref);};
+    const settings={...current.settings,prometheus:current.settings.prometheus.map(c=>({...c,bearerTokenFile:c.bearerTokenFile===null?null:secret(c.bearerTokenFile)})),alertmanager:current.settings.alertmanager.map(c=>({...c,bearerTokenFile:secret(c.bearerTokenFile)}))};
+    const subject={schema:current.schema,workspaceId:current.workspaceId,settings},moved={...subject,digest:nativeSha256(subject)};
+    let ref:string;
+    if(registration.ref===path.join(source.workspaceRoot,'online/configuration.json')){
+      const bytes=Buffer.from(canonical(moved)+'\n'),previous=pin(registration.ref),target=path.join(destination.workspaceRoot,'online/configuration.json'),after=hashMaintenanceFile(target),sha256=sha(bytes);
+      if(previous.mode!==0o600||after.mode!==0o600||![previous.sha256,sha256].includes(after.sha256))fail();
+      patches.push({path:'online/configuration.json',role:'workspace',previousSha256:previous.sha256,sha256,bytes,mode:0o600});ref=target;
+    }else{
+      // An external or content-addressed configuration remains immutable at
+      // its old location. The moved Host selects a new operational document.
+      const name='relocated-online-'+digest(moved)+'.json';if(!patches.some(p=>p.path===name&&!p.role))addJSON(name,moved);ref=path.join(destination.serviceRoot,name);
+    }
+    const result={ref,digest:digest(moved)};onlineRegistrations.set(key,result);return result;
+  };
+  const movedOwner=(ref:string,pinDigest:string,projectId:string,name?:string)=>{
+    const config=structuredClone(json(ref,readLegacyOwnerHostConfiguration));
+    if(digest(config)!==pinDigest||config.legacyBindingRef!==original.legacyRef||config.workspaceId!==source.workspaceId||config.projectId!==projectId)fail();
+    config.legacyBindingRef=specification.legacyRef!;if(config.project)config.project.root=map(config.project.root);
+    for(const owner of Object.values(config.owners))owner.packageRoot=map(owner.packageRoot);
+    if(config.nativeToolchain)config.nativeToolchain=native(config.nativeToolchain);
+    if(config.online)config.online=online(config.online);
+    const filename=name??'relocated-online-owner-'+digest(config)+'.json';addJSON(filename,config);
+    return{ownerConfigRef:path.join(destination.serviceRoot,filename),ownerConfigDigest:digest(config)};
+  };
   addJSON('legacy-binding.json',binding(destination));
   if(original.integrationsRef!==null){
     const current=structuredClone(json(original.integrationsRef,file=>readIntegrationConfiguration(file,source.workspaceId)));
@@ -127,20 +159,32 @@ export function prepareRelocationConfiguration(sourceInput:WorkspaceSelection,de
   }
   let relocatedHost:LegacyPluginSelection={};
   if(ownerHost.ownerConfigRef){
-    const config=structuredClone(json(ownerHost.ownerConfigRef,readLegacyOwnerHostConfiguration));
-    if(digest(config)!==ownerHost.ownerConfigDigest||config.legacyBindingRef!==original.legacyRef||config.workspaceId!==source.workspaceId||config.projectId!==original.projectId||config.project&&config.project.root!==source.projectRoot)fail();
-    config.legacyBindingRef=specification.legacyRef!;if(config.project)config.project.root=destination.projectRoot;
-    for(const owner of Object.values(config.owners))owner.packageRoot=map(owner.packageRoot);
-    if(config.nativeToolchain)config.nativeToolchain=native(config.nativeToolchain);
-    const name='relocated-owner-host.json';addJSON(name,config);relocatedHost={ownerConfigRef:path.join(destination.serviceRoot,name),ownerConfigDigest:digest(config)};
+    const config=json(ownerHost.ownerConfigRef,readLegacyOwnerHostConfiguration);
+    if(config.project&&config.project.root!==source.projectRoot)fail();
+    relocatedHost=movedOwner(ownerHost.ownerConfigRef,ownerHost.ownerConfigDigest!,original.projectId,'relocated-owner-host.json');
   }
   if(ownerHost.workspaceConfigRef){
     const config=json(ownerHost.workspaceConfigRef,readWorkspaceOperatorConfiguration);
     if(digest(config)!==ownerHost.workspaceConfigDigest||!equal(config.selection,source)||config.specificationDigest!==digest(original)||!equal(config.ownerHost,ownerHost.ownerConfigRef?{ownerConfigRef:ownerHost.ownerConfigRef,ownerConfigDigest:ownerHost.ownerConfigDigest}:{}))fail();
     const history=prepareToolchainHistoryDigest({workspaceRoot:source.workspaceRoot,workspaceId:source.workspaceId,installationDigest:digest({specificationDigest:config.specificationDigest,configurationDigest:ownerHost.workspaceConfigDigest}),...(config.toolchainPreparationHistoryDigest?{historicalRecordsDigest:config.toolchainPreparationHistoryDigest}:{})});
-    const moved={...config,selection:destination,specificationDigest:digest(specification),connectionRef:path.join(destination.serviceRoot,'connection.json'),owners:{ontology:map(config.owners.ontology),harness:map(config.owners.harness)},ownerHost:{...relocatedHost},...(history?{toolchainPreparationHistoryDigest:history}:{})};
+    const movedOnline=config.online?{hosts:config.online.hosts.map(h=>{
+      const connection=json(h.connectionRef,readHostConnection);
+      if(connection.workspaceId!==source.workspaceId||connection.serviceId!==source.serviceId||connection.origin!=='http://127.0.0.1:'+original.port||connection.version!==original.version)fail();
+      const credential=json(connection.tokenRef,readPrivateJson) as {schema:string;workspaceId:string;projectId:string;principalId:string};
+      if(credential.schema!=='runtime-client-credential/v1'||credential.workspaceId!==source.workspaceId||credential.projectId!==connection.projectId||credential.principalId!==connection.principalId)fail();
+      const movedConnection={...connection,tokenRef:mappedFile(connection.tokenRef)};
+      if(h.connectionRef===path.join(source.serviceRoot,'connection.json')){
+        if(h.ownerConfigRef!==ownerHost.ownerConfigRef||h.ownerConfigDigest!==ownerHost.ownerConfigDigest||!relocatedHost.ownerConfigRef)fail();
+        return{connectionRef:path.join(destination.serviceRoot,'connection.json'),ownerConfigRef:relocatedHost.ownerConfigRef,ownerConfigDigest:relocatedHost.ownerConfigDigest!};
+      }
+      const name='relocated-online-connection-'+digest(movedConnection)+'.json';addJSON(name,movedConnection);
+      return{connectionRef:path.join(destination.serviceRoot,name),...movedOwner(h.ownerConfigRef,h.ownerConfigDigest,connection.projectId)};
+    })}:undefined;
+    const moved={...config,selection:destination,specificationDigest:digest(specification),connectionRef:path.join(destination.serviceRoot,'connection.json'),owners:{ontology:map(config.owners.ontology),harness:map(config.owners.harness)},ownerHost:{...relocatedHost},...(history?{toolchainPreparationHistoryDigest:history}:{}),...(movedOnline?{online:movedOnline}:{})};
     const name='relocated-workspace-operator.json';addJSON(name,moved);relocatedHost={...relocatedHost,workspaceConfigRef:path.join(destination.serviceRoot,name),workspaceConfigDigest:digest(moved)};
   }
+  const canonicalOnline=path.join(source.workspaceRoot,'online/configuration.json');
+  if(!onlineRegistrations.size&&fs.existsSync(canonicalOnline))online({ref:canonicalOnline,digest:digest(json(canonicalOnline,readPrivateJson))});
   const connection=json(path.join(source.serviceRoot,'connection.json'),readHostConnection);
   if(connection.workspaceId!==source.workspaceId||connection.projectId!==original.projectId||connection.principalId!==original.principalId||connection.serviceId!==source.serviceId||connection.version!==original.version||connection.tokenRef!==original.tokenRef||connection.origin!=='http://127.0.0.1:'+original.port)fail();
   addJSON('connection.json',{...connection,tokenRef:specification.tokenRef});
@@ -155,7 +199,7 @@ export function prepareRelocationConfiguration(sourceInput:WorkspaceSelection,de
     if(setup.serviceRoot!==source.serviceRoot||setup.workspaceRoot!==source.workspaceRoot||setup.projectRoot!==source.projectRoot||setup.workspaceId!==source.workspaceId||setup.serviceId!==source.serviceId||setup.connectionRef!==path.join(source.serviceRoot,'connection.json')||!equal(setup.ownerHost,ownerHost.ownerConfigRef?{ref:ownerHost.ownerConfigRef,digest:ownerHost.ownerConfigDigest}:null))fail();
     if(ownerHost.workspaceConfigRef){
       const current=json(ownerHost.workspaceConfigRef,readWorkspaceOperatorConfiguration);
-      const grant={projectRoot:current.selection.projectRoot,referenceFiles:current.selection.referenceFiles,owners:current.owners,calls:current.calls,expiresAt:current.expiresAt};
+      const grant={projectRoot:current.selection.projectRoot,referenceFiles:current.selection.referenceFiles,owners:current.owners,calls:current.calls,expiresAt:current.expiresAt,...(current.online?{online:current.online}:{})};
       if(!equal(setup.workspaceOperator,grant))fail();
     }else if(setup.workspaceOperator!==null)fail();
     sourceHost={...sourceHost,setupConfigRef:ref,setupConfigDigest:digest(setup)};

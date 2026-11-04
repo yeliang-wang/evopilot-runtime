@@ -338,7 +338,9 @@
         "src/installation/online/application.ts",
         "tests/e2e/online-configuration-v090.test.mjs",
         "src/installation/online/operator.ts",
-        "tests/e2e/online-host-operator-v090.test.mjs"
+        "tests/e2e/online-host-operator-v090.test.mjs",
+        "src/installation/online/preservation.ts",
+        "tests/e2e/online-maintenance-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

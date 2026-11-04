@@ -186,7 +186,7 @@ export async function checkSource() {
     if (!path.endsWith('.mjs') && !path.endsWith('.ts') && !path.endsWith('.mts')) continue;
     const source = await readFile(path, 'utf8');
     if(!path.includes('/src/installation/'))assert.doesNotMatch(source,/from\s+['"][^'"]*installation\/[^'"]+['"]/,'Operator installation must not be reachable from Runtime service code');
-    const operatorHostReader=['installer.ts','host-selection.ts','workspace/configuration.ts','workspace/binding.ts','online/selection.ts','online/worker.ts','online/configuration.ts','online/application.ts','online/operator.ts'].some(file=>path.endsWith('/src/installation/'+file));
+    const operatorHostReader=['installer.ts','host-selection.ts','workspace/configuration.ts','workspace/binding.ts','online/selection.ts','online/worker.ts','online/configuration.ts','online/application.ts','online/operator.ts','online/preservation.ts'].some(file=>path.endsWith('/src/installation/'+file));
     if(path.endsWith('/src/installation/online/selection.ts'))assert.doesNotMatch(source,/\b(?:openLegacyOwnerRoutes|createLegacyOwnerProviders|createProjectHostRoutes)\b/,'Worker selection may read current grants but must never invoke owner work');
     if(path.endsWith('/src/installation/online/worker.ts')){
       assert.match(source,/openLegacyOwnerRoutes\(h\.ownerConfigRef,createRuntimeHttpClient\(h\.connectionRef\),h\.ownerConfigDigest\)/,'Worker must use explicit per-project published owner Host bindings');
@@ -200,6 +200,7 @@ export async function checkSource() {
     if(path.endsWith('/src/installation/host-selection.ts')||path.endsWith('/src/installation/online/configuration.ts')||path.endsWith('/src/installation/online/application.ts'))assert.doesNotMatch(source,/\b(?:openLegacyOwnerRoutes|createLegacyOwnerProviders|createProjectHostRoutes)\b/,'Local configuration selection and publication must not invoke owner business work');
     if(path.endsWith('/src/installation/toolchain/registration.ts'))assert.match(source,/inspectInstalledHostSelection\(selection,'TOOLCHAIN_BINDING_CHANGED'\)/,'Dependency binding must retain exact installed plugin and grant inspection');
     if(path.endsWith('/src/installation/online/operator.ts'))assert.doesNotMatch(source,/\b(?:openLegacyOwnerRoutes|createLegacyOwnerProviders|createProjectHostRoutes|RuntimeStore|createComposition)\b/,'Online operator delegates existing guarded local configuration/worker operations only');
+    if(path.endsWith('/src/installation/online/preservation.ts'))assert.doesNotMatch(source,/\b(?:openLegacyOwnerRoutes|openPublishedOnlineAdapters|createLegacyOwnerProviders|createProjectHostRoutes|RuntimeStore|createComposition|startOnlineWorker|startUserService)\b/,'Backup reference inspection must remain passive and preserve expired grants without renewing or invoking them');
     if(!path.includes('/src/host/')&&!operatorHostReader)assert.doesNotMatch(source,/from\s+['"][^'"]*host\/(?:legacy-owner(?:s|-providers)\.js|online\.js|project\/[^'"]+)['"]/,'Historical owner/project Host delegation must not be reachable from Runtime HTTP consumers');
     if (path.endsWith('.mjs')) {
     const syntax = spawnSync(process.execPath, ['--check', path], { encoding: 'utf8' });

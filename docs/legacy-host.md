@@ -646,8 +646,9 @@ Stop the worker before Workspace maintenance; the maintenance guard recognizes
 the original worker label and refuses a still-loaded job.
 
 The online Host entry described below uses these same local operator functions.
-Relocated online references still require their own implementation and
-acceptance before compatibility is complete.
+Stopped backup and relocation preserve their selected online references as
+described below. Full candidate-bound acceptance remains separate from these
+operator implementation checks.
 
 独立 worker 通过各项目已有的受保护连接调用已发布 Harness，并通过 HTTP 将发现送回
 已运行的 Runtime。选择和检查不启动监测；启动也不会选择策略、执行业务任务或批准
@@ -743,3 +744,41 @@ verification does not certify monitoring health or approve a repair.
 中断后可从离线 Host 沿用原请求恢复，不需要为了恢复而创建新请求。worker 的控制
 请求保留准确尝试身份；回执丢失后只核对原进程，不自动重复启动或停止。未知结果保留
 为 `UNKNOWN`，监测观察始终不能代替领域审批或软件发布决定。
+
+## Online references during backup and relocation
+
+A stopped Workspace backup follows the installed plugin's selected owner and
+operator configurations, including completed first-use bindings and every
+explicit `online.hosts` entry. It preserves referenced connection credentials,
+the pinned online configuration and Prometheus/Alertmanager credential files.
+Files inside the three selected roots remain in those inventories; external
+files receive exact entries in the protected backup. Manifests contain paths,
+hashes and modes, never credential values. Missing, changed or unsafe references
+prevent a consistent snapshot. Additional selected reference files remain
+supported. Preserving an expired owner grant neither renews it nor admits work.
+
+Relocation changes only operational paths and their dependent content digests.
+The canonical Workspace `online/configuration.json` follows the new Workspace
+root. External or content-addressed configuration remains intact at its old
+location; moved Hosts select a new protected operational document. Internal
+credential references move with their selected roots and retain exact bytes;
+external credential references remain external prerequisites. Each explicitly
+selected project keeps its own connection, identity, calls and expiry. The
+primary plugin and operator receive the corresponding exact pins. An original
+online configuration without standalone grants is remapped without adding
+tools, selecting policies or starting a worker.
+
+Original source configuration, installation/adoption records, business evidence
+and completed request material remain historical. Worker attempts and local
+control journals in the original sibling directories remain at their original
+locations; the selected-root backup does not claim to relocate those directories.
+After relocation, explicitly start the selected Runtime, reconnect its moved
+plugin, and select/start a worker against the moved configuration. Replaying a
+completed relocation returns its original receipt without replacing a running
+worker or applying configuration again.
+
+工作区备份会沿当前插件的明确绑定收集在线配置、各项目连接以及监测凭据引用；目录内
+文件随原目录保留，外部文件纳入受保护备份，清单不包含密钥值。迁移只调整运行配置
+路径及其摘要：内部凭据随目录迁移，外部引用保持原位置，各项目权限和有效期不变。
+尚未绑定 Host 的旧在线配置也可迁移，但不会因此新增授权或启动监控。原位置的历史
+记录和 worker 尝试保留；迁移后需要明确启动 Runtime、重连插件并选择启动新的 worker。

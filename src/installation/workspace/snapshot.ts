@@ -15,6 +15,7 @@ import {readIdentity,readRelocations} from '../../location-lineage.js';
 import {RuntimeStore} from '../../server/store.js';
 import {inspectAllTables} from '../../compat/table-inventory.js';
 import {copyMaintenanceFile,hashMaintenanceFile,inspectMaintenanceTree,maintenanceJSONDigest,type MaintenanceEntry} from './stream.js';
+import {onlinePreservationReferences} from '../online/preservation.js';
 
 export interface WorkspaceSelection extends ManagedLegacyBinding {
   projectRoot:string;serviceRoot:string;referenceFiles:string[];
@@ -75,7 +76,7 @@ function quietDatabase(filename:string):void {
 function references(selection:WorkspaceSelection):PreservedReference[] {
   const spec=JSON.parse(readRegular(path.join(selection.serviceRoot,'service-specification.json'),1048576,true).toString()) as Record<string,unknown>;
   if(spec.schema!=='runtime-user-service/v1'||spec.root!==selection.serviceRoot||spec.workspaceId!==selection.workspaceId||typeof spec.legacyRef!=='string')fail('MAINTENANCE_IDENTITY');
-  const refs=[...selection.referenceFiles,spec.tokenRef,spec.integrationsRef,spec.legacyRef];
+  const refs=[...selection.referenceFiles,spec.tokenRef,spec.integrationsRef,spec.legacyRef,...onlinePreservationReferences(selection)];
   if(spec.legacyProviders!=null){fields(spec.legacyProviders,['ref','digest']);refs.push(spec.legacyProviders.ref);}
   const binding=JSON.parse(readRegular(spec.legacyRef,16384,true).toString()) as Record<string,unknown>;
   for(const key of ['workspaceRoot','workspaceId','serviceId','migrationDigest'] as const)if(binding[key]!==selection[key])fail('MAINTENANCE_IDENTITY');
