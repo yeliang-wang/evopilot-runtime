@@ -27,7 +27,7 @@ function fixture(t,changeGovernance){
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));fs.mkdirSync(source);fs.mkdirSync(evidence,{mode:0o700});
  const put=(file,value)=>{fs.mkdirSync(dirname(file),{recursive:true});const bytes=Buffer.isBuffer(value)?value:Buffer.from(typeof value==='string'?value:JSON.stringify(value,null,2)+'\n');fs.writeFileSync(file,bytes,{mode:0o600});return{ref:file,sha256:sha(bytes)};};
  for(const file of ['package.json','package-lock.json',...fs.readdirSync(join(repository,'governance')).filter(n=>n.endsWith('.json')).map(n=>'governance/'+n)])put(join(source,file),fs.readFileSync(join(repository,file)));
- for(const name of ['support.mjs','browser.mjs','maintenance.mjs','usage.test.mjs',...Array.from({length:22},(_,i)=>'e'+String(i+1).padStart(2,'0')+'.test.mjs')])put(join(source,'tests/acceptance/v090',name),'// Synthetic collector identity only.\n');
+ for(const name of ['support.mjs','browser.mjs','maintenance.mjs','execution.mjs','usage.test.mjs',...Array.from({length:22},(_,i)=>'e'+String(i+1).padStart(2,'0')+'.test.mjs')])put(join(source,'tests/acceptance/v090',name),'// Synthetic collector identity only.\n');
  changeGovernance?.({source,put});
  const git=args=>execFileSync('/usr/bin/git',['-c','core.fsmonitor=false','-C',source,...args],{env:{...process.env,GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1'},stdio:['ignore','pipe','pipe']}).toString();
  git(['init','--quiet']);git(['add','.']);git(['-c','user.name=Synthetic fixture','-c','user.email=synthetic@example.invalid','-c','commit.gpgsign=false','commit','--quiet','-m','Synthetic release gate fixture']);const sourceCommit=git(['rev-parse','HEAD']).trim();
@@ -48,7 +48,7 @@ function fixture(t,changeGovernance){
  const candidate={manifestDigest:sha(manifest),archiveDigest:sha(archive),version:'0.9.0',serviceId:'synthetic',workspaceId:'synthetic',projectId:'synthetic'},candidateDigest='sha256:'+sha(manifest),matrixBytes=fs.readFileSync(join(source,'governance/parameter-matrix-v090.json')),matrix=JSON.parse(matrixBytes);
  const reports=[];
  function report(scenario,ids,usage=false){
-  const dir=join(evidence,scenario),collectorNames=usage?['usage.test.mjs']:['support.mjs',scenario.toLowerCase()+'.test.mjs',...(['E04','E05','E06','E07','E12','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[])];
+  const dir=join(evidence,scenario),collectorNames=usage?['usage.test.mjs']:['support.mjs',scenario.toLowerCase()+'.test.mjs',...(['E04','E05','E06','E07','E12','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(scenario==='E13'?['execution.mjs']:[])];
   const selection={scenario,qualification:'FINAL_CANDIDATE',candidate,candidateDigest,collectorPins:Object.fromEntries(collectorNames.map(n=>[n,sha(fs.readFileSync(join(source,'tests/acceptance/v090',n)))])),selectedCaseIds:ids,...(usage?{sourceCommit,addendumDigest:sha(fs.readFileSync(join(source,'governance/token-usage-v090.json')))}:{matrixDigest:sha(matrixBytes)})};
   const selectionRef=put(join(dir,'selection.json'),selection);
   const records=id=>{const n=id??'setup',request=put(join(dir,n+'-request.json'),{caseInstanceId:id,synthetic:true,request:'Integrity fixture'}),response=put(join(dir,n+'-response.json'),{caseInstanceId:id,synthetic:true,response:'Not actual acceptance'});return{caseInstanceId:id,request:n+'-request.json',requestDigest:request.sha256,response:n+'-response.json',fileDigest:response.sha256};};

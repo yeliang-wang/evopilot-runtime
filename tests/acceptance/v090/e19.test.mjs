@@ -101,22 +101,40 @@ async function emptyStates(run,browser){
 }
 
 async function loadingState(run,ui,route){
- let release,held=0;const barrier=new Promise(resolve=>{release=resolve;}),pattern=route==='/monitor'?'**/api/v1/dashboard/monitor*':'**/api/v1/dashboard/request';
- const hold=async request=>{const op=route==='/monitor'?null:request.request().postDataJSON()?.operation;if(route==='/monitor'||op==='lifecycle.base.inspect'||op==='lifecycle.definition.inspect'){held++;await barrier;}await request.continue();};
+ let release,observeHeld,released=false,failure;const barrier=new Promise(resolve=>{release=resolve;}),firstHeld=new Promise(resolve=>{observeHeld=resolve;}),pattern=route==='/monitor'?'**/api/v1/dashboard/monitor*':'**/api/v1/dashboard/request',requests=[],handlerErrors=[];
+ const bounded=async(promise,label)=>{let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('E19_LOADING_ROUTE_TIMEOUT: '+label)),10000);})]);}finally{clearTimeout(timer);}};
+ const hold=async request=>{
+  const operation=route==='/monitor'?'monitor.read':request.request().postDataJSON()?.operation,blocked=route==='/monitor'||operation==='lifecycle.base.inspect'||operation==='lifecycle.definition.inspect',row={operation,blocked,continued:false,completed:false};requests.push(row);
+  // The initial loading DOM can render before its request reaches routing.
+  // Observe the actual intercepted request before asserting that UI state.
+  try{if(blocked){observeHeld();await barrier;}await request.continue();row.continued=true;}
+  catch(error){handlerErrors.push(error);}
+  finally{row.completed=true;}
+ };
  await ui.flush();await ui.page.route(pattern,hold);
- try{await ui.page.goto(run.serviceOrigin+route);await expect(ui.page.getByText(route==='/monitor'?'正在读取生命周期实例…':'正在读取项目定义…',{exact:true})).toBeVisible();assert(held>0);await ui.screenshot();run.artifact('explicit-ui-loading-fault.json',{route,method:'Hold the actual native request briefly, then continue unchanged',syntheticResponse:false,excludedFromPerformanceSamples:true});}
- finally{release();await ui.page.unroute(pattern,hold);}
+ try{await ui.page.goto(run.serviceOrigin+route);await bounded(firstHeld,'native request interception');assert(requests.some(r=>r.blocked&&!r.completed));await expect(ui.page.getByText(route==='/monitor'?'正在读取生命周期实例…':'正在读取项目定义…',{exact:true})).toBeVisible();await ui.screenshot();}
+ catch(error){failure=error;}
+ finally{
+  assert.equal(released,false);released=true;release();
+  // This page has only this temporary route. Wait for its in-flight handlers
+  // before any later navigation or close can handle the same request again.
+  try{await bounded(ui.page.unrouteAll({behavior:'wait'}),'released handler completion');}catch(error){handlerErrors.push(error);}
+ }
+ run.artifact('explicit-ui-loading-fault.json',{route,method:'Observe and hold the actual native request, then continue unchanged exactly once and await all handlers',syntheticResponse:false,excludedFromPerformanceSamples:true,releasedOnce:released,requests,errors:handlerErrors.map(error=>error.message),observationError:failure?.message??null});
+ if(failure&&handlerErrors.length)throw new AggregateError([failure,...handlerErrors],'E19 loading observation and route cleanup failed; inspect retained request outcomes');
+ if(failure)throw failure;if(handlerErrors.length)throw new AggregateError(handlerErrors,'E19 loading route cleanup failed; inspect retained request outcomes');assert(requests.every(r=>r.completed&&r.continued));
  await expect(ui.page.getByRole('heading',{name:route==='/monitor'?'生命周期监控':'生命周期定义',exact:true})).toBeVisible();if(route==='/monitor')await expect(ui.page.getByLabel('生命周期实例',{exact:true})).toBeVisible();else await ui.valid();await ui.flush();
 }
 
 async function interactionStates(run,browser,original){
  const ui=await openBrowser(run,browser,{route:'/lifecycle',monitorEvidence:true});const saved=await ui.source.inputValue();assert.equal(saved,original);
+ const editorByKeyboard=async()=>{await ui.flush();const link=ui.page.getByRole('navigation',{name:'项目导航',exact:true}).getByRole('link',{name:'◇ 生命周期定义',exact:true});await link.focus();await ui.page.keyboard.press('Enter');await expect(ui.page.getByRole('heading',{name:'生命周期定义',exact:true})).toBeVisible();await ui.valid();};
  try{
   await loadingState(run,ui,'/lifecycle');await loadingState(run,ui,'/monitor');
   for(const viewport of fixed.viewports){
-   await ui.page.setViewportSize(viewport);await ui.login('/lifecycle');await ui.valid();await fitted(ui);await expect(ui.node('scope')).toBeVisible();await ui.node('scope').focus();await ui.page.keyboard.press('ArrowDown');
+   await ui.page.setViewportSize(viewport);await editorByKeyboard();await ui.valid();await fitted(ui);await expect(ui.node('scope')).toBeVisible();await ui.node('scope').focus();await ui.page.keyboard.press('ArrowDown');
    const changed=await ui.source.inputValue();assert.notEqual(changed,saved);await expect(ui.source).toBeEditable();await ui.source.fill(saved);await ui.valid();await ui.screenshot();
-   const link=ui.page.getByRole('link',{name:'实时监控',exact:true});await link.focus();await ui.page.keyboard.press('Enter');await expect(ui.page.getByRole('heading',{name:'生命周期监控',exact:true})).toBeVisible();await expect(ui.page.getByLabel('生命周期实例',{exact:true})).toBeVisible();await ui.node('scope').focus();await ui.page.keyboard.press('Enter');await expect(ui.page.getByRole('heading',{name:'范围定义 · 观测详情'})).toBeVisible();await expect(ui.source).toHaveCount(0);await fitted(ui);await ui.screenshot();
+   const link=ui.page.getByRole('navigation',{name:'项目导航',exact:true}).getByRole('link',{name:'◉ 实时监控',exact:true});await link.focus();await ui.page.keyboard.press('Enter');await expect(ui.page.getByRole('heading',{name:'生命周期监控',exact:true})).toBeVisible();await expect(ui.page.getByLabel('生命周期实例',{exact:true})).toBeVisible();await ui.node('scope').focus();await ui.page.keyboard.press('Enter');await expect(ui.page.getByRole('heading',{name:'范围定义 · 观测详情'})).toBeVisible();await expect(ui.source).toHaveCount(0);await fitted(ui);await ui.screenshot();
    for(let page=0;await ui.page.locator('#instance option').count()<=50&&page<20;page++){
     const count=await ui.page.locator('#instance option').count();await ui.page.getByRole('button',{name:'加载更多实例',exact:true}).click();await expect.poll(()=>ui.page.locator('#instance option').count()).toBeGreaterThan(count);
    }
@@ -127,7 +145,7 @@ async function interactionStates(run,browser,original){
   const statuses=await ui.page.locator('tbody').innerText();await ui.page.evaluate(()=>{window.__e19Parse=DOMParser.prototype.parseFromString;DOMParser.prototype.parseFromString=function(){throw Error('E19 controlled browser DOM parser outage');};});
   try{await ui.page.locator('tbody').getByRole('button',{name:'方案设计',exact:true}).click();await expect(ui.page.getByRole('alert').filter({hasText:'图形暂不可用'})).toBeVisible();assert.equal(await ui.page.locator('tbody').innerText(),statuses);await expect(ui.page.getByRole('heading',{name:'方案设计 · 观测详情'})).toBeVisible();await ui.screenshot();run.artifact('explicit-monitor-render-fault.json',{method:'Temporary browser DOMParser.parseFromString failure only; service graph and stage facts unchanged',originalStatusTableRetained:true,syntheticServiceResponse:false});}
   finally{await ui.page.evaluate(()=>{DOMParser.prototype.parseFromString=window.__e19Parse;delete window.__e19Parse;});}
-  await ui.login('/lifecycle');await ui.source.fill('projectId: '+run.selection.projectId+'\na: [');await expect(ui.page.getByRole('alert').filter({hasText:'YAML 语法错误'})).toBeVisible();await expect(ui.page.getByRole('button',{name:'保存并启用',exact:true})).toBeDisabled();await ui.screenshot();await ui.source.fill(saved);await ui.valid();
+  await editorByKeyboard();await ui.source.fill('projectId: '+run.selection.projectId+'\na: [');await expect(ui.page.getByRole('alert').filter({hasText:'YAML 语法错误'})).toBeVisible();await expect(ui.page.getByRole('button',{name:'保存并启用',exact:true})).toBeDisabled();await ui.screenshot();await ui.source.fill(saved);await ui.valid();
   const doc=parseDocument(saved);assert.equal(doc.errors.length,0);doc.set('extensions',[{id:'project.e19-one',slot:'after-plan',dependsOn:['project.e19-two']},{id:'project.e19-two',slot:'after-plan',dependsOn:['project.e19-one']}]);const invalid=doc.toString({lineWidth:0});await ui.source.fill(invalid);
   await expect(ui.page.getByRole('alert').filter({hasText:'图形暂不可用'})).toBeVisible();await expect(ui.source).toHaveValue(invalid);await expect(ui.page.getByRole('button',{name:'保存并启用',exact:true})).toBeDisabled();await ui.screenshot();await ui.source.fill(saved);await ui.valid();
   // This is a transport fault, not a fulfilled synthetic service response.

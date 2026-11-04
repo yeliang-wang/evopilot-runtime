@@ -62,6 +62,20 @@ readiness. These cases have no model turn and do not satisfy Expert dialogue
 obligations. `maintenance.casePlans` binds each selected case's plan reference,
 SHA256 and isolated Codex home; the campaign root must not already exist.
 
+E13 currently implements four interruption/measurement branches. Its protected
+`interruptionFixture` selects original native instances and records; it cannot
+supply stage outcomes or Host reports. The two interruption cases require actual
+native scope and plan completion and distinct PENDING implementation stages.
+They disconnect before the complete request body or after response headers,
+recover the original receipt, reject conflicting/duplicate requests, restart the
+owned installed service and check the original Agent handoff and prerequisite
+evidence. They do not start a model turn or submit a Host report. The measurement
+case reads an existing authenticated Host report whose measurement is absent;
+the unsupported-limit case verifies schema refusal without a new budget engine.
+The remaining eight E13 instances remain required. Both the collector and its
+`execution.mjs` helper are pinned and rechecked; none of these branches substitutes
+for the complete interruption journey or two-client acceptance.
+
 E15 binds a separate installed migrated workspace and explicit synthetic assets
 from the published Ontology/Harness 0.8.3 packages. Its actual Codex plugin exposes
 one HTTP service and its stdio compatibility route. The collector verifies the
@@ -72,6 +86,16 @@ so the exact revision increment is two. Readback and replay must not advance it
 again. Harness readiness reads the original Ontology projection and Runtime
 intent. This is technical validation of isolated assets, not semantic approval,
 business execution, asset publication or actual Expert dialogue.
+
+E16's scope-mismatch branch requires both existing synthetic owner bindings to
+validate through the installed service before testing refusals. It checks private
+project, visibility and adapter-owner mismatches plus cross-project reads and
+writes. Blocked activation retains an invalid draft as the product specifies;
+the collector then saves a separate repaired draft and revalidates it. The
+original active definition, immutable source records and every existing PENDING
+instance must remain unchanged. Expired instance grants are historical evidence
+only and are never used for admission. This branch does not satisfy the other
+six E16 cases, owner feedback recovery, business acceptance or an L3 assessment.
 
 The private EX10 predecessor can be built with
 `node scripts/package-base-qualification.mjs /absolute/private/new-output` from
