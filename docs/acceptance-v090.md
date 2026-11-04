@@ -119,6 +119,18 @@ E09 对两个已声明协议版本执行独立 HTTP 交互，并使用锁定的�
 
 ## Pre-release record integrity
 
+The E10 collector uses the actual installed Expert in an ephemeral Codex Host:
+one dialogue asks for the eight stages' required inputs, the next supplies a
+protected exact synthetic configuration, and only its single matching activation
+request can receive the test's scoped tool permission. Runtime still performs
+live validation and activation. CLI and browser read back the same definition;
+a new Host connection must read current server state without another write.
+The `E10.variant.01` and `E10.MC01` aliases bind that original dialogue's case and
+transcript hashes. They are not additional independent runs. CV05's active-CI,
+changed-scope/permission and authority-reuse requirements remain separate and
+cannot pass merely because a configuration-only Host reconnects. Preparatory
+selections must leave CV05 explicitly unexecuted until that collector exists.
+
 E08 separately collects installed package behavior and static prerequisites.
 Its protected `packageCompatibility` selection binds a published-owner synthetic
 fixture, the exact distribution source revision and a read-only parent navigation

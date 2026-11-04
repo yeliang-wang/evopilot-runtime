@@ -8,6 +8,7 @@ import {createHash} from 'node:crypto';
 import {execFile,spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {createInterface} from 'node:readline';
+import {isDeepStrictEqual} from 'node:util';
 import {readRegular,canonicalPath} from '../../../dist/compat/project/files.js';
 import {readHostConnection,hostHeaders} from '../../../dist/server/security.js';
 import {inspectInstalledServiceSelection} from '../../../dist/installation/service-control.js';
@@ -31,8 +32,9 @@ export async function openScenario(scenario){
  const selectionRef=process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;
  assert(selectionRef,'Set EVOPILOT_V090_ACCEPTANCE_SELECTION to a protected, explicit isolated candidate selection');
  const selection=JSON.parse(readRegular(selectionRef,131072,true));
- keys(selection,['schema','installedRoot','expectedManifestDigest','connectionRef','workspaceId','projectId','runId','outputRoot','qualification'],['caseIds','codexHost','packageCompatibility']);
+ keys(selection,['schema','installedRoot','expectedManifestDigest','connectionRef','workspaceId','projectId','runId','outputRoot','qualification'],['caseIds','codexHost','packageCompatibility','expertConfiguration']);
  if(selection.packageCompatibility)assert.equal(scenario,'E08','Package compatibility inputs are scoped to E08');
+ if(selection.expertConfiguration)assert.equal(scenario,'E10','Expert configuration inputs are scoped to E10');
  assert.equal(selection.schema,'runtime-v090-acceptance-selection/v1');assert(['DEVELOPMENT','FINAL_CANDIDATE'].includes(selection.qualification));
  assert(/^[a-z][a-z0-9-]{0,47}$/.test(selection.runId));assert(/^[a-f0-9]{64}$/.test(selection.expectedManifestDigest));
  const target=json(path.join(repository,'governance/target-v090.json'));
@@ -61,7 +63,7 @@ export async function openScenario(scenario){
  const candidateDigest='sha256:'+selection.expectedManifestDigest;
  const collectorPins=Object.fromEntries(['support.mjs',scenario.toLowerCase()+'.test.mjs'].map(name=>[name,sha(fs.readFileSync(new URL(name,import.meta.url)))]));
  write('selection.json',{scenario,qualification:selection.qualification,candidate,candidateDigest,collectorPins,matrixDigest:sha(matrixBytes),selectedCaseIds:selectedIds,scenarioDenominator:all.length,fullDenominator:matrix.count,sourceQualification:'SEPARATE_E20_OBLIGATION'});
- let sequence=0,currentCase=null,uncertain=false;
+ let sequence=0,currentCase=null,uncertain=false,hostSequence=0;
  const evidence=[],results=[];
  async function request(operation,input={},meta={}){
   assert(!uncertain,'Inspect the original uncertain request before making another mutation');
@@ -101,12 +103,12 @@ export async function openScenario(scenario){
   return{status:response.status,headers,rawBody:raw,body:raw?JSON.parse(raw):null};
  }
  async function configurationEntry(entry,operation,input={},meta={}){
-  assert(['E03','E08'].includes(scenario));assert(['http-api','http-mcp','cli'].includes(entry));
+  assert(['E03','E08','E10'].includes(scenario));assert(['http-api','http-mcp','cli'].includes(entry));
   const writes=['lifecycle.draft.save','lifecycle.definition.save-and-activate'];
-  const reads=['lifecycle.definition.inspect','lifecycle.definition.validate',...(scenario==='E08'?['runtime.status','lifecycle.base.inspect']:[])];
+  const reads=['lifecycle.definition.inspect','lifecycle.definition.validate',...(scenario!=='E03'?['runtime.status','lifecycle.base.inspect']:[])];
   assert([...writes,...reads].includes(operation));
   const mutation=writes.includes(operation),envelope={operation,projectId:selection.projectId,input,...meta};
-  if(scenario==='E08')assert(!mutation,'Package compatibility collection is read-only');
+  if(scenario!=='E03')assert(!mutation,'Package/Expert readback cannot substitute for actual Expert writes');
   assert.equal(Boolean(meta.requestId),mutation);assert(!uncertain,'Inspect the original uncertain request before another operation');
   if(entry==='http-api'){const r=await request(operation,input,meta);assert.equal(r.status,200,JSON.stringify(r.body));return r.body;}
   if(entry==='http-mcp'){
@@ -138,7 +140,7 @@ export async function openScenario(scenario){
   const item={caseInstanceId:currentCase,artifact:ref,fileDigest:sha(bytes),mimeType:'image/png'};evidence.push(item);return item;
  }
  async function browserCode(){
-  assert.equal(scenario,'E03');
+  assert(['E03','E10'].includes(scenario));
   const args=[path.join(selection.installedRoot,'package/dist/server/cli.js'),'browser-code','--connection-ref',selection.connectionRef];
   const result=await new Promise(resolve=>execFile(plan.nodeExecutable,args,{timeout:20000,maxBuffer:16384,encoding:'utf8'},(error,stdout,stderr)=>resolve({exitCode:error?error.code:0,signal:error?.signal??null,stdout,stderr})));
   assert.equal(result.exitCode,0,'Installed browser-code command failed');assert.equal(result.signal,null);
@@ -147,7 +149,7 @@ export async function openScenario(scenario){
   return code.code;
  }
  async function openExpert(){
-  assert.equal(scenario,'E03');
+  assert(['E03','E10'].includes(scenario));
   const host=selection.codexHost;keys(host,['executable','executableSha256','timeoutSeconds']);
   canonicalPath(host.executable);assert.equal(sha(fs.readFileSync(host.executable)),host.executableSha256);
   assert(Number.isInteger(host.timeoutSeconds)&&host.timeoutSeconds>=60&&host.timeoutSeconds<=600);
@@ -155,7 +157,7 @@ export async function openScenario(scenario){
   const environment=json(path.join(repository,'governance/environment-contract-v090.json'));assert.equal(version,'codex-cli '+environment.hostVersion);
   const plugin=path.join(selection.installedRoot,'plugin'),marketplacePath=path.join(selection.installedRoot,'.agents/plugins/marketplace.json'),marketplace=json(marketplacePath);
   const pluginId='evopilot-runtime@'+marketplace.name,configurationRef=path.join(plugin,'skills/evopilot-runtime-expert/references/configuration.md'),configuration=fs.readFileSync(configurationRef,'utf8');
-  const directory=path.join(selection.outputRoot,'codex-host');fs.mkdirSync(directory,{mode:0o700});
+  const directory=path.join(selection.outputRoot,'codex-host'+(++hostSequence===1?'':'-'+hostSequence));fs.mkdirSync(directory,{mode:0o700});
   // These are per-process overrides, not writes to the user's Codex settings.
   // CLI dotted paths are not TOML section syntax: quoted names create different
   // keys. Reject unsupported names instead of silently retaining other servers.
@@ -191,10 +193,12 @@ export async function openScenario(scenario){
      try{record({direction:'response',...m});m.error?p.reject(Error(JSON.stringify(m.error))):p.resolve(m.result);}catch(error){p.reject(error);throw error;}
     }else if(m.id!==undefined){
      record({direction:'host-request',...m});const a=m.params?._meta?.tool_params,c=currentTurn;
-     const allowed=c&&m.method==='mcpServer/elicitation/request'&&m.params.threadId===threadId&&m.params.serverName==='evopilot_runtime'&&m.params.mode==='form'&&m.params._meta.codex_approval_kind==='mcp_tool_call'&&m.params.message.includes('"runtime_write"')&&c.approvals===0&&a?.operation==='lifecycle.draft.save'&&a.projectId===selection.projectId&&a.requestId===c.requestId&&a.expectedRevision===c.expectedRevision&&a.input?.yaml===c.yaml&&Object.keys(a).sort().join(',')==='expectedRevision,input,operation,projectId,requestId';
-     const response=allowed?{id:m.id,result:{action:'accept',content:{}}}:{id:m.id,error:{code:-32601,message:'Outside this exact authorized synthetic draft test'}};
+     const exactDraft=c&&!c.mode&&a?.operation==='lifecycle.draft.save'&&a.projectId===selection.projectId&&a.requestId===c.requestId&&a.expectedRevision===c.expectedRevision&&a.input?.yaml===c.yaml&&Object.keys(a).sort().join(',')==='expectedRevision,input,operation,projectId,requestId'&&Object.keys(a.input).join(',')==='yaml';
+     const exactConfiguration=c?.mode==='configuration'&&c.write&&isDeepStrictEqual(a,c.write);
+     const allowed=c&&m.method==='mcpServer/elicitation/request'&&m.params.threadId===threadId&&m.params.serverName==='evopilot_runtime'&&m.params.mode==='form'&&m.params._meta.codex_approval_kind==='mcp_tool_call'&&m.params.message.includes('"runtime_write"')&&c.approvals===0&&(exactDraft||exactConfiguration);
+     const response=allowed?{id:m.id,result:{action:'accept',content:{}}}:{id:m.id,error:{code:-32601,message:'Outside this exact authorized synthetic configuration test'}};
      if(allowed)c.approvals++;
-     record({direction:'scoped-approval-response',basis:'Existing implementation authority for the exact reversible synthetic test draft; not a domain or release decision',...response});child.stdin.write(JSON.stringify(response)+'\n');
+     record({direction:'scoped-approval-response',basis:'Existing implementation authority for the exact reversible synthetic definition; no execution, domain or release decision',...response});child.stdin.write(JSON.stringify(response)+'\n');
     }else if(['item/started','item/completed','turn/completed','thread/tokenUsage/updated','error'].includes(m.method)){
      if(m.params?.item?.type==='reasoning')return;
      record({direction:'notification',...m});
@@ -241,6 +245,23 @@ export async function openScenario(scenario){
      return{calls,discovery,model:thread.model,provider:thread.modelProvider,threadId,turnId:currentTurn.turnId,approvalResponses:currentTurn.approvals};
     }catch(error){uncertain=true;throw error;}
     finally{clearTimeout(timer);artifact('expert-turn-transcript.json',{threadId,turnId:currentTurn.turnId,model:thread.model,provider:thread.modelProvider,originalDraftRequestId:requestId,actualModelTurn:true,frames});}
+   },
+   async configurationTurn(prompt,write=null){
+    assert.equal(scenario,'E10');assert(!fatal);assert(!currentTurn||currentTurn.completed);
+    if(write){keys(write,['operation','projectId','input','requestId','expectedRevision']);assert.equal(write.operation,'lifecycle.definition.save-and-activate');assert.equal(write.projectId,selection.projectId);keys(write.input,['yaml','validationDigest']);assert.equal(typeof write.input.yaml,'string');assert(/^sha256:[a-f0-9]{64}$/.test(write.input.validationDigest));}
+    frames=[];frameBytes=0;let resolve;const completion=new Promise(r=>resolve=r);currentTurn={mode:'configuration',write,resolve,items:[],approvals:0,completed:false,turnId:null};let timer;
+    try{
+     const started=await call('turn/start',{threadId,additionalContext:{installedRuntimeConfiguration:{kind:'application',value:configuration}},input:[{type:'skill',name:skill.name,path:skill.path},{type:'text',text:'Use $'+skill.name+' in the selected synthetic project '+selection.projectId+'. '+prompt}]});currentTurn.turnId=started.turn.id;
+     timer=setTimeout(()=>resolve({driverError:'Actual Codex configuration turn exceeded its selected watchdog; inspect original requests'}),host.timeoutSeconds*1000);
+     const completed=await completion;if(completed.driverError)throw Error(completed.driverError);assert.equal(completed.turn.status,'completed',JSON.stringify(completed.turn.error));
+     const all=currentTurn.items.filter(i=>i.type==='mcpToolCall'),discovery=all.filter(c=>c.server==='codex'&&['list_mcp_resources','list_mcp_resource_templates'].includes(c.tool));
+     for(const c of discovery){assert.equal(c.status,'completed');keys(c.arguments,[],['server']);assert(!c.arguments.server||c.arguments.server==='evopilot_runtime');}
+     const calls=all.filter(c=>!discovery.includes(c));assert(calls.length);assert(calls.every(c=>c.server==='evopilot_runtime'&&['runtime_read','runtime_write'].includes(c.tool)&&c.arguments.projectId===selection.projectId&&c.status==='completed'));
+     const writes=calls.filter(c=>c.tool==='runtime_write');assert.equal(writes.length,write?1:0);if(write)assert.deepEqual(writes[0].arguments,write);
+     const messages=currentTurn.items.filter(i=>i.type==='agentMessage').map(i=>i.text);assert(messages.length);
+     return{calls,discovery,messages,model:thread.model,provider:thread.modelProvider,threadId,turnId:currentTurn.turnId,approvalResponses:currentTurn.approvals};
+    }catch(error){uncertain=!!write;throw error;}
+    finally{clearTimeout(timer);artifact('expert-configuration-transcript.json',{threadId,turnId:currentTurn.turnId,model:thread.model,provider:thread.modelProvider,exactWrite:write,actualModelTurn:true,frames});}
    },close,
   };
  }
