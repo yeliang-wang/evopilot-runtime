@@ -4,7 +4,7 @@ import type {RuntimeStore} from '../server/store.js';
 import {inspectInstance} from '../lifecycle/instance.js';
 import type {LifecycleInstance} from '../lifecycle/instance.js';
 import {isPreparationRef,readPreparationPacket} from '../lifecycle/preparation.js';
-import {readUsageGrant} from './codex.js';
+import {readUsageGrant,readUsageGrantIdentity} from './codex.js';
 import {BASE_STAGES,attributionInput,type UsageSource,type UsageAttribution} from './contract.js';
 import {usageObjects,attributionsAt,sourceRecords} from './ledger.js';
 import {createUsageReport,parseUsageQuery,usageMarkdown,type UsageReport} from './reports.js';
@@ -50,7 +50,8 @@ export function createUsageService(store:RuntimeStore){
         if(priorSources.length){
           if(!g.predecessorId||priorSources.some(p=>p.projectId!==projectId)||!priorSources.some(p=>p.id===g.predecessorId))reject('USAGE_EPOCH','Resume the original source or explicitly bind its next epoch',409);
           for(const p of priorSources)if(!source(projectId,p.id).revoked)reject('USAGE_EPOCH','Revoke the original epoch before selecting its replacement',409);
-          const old=source(projectId,g.predecessorId),oldGrant=readUsageGrant(store.root,store.workspaceId,projectId,old.id),checkpoint=store.object(projectId,'usage-checkpoint',old.id) as {offset:number}|null;
+          const old=source(projectId,g.predecessorId),oldGrant=readUsageGrantIdentity(store.root,store.workspaceId,projectId,old.id),checkpoint=store.object(projectId,'usage-checkpoint',old.id) as {offset:number}|null;
+          if(digest(oldGrant)!==old.grantDigest)reject('USAGE_GRANT_CHANGED','Original predecessor grant changed',409);
           if(oldGrant.identity.dev===g.identity.dev&&oldGrant.identity.ino===g.identity.ino&&(!checkpoint||!g.initialCursor||g.initialCursor.offset<checkpoint.offset))reject('USAGE_EPOCH_OVERLAP','A new epoch cannot reread original consumed bytes',409);
         }else if(g.predecessorId)reject('USAGE_EPOCH','Original predecessor source does not exist',409);
         const saved:UsageSource={schema:'runtime-usage-source/v1',id,projectId,threadId:g.identity.threadId,epoch:g.epoch,agentRole:g.agentRole,parentThreadId:g.parentThreadId,baseline:g.baseline,baselineEvidence:g.baselineEvidence,principalId:actor.id,principalRevision:actor.revision,grantDigest:digest(g),registeredAt:new Date().toISOString(),revoked:false};

@@ -57,16 +57,25 @@ export function createUsageWorker(store:RuntimeStore,principal:(id:string)=>Prin
   function snapshots(source:UsageSource,actor:Principal){
     const projectId=source.projectId,bindings=[...usageObjects<UsageAttribution>(store,projectId,'usage-attribution')];
     let watermark=0;for(const b of bindings)watermark=Math.max(watermark,b.recordedRevision);for(const r of usageObjects<UsageRecord>(store,projectId,'usage-observation'))watermark=Math.max(watermark,r.recordedRevision);for(const c of usageObjects<{recordedRevision:number}>(store,projectId,'usage-attribution-close'))watermark=Math.max(watermark,c.recordedRevision);
-    let created=0;
+    const pending:{trigger:Trigger;targetVersion:string;id:string;progressId:string;previousWatermark:number}[]=[];
     for(const trigger of usageObjects<Trigger>(store,projectId,'usage-trigger')){
-      if(created>=2)break;const versions=[...new Set(bindings.filter(b=>b.instanceId===trigger.instanceId).map(b=>b.targetVersion))];
+      const versions=[...new Set(bindings.filter(b=>b.instanceId===trigger.instanceId).map(b=>b.targetVersion))];
       for(const targetVersion of versions){
         const id=digest({trigger,targetVersion,watermark});if(store.object(projectId,'usage-snapshot',id))continue;
-        const report=createUsageReport(store,projectId,{targetVersion,throughTime:trigger.completedAt});
-        const saved:UsageSnapshot={schema:'runtime-usage-snapshot/v1',id,kind:trigger.stageId==='publication'?'publication':trigger.stageId==='closure'?'closure':'stage',trigger,report};
-        const input={snapshotId:id,eventRevision:trigger.eventRevision,watermark};
-        store.mutate(actor,{projectId,operation:'usage.snapshot.observed',requestId:'usage-snapshot-'+id,expectedRevision:store.revision(projectId),input,permission:'read'},()=>({objects:[{kind:'usage-snapshot',id,value:saved}],value:{snapshotId:id,reportDigest:report.digest},event:{type:'usage-snapshot-created',data:{snapshotId:id,instanceId:trigger.instanceId,stageId:trigger.stageId}}}),()=>current(source));created++;
+        const progressId=digest({trigger,targetVersion}),progress=store.object(projectId,'usage-trigger-progress',progressId) as {watermark:number}|null;
+        pending.push({trigger,targetVersion,id,progressId,previousWatermark:progress?.watermark??-1});
       }
+    }
+    // Give unseen triggers priority, then refresh the oldest ledger cutoffs.
+    // Starting at the first trigger for every new watermark would starve all
+    // later stages while usage keeps arriving. Progress is committed with the
+    // immutable report so restart and failed writes preserve fair recovery.
+    pending.sort((a,b)=>a.previousWatermark-b.previousWatermark||a.trigger.eventRevision-b.trigger.eventRevision||a.id.localeCompare(b.id));
+    for(const {trigger,targetVersion,id,progressId} of pending.slice(0,2)){
+      const report=createUsageReport(store,projectId,{targetVersion,throughTime:trigger.completedAt});
+      const saved:UsageSnapshot={schema:'runtime-usage-snapshot/v1',id,kind:trigger.stageId==='publication'?'publication':trigger.stageId==='closure'?'closure':'stage',trigger,report};
+      const input={snapshotId:id,eventRevision:trigger.eventRevision,watermark};
+      store.mutate(actor,{projectId,operation:'usage.snapshot.observed',requestId:'usage-snapshot-'+id,expectedRevision:store.revision(projectId),input,permission:'read'},()=>({objects:[{kind:'usage-snapshot',id,value:saved},{kind:'usage-trigger-progress',id:progressId,value:{watermark,snapshotId:id}}],value:{snapshotId:id,reportDigest:report.digest},event:{type:'usage-snapshot-created',data:{snapshotId:id,instanceId:trigger.instanceId,stageId:trigger.stageId}}}),()=>current(source));
     }
   }
   function tick(){
@@ -75,7 +84,8 @@ export function createUsageWorker(store:RuntimeStore,principal:(id:string)=>Prin
       const rows=store.usageSourcePage(after);if(!rows.length){after=undefined;return;}
       // One bounded source batch per turn leaves the lifecycle executor free.
       const row=rows[0];after=row;const source=store.object(row.projectId,'usage-source',row.id) as UsageSource;
-      if(source.revoked)return;
+      // Revocation stops collection inside collect(); retained reports still
+      // follow lifecycle events under the exact current principal authority.
       let actor:Principal;
       try{actor=current(source);}catch(error){errors.set(row.projectId,error instanceof ServiceError?error.code:'USAGE_AUTHORITY_UNAVAILABLE');return;}
       try{collect(source,actor);errors.delete(row.projectId);}catch(error){const code=error instanceof ServiceError?error.code:'USAGE_SOURCE_UNAVAILABLE';errors.set(row.projectId,code);try{health(source,actor,'INCOMPLETE',code);}catch{/* Usage health must not affect lifecycle. */}}

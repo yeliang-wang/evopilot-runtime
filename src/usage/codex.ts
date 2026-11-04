@@ -98,8 +98,14 @@ export function validateUsageGrant(value:unknown):UsageGrant{
   if(v.initialCursor!==undefined){const c=record(v.initialCursor);exact(c,['offset','tailDigest','model','provider','turnId','latestSequence']);if(!Number.isSafeInteger(c.offset)||Number(c.offset)<1||!/^[a-f0-9]{64}$/.test(string(c.tailDigest))||c.model!==null||c.turnId!==null||c.latestSequence!==null||c.provider!==(v.identity as CodexFileIdentity).provider)reject('USAGE_SOURCE_OFFSET','Use the native inspected source boundary');}
   return {...v,baseline} as unknown as UsageGrant;
 }
-export function readUsageGrant(stateRoot:string,workspaceId:string,projectId:string,id:string):UsageGrant{
+/** Read retained identity for historical lineage checks only. Callers must
+ * verify the original grant digest; this never authorizes source collection. */
+export function readUsageGrantIdentity(stateRoot:string,workspaceId:string,projectId:string,id:string):UsageGrant{
   slug(id);const value=validateUsageGrant(readPrivateJson(join(stateRoot,'usage-grants',id+'.json')));
   if(value.id!==id||value.workspaceId!==workspaceId||value.projectId!==projectId)reject('USAGE_SCOPE','Source grant belongs to another scope',403);
+  return value;
+}
+export function readUsageGrant(stateRoot:string,workspaceId:string,projectId:string,id:string):UsageGrant{
+  const value=readUsageGrantIdentity(stateRoot,workspaceId,projectId,id);
   if(Date.parse(value.expiresAt)<=Date.now())reject('USAGE_EXPIRED','Source grant expired',403);return value;
 }

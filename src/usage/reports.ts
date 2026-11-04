@@ -27,6 +27,7 @@ export function createUsageReport(store:RuntimeStore,projectId:string,query:Usag
   string(query.targetVersion,256);if(!Number.isSafeInteger(cutoff)||cutoff<0||cutoff>store.revision(projectId))reject('USAGE_CUTOFF','Invalid ledger cutoff');
   if(query.throughTime!==undefined&&!Number.isFinite(Date.parse(query.throughTime)))reject('USAGE_CUTOFF','Invalid timestamp cutoff');
   const bindings=attributionsAt(store,projectId,cutoff);
+  const matchesQuery=(b:UsageAttribution):boolean=>b.targetVersion===query.targetVersion&&(query.instanceId===undefined||b.instanceId===query.instanceId)&&(query.stageId===undefined||b.stageId===query.stageId);
   const selected:UsageDelta[]=[],unclassified:UsageDelta[]=[],sources:UsageReport['sources']=[],issueCounts=new Map<string,number>();
   for(const source of usageObjects<UsageSource>(store,projectId,'usage-source')){
     const rows=sourceRecords(store,projectId,source.id,cutoff),deltas=deriveDeltas(source,rows,bindings);
@@ -35,10 +36,10 @@ export function createUsageReport(store:RuntimeStore,projectId:string,query:Usag
       if(query.throughTime!==undefined&&Date.parse(delta.record.observedAt)>Date.parse(query.throughTime))continue;
       const b=delta.binding;
       if(!b){unclassified.push(delta);continue;}
-      if(b.targetVersion!==query.targetVersion||query.instanceId!==undefined&&b.instanceId!==query.instanceId||query.stageId!==undefined&&b.stageId!==query.stageId)continue;
+      if(!matchesQuery(b))continue;
       selected.push(delta);count++;for(const code of new Set(delta.issues))issueCounts.set(code,(issueCounts.get(code)??0)+1);
     }
-    if(count||bindings.some(b=>b.sourceId===source.id&&b.targetVersion===query.targetVersion))sources.push({id:source.id,threadId:source.threadId,epoch:source.epoch,agentRole:source.agentRole,parentThreadId:source.parentThreadId,revoked:source.revoked,records:count});
+    if(count||bindings.some(b=>b.sourceId===source.id&&matchesQuery(b)))sources.push({id:source.id,threadId:source.threadId,epoch:source.epoch,agentRole:source.agentRole,parentThreadId:source.parentThreadId,revoked:source.revoked,records:count});
   }
   const counts=summary(selected),truncatedViews:string[]=[],bySource=new Map(sources.map(s=>[s.id,s]));
   const keys={stage:(r:UsageDelta)=>r.binding!.baseStage,node:(r:UsageDelta)=>r.binding!.stageId,target:(r:UsageDelta)=>r.binding!.targetRef,task:(r:UsageDelta)=>r.binding!.taskId+'/'+r.binding!.attemptId,workType:(r:UsageDelta)=>r.binding!.workType,model:(r:UsageDelta)=>(r.record.provider??'unknown')+'/'+(r.record.model??'unknown'),agent:(r:UsageDelta)=>(bySource.get(r.record.sourceId)?.agentRole??'unknown')+'/'+(bySource.get(r.record.sourceId)?.threadId??'unknown'),instance:(r:UsageDelta)=>r.binding!.instanceId};

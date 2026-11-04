@@ -2,6 +2,9 @@
 
 The fixed catalog contains 64 requirement groups, 22 scenarios and 664 instances
 (655 before release, 9 after delivery). Development regressions are separate.
+The approved Runtime-only usage addendum adds UT01–UT24 independently: 23 before
+release and one after delivery. The combined obligation is **688 instances:
+678 pre-release and 10 post-release**. It does not replace any original scenario.
 The E03 collector, `tests/acceptance/v090/e03.test.mjs`, executes the 332
 required-field HTTP instances, 48 fixed HTTP/MCP/CLI stage-entry instances and
 32 actual browser graph/YAML stage-entry instances and 16 actual Codex Expert
@@ -73,8 +76,11 @@ EVOPILOT_V090_ACCEPTANCE_SELECTION=/absolute/private/selection.json \
 Retain the selection, raw requests/responses, per-case assertions and report.
 Authorization headers and token values are not recorded. A transport failure
 after a mutation preserves the original request and stops further writes;
-inspect its actual receipt before another action. No collector starts a service,
-changes current Codex configuration, dispatches CI, or authorizes publication.
+inspect its actual receipt before another action. Configuration/protocol
+collectors do not start services, dispatch CI or authorize publication. E02's
+explicit isolated lifecycle selection separately permits its test-only execution
+chain and service restart; no collector changes daily Codex configuration or
+authorizes an EvoPilot product release.
 
 `tests/acceptance/v090/e09.test.mjs` collects all six fixed E09 protocol instances.
 It sends independent wire requests for both `2025-06-18` and `2025-11-25`, and
@@ -196,3 +202,45 @@ result does not authorize publication, and it is not a replacement for E01–E20
 原始记录不能通过。旧报告保留原样，不补写缺失证据；后置 9 项仍待实际交付完成。
 核验记录完整性不等于产品验收、源码 CI 或真实发布决定，更不能用合成守卫测试
 替代真实软件流程。
+
+## Additive usage collection
+
+`tests/acceptance/v090/usage.test.mjs` uses the selected installed package's
+helpers, CLI and authenticated HTTP service. It never writes Runtime's database
+directly. Set `EVOPILOT_V090_USAGE_SELECTION` to a private
+`runtime-v090-usage-selection/v1` JSON object with `installedRoot`,
+`expectedManifestDigest`, `sourceRevision: {ref, sha256}`, `connectionRef`,
+`workspaceId`, `projectId`, `runId`, `outputRoot`, `qualification`, explicit
+`caseIds`, an existing `instanceId`, its `targetVersion`, and the current
+`principalRevision`. The source revision file and output root must be protected;
+the output root must not already exist. `FINAL_CANDIDATE` also requires the exact
+clean source commit. Installed-source inspection and local grant creation apply
+only to controlled files created in this isolated campaign.
+
+The implemented branches are UT01, UT02, UT04–UT06, UT09–UT12, UT17, UT18,
+UT20 and UT21. They retain controlled Codex-format counter events, native grant
+and HTTP receipts, exact assertions and immutable snapshot readbacks. These
+fixtures are expressly synthetic, not actual model work. UT10 requires an actual
+project extension in the selected instance; UT12 requires an actually running
+implementation stage. Cases needing complete lifecycle transitions, actual Host
+usage/Expert dialogue, multi-instance recovery or current-host delivery remain
+independently required. Selecting a branch without its live driver fails;
+partial reports list every unexecuted pre-release UT ID and cannot qualify.
+
+```sh
+EVOPILOT_V090_USAGE_SELECTION=/absolute/private/usage-selection.json \
+  node --test tests/acceptance/v090/usage.test.mjs
+```
+
+`src/release/usage-evidence.ts` separately inspects all 23 pre-release UT records
+against the exact source, collector, addendum and candidate. It rejects missing,
+partial, repeated, mismatched or changed records and preserves the original 664
+obligations plus UT24. Byte integrity cannot authenticate execution or turn a
+synthetic Host fixture into a real Host observation. The result remains
+`productAcceptance: NOT_EVALUATED`, `releaseAuthorized: false`; final review must
+inspect the actual execution provenance and independent original acceptance.
+
+新增统计验收固定为 UT01–UT24，与原 664 项分别记账，总计 688 项。统计采集器通过
+精确安装包的 CLI／HTTP 运行，不直接写库。受控计数输入明确标为合成格式样本，不能
+冒充真实 Codex 用量；真实 Host、八阶段完成、恢复及当前安装仍需要各自执行证据。
+选择部分用例只产生部分报告。记录摘要一致仅证明字节完整，不能授予产品验收或发布权限。
