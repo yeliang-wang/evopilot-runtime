@@ -3,11 +3,14 @@ import assert from 'node:assert/strict';
 import {openScenario} from './support.mjs';
 import {exactKeys,interruptionFixture,openExecution} from './execution.mjs';
 
-// The four implemented branches consume an explicitly prepared isolated
+// The three implemented branches consume an explicitly prepared isolated
 // service. 01/02 require a genuinely admitted instance with real native scope
 // and plan completion, and implementation still PENDING. They create only its
 // original external-Agent handoff, never a Host claim/report, CI or Release.
-// 05 reads a pinned, already retained real Host report with unavailable metrics.
+// 05 remains unimplemented until real Host availability evidence is correlated
+// with the exact original report and Target version. A null field alone proves
+// omission, not unavailability; an actual unsupported or unavailable source can
+// qualify without manufacturing a collection failure.
 // 06 rejects an unsupported exact token cap through the native preview schema;
 // it does not add token-budget semantics to Runtime's reporting addendum.
 //
@@ -15,13 +18,13 @@ import {exactKeys,interruptionFixture,openExecution} from './execution.mjs';
 // {schema,candidateDigest,workspaceId,projectId,syntheticAssets:true,
 //  syntheticDecisions:true,casePlans:{[fixedCaseId]:plan}}.
 // 01/02 plan={instanceId,allowServiceRestart:true}; use distinct instances.
-// 05 plan={stageRequestId,reportDigest,targetVersion}.
 // 06 plan={instanceId,targetVersion}.
 // A fixture is selection, never a supplied expected outcome or new authority.
 const unsupported={
  'E13.journey':'Full original Host, provider-channel interruption, cancellation and managed-action budget journey is not yet implemented.',
  'E13.variant.03':'Requires original native owner one-sided success and recovery without redispatch.',
  'E13.variant.04':'Requires actual test-channel response loss and independent original provider readback.',
+ 'E13.variant.05':'Requires original real Host availability evidence correlated with the exact report, task and Target version; measurement:null alone does not prove that metrics were unavailable.',
  'E13.variant.07':'Requires a new actual two-client MC04 closure; another scenario result is not an alias.',
  'E13.MC04':'Requires a new actual two-client MC04 closure and postcommit response loss.',
  'E13.CV03':'Requires the full original eight-stage admission and supported measured-budget matrix; one fixed loop is not a fabricated exhausted-loop result.',
@@ -82,15 +85,6 @@ async function interruption(run,driver,c,plan){
  run.artifact('interruption-original-summary.json',{fault,requestId,receipt,stageRequestId,pinsDigest:saved.pinsDigest,loopRef:saved.pins.loopRef,addedEvents:added,originalPreparationEvidenceUnchanged:true,hostReportSubmitted:false,providerCallsMeasured:false,actualBusinessRunCountClaim:null});
  return{faultPoint:point,originalRequestId:requestId,stageRequestId,originalReceiptRecovered:true,sameKeySameResult:true,sameKeyChangedContentRejected:true,differentKeyDuplicateStageRejected:true,nativeServiceRestart:true,originalHandoffRecovered:true,stageAdmissionEvents:requested.length,handoffEvents:retained.length,implementationAttempts:1,grantCannotCreateSecondInstance:true,pinnedMaxLoops:saved.pins.budget.maxLoops,loopBudgetSemantics:'EXACT_SINGLE_LOOP_PIN_AND_NO_DUPLICATE_ADMISSION',runtimeStartedAgent:false,hostReportSubmitted:false,fullJourneyNotCredited:true};
 }
-async function unknownMeasurement(run,driver,plan){
- exactKeys(plan,['stageRequestId','reportDigest','targetVersion']);assert(/^sha256:[a-f0-9]{64}$/.test(plan.reportDigest));
- const original=await driver.original(plan.stageRequestId);assert.equal(original.request.stageId,'implementation');
- const before=await run.read('runtime.status'),result=await run.read('lifecycle.agent.report.read',{stageRequestId:plan.stageRequestId,reportDigest:plan.reportDigest});
- assert(result.report,'An unclaimed handoff is not an observed Host measurement failure');driver.intact(result.report);assert.equal(result.report.digest,plan.reportDigest);assert.equal(result.report.source,'authenticated-host-report');assert.equal(result.report.measurement,null);assert.equal(result.measurementSource,'unavailable');assert.equal(result.independentlyVerified,false);assert.equal(result.authorityGranted,false);
- const handoff=await run.read('lifecycle.agent.handoff.read',{stageRequestId:plan.stageRequestId});assert(handoff.claim);driver.intact(handoff.claim);assert.equal(result.report.claimDigest,handoff.claim.digest);assert.equal(handoff.hostSessionAttested,false);
- const report=await usage(run,plan.targetVersion,original.request.instanceId);assert.equal((await run.read('runtime.status')).revision,before.revision);
- return{stageRequestId:plan.stageRequestId,reportDigest:plan.reportDigest,originalHostMeasurement:null,measurementSource:'unavailable',hostMetadataIndependentlyAttested:false,reportRecords:report.report.records,usageCoverage:report.report.coverage,completeVersionTotal:false,createdReports:0,writes:0};
-}
 async function unsupportedLimit(run,driver,c,plan){
  exactKeys(plan,['instanceId','targetVersion']);slug(plan.instanceId);
  const before=await driver.instance(plan.instanceId),view=await run.read('lifecycle.definition.inspect');assert.equal(view.active.id,before.instance.pins.definitionRevisionId);
@@ -116,7 +110,6 @@ test('E13 installed interruption and truthful unavailable measurement branches',
    if(unsupported[c.caseInstanceId])throw Error('UNIMPLEMENTED_ORIGINAL_CASE: '+unsupported[c.caseInstanceId]);
    const plan=fixture.casePlans[c.caseInstanceId];assert(plan,'A fixed case requires its exact native fixture selection');
    if(['E13.variant.01','E13.variant.02'].includes(c.caseInstanceId)){assert(!used.has(plan.instanceId),'Interruption cases require independent original instances');used.add(plan.instanceId);return interruption(run,driver,c,plan);}
-   if(c.caseInstanceId==='E13.variant.05')return unknownMeasurement(run,driver,plan);
    if(c.caseInstanceId==='E13.variant.06')return unsupportedLimit(run,driver,c,plan);
    throw Error('UNIMPLEMENTED_ORIGINAL_CASE: '+c.caseInstanceId);
   });

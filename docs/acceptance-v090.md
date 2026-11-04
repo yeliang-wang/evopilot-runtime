@@ -62,19 +62,23 @@ readiness. These cases have no model turn and do not satisfy Expert dialogue
 obligations. `maintenance.casePlans` binds each selected case's plan reference,
 SHA256 and isolated Codex home; the campaign root must not already exist.
 
-E13 currently implements four interruption/measurement branches. Its protected
+E13 currently implements three interruption/measurement branches. Its protected
 `interruptionFixture` selects original native instances and records; it cannot
 supply stage outcomes or Host reports. The two interruption cases require actual
 native scope and plan completion and distinct PENDING implementation stages.
 They disconnect before the complete request body or after response headers,
 recover the original receipt, reject conflicting/duplicate requests, restart the
 owned installed service and check the original Agent handoff and prerequisite
-evidence. They do not start a model turn or submit a Host report. The measurement
-case reads an existing authenticated Host report whose measurement is absent;
-the unsupported-limit case verifies schema refusal without a new budget engine.
-The remaining eight E13 instances remain required. Both the collector and its
-`execution.mjs` helper are pinned and rechecked; none of these branches substitutes
-for the complete interruption journey or two-client acceptance.
+evidence. They do not start a model turn or submit a Host report. The
+unsupported-limit case verifies schema refusal without a new budget engine.
+The remaining nine E13 instances remain required, including variant 05. That
+variant needs original real Host availability evidence correlated with the exact
+report, task and Target version; an authenticated report containing null alone
+does not establish unavailability. An actual unsupported or unavailable source
+can qualify once evidenced; a manufactured collection failure is not required.
+Both the collector and its `execution.mjs` helper are pinned and rechecked; none
+of these branches substitutes for the complete interruption journey or two-client
+acceptance.
 
 E15 binds a separate installed migrated workspace and explicit synthetic assets
 from the published Ontology/Harness 0.8.3 packages. Its actual Codex plugin exposes
