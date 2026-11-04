@@ -69,7 +69,7 @@ export async function openScenario(scenario){
   let response,raw;
   try{response=await fetch(connection.origin+'/api/v1/request',{method:'POST',headers:{...hostHeaders(connection),'content-type':'application/json'},body:JSON.stringify(envelope),signal:AbortSignal.timeout(30000),redirect:'error'});raw=await bounded(response);}
   catch(error){uncertain=!!meta.requestId;write(id+'-transport-failure.json',{caseInstanceId:currentCase,operation,requestId:meta.requestId??null,outcome:uncertain?'UNKNOWN':'READ_FAILED',automaticRetry:false});throw error;}
-  const body=JSON.parse(raw),responseRef=id+'-response.json';write(responseRef,{caseInstanceId:currentCase,status:response.status,rawBody:raw,body});evidence.push({caseInstanceId:currentCase,request:ref,response:responseRef,responseDigest:sha(raw),fileDigest:sha(fs.readFileSync(path.join(selection.outputRoot,responseRef)))});
+  const body=JSON.parse(raw),responseRef=id+'-response.json';write(responseRef,{caseInstanceId:currentCase,status:response.status,rawBody:raw,body});evidence.push({caseInstanceId:currentCase,request:ref,requestDigest:sha(fs.readFileSync(path.join(selection.outputRoot,ref))),response:responseRef,responseDigest:sha(raw),fileDigest:sha(fs.readFileSync(path.join(selection.outputRoot,responseRef)))});
   return{status:response.status,body};
  }
  async function protocol(rawBody,options={},mutation=null){
@@ -96,7 +96,7 @@ export async function openScenario(scenario){
   }catch(error){uncertain=!!mutation;write(id+'-protocol-failure.json',{caseInstanceId:currentCase,requestId:mutation?.requestId??null,outcome:uncertain?'UNKNOWN':'READ_FAILED',error:{name:error.name,message:error.message},automaticRetry:false});throw error;}
   const headers=Object.fromEntries(['content-type','mcp-session-id','mcp-protocol-version','x-request-id','allow'].map(k=>[k,response.headers.get(k)]).filter(([,v])=>v!==null));
   const responseRef=id+'-protocol-response.json';write(responseRef,{caseInstanceId:currentCase,status:response.status,headers,rawBody:raw});
-  evidence.push({caseInstanceId:currentCase,request:ref,response:responseRef,responseDigest:sha(raw),fileDigest:sha(fs.readFileSync(path.join(selection.outputRoot,responseRef)))});
+  evidence.push({caseInstanceId:currentCase,request:ref,requestDigest:sha(fs.readFileSync(path.join(selection.outputRoot,ref))),response:responseRef,responseDigest:sha(raw),fileDigest:sha(fs.readFileSync(path.join(selection.outputRoot,responseRef)))});
   return{status:response.status,headers,rawBody:raw,body:raw?JSON.parse(raw):null};
  }
  async function configurationEntry(entry,operation,input={},meta={}){
@@ -120,7 +120,7 @@ export async function openScenario(scenario){
   const args=[path.join(selection.installedRoot,'package/dist/server/cli.js'),'request','--url',connection.origin,'--token-ref',connection.tokenRef,'--project',selection.projectId,'--request-ref',path.join(selection.outputRoot,ref)];
   const result=await new Promise(resolve=>execFile(plan.nodeExecutable,args,{timeout:35000,maxBuffer:524288,encoding:'utf8'},(error,stdout,stderr)=>resolve({exitCode:error?error.code:0,signal:error?.signal??null,stdout,stderr})));
   const responseRef=id+'-cli-result.json';write(responseRef,{caseInstanceId:currentCase,executable:plan.nodeExecutable,args,...result});
-  evidence.push({caseInstanceId:currentCase,request:ref,response:responseRef,fileDigest:sha(fs.readFileSync(path.join(selection.outputRoot,responseRef)))});
+  evidence.push({caseInstanceId:currentCase,request:ref,requestDigest:sha(fs.readFileSync(path.join(selection.outputRoot,ref))),response:responseRef,fileDigest:sha(fs.readFileSync(path.join(selection.outputRoot,responseRef)))});
   let body;try{assert(Buffer.byteLength(result.stdout)<=262144);body=JSON.parse(result.stdout);}catch(error){uncertain=mutation;throw error;}
   if(result.signal||body.error?.code==='REQUEST_OUTCOME_UNKNOWN')uncertain=mutation;
   assert.equal(result.exitCode,0,JSON.stringify(body));assert.equal(result.signal,null);return body;
@@ -258,7 +258,7 @@ export async function openScenario(scenario){
    const after=inspectInstalledServiceSelection(selection.installedRoot);assert.equal(after.selectionDigest,current.selectionDigest);
    for(const [name,pin] of Object.entries(collectorPins))assert.equal(sha(fs.readFileSync(new URL(name,import.meta.url))),pin,'Collector changed during execution');
    const missing=all.filter(c=>!results.some(r=>r.caseInstanceId===c.caseInstanceId)).map(c=>c.caseInstanceId),passed=results.filter(r=>r.status==='PASS').length;
-   const report={scenario,candidate,candidateDigest,qualification:selection.qualification,scenarioDenominator:all.length,fullDenominator:matrix.count,selected:cases.length,executed:results.length,passed,failed:results.length-passed,unexecutedCaseIds:missing,scenarioStatus:missing.length||passed!==all.length?'INCOMPLETE':'OBSERVED_PASS',productAcceptance:'NOT_EVALUATED',releaseAuthorized:false,dailyInstallationChanged:false,setupEvidence:evidence.filter(e=>e.caseInstanceId===null),results};
+   const report={scenario,candidate,candidateDigest,selectionDigest:sha(fs.readFileSync(path.join(selection.outputRoot,'selection.json'))),qualification:selection.qualification,scenarioDenominator:all.length,fullDenominator:matrix.count,selected:cases.length,executed:results.length,passed,failed:results.length-passed,unexecutedCaseIds:missing,scenarioStatus:missing.length||passed!==all.length?'INCOMPLETE':'OBSERVED_PASS',productAcceptance:'NOT_EVALUATED',releaseAuthorized:false,dailyInstallationChanged:false,setupEvidence:evidence.filter(e=>e.caseInstanceId===null),results};
    write('REPORT.json',report);return report;
   }};
 }

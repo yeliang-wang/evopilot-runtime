@@ -92,6 +92,7 @@ test('E09 installed candidate Streamable HTTP contract',async()=>{
   const coverage=run.cases.find(c=>c.caseInstanceId==='E09.CV07');if(coverage)await run.collect(coverage,async()=>{
    const required=run.all.filter(c=>c.caseInstanceId!==coverage.caseInstanceId).map(c=>c.caseInstanceId);
    assert.deepEqual([...completed.keys()].sort(),required.sort(),'CV07 requires every frozen E09 journey and protocol, not a selected subset');
+   run.artifact('protocol-coverage.json',{candidateDigest:run.candidateDigest,required,originalCases:required.map(id=>({caseInstanceId:id,ref:id+'.json',sha256:sha(fs.readFileSync(path.join(run.selection.outputRoot,id+'.json')))})),scope:'This E09 coverage record references actual same-campaign results; other scenarios remain separate obligations'});
    return{frozenInstances:run.all.map(c=>c.caseInstanceId),independentProtocolResults:versions.map(v=>({version:v,...completed.get('E09.http.'+v)})),fullDenominator:664,crossScenarioCoverage:'Requires separate E01/E02/E03/E18/E20 reports'};
   });
  }finally{run.finish();}

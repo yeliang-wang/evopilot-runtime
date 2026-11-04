@@ -116,3 +116,31 @@ HTTP MCP 保存／校验，再独立读回原请求和草稿。输入明确保�
 E09 对两个已声明协议版本执行独立 HTTP 交互，并使用锁定的官方 SDK 连接同一安装包。
 六个固定实例包括发现、初始化、工具读取、错误拒绝与无副作用检查；每次交互保留
 脱敏原始记录。这里没有真实模型调用，不能当作 E10 的 Codex 对话验收。
+
+## Pre-release record integrity
+
+`src/release/evidence.ts` audits a protected `runtime-release-evidence-input/v1`
+against clean committed source. The input pins the original archive, distribution
+manifest, source revision and exactly twenty E01–E20 reports. Every one of the
+655 pre-release case IDs must have a final-candidate PASS, nonempty assertions,
+its original case file and original evidence. Partial campaigns, development
+reports, skipped/foreign cases, changed collectors, changed candidate bytes and
+missing records fail this audit. The remaining nine post-release instances stay
+outstanding.
+
+Collectors now bind the selection file and both original request and response
+files by SHA256; artifacts and screenshots retain their own hashes. Existing
+reports are preserved rather than edited to add missing evidence. An older
+unbound request record cannot qualify a new final-candidate campaign.
+
+This audit returns record integrity, **not product acceptance or publication
+authority**. Independent source-CI/original-artifact verification, the precise
+actual release decision and public delivery/current-Host checks are separate
+remaining obligations. Synthetic tests of this auditor never count as actual
+product journeys.
+
+发布前记录核验固定要求 E01–E20 的全部 655 项，逐项绑定候选、收集器、选择文件、
+原用例结果及请求／响应／附件原始摘要。开发子集、遗漏、跳过、错误候选或修改后的
+原始记录不能通过。旧报告保留原样，不补写缺失证据；后置 9 项仍待实际交付完成。
+核验记录完整性不等于产品验收、源码 CI 或真实发布决定，更不能用合成守卫测试
+替代真实软件流程。

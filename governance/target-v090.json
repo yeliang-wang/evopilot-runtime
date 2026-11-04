@@ -474,7 +474,9 @@
         "CHANGELOG.md",
         "src/service.ts",
         "plugins/codex/.codex-plugin/plugin.json",
-        "tests/fixtures/relocation-configuration-v090.mjs"
+        "tests/fixtures/relocation-configuration-v090.mjs",
+        "src/release/evidence.ts",
+        "tests/e2e/release-evidence-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/acceptance-v090.json",
