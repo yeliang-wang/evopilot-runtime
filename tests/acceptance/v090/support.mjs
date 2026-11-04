@@ -31,7 +31,8 @@ export async function openScenario(scenario){
  const selectionRef=process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;
  assert(selectionRef,'Set EVOPILOT_V090_ACCEPTANCE_SELECTION to a protected, explicit isolated candidate selection');
  const selection=JSON.parse(readRegular(selectionRef,131072,true));
- keys(selection,['schema','installedRoot','expectedManifestDigest','connectionRef','workspaceId','projectId','runId','outputRoot','qualification'],['caseIds','codexHost']);
+ keys(selection,['schema','installedRoot','expectedManifestDigest','connectionRef','workspaceId','projectId','runId','outputRoot','qualification'],['caseIds','codexHost','packageCompatibility']);
+ if(selection.packageCompatibility)assert.equal(scenario,'E08','Package compatibility inputs are scoped to E08');
  assert.equal(selection.schema,'runtime-v090-acceptance-selection/v1');assert(['DEVELOPMENT','FINAL_CANDIDATE'].includes(selection.qualification));
  assert(/^[a-z][a-z0-9-]{0,47}$/.test(selection.runId));assert(/^[a-f0-9]{64}$/.test(selection.expectedManifestDigest));
  const target=json(path.join(repository,'governance/target-v090.json'));
@@ -100,11 +101,12 @@ export async function openScenario(scenario){
   return{status:response.status,headers,rawBody:raw,body:raw?JSON.parse(raw):null};
  }
  async function configurationEntry(entry,operation,input={},meta={}){
-  assert.equal(scenario,'E03');assert(['http-api','http-mcp','cli'].includes(entry));
+  assert(['E03','E08'].includes(scenario));assert(['http-api','http-mcp','cli'].includes(entry));
   const writes=['lifecycle.draft.save','lifecycle.definition.save-and-activate'];
-  const reads=['lifecycle.definition.inspect','lifecycle.definition.validate'];
+  const reads=['lifecycle.definition.inspect','lifecycle.definition.validate',...(scenario==='E08'?['runtime.status','lifecycle.base.inspect']:[])];
   assert([...writes,...reads].includes(operation));
   const mutation=writes.includes(operation),envelope={operation,projectId:selection.projectId,input,...meta};
+  if(scenario==='E08')assert(!mutation,'Package compatibility collection is read-only');
   assert.equal(Boolean(meta.requestId),mutation);assert(!uncertain,'Inspect the original uncertain request before another operation');
   if(entry==='http-api'){const r=await request(operation,input,meta);assert.equal(r.status,200,JSON.stringify(r.body));return r.body;}
   if(entry==='http-mcp'){

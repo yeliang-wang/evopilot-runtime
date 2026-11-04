@@ -119,6 +119,19 @@ E09 对两个已声明协议版本执行独立 HTTP 交互，并使用锁定的�
 
 ## Pre-release record integrity
 
+E08 separately collects installed package behavior and static prerequisites.
+Its protected `packageCompatibility` selection binds a published-owner synthetic
+fixture, the exact distribution source revision and a read-only parent navigation
+checkout. The main journey uses a standalone service without Codex or integrations,
+the compiled CLI/HTTP API and shipped pages; missing lifecycle configuration must
+remain blocked. Source compilation/classification and navigation checks are
+explicitly static evidence. Compatibility uses the installed Runtime's real
+published-owner adapters and immutable asset readback. A changed version label in
+an isolated owner-package copy must fail before import; original packages remain
+unchanged. Synthetic assets/decisions and pure package inspection are never
+reported as domain approval, new native-validation receipts or Host conversations.
+Actual conversational journeys have their separate frozen scenarios.
+
 `src/release/evidence.ts` audits a protected `runtime-release-evidence-input/v1`
 against clean committed source. The input pins the original archive, distribution
 manifest, source revision and exactly twenty E01–E20 reports. Every one of the
