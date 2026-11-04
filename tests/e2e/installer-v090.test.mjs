@@ -84,6 +84,16 @@ test('operator stages exact distribution and least-authority credential without 
   if(process.platform==='darwin'){const removed=await runInstaller(f.plan,'uninstall');assert.equal(removed.phase,'UNINSTALLED');assert.equal(removed.dataRetained,true);assert.deepEqual(readFileSync(join(f.plan.root,'data/auth.json')),auth);}
  }finally{f.cleanup();}
 });
+test('explicit operator staging provisions existing scoped permissions without changing retained installations',async()=>{
+ const f=distributionFixture();try{
+  const plan={...f.plan,role:'operator'};await runInstaller(plan,'stage');
+  const auth=readFileSync(join(plan.root,'data/auth.json')),principal=JSON.parse(auth).principals[0];
+  assert.deepEqual(principal.projects,['alpha']);assert.deepEqual(principal.permissions,['read','draft.write','definition.activate','execution.request','decision.record','release.request']);
+  assert(!existsSync(join(plan.root,'data/service.sqlite')),'Provisioning must not create lifecycle instances or authority records');
+  await runInstaller(plan,'stage');assert.deepEqual(readFileSync(join(plan.root,'data/auth.json')),auth);
+  await assert.rejects(()=>runInstaller({...plan,role:'activator'},'stage'),{code:'INSTALLATION_CHANGED'});assert.deepEqual(readFileSync(join(plan.root,'data/auth.json')),auth);
+ }finally{f.cleanup();}
+});
 test('failed archive or source digest never installs unchecked bytes; recovery retains original failure',async()=>{
  const f=distributionFixture();try{
   writeFileSync(join(f.source,'dist/server/cli.js'),'changed');await assert.rejects(()=>runInstaller(f.plan,'stage'),{code:'INSTALLATION_DISTRIBUTION'});assert(!existsSync(join(f.plan.root,'data/auth.json')));

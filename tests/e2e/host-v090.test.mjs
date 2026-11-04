@@ -17,6 +17,7 @@ import {createRuntimeHttpClient,hostHeaders,readHostConnection,localOrigin} from
 import {runtimePluginMaterial,quoteHelperArgument} from '../../dist/host/plugin.js';
 import {lifecycle,yaml,syntheticBindings} from '../fixtures/lifecycle-v090.mjs';
 import {digest} from '../../dist/server/errors.js';
+import {serviceMain} from '../../dist/server/cli.js';
 
 const repo=realpathSync(fileURLToPath(new URL('../../',import.meta.url))),node=realpathSync(process.execPath),bridge=join(repo,'dist/host/bridge.js');
 async function fixture({reader=false}={}){
@@ -28,6 +29,21 @@ async function fixture({reader=false}={}){
  return{root,stateRoot,token,tokenRef,connectionRef,connection,credential,put,server,client:createRuntimeHttpClient(connectionRef),async cleanup(){await server.close();rmSync(root,{recursive:true,force:true});}};
 }
 const envelope=(operation,input={},extra={})=>({operation,projectId:'alpha',input,...extra});
+for(const role of ['activator','operator'])test('local '+role+' bootstrap never substitutes for exact execution authority',async()=>{
+ const root=mkdtempSync(join(realpathSync(tmpdir()),'runtime-role-')),stateRoot=join(root,'state');let server;
+ try{
+  let output='';assert.equal(await serviceMain(['auth-init','--state-root',stateRoot,'--workspace-id','host-test','--project','alpha','--principal','host','--role',role],{write:v=>{output+=v;}}),0);
+  const initialized=JSON.parse(output);assert.equal(initialized.executionAuthorized,false);assert.equal(initialized.releaseAuthorized,false);
+  const credential=JSON.parse(readFileSync(initialized.tokenRef));assert(!output.includes(credential.token));
+  server=await startRuntimeServer({stateRoot,workspaceId:'host-test'},syntheticBindings().provider);
+  const request=async(operation,input,meta={})=>{const response=await fetch(server.url+'/api/v1/request',{method:'POST',headers:{authorization:'Bearer '+credential.token,'content-type':'application/json'},body:JSON.stringify(envelope(operation,input,meta))});return{status:response.status,body:await response.json()};};
+  const text=yaml(lifecycle()),preview=await request('lifecycle.definition.validate',{yaml:text});assert.equal(preview.body.result.ready,true);
+  const active=await request('lifecycle.definition.save-and-activate',{yaml:text,validationDigest:preview.body.result.validationDigest},{requestId:'configure',expectedRevision:0});assert.equal(active.status,200);
+  const denied=await request('lifecycle.instance.create',{instanceId:'unauthorized',definitionRevisionId:active.body.result.result.revisionId,authorityRef:'authority:sha256:'+'0'.repeat(64)},{requestId:'deny-execution',expectedRevision:1});
+  assert.equal(denied.status,role==='operator'?404:403);assert.equal(denied.body.error.code,role==='operator'?'NOT_FOUND':'FORBIDDEN');assert.equal((await request('runtime.status',{})).body.result.revision,1);
+  const auth=readFileSync(join(stateRoot,'auth.json'));output='';assert.equal(await serviceMain(['auth-init','--state-root',stateRoot,'--workspace-id','host-test','--project','alpha','--principal','host','--role','operator'],{write:v=>{output+=v;}}),1);assert.deepEqual(readFileSync(join(stateRoot,'auth.json')),auth);
+ }finally{await server?.close();rmSync(root,{recursive:true,force:true});}
+});
 test('protected HTTP client reads exact live identity and enforces immutable connection scope',async()=>{
  const f=await fixture();try{
   const status=await f.client.status();assert.equal(status.result.serviceId,f.server.identity.serviceId);assert.equal(status.result.independentLlm,false);

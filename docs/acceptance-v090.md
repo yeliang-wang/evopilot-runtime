@@ -119,6 +119,25 @@ E09 对两个已声明协议版本执行独立 HTTP 交互，并使用锁定的�
 
 ## Pre-release record integrity
 
+E02 starts from a fresh installed service with an explicitly selected `operator`
+role, real published owner packages, synthetic isolated assets and a real GitLab
+test repository. It obtains configuration through the actual installed Expert,
+then waits for the current external Codex to claim and complete the retained
+coding handoff. The collector must not manufacture an Agent result. Exact
+source/MR, CI, candidate, native owner validation, test-only release/download,
+owner feedback and restarted archive are read from their original services.
+Both browser pages and the monitor trace bind the same service and instance.
+Decision fixtures are expressly synthetic and cannot approve business assets or
+an EvoPilot product release. A preparation selection may choose `E02.journey`;
+all other fixed variants remain unexecuted until separately implemented. An
+unknown mutation stops this attempt without redispatch or changing its budget.
+
+E02 使用全新隔离安装、明确的 `operator` 角色、已发布 owner 包和真实 GitLab 测试项目。
+真实 Expert 完成配置；编码结果必须由实际外部 Codex 的原 handoff 返回，不能由驱动器
+伪造。源码／MR、CI、候选、双方验证、测试发布／下载、反馈与归档均保留原回执。
+两页浏览器与监控 trace 绑定同一实例。测试决定明确标为合成证据，不批准业务资产或
+产品发布。仅选择主路径时，其余固定变体仍未执行；未知写入不自动重发或重置预算。
+
 The E10 collector uses the actual installed Expert in an ephemeral Codex Host:
 one dialogue asks for the eight stages' required inputs, the next supplies a
 protected exact synthetic configuration, and only its single matching activation

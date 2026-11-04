@@ -20,9 +20,9 @@ const keys=(v,required,optional=[])=>{
  assert(v&&typeof v==='object'&&!Array.isArray(v));
  assert(required.every(k=>Object.hasOwn(v,k)));assert(Object.keys(v).every(k=>required.includes(k)||optional.includes(k)));
 };
-const bounded=async response=>{
+const bounded=async(response,limit=262144)=>{
  const reader=response.body.getReader(),parts=[];let bytes=0;
- try{for(;;){const part=await reader.read();if(part.done)break;bytes+=part.value.length;assert(bytes<=262144,'Service response exceeds the frozen bound');parts.push(part.value);}}
+ try{for(;;){const part=await reader.read();if(part.done)break;bytes+=part.value.length;assert(bytes<=limit,'Service response exceeds the selected collector bound');parts.push(part.value);}}
  finally{reader.releaseLock();}
  assert(bytes===0||response.headers.get('content-type')?.startsWith('application/json'),'Expected JSON or an empty notification acknowledgement from the selected Runtime');
  return Buffer.concat(parts).toString('utf8');
@@ -32,9 +32,10 @@ export async function openScenario(scenario){
  const selectionRef=process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;
  assert(selectionRef,'Set EVOPILOT_V090_ACCEPTANCE_SELECTION to a protected, explicit isolated candidate selection');
  const selection=JSON.parse(readRegular(selectionRef,131072,true));
- keys(selection,['schema','installedRoot','expectedManifestDigest','connectionRef','workspaceId','projectId','runId','outputRoot','qualification'],['caseIds','codexHost','packageCompatibility','expertConfiguration']);
+ keys(selection,['schema','installedRoot','expectedManifestDigest','connectionRef','workspaceId','projectId','runId','outputRoot','qualification'],['caseIds','codexHost','packageCompatibility','expertConfiguration','lifecycleExecution']);
  if(selection.packageCompatibility)assert.equal(scenario,'E08','Package compatibility inputs are scoped to E08');
- if(selection.expertConfiguration)assert.equal(scenario,'E10','Expert configuration inputs are scoped to E10');
+ if(selection.expertConfiguration)assert(['E02','E10'].includes(scenario),'Expert configuration inputs are scoped to E02/E10');
+ if(selection.lifecycleExecution)assert.equal(scenario,'E02','Execution collection inputs are scoped to E02');
  assert.equal(selection.schema,'runtime-v090-acceptance-selection/v1');assert(['DEVELOPMENT','FINAL_CANDIDATE'].includes(selection.qualification));
  assert(/^[a-z][a-z0-9-]{0,47}$/.test(selection.runId));assert(/^[a-f0-9]{64}$/.test(selection.expectedManifestDigest));
  const target=json(path.join(repository,'governance/target-v090.json'));
@@ -53,6 +54,10 @@ export async function openScenario(scenario){
  assert.equal(selection.connectionRef,path.join(selection.installedRoot,'connection.json'));
  assert.equal(connection.workspaceId,selection.workspaceId);assert.equal(connection.projectId,selection.projectId);
  assert.equal(connection.serviceId,current.serviceId);assert.equal(connection.version,manifest.version);
+ if(selection.lifecycleExecution){
+  keys(selection.lifecycleExecution,['preparationRef','preparationSha256','ownerFixtureRef','ownerFixtureSha256','exchangeRoot','timeoutSeconds']);
+  assert.equal(plan.role,'operator','Execution requires an explicitly provisioned local operator role; do not edit installed credentials');
+ }
  if(selection.qualification==='FINAL_CANDIDATE')assert.equal(manifest.version,'0.9.0','Development version cannot qualify the final release');
  canonicalPath(path.dirname(selection.outputRoot));assert(!fs.existsSync(selection.outputRoot),'Retain existing campaign evidence; do not overwrite a prior attempt');
  assert(!selection.outputRoot.startsWith(selection.installedRoot+path.sep));fs.mkdirSync(selection.outputRoot,{mode:0o700});
@@ -68,9 +73,9 @@ export async function openScenario(scenario){
  async function request(operation,input={},meta={}){
   assert(!uncertain,'Inspect the original uncertain request before making another mutation');
   const envelope={operation,projectId:selection.projectId,input,...meta},id=String(++sequence).padStart(5,'0'),ref=id+'-request.json';
-  write(ref,{caseInstanceId:currentCase,envelope});
+  write(ref,{caseInstanceId:currentCase,envelope,principalId:connection.principalId});
   let response,raw;
-  try{response=await fetch(connection.origin+'/api/v1/request',{method:'POST',headers:{...hostHeaders(connection),'content-type':'application/json'},body:JSON.stringify(envelope),signal:AbortSignal.timeout(30000),redirect:'error'});raw=await bounded(response);}
+  try{response=await fetch(connection.origin+'/api/v1/request',{method:'POST',headers:{...hostHeaders(connection),'content-type':'application/json'},body:JSON.stringify(envelope),signal:AbortSignal.timeout(30000),redirect:'error'});raw=await bounded(response,scenario==='E02'?1048576:262144);}
   catch(error){uncertain=!!meta.requestId;write(id+'-transport-failure.json',{caseInstanceId:currentCase,operation,requestId:meta.requestId??null,outcome:uncertain?'UNKNOWN':'READ_FAILED',automaticRetry:false});throw error;}
   const body=JSON.parse(raw),responseRef=id+'-response.json';write(responseRef,{caseInstanceId:currentCase,status:response.status,rawBody:raw,body});evidence.push({caseInstanceId:currentCase,request:ref,requestDigest:sha(fs.readFileSync(path.join(selection.outputRoot,ref))),response:responseRef,responseDigest:sha(raw),fileDigest:sha(fs.readFileSync(path.join(selection.outputRoot,responseRef)))});
   return{status:response.status,body};
@@ -103,7 +108,7 @@ export async function openScenario(scenario){
   return{status:response.status,headers,rawBody:raw,body:raw?JSON.parse(raw):null};
  }
  async function configurationEntry(entry,operation,input={},meta={}){
-  assert(['E03','E08','E10'].includes(scenario));assert(['http-api','http-mcp','cli'].includes(entry));
+  assert(['E02','E03','E08','E10'].includes(scenario));assert(['http-api','http-mcp','cli'].includes(entry));
   const writes=['lifecycle.draft.save','lifecycle.definition.save-and-activate'];
   const reads=['lifecycle.definition.inspect','lifecycle.definition.validate',...(scenario!=='E03'?['runtime.status','lifecycle.base.inspect']:[])];
   assert([...writes,...reads].includes(operation));
@@ -139,8 +144,13 @@ export async function openScenario(scenario){
   const ref=String(++sequence).padStart(5,'0')+'-browser.png';fs.writeFileSync(path.join(selection.outputRoot,ref),bytes,{mode:0o600,flag:'wx'});
   const item={caseInstanceId:currentCase,artifact:ref,fileDigest:sha(bytes),mimeType:'image/png'};evidence.push(item);return item;
  }
+ function traceArtifact(bytes){
+  assert.equal(scenario,'E02');assert(Buffer.isBuffer(bytes)&&bytes.length<=16777216);assert.equal(bytes.readUInt32LE(0),0x04034b50);
+  const ref=String(++sequence).padStart(5,'0')+'-browser-trace.zip';fs.writeFileSync(path.join(selection.outputRoot,ref),bytes,{mode:0o600,flag:'wx'});
+  const item={caseInstanceId:currentCase,artifact:ref,fileDigest:sha(bytes),mimeType:'application/zip'};evidence.push(item);return item;
+ }
  async function browserCode(){
-  assert(['E03','E10'].includes(scenario));
+  assert(['E02','E03','E10'].includes(scenario));
   const args=[path.join(selection.installedRoot,'package/dist/server/cli.js'),'browser-code','--connection-ref',selection.connectionRef];
   const result=await new Promise(resolve=>execFile(plan.nodeExecutable,args,{timeout:20000,maxBuffer:16384,encoding:'utf8'},(error,stdout,stderr)=>resolve({exitCode:error?error.code:0,signal:error?.signal??null,stdout,stderr})));
   assert.equal(result.exitCode,0,'Installed browser-code command failed');assert.equal(result.signal,null);
@@ -149,7 +159,7 @@ export async function openScenario(scenario){
   return code.code;
  }
  async function openExpert(){
-  assert(['E03','E10'].includes(scenario));
+  assert(['E02','E03','E10'].includes(scenario));
   const host=selection.codexHost;keys(host,['executable','executableSha256','timeoutSeconds']);
   canonicalPath(host.executable);assert.equal(sha(fs.readFileSync(host.executable)),host.executableSha256);
   assert(Number.isInteger(host.timeoutSeconds)&&host.timeoutSeconds>=60&&host.timeoutSeconds<=600);
@@ -247,7 +257,7 @@ export async function openScenario(scenario){
     finally{clearTimeout(timer);artifact('expert-turn-transcript.json',{threadId,turnId:currentTurn.turnId,model:thread.model,provider:thread.modelProvider,originalDraftRequestId:requestId,actualModelTurn:true,frames});}
    },
    async configurationTurn(prompt,write=null){
-    assert.equal(scenario,'E10');assert(!fatal);assert(!currentTurn||currentTurn.completed);
+    assert(['E02','E10'].includes(scenario));assert(!fatal);assert(!currentTurn||currentTurn.completed);
     if(write){keys(write,['operation','projectId','input','requestId','expectedRevision']);assert.equal(write.operation,'lifecycle.definition.save-and-activate');assert.equal(write.projectId,selection.projectId);keys(write.input,['yaml','validationDigest']);assert.equal(typeof write.input.yaml,'string');assert(/^sha256:[a-f0-9]{64}$/.test(write.input.validationDigest));}
     frames=[];frameBytes=0;let resolve;const completion=new Promise(r=>resolve=r);currentTurn={mode:'configuration',write,resolve,items:[],approvals:0,completed:false,turnId:null};let timer;
     try{
@@ -268,7 +278,7 @@ export async function openScenario(scenario){
  async function read(operation,input={}){const r=await request(operation,input);assert.equal(r.status,200,JSON.stringify(r.body));return r.body.result;}
  async function source(revisionId){let offset=0;const chunks=[];for(;;){const page=await read('lifecycle.definition.source.read',{revisionId,offset});assert.equal(page.revisionId,revisionId);chunks.push(Buffer.from(page.data,'base64'));if(page.nextOffset===null)return Buffer.concat(chunks).toString('utf8');assert(page.nextOffset>offset);offset=page.nextOffset;}}
  const status=await read('runtime.status');assert.equal(status.serviceId,connection.serviceId);assert.equal(status.workspaceId,selection.workspaceId);assert.equal(status.version,manifest.version);
- return{selection,candidate,candidateDigest,cases,all,request,read,source,protocol,artifact,imageArtifact,browserCode,openExpert,configurationEntry,serviceOrigin:connection.origin,
+ return{selection,candidate,candidateDigest,cases,all,request,read,source,protocol,artifact,imageArtifact,traceArtifact,browserCode,openExpert,configurationEntry,serviceOrigin:connection.origin,
   requestId:(caseId,suffix)=>scenario.toLowerCase()+'-'+sha(selection.runId+'|'+caseId+'|'+suffix).slice(0,48),
   async collect(c,fn){currentCase=c.caseInstanceId;const first=evidence.length;
    try{const assertions=await fn();results.push({caseInstanceId:c.caseInstanceId,status:'PASS',candidateDigest,qualification:selection.qualification,assertions,evidence:evidence.slice(first)});}

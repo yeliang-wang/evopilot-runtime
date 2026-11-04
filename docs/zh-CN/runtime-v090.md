@@ -28,6 +28,12 @@ Runtime 通过公开 API 消费 Ontology/Harness 的已发布包；本次选择�
 [安装器类型定义](../../src/installation/installer.ts)列出准确字段。
 示例路径和凭据不能直接当作真实安装计划。
 
+角色必须明确选择：`reader` 可读取，`editor` 还可保存草稿，`activator` 还可启用
+有效定义。`operator` 另有执行请求和记录执行／发布决定的权限，但角色本身不是任务或
+发布批准；服务仍核对准确范围、有效授权和原始决定证据。本地
+`auth-init --role operator` 使用同一权限集合。安装器不会把现有凭据静默提升为
+此角色，也不会覆盖原安装计划；已有安装的权限保持原样。
+
 ```sh
 node /absolute/downloads/unpacked/package/dist/installation/installer.js stage --plan-ref /absolute/private/installation-plan.json
 node /absolute/downloads/unpacked/package/dist/installation/installer.js install --plan-ref /absolute/private/installation-plan.json

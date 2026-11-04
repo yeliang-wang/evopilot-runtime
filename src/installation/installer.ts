@@ -27,7 +27,7 @@ export interface RuntimeInstallPlan {
   schema:'runtime-install-plan/v1';root:string;
   distribution:{packageRoot:string;manifestRef:string;manifestDigest:string;archiveRef:string;archiveDigest:string};
   nodeExecutable:string;nodeSha256:string;workspaceId:string;projectId:string;principalId:string;
-  role:'reader'|'editor'|'activator';credentialExpiresAt:string;port:number;integrationsRef:string|null;
+  role:'reader'|'editor'|'activator'|'operator';credentialExpiresAt:string;port:number;integrationsRef:string|null;
   codex:{executable:string;sha256:string;version:string}|null;
   legacyMigration?:{workspaceRoot:string;expectedSnapshotDigest:string;backupRoot:string;expectedBackupDigest:string}|null;
   legacyOwnerHost?:{ref:string;digest:string}|null;
@@ -36,7 +36,9 @@ export interface RuntimeInstallPlan {
   workspaceSetup?:WorkspaceSetupGrant|null;
 }
 export type InstallerCommand='stage'|'install'|'start'|'stop'|'inspect'|'uninstall';
-const ROLES:Record<RuntimeInstallPlan['role'],Permission[]>={reader:['read'],editor:['read','draft.write'],activator:['read','draft.write','definition.activate']};
+// Explicit local provisioning only. These permissions allow requests; exact
+// execution/release authority and its original evidence are still mandatory.
+const ROLES:Record<RuntimeInstallPlan['role'],Permission[]>={reader:['read'],editor:['read','draft.write'],activator:['read','draft.write','definition.activate'],operator:['read','draft.write','definition.activate','execution.request','decision.record','release.request']};
 const sha=(value:Buffer|string)=>createHash('sha256').update(value).digest('hex');
 function absolute(path:string):string{string(path,4096);if(!isAbsolute(path)||resolve(path)!==path)reject('INSTALLATION_PATH','Use a canonical absolute path');return path;}
 function existing(path:string):string{absolute(path);if(realpathSync(path)!==path)reject('INSTALLATION_PATH','Installation ancestors cannot be links');return path;}

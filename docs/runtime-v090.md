@@ -37,6 +37,15 @@ principal, role, expiry, port, integration reference and selected Codex Host.
 The [installer types](../src/installation/installer.ts) define the fields.
 Do not reuse an example's paths or credentials as an actual plan.
 
+Choose the role explicitly: `reader` can read, `editor` can also save drafts,
+and `activator` can also activate valid definitions. `operator` additionally
+permits execution requests and recording exact execution/release decisions.
+It does not itself approve a task or release: the service still requires current,
+scope-bound authority and original decision evidence before each applicable
+operation. The local `auth-init --role operator` entry uses the same permission
+set. Installation never upgrades an existing credential or changes an existing
+installation plan to this role; existing installations retain their permissions.
+
 ```sh
 node /absolute/downloads/unpacked/package/dist/installation/installer.js stage --plan-ref /absolute/private/installation-plan.json
 node /absolute/downloads/unpacked/package/dist/installation/installer.js install --plan-ref /absolute/private/installation-plan.json

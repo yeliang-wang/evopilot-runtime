@@ -32,8 +32,8 @@ export async function serviceMain(argv: string[], output: { write(value: string)
     if(command==='auth-init'){
       exact(flags,['state-root','workspace-id','project','principal','role']);
       const root=flags['state-root'],workspaceId=slug(flags['workspace-id']),projectId=slug(flags.project),id=slug(flags.principal);
-      const roles:Record<string,Permission[]>={reader:['read'],editor:['read','draft.write'],activator:['read','draft.write','definition.activate']};
-      if(!Object.hasOwn(roles,flags.role))reject('INVALID_ROLE','Choose reader, editor or activator');
+      const roles:Record<string,Permission[]>={reader:['read'],editor:['read','draft.write'],activator:['read','draft.write','definition.activate'],operator:['read','draft.write','definition.activate','execution.request','decision.record','release.request']};
+      if(!Object.hasOwn(roles,flags.role))reject('INVALID_ROLE','Choose reader, editor, activator or operator; operator still requires exact execution and release decisions');
       ensurePrivateRoot(root);const token=randomBytes(32).toString('base64url'),tokenRef=join(root,'principal-'+id+'.json');
       const fd=openSync(tokenRef,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);
       try{writeFileSync(fd,canonical({schema:'runtime-client-credential/v1',workspaceId,principalId:id,projectId,token}));fsyncSync(fd);}finally{closeSync(fd);}
