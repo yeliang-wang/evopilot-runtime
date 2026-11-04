@@ -1,6 +1,6 @@
 import {useEffect,useRef,useState} from 'react';
 import {Graph} from './Graph';
-import {ApiError,call,source as readSource,savePending,loadPending,clearPending} from './api';
+import {ApiError,call,source as readSource,savePending,loadPending,clearPending,recordCompletedAuthorityResponse} from './api';
 import {addExtension,at,changeExtension,changeField,connectExtension,data,diffLines,draftNodes,displayValue,extensions,fieldValue,moveNode,removeExtension,stageLabels} from './model';
 import type {Base,BaseTransitionPreview,DefinitionView,Field,GraphNode,Issue,Pending,Receipt,Session,Validation} from './types';
 
@@ -48,9 +48,21 @@ export function Editor({session,onDirty,onAuthLost}:{session:Session;onDirty:(va
   setBusy(true);try{const receipt=await call<Receipt>(session,operation,{yaml:original,...(activate?{validationDigest:previewValidation?.validationDigest}: {})},{requestId:p.requestId,expectedRevision:view.revision});accept(receipt,original);}catch(e){
    // A definite pre-commit rejection can be corrected. Transport/5xx/authority
    // uncertainty keeps the original request ID and disables new mutations.
-   if(e instanceof ApiError&&['REVISION_CONFLICT','INVALID_INPUT','INLINE_SECRET','YAML_LIMIT','INVALID_REFERENCE','INVALID_FIELDS'].includes(e.code)){clearPending(session);setPending(null);}fail(e);
+   if(e instanceof ApiError&&['REVISION_CONFLICT','INVALID_INPUT','INLINE_SECRET','YAML_LIMIT','INVALID_REFERENCE','INVALID_FIELDS'].includes(e.code)){clearPending(session);setPending(null);}
+   else{try{const observed=recordCompletedAuthorityResponse(session,p,e);if(observed)setPending(observed);}catch{/* Failed persistence retains the original UNKNOWN request. */}}fail(e);
   }finally{setBusy(false);}}
- async function inspectPending(){if(!pending)return;setBusy(true);try{const receipt=await call<Receipt>(session,'runtime.receipt.read',{requestId:pending.requestId});if(receipt.requestId!==pending.requestId||receipt.operation!==pending.operation)throw Error('回执与原请求不一致。');accept(receipt);setMessage('已找到原请求回执。请重新读取已保存定义，再继续修改。');setConflict(true);}catch(e){if(e instanceof ApiError&&e.code==='NOT_FOUND')setMessage('原请求尚无已提交回执；保留请求身份，未重复提交。');else fail(e);}finally{setBusy(false);}}
+ async function inspectPending(){if(!pending)return;setBusy(true);try{
+  const receipt=await call<Receipt>(session,'runtime.receipt.read',{requestId:pending.requestId});if(receipt.requestId!==pending.requestId||receipt.operation!==pending.operation||receipt.projectId!==pending.projectId||receipt.principalId!==pending.principalId)throw Error('回执与原请求不一致。');accept(receipt);setMessage('已找到原请求回执。请重新读取已保存定义，再继续修改。');setConflict(true);
+ }catch(e){
+  if(e instanceof ApiError&&e.status===404&&e.code==='NOT_FOUND'){
+   if(pending.completedAuthorityResponse){
+    // A complete synchronous definition-write reply can still follow a commit
+    // (the server rechecks authority after dispatch). Only this exact receipt
+    // read distinguishes it. A missing receipt for an UNKNOWN request cannot.
+    try{clearPending(session,pending);setPending(null);setPreviewSource(null);setPreviewValidation(null);setMessage('原请求已明确结束且未提交。当前 YAML 已保留，请重新校验后再提交。');}catch(error){fail(error);}
+   }else setMessage('原请求尚无已提交回执；保留请求身份，未重复提交。');
+  }else fail(e);
+ }finally{setBusy(false);}}
  if(loading&&!base)return <div className="panel" role="status">正在读取项目定义…</div>;
  return <><div className="page-heading"><div><p className="eyebrow">PROJECT LIFECYCLE</p><h1>生命周期定义</h1><p>图形和 YAML，共用同一份配置。</p></div><div className="badges"><span className="badge">{text===saved?'已保存':'有未保存变更'}</span><span className="badge">{view?.active?'已有生效版本':'尚未启用'}</span></div></div>
   {message?<div className="notice" role="status">{message}</div>:null}

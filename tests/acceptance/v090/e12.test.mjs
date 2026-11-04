@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {randomBytes} from 'node:crypto';
+import {request as httpRequest} from 'node:http';
 import {parse,parseDocument} from 'yaml';
 import {chromium,expect} from '@playwright/test';
 import {openScenario,repository,sha} from './support.mjs';
@@ -119,9 +120,27 @@ async function samePageRepairs(run,browser,c){
 
 async function protocolProbes(run,ui){
  const findings=[],probe=async(name,url,options,expectedCode)=>{
-  const response=await fetch(url,{...options,redirect:'error',signal:AbortSignal.timeout(10000)}),raw=await response.text();assert(Buffer.byteLength(raw)<=8192);const body=JSON.parse(raw);
-  const result=denied({status:response.status,body},[expectedCode]);assert.equal(response.headers.get('access-control-allow-origin'),null);
-  run.artifact('http-boundary-rejection.json',{name,path:new URL(url).pathname,method:options.method??'GET',status:response.status,body,inputKind:'SYNTHETIC_NEGATIVE_REQUEST',authorizationOmitted:true});findings.push({name,...result});
+  const selected=new URL(url);assert.equal(selected.origin,run.serviceOrigin);let observed;
+  if(name==='invalid-host'){
+   // Fetch rewrites Host to the URL authority. node:http retains this exact
+   // negative header, performs one request, and never follows redirects.
+   assert.deepEqual(options,{headers:{host:'attacker.invalid'}});
+   observed=await new Promise((resolve,reject)=>{
+    const request=httpRequest(selected,{method:'GET',headers:options.headers,agent:false,signal:AbortSignal.timeout(10000)},response=>{
+     const chunks=[];let size=0;response.on('data',chunk=>{size+=chunk.length;if(size>8192){response.destroy(Error('HTTP probe response exceeds 8192 bytes'));return;}chunks.push(chunk);});response.on('error',reject);response.on('aborted',()=>reject(Error('HTTP probe response aborted')));
+     response.on('end',()=>resolve({transport:'node:http',status:response.statusCode,headers:response.headers,rawBody:Buffer.concat(chunks).toString('utf8'),actualRequest:{method:request.method,path:request.path,headers:request.getHeaders()}}));
+    });request.on('error',reject);request.end();
+   });
+  }else{
+   const response=await fetch(url,{...options,redirect:'error',signal:AbortSignal.timeout(10000)}),reader=response.body.getReader(),chunks=[];let size=0;
+   try{for(;;){const item=await reader.read();if(item.done)break;size+=item.value.length;if(size>8192){await reader.cancel();throw Error('HTTP probe response exceeds 8192 bytes');}chunks.push(item.value);}}finally{reader.releaseLock();}
+   observed={transport:'fetch',status:response.status,headers:Object.fromEntries(response.headers),rawBody:Buffer.concat(chunks).toString('utf8')};
+  }
+  // Preserve the real rejection before parsing or checking the fixed predicate.
+  run.artifact('http-boundary-rejection.json',{name,path:selected.pathname,method:options.method??'GET',...observed,inputKind:'SYNTHETIC_NEGATIVE_REQUEST',authorizationOmitted:true});
+  const body=JSON.parse(observed.rawBody),result=denied({status:observed.status,body},[expectedCode]);assert.equal(observed.headers['access-control-allow-origin']??null,null);
+  if(name==='invalid-host'){assert.equal(observed.status,403);assert.equal(observed.actualRequest.headers.host,'attacker.invalid');}
+  findings.push({name,...result});
  };
  await probe('invalid-host',run.serviceOrigin+'/api/v1/status?projectId='+encodeURIComponent(run.selection.projectId),{headers:{host:'attacker.invalid'}},'INVALID_HOST');
  await probe('invalid-origin',run.serviceOrigin+'/api/v1/status?projectId='+encodeURIComponent(run.selection.projectId),{headers:{origin:'https://attacker.invalid'}},'INVALID_ORIGIN');
@@ -170,12 +189,19 @@ async function deniedUiActivation(ui,run,source,preview,{holdBeforeSubmit=false,
   const row=ui.network.slice(start).find(v=>v.request?.operation==='lifecycle.definition.save-and-activate'&&v.transportOutcome==='RESPONSE_RETAINED');assert.equal(row.request.input.validationDigest,preview.digest);assert.equal(row.request.input.yaml,source);const result=denied({status:row.status,body:JSON.parse(row.rawBody)},['BROWSER_SESSION_REVOKED','UNAUTHENTICATED']);assert.equal(result.status,401);return{...result,actualUiRequest:row.request,heldBeforeTransport:holdBeforeSubmit,previewResponseRequestId:preview.responseRequestId};
  }finally{if(!released){released=true;release(false);}if(holdBeforeSubmit)await ui.page.unroute('**/api/v1/dashboard/request',handler);}
 }
-async function restorePreview(run,ui,c,initial,source,preview,restoreId){
+async function restorePreview(run,ui,c,initial,source,preview,restoreId,pendingRequestId=null){
  run.permissionFault(restoreId);const old=await ui.sessionRequest('runtime.status');assert.equal(old.status,401);denied(old,['UNAUTHENTICATED','BROWSER_SESSION_REVOKED']);await ui.login('/lifecycle');
+ let originalRequestRecovery=null;
+ if(pendingRequestId!==null){
+  assert.equal(typeof pendingRequestId,'string');const button=ui.page.getByRole('button',{name:'核对原请求',exact:true});await expect(button).toBeEnabled();await expect(ui.page.getByText('待核对原请求',{exact:false})).toContainText(pendingRequestId);await expect(ui.source).toHaveAttribute('readonly','');
+  const since=ui.network.length;await button.click();await expect(ui.source).toBeEditable();await expect(button).toHaveCount(0);await expect.poll(()=>ui.network.slice(since).filter(row=>row.request?.operation==='runtime.receipt.read'&&row.request.input?.requestId===pendingRequestId&&row.transportOutcome==='RESPONSE_RETAINED').length,{timeout:10000}).toBe(1);
+  const rows=ui.network.slice(since),row=rows.find(row=>row.request?.operation==='runtime.receipt.read'&&row.request.input?.requestId===pendingRequestId);assert.equal(row.status,404);assert.equal(JSON.parse(row.rawBody).error.code,'NOT_FOUND');assert(!rows.some(row=>['lifecycle.draft.save','lifecycle.definition.save-and-activate'].includes(row.request?.operation)));await expect(ui.page.getByRole('button',{name:'保存并启用',exact:true})).toBeDisabled();
+  originalRequestRecovery={originalRequestId:pendingRequestId,entry:'ACTUAL_DASHBOARD_ORIGINAL_REQUEST_BUTTON',receiptRead:row,missingReceiptConfirmed:true,newWrites:0};run.artifact('permission-original-request-recovery.json',originalRequestRecovery);
+ }
  const before=await run.read('lifecycle.definition.inspect'),requestId=run.requestId(c.caseInstanceId,restoreId+'-old-preview'),stale=await ui.sessionRequest('lifecycle.definition.save-and-activate',{yaml:source,validationDigest:preview.digest},{requestId,expectedRevision:before.revision});assert.equal(stale.status,200);assert.equal(stale.body.result.result.status,'BLOCKED');assert(stale.body.result.result.issues.some(i=>i.code==='VALIDATION_STALE'));assert.deepEqual((await run.read('lifecycle.definition.inspect')).active,before.active);
  // The real BLOCKED request retains its draft and advances revision. Reconnect
  // this same Dashboard page before obtaining and consuming a genuinely new preview.
- await ui.login('/lifecycle');const fresh=await previewPermissionSource(ui,source);assert.notEqual(fresh.digest,preview.digest);const activated=await activateCurrent(ui,run,source);await intactPermissionHistory(run,initial);return{oldSessionRejected:true,oldPreviewRequestId:requestId,oldPreviewBlocked:true,freshPreview:fresh,activated};
+ await ui.login('/lifecycle');const fresh=await previewPermissionSource(ui,source);assert.notEqual(fresh.digest,preview.digest);const activated=await activateCurrent(ui,run,source);await intactPermissionHistory(run,initial);return{oldSessionRejected:true,originalRequestRecovery,oldPreviewRequestId:requestId,oldPreviewBlocked:true,freshPreview:fresh,activated};
 }
 async function afterActivationRevocation(run,browser,c,initial,ids){
  const ui=await openBrowser(run,browser,{principalAlias:'activator',route:'/lifecycle',monitorEvidence:true});
@@ -197,7 +223,7 @@ async function permissionTiming(run,browser,c){
  for(const name of ['after-preview','before-submit']){
   const ui=await openBrowser(run,browser,{principalAlias:'activator',route:'/lifecycle',monitorEvidence:true});
   try{const selected=await selectedActive(run),source=selected.source+'\n# '+name+' '+run.selection.runId+'\n',preview=await previewPermissionSource(ui,source),before=await run.read('lifecycle.definition.inspect');const rejected=await deniedUiActivation(ui,run,source,preview,{holdBeforeSubmit:name==='before-submit',stepId:name+'-revoke'});
-   const native=await run.principalRequest('activator','lifecycle.definition.save-and-activate',{yaml:source,validationDigest:preview.digest},{requestId:run.requestId(c.caseInstanceId,name+'-native-denied'),expectedRevision:before.revision});assert.equal(native.status,403);denied(native,['FORBIDDEN']);assert.equal((await run.principalRequest('activator','lifecycle.instance.inspect',{instanceId:initial.original.id})).status,200);await noChanges(run,before);await intactPermissionHistory(run,initial);const recovery=await restorePreview(run,ui,c,initial,source,preview,name+'-restore');await ui.flush();timings.push({boundary:name,rejected,nativeDenied:true,recovery});
+   const native=await run.principalRequest('activator','lifecycle.definition.save-and-activate',{yaml:source,validationDigest:preview.digest},{requestId:run.requestId(c.caseInstanceId,name+'-native-denied'),expectedRevision:before.revision});assert.equal(native.status,403);denied(native,['FORBIDDEN']);assert.equal((await run.principalRequest('activator','lifecycle.instance.inspect',{instanceId:initial.original.id})).status,200);await noChanges(run,before);await intactPermissionHistory(run,initial);const recovery=await restorePreview(run,ui,c,initial,source,preview,name+'-restore',rejected.actualUiRequest.requestId);await ui.flush();timings.push({boundary:name,rejected,nativeDenied:true,recovery});
   }finally{run.restorePermissionFault();await ui.close();}
  }
  const post=await afterActivationRevocation(run,browser,c,initial,{expire:'after-active-expire',restore:'after-active-restore'});const after=await permissionEvents(run);assert.deepEqual(after.slice(0,events.length),events);const added=after.slice(events.length);assert(added.every(e=>['definition-draft-saved','definition-activation-blocked','definition-activated'].includes(e.type)));

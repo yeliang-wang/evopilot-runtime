@@ -1603,8 +1603,15 @@ Saving a draft preserves its exact source. The same page can validate, show the
 complete textual difference from the active revision, then save and activate using
 that reviewed validation digest. A background preview cannot replace the digest
 selected for activation. Concurrent writes preserve the local text and require
-readback. An uncertain write retains only its original request identity in session
+readback. An uncertain write retains its original request identity in session
 storage; the UI inspects its receipt and never submits a replacement automatically.
+A complete, recognized authority-denial response adds a bounded local observation
+to that identity. It does not prove that the write was uncommitted: the server
+also checks authority after dispatch. After reconnecting as the same principal,
+the existing original-request check either recovers the committed receipt or,
+only for that completed denial plus an exact `404 NOT_FOUND`, releases the editing
+lock and requires a new validation. A missing receipt alone never releases an
+unknown, interrupted or server-error request. Recovery itself performs no write.
 YAML and long-lived credentials are not stored in browser storage. Reauthentication
 to the same project retains unsaved text in the open page's memory. Closing or
 reloading the page still loses unsaved memory, with an unsaved-navigation warning.

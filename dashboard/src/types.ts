@@ -11,4 +11,5 @@ export interface Receipt {projectId:string;requestId:string;operation:string;pri
 export interface Stage {status:'PENDING'|'RUNNING'|'UNKNOWN'|'FAILED'|'PASSED';attempts:number;requestId:string|null;requestedAt:string|null;receiptRef:string|null;outcomeDigest:string|null;expiresAt:string|null;}
 export interface MonitoredInstance {id:string;createdAt:string;definitionRevisionId:string;base:Base['pin'];goalRef:string;targetRef:string;loopRef:string;candidateDigest:string|null;graph:GraphNode[];stages:Record<string,Stage>;}
 export interface MonitorPage {projectId:string;revision:number;instances:MonitoredInstance[];nextAfter:string|null;observedAt:string;readOnly:true;}
-export interface Pending {projectId:string;principalId:string;serviceId:string;requestId:string;operation:string;}
+export type CompletedAuthorityResponse={status:401;code:'UNAUTHENTICATED'|'BROWSER_SESSION_REVOKED'}|{status:403;code:'FORBIDDEN'};
+export interface Pending {projectId:string;principalId:string;serviceId:string;requestId:string;operation:string;completedAuthorityResponse?:CompletedAuthorityResponse;}

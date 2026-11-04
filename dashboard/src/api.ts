@@ -1,4 +1,4 @@
-import type {Session,MonitorPage,Pending} from './types';
+import type {Session,MonitorPage,Pending,CompletedAuthorityResponse} from './types';
 export class ApiError extends Error {constructor(readonly code:string,message:string,readonly status=0){super(message);}}
 export async function json<T>(path:string,options:RequestInit={}):Promise<T>{
  let response:Response;try{response=await fetch(path,{...options,credentials:'same-origin',redirect:'error',signal:options.signal??AbortSignal.timeout(20000)});}catch{throw new ApiError('TRANSPORT_UNKNOWN','连接中断。请核对原请求，不要重复提交。');}
@@ -23,5 +23,28 @@ export async function source(s:Session,revisionId:string):Promise<string>{let of
 export const monitor=(after?:string,revision?:number)=>json<MonitorPage>('/api/v1/dashboard/monitor'+(after?'?'+new URLSearchParams({after,revision:String(revision)}).toString():''));
 const pendingKey=(s:Session)=>'evopilot.pending.'+s.serviceId+'.'+s.projectId+'.'+s.principalId;
 export function savePending(s:Session,operation:string):Pending{const pending={projectId:s.projectId,principalId:s.principalId,serviceId:s.serviceId,requestId:crypto.randomUUID(),operation};sessionStorage.setItem(pendingKey(s),JSON.stringify(pending));return pending;}
-export function loadPending(s:Session):Pending|null{try{const value=JSON.parse(sessionStorage.getItem(pendingKey(s))??'null') as Pending|null;return value&&value.serviceId===s.serviceId&&value.projectId===s.projectId&&value.principalId===s.principalId&&typeof value.requestId==='string'?value:null;}catch{return null;}}
-export const clearPending=(s:Session)=>sessionStorage.removeItem(pendingKey(s));
+function completedAuthorityResponse(value:unknown):value is CompletedAuthorityResponse{
+ if(!value||typeof value!=='object'||Array.isArray(value))return false;
+ const v=value as Record<string,unknown>;if(Object.keys(v).sort().join(',')!=='code,status')return false;
+ return v.status===401&&(v.code==='UNAUTHENTICATED'||v.code==='BROWSER_SESSION_REVOKED')||v.status===403&&v.code==='FORBIDDEN';
+}
+const definitionWrite=(operation:string)=>operation==='lifecycle.draft.save'||operation==='lifecycle.definition.save-and-activate';
+const samePending=(a:Pending|null,b:Pending)=>!!a&&(['serviceId','projectId','principalId','requestId','operation'] as const).every(key=>a[key]===b[key]);
+export function loadPending(s:Session):Pending|null{try{
+ const raw=sessionStorage.getItem(pendingKey(s));if(!raw||raw.length>8192)return null;
+ const value=JSON.parse(raw) as Record<string,unknown>|null;if(!value||typeof value!=='object'||Array.isArray(value)||value.serviceId!==s.serviceId||value.projectId!==s.projectId||value.principalId!==s.principalId||typeof value.requestId!=='string'||!value.requestId||value.requestId.length>128||typeof value.operation!=='string'||!value.operation||value.operation.length>128)return null;
+ const pending:Pending={serviceId:s.serviceId,projectId:s.projectId,principalId:s.principalId,requestId:value.requestId,operation:value.operation};
+ // An invalid or unknown marker must retain the pending request as UNKNOWN.
+ if(definitionWrite(pending.operation)&&completedAuthorityResponse(value.completedAuthorityResponse))pending.completedAuthorityResponse=value.completedAuthorityResponse;
+ return pending;
+}catch{return null;}}
+export function recordCompletedAuthorityResponse(s:Session,pending:Pending,error:unknown):Pending|null{
+ if(!definitionWrite(pending.operation)||!(error instanceof ApiError))return null;
+ const observed={status:error.status,code:error.code};if(!completedAuthorityResponse(observed))return null;
+ if(!samePending(loadPending(s),pending))throw new Error('原请求身份已变化，请保留并核对。');
+ const updated:Pending={...pending,completedAuthorityResponse:observed};sessionStorage.setItem(pendingKey(s),JSON.stringify(updated));return updated;
+}
+export function clearPending(s:Session,expected?:Pending):void{
+ if(expected&&!samePending(loadPending(s),expected))throw new Error('原请求身份已变化，未清除待核对状态。');
+ sessionStorage.removeItem(pendingKey(s));
+}

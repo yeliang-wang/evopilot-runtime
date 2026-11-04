@@ -21,7 +21,18 @@ export async function dashboardFixture({seed=true}={}){
  const initialSource='# Browser development fixture, not project acceptance\n'+yaml(data),controls={phase:'UNKNOWN',dispatches:0},adapterDigest=valueDigest('synthetic-browser-adapter');
  const observe=r=>({requestId:r.id,inputDigest:r.inputDigest,adapterDigest,phase:controls.phase,handle:{synthetic:r.id},outcome:{requestId:r.id,inputDigest:r.inputDigest,receiptRef:'synthetic:browser/'+r.id,status:controls.phase==='FAILED'?'FAILED':'UNKNOWN',expiresAt:new Date(Date.now()+60000).toISOString(),checks:[]}});
  const adapter={async prepare(_i,stageId){return{adapterId:'synthetic-browser',adapterDigest,action:'base.'+stageId,bindingDigest:valueDigest('synthetic-browser-binding'),parameters:{synthetic:true}};},async dispatch(r,_i,permit){await permit();controls.dispatches++;return observe(r);},async inspect(r){return observe(r);}};
- let server;const open=async port=>server=await startRuntimeServer({stateRoot,workspaceId:'browser-fixture',port},bindings.provider,async ref=>authorities.get(ref)??null,undefined,adapter);
+ let server,afterCommitRequest=null;const postCommitFaults=[];
+ const open=async port=>server=await startRuntimeServer({stateRoot,workspaceId:'browser-fixture',port},bindings.provider,async ref=>authorities.get(ref)??null,undefined,store=>{
+  // Source-test-only scheduling fault: run the original synchronous transaction
+  // completely, then rotate this fixture identity before HTTP's final auth check.
+  // No fake response, receipt, database seed, or installed acceptance is involved.
+  const mutate=store.mutate.bind(store);store.mutate=(actor,request,...rest)=>{
+   const receipt=mutate(actor,request,...rest);
+   if(request.requestId===afterCommitRequest){assert.equal(actor.id,'owner');assert(['lifecycle.draft.save','lifecycle.definition.save-and-activate'].includes(request.operation));afterCommitRequest=null;rotate();postCommitFaults.push({requestId:request.requestId,revision:receipt.revision,actualCommit:true});}
+   return receipt;
+  };return adapter;
+ });
+ function rotateAfterCommit(requestId){assert.equal(afterCommitRequest,null);assert(/^[a-f0-9-]{36}$/.test(requestId));afterCommitRequest=requestId;}
  await open();
  // Fault injection touches only this fixture's actual HTTP responses. Browser
  // offline emulation does not reliably close an already established SSE socket.
@@ -53,5 +64,5 @@ export async function dashboardFixture({seed=true}={}){
   return revision;
  }
  if(seed)await write('lifecycle.draft.save',{yaml:initialSource});
- return{root,bindings,controls,data,initialSource,call,write,source,activate,createInstance,code,rotate,appendEvents,disconnectEvents,get url(){return server.url;},async restart(){const port=server.port;await server.close();await open(port);},async close(){requests.unsubscribe(captureEvents);await server.close();rmSync(root,{recursive:true,force:true});}};
+ return{root,bindings,controls,data,initialSource,call,write,source,activate,createInstance,code,rotate,rotateAfterCommit,postCommitFaults,appendEvents,disconnectEvents,get url(){return server.url;},async restart(){const port=server.port;await server.close();await open(port);},async close(){requests.unsubscribe(captureEvents);await server.close();rmSync(root,{recursive:true,force:true});}};
 }

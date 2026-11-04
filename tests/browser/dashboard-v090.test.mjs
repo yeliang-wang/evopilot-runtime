@@ -70,6 +70,46 @@ test('lost committed response is inspected by original request and never automat
  await page.getByRole('button',{name:'保存草稿',exact:true}).click();await expect(page.getByRole('button',{name:'核对原请求'})).toBeEnabled();await expect(page.getByRole('button',{name:'保存草稿',exact:true})).toBeDisabled();await page.getByRole('button',{name:'核对原请求'}).click();await expect(page.getByRole('button',{name:'重新读取',exact:true})).toBeVisible();await expect(source(page)).toHaveValue(text);expect(writes).toBe(1);const receipt=await f.call('runtime.receipt.read',{requestId:original});expect(receipt.result.status).toBe('DRAFT');expect(await f.source(receipt.result.revisionId)).toBe(text);
 });
 
+async function reconnect(page){await expect(page.getByLabel('一次性连接码')).toBeVisible();await page.getByLabel('一次性连接码').fill(await f.code());await page.getByRole('button',{name:'连接项目',exact:true}).click();await expect(page.getByRole('heading',{name:'生命周期定义',exact:true})).toBeVisible();}
+async function pendingEntry(page){return page.evaluate(()=>{const key=Object.keys(sessionStorage).find(k=>k.startsWith('evopilot.pending.'));return key?{key,value:JSON.parse(sessionStorage.getItem(key))}:null;});}
+
+test('completed pre-commit auth rejection recovers only after exact missing-receipt read and fresh preview',async({page})=>{
+ await login(page);await valid(page);const before=await f.call('lifecycle.definition.inspect'),text=f.initialSource+'\n# completed authority rejection';await source(page).fill(text);await page.getByRole('button',{name:'校验与差异预览'}).click();await expect(page.getByRole('button',{name:'保存并启用',exact:true})).toBeEnabled();
+ const writes=[],reads=[],responses=[];
+ await page.route('**/api/v1/dashboard/request',async route=>{const payload=route.request().postDataJSON();if(payload.operation==='lifecycle.definition.save-and-activate'){writes.push(payload);if(writes.length===1)f.rotate();}if(payload.operation==='runtime.receipt.read')reads.push(payload.input.requestId);await route.continue();});
+ page.on('response',async response=>{if(response.request().method()==='POST'&&response.url().endsWith('/api/v1/dashboard/request')){const body=response.request().postDataJSON();if(body.operation==='lifecycle.definition.save-and-activate')responses.push({requestId:body.requestId,status:response.status()});}});
+ await page.getByRole('button',{name:'保存并启用',exact:true}).click();await reconnect(page);await expect(source(page)).toHaveValue(text);await expect(source(page)).toHaveAttribute('readonly','');
+ const retained=await pendingEntry(page);expect(retained.value.requestId).toBe(writes[0].requestId);expect(retained.value.completedAuthorityResponse).toEqual({status:401,code:'BROWSER_SESSION_REVOKED'});expect(responses[0].status).toBe(401);expect(await f.call('lifecycle.definition.inspect')).toEqual(before);
+ await page.getByRole('button',{name:'核对原请求',exact:true}).click();await expect(source(page)).toBeEditable();await expect(source(page)).toHaveValue(text);expect(reads).toEqual([writes[0].requestId]);expect(await pendingEntry(page)).toBeNull();expect(writes).toHaveLength(1);await expect(page.getByRole('button',{name:'保存并启用',exact:true})).toBeDisabled();
+ await page.getByRole('button',{name:'校验与差异预览'}).click();await expect(page.getByRole('button',{name:'保存并启用',exact:true})).toBeEnabled();await page.getByRole('button',{name:'保存并启用',exact:true}).click();await expect(page.getByText('已启用此精确定义。既有实例继续使用原版本。',{exact:true})).toBeVisible();expect(writes).toHaveLength(2);expect(writes[1].requestId).not.toBe(writes[0].requestId);expect((await f.call('lifecycle.definition.inspect')).revision).toBe(before.revision+1);
+});
+
+test('post-commit native auth rejection retains exact receipt across reload and never writes twice',async({page})=>{
+ await login(page);await valid(page);const before=await f.call('lifecycle.definition.inspect'),text=f.initialSource+'\n# committed before authority response';await source(page).fill(text);const writes=[],reads=[];
+ await page.route('**/api/v1/dashboard/request',async route=>{const p=route.request().postDataJSON();if(p.operation==='lifecycle.draft.save'){writes.push(p);f.rotateAfterCommit(p.requestId);}if(p.operation==='runtime.receipt.read')reads.push(p.input.requestId);await route.continue();});
+ await page.getByRole('button',{name:'保存草稿',exact:true}).click();await reconnect(page);await expect(source(page)).toHaveValue(text);expect(f.postCommitFaults).toEqual([{requestId:writes[0].requestId,revision:before.revision+1,actualCommit:true}]);expect((await pendingEntry(page)).value.completedAuthorityResponse).toEqual({status:401,code:'BROWSER_SESSION_REVOKED'});
+ await page.reload();await expect(page.getByRole('button',{name:'核对原请求',exact:true})).toBeEnabled();await expect(source(page)).toHaveAttribute('readonly','');await page.getByRole('button',{name:'核对原请求',exact:true}).click();await expect(page.getByRole('button',{name:'重新读取',exact:true})).toBeVisible();expect(reads).toEqual([writes[0].requestId]);expect(writes).toHaveLength(1);expect(await pendingEntry(page)).toBeNull();
+ const receipt=await f.call('runtime.receipt.read',{requestId:writes[0].requestId});expect(receipt.revision).toBe(before.revision+1);expect(await f.source(receipt.result.revisionId)).toBe(text);await page.getByRole('button',{name:'重新读取',exact:true}).click();await expect(source(page)).toBeEditable();await expect(source(page)).toHaveValue(text);expect((await f.call('lifecycle.definition.inspect')).revision).toBe(before.revision+1);
+});
+
+for(const failure of ['transport','server-error'])test('unknown '+failure+' and absent receipt preserve pending and block new writes',async({page})=>{
+ await login(page);await valid(page);const before=await f.call('lifecycle.definition.inspect'),text=f.initialSource+'\n# unknown original write';await source(page).fill(text);let writes=0,original;
+ await page.route('**/api/v1/dashboard/request',async route=>{const p=route.request().postDataJSON();if(p.operation!=='lifecycle.draft.save')return route.continue();writes++;original=p.requestId;if(failure==='transport')await route.abort('connectionreset');else await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{code:'FORBIDDEN',message:'Synthetic source-test 5xx response; not a completed authority rejection'}})});});
+ await page.getByRole('button',{name:'保存草稿',exact:true}).click();await expect(page.getByRole('button',{name:'核对原请求'})).toBeEnabled();expect((await pendingEntry(page)).value.completedAuthorityResponse).toBeUndefined();await page.getByRole('button',{name:'核对原请求'}).click();await expect(page.getByText('原请求尚无已提交回执；保留请求身份，未重复提交。',{exact:true})).toBeVisible();expect((await pendingEntry(page)).value.requestId).toBe(original);await expect(source(page)).toHaveAttribute('readonly','');await expect(source(page)).toHaveValue(text);expect(writes).toBe(1);expect(await f.call('lifecycle.definition.inspect')).toEqual(before);
+});
+
+test('malformed completion marker stays UNKNOWN and cannot unlock an absent request after reload',async({page})=>{
+ await login(page);await valid(page);await source(page).fill(f.initialSource+'\n# malformed pending completion');let writes=0;
+ await page.route('**/api/v1/dashboard/request',async route=>{const p=route.request().postDataJSON();if(p.operation==='lifecycle.draft.save'){writes++;await route.abort('connectionreset');}else await route.continue();});
+ await page.getByRole('button',{name:'保存草稿',exact:true}).click();await expect(page.getByRole('button',{name:'核对原请求'})).toBeEnabled();
+ // Deliberately corrupt local source-test state. No installed E2E uses this path.
+ for(const marker of [{status:503,code:'FORBIDDEN'},{status:401,code:'TRANSPORT_UNKNOWN'},{status:401,code:'UNAUTHENTICATED',projectId:'other'},true]){
+  await page.evaluate(value=>{const key=Object.keys(sessionStorage).find(k=>k.startsWith('evopilot.pending.')),pending=JSON.parse(sessionStorage.getItem(key));pending.completedAuthorityResponse=value;sessionStorage.setItem(key,JSON.stringify(pending));},marker);
+  await page.reload();await expect(page.getByRole('button',{name:'核对原请求'})).toBeEnabled();await page.getByRole('button',{name:'核对原请求'}).click();await expect(page.getByText('原请求尚无已提交回执；保留请求身份，未重复提交。',{exact:true})).toBeVisible();await expect(source(page)).toHaveAttribute('readonly','');expect(await pendingEntry(page)).not.toBeNull();
+ }
+ expect(writes).toBe(1);
+});
+
 test('permission revocation requires reconnect without losing unsaved YAML; read identity cannot edit',async({page,browser})=>{
  await login(page);await valid(page);const text=f.initialSource+'\n# preserved through auth loss';f.rotate();await source(page).fill(text);await expect(page.getByLabel('一次性连接码')).toBeVisible();await page.getByLabel('一次性连接码').fill(await f.code());await page.getByRole('button',{name:'连接项目',exact:true}).click();await expect(source(page)).toHaveValue(text);await expect(source(page)).toBeEditable();
  const context=await browser.newContext(),reader=await context.newPage();await login(reader,'/lifecycle','reader');await expect(source(reader)).toHaveAttribute('readonly','');await expect(reader.getByRole('button',{name:'保存草稿',exact:true})).toBeDisabled();await expect(reader.getByRole('button',{name:'保存并启用'})).toBeDisabled();await context.close();
