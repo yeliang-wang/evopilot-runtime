@@ -4,7 +4,8 @@ The fixed catalog contains 64 requirement groups, 22 scenarios and 664 instances
 (655 before release, 9 after delivery). Development regressions are separate.
 The E03 collector, `tests/acceptance/v090/e03.test.mjs`, executes the 332
 required-field HTTP instances, 48 fixed HTTP/MCP/CLI stage-entry instances and
-32 actual browser graph/YAML stage-entry instances
+32 actual browser graph/YAML stage-entry instances and 16 actual Codex Expert
+stage-entry instances
 against an explicitly selected installed package
 and an existing activated isolated project. It checks field/rule/remedy errors,
 retained drafts, the original active revision and historical source bytes.
@@ -24,6 +25,23 @@ explicit API draft save; it is not counted as a UI action or dependency readines
 Each case retains a screenshot and actual browser action/network transcript,
 without authentication headers, cookies, session values or the one-use code.
 
+Expert cases use an ephemeral instance of the selected actual Codex executable,
+the installed plugin's own marketplace identity and its Host-reported qualified
+skill name. A real model turn saves and validates each supplied configuration
+through HTTP MCP; independent service reads verify the original request, exact
+draft, validation issue and unchanged active/history. The fenced input declares
+its single final LF; saved bytes are compared exactly without normalization.
+Host-built-in read-only resource discovery is retained separately and never
+counted as a Runtime call; discovery of an unrelated named server is rejected.
+The installed configuration
+reference is supplied through App Server application context. The driver records
+the real model/provider, tool results, token usage and bounded dialogue transcript;
+scripted tool calls alone cannot satisfy these cases. Other MCP/app capabilities
+are disabled only for that test process. A precise synthetic draft permission
+response reuses existing test authority; it never supplies a domain/release
+decision or changes daily Codex configuration. Unexpected shell use or an
+uncertain write fails the case and retains the original request for inspection.
+
 Other E03 journeys and entry cases remain required. Selecting one without its
 implementation fails; it is not skipped or represented by a field test. A
 bounded subset report retains the complete 448-instance E03 denominator and
@@ -40,6 +58,12 @@ omit it for the complete scenario. The output root must be new. The installed
 manifest and all package bytes are verified before and after execution. Final
 candidate mode requires version `0.9.0`; this alone does not establish release
 eligibility or replace E20 source/evidence qualification.
+
+Selecting Expert instances also requires `codexHost` with the canonical
+`executable`, its `executableSha256`, and `timeoutSeconds` (60–600). The actual
+Host version must match the frozen environment. This is the test watchdog, not
+a change to any Runtime execution budget. Each turn's final status and original
+service receipt are checked; timeout or a Host interruption is not a pass.
 
 ```sh
 EVOPILOT_V090_ACCEPTANCE_SELECTION=/absolute/private/selection.json \
@@ -67,7 +91,8 @@ qualification. CV07 in E09 requires every fixed E09 instance in the same campaig
 
 固定验收分母为 664，开发回归与正式验收分别记账。E03 对真实安装包执行 332 个
 字段缺项／非法值检查，以及 HTTP、MCP、CLI 三个入口的 48 个阶段配置检查和
-图形／YAML 两个实际浏览器入口的 32 个阶段配置检查，
+图形／YAML 两个实际浏览器入口的 32 个阶段配置检查，以及真实 Codex Expert 的
+16 个阶段配置检查，
 要求已有通过服务正常启用的隔离项目作为基线；
 检查准确字段与规则、草稿保留、原生效版本及历史源码不变，不直接写库或伪造依赖就绪。
 
@@ -76,7 +101,15 @@ qualification. CV07 in E09 requires every fixed E09 instance in the same campaig
 测试缺失键／null，分别记录，不能把 HTTP 注入冒充图形操作。每项保留实际截图和
 动作／网络记录，连接码和认证材料不写入记录。
 
-其余 E03 完整流程及 Expert 入口仍必须实现。未实现用例会失败；选择部分用例
+Expert 用例加载安装包实际插件标识和 Host 返回的完整技能名，由真实模型调用
+HTTP MCP 保存／校验，再独立读回原请求和草稿。输入明确保留末尾一个换行，按原始字节
+核对；Host 内置只读发现调用另行保留，不能当作 Runtime 调用或访问无关服务。
+记录实际模型、提供方、token 用量及
+对话／工具回执。临时测试进程关闭其他 MCP／应用，只复用本次准确合成草稿的已有
+测试权限，不修改日常 Codex 配置、不生成领域或发布批准。固定 Host 版本和可执行文件
+摘要必须匹配；异常、超时及未知写入均不能算通过。
+
+其余 E03 完整流程仍必须实现。未实现用例会失败；选择部分用例
 只生成明确的部分报告，保留完整分母及未执行 ID。开发版本不能声明最终候选验收通过。
 结果不替代完整源代码 CI、真实 Host／浏览器／平台流程、发行及当前 Codex 安装终验。
 

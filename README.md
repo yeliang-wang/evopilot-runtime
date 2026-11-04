@@ -2,6 +2,13 @@
 
 English | [简体中文](README_CN.md)
 
+**v0.9 development:** this branch implements the independent lifecycle service,
+one Runtime Expert/HTTP MCP plugin, and two Dashboard pages. Read the
+[v0.9 operator guide](docs/runtime-v090.md) and [lifecycle API](docs/lifecycle-api.md).
+Full candidate acceptance and release remain pending. The published v0.8.3
+installation and capability descriptions below apply to that immutable release;
+they do not describe the new service's runtime dependencies or independent entry.
+
 Runtime is the durable execution layer of [EvoPilot](https://github.com/yeliang-wang/evopilot/blob/main/README.md). It owns projects, goals, reviewed plans, decisions, execution claims, receipts and audit. [Ontology](https://github.com/yeliang-wang/evopilot-ontology/blob/main/README.md) owns semantic models; [Harness](https://github.com/yeliang-wang/evopilot-harness/blob/main/README.md) owns quality policies and evidence evaluation.
 
 [Quickstart](#quickstart) · [Service API](docs/service.md) · [CLI](docs/cli.md) · [Documentation](docs/README.md) · [Release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.8.3)

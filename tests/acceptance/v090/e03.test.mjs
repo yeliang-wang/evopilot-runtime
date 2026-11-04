@@ -88,8 +88,24 @@ async function browserCase(run,browser,c,fields,control,initial,activeSource){
  }
 }
 
+async function expertCase(run,expert,c,fields,control,initial,activeSource){
+ const spec=fields.find(f=>f.stage===c.parameters.stage&&f.providers.includes(c.parameters.provider)&&f.required);assert(spec);
+ const missing=c.parameters.failure==='missing-required';assert(missing||c.parameters.failure==='invalid-type');
+ const data=structuredClone(control);set(data,spec.path,missing?undefined:null);const yaml=stringify(data,{lineWidth:0});
+ const before=await run.read('lifecycle.definition.inspect');assert.deepEqual(before.active,initial.active);
+ const oldDraft=before.draft?await run.source(before.draft.id):null,requestId=run.requestId(c.caseInstanceId,'expert-draft');
+ const observed=await expert.draft({yaml,requestId,expectedRevision:before.revision});
+ const receipt=await run.read('runtime.receipt.read',{requestId});assert.equal(receipt.result.status,'DRAFT');
+ const after=await run.read('lifecycle.definition.inspect');assert.deepEqual(after.active,initial.active);assert.equal(after.draft.id,receipt.result.revisionId);assert.equal(await run.source(after.draft.id),yaml);
+ assert.equal(await run.source(initial.active.id),activeSource);if(before.draft)assert.equal(await run.source(before.draft.id),oldDraft);
+ const call=observed.calls.filter(c=>c.tool==='runtime_read'&&c.arguments.operation==='lifecycle.definition.validate'&&c.arguments.input.yaml===yaml).at(-1);
+ const preview=JSON.parse(call.result.content[0].text).result;assert.equal(preview.compilation.valid,false);assert.equal(preview.ready,false);issue(preview.compilation.issues,spec.path);
+ assert(!observed.calls.some(c=>['lifecycle.definition.activate','lifecycle.definition.save-and-activate','lifecycle.instance.create','lifecycle.stage.request'].includes(c.arguments.operation)));
+ return{entry:'expert',stage:c.parameters.stage,field:spec.path,inputRepresentation:missing?'missing-yaml-key':'yaml-null',actualModelTurn:true,actualInstalledExpert:true,actualInstalledHttpMcp:true,model:observed.model,provider:observed.provider,threadId:observed.threadId,turnId:observed.turnId,originalDraftRequestId:requestId,exactDraftApprovalResponses:observed.approvalResponses,specificFieldRuleAndRemedy:true,invalidDraftRetained:true,activationNotAdmitted:true,existingActiveAndHistoryUnchanged:true,externalExecutionRequested:false,inputKind:'SYNTHETIC_NEGATIVE_CONFIGURATION'};
+}
+
 test('E03 fixed candidate service admission cases',async()=>{
- const run=await openScenario('E03');let browser;
+ const run=await openScenario('E03');let browser,expert;
  try{
   const fields=JSON.parse(fs.readFileSync(path.join(repository,'governance/lifecycle-contract-v090.json'))).fields;
   const base=await run.read('lifecycle.base.inspect');assert.deepEqual(base.fields,fields);
@@ -103,8 +119,14 @@ test('E03 fixed candidate service admission cases',async()=>{
    assert.equal(control.compilation.valid,true,'The negative-case control must be structurally valid');variants.set(provider,data);
   }
   if(run.cases.some(c=>['dashboard-graph','dashboard-yaml'].includes(c.parameters.entry)))browser=await chromium.launch({headless:true});
+  if(run.cases.some(c=>c.parameters.entry==='expert'))expert=await run.openExpert();
   for(const c of run.cases)await run.collect(c,async()=>{
    assert(['REAL_SERVICE_PARAMETER','ENTRY_ADMISSION'].includes(c.kind),'This frozen journey still requires its actual collector; it may not be skipped or replaced by a field test');
+   if(c.parameters.entry==='expert'){
+    const result=await expertCase(run,expert,c,fields,variants.get(c.parameters.provider),initial,activeSource);
+    const events=await run.read('runtime.events.read',{cursor:eventCursor});eventCursor=events.cursor;
+    assert.deepEqual(events.events.map(e=>e.type),['definition-draft-saved'],'An incomplete Expert draft must not activate or dispatch execution');return result;
+   }
    if(['dashboard-graph','dashboard-yaml'].includes(c.parameters.entry)){
     const result=await browserCase(run,browser,c,fields,variants.get(c.parameters.provider),initial,activeSource);
     const events=await run.read('runtime.events.read',{cursor:eventCursor});eventCursor=events.cursor;
@@ -127,5 +149,5 @@ test('E03 fixed candidate service admission cases',async()=>{
    if(before.draft)assert.equal(await run.source(before.draft.revisionId??before.draft.id),oldDraft);
    return{entry,field:spec.path,fault,specificFieldRuleAndRemedy:true,invalidDraftRetained:true,activationBlocked:true,existingActiveAndHistoryUnchanged:true,externalExecutionRequested:false,inputKind:'SYNTHETIC_NEGATIVE_CONFIGURATION',service:'ACTUAL_INSTALLED_HTTP'};
   });
- }finally{await browser?.close();run.finish();}
+ }finally{await browser?.close();await expert?.close();run.finish();}
 });

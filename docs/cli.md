@@ -1,5 +1,11 @@
 # Runtime CLI
 
+The independent v0.9 service uses `evopilot-runtime`; its managed operator is
+`evopilot-runtime-install`. See the [current operator guide](runtime-v090.md) and
+[HTTP envelope reference](lifecycle-api.md). The commands below describe the
+retained `evopilot-next-runtime` embedded/native entry and do not start the new
+HTTP service. The parent integration advice below applies to that older route.
+
 Use Node 24.14.0 or later. The installed executable is `evopilot-next-runtime`; from a source checkout run `npm ci --ignore-scripts`, `npm run build`, then `node dist/cli.js`. Discovery commands do not initialize storage:
 
 ```text

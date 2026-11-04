@@ -4,6 +4,12 @@ Start with the [v0.8.3 Preview quickstart](../README.md#quickstart) for prerequi
 
 English | [简体中文](zh-CN/README.md)
 
+For the independent v0.9 development target, use the
+[operator and lifecycle guide](runtime-v090.md), [HTTP lifecycle API](lifecycle-api.md),
+[legacy Host/migration reference](legacy-host.md) and [fixed acceptance](acceptance-v090.md).
+These describe the candidate branch, not an already published v0.9 release.
+The v0.8.3 installation routes below remain historical release instructions.
+
 - [Conversation-driven planning](planning-api.md): scoped revisions, exact human decisions and immutable execution bindings.
 - [Service API](service.md): embed the durable service, configure trusted providers and recover uncertain execution.
 - [Reviewed response execution](response.md): exact runbook and source pins, one actual action, independent verification and reviewed closure.

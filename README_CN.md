@@ -2,6 +2,11 @@
 
 [English](README.md) | 简体中文
 
+**v0.9 开发中：** 本分支实现独立生命周期服务、一个 Runtime Expert/HTTP MCP 插件和
+两个 Dashboard 页面。请阅读 [v0.9 使用指南](docs/zh-CN/runtime-v090.md)及
+[生命周期 API（英文）](docs/lifecycle-api.md)。完整候选验收与发行尚未完成。
+下方 v0.8.3 安装及能力说明适用于该不可变历史发行包，不代表新服务的运行时依赖和独立入口。
+
 Runtime 是 [EvoPilot](https://github.com/yeliang-wang/evopilot/blob/main/README_CN.md) 的持久化执行层，负责项目、目标、经审阅的计划、决定、执行声明、回执与审计。[Ontology](https://github.com/yeliang-wang/evopilot-ontology/blob/main/README_CN.md) 管理语义模型，[Harness](https://github.com/yeliang-wang/evopilot-harness/blob/main/README_CN.md) 管理质量策略与证据评估。
 
 [快速开始](#快速开始) · [服务 API（英文）](docs/service.md) · [CLI（英文）](docs/cli.md) · [中文文档入口](docs/zh-CN/README.md) · [发行版](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.8.3)
