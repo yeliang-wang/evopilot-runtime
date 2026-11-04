@@ -122,3 +122,19 @@ for(const failure of ['lost','malformed','incomplete'])test(failure+' write resp
   await assert.rejects(()=>client.request(original),{code:'REQUEST_OUTCOME_UNKNOWN'});assert.equal(mutations,1);assert.deepEqual(originals,[original]);assert.equal((await f.client.status().catch(e=>({error:e.code}))).error,'CONNECTION_CHANGED');
  }finally{await new Promise(resolve=>proxy?proxy.close(resolve):resolve());await f.cleanup();}
 });
+
+test('only stage.request can receive a response beyond fifteen seconds; other writes and caller cancellation remain bounded without retry',async()=>{
+ const f=await fixture();let proxy;const timers=new Set(),originals=[],cancellation=new AbortController();
+ try{
+  proxy=createServer(async(req,res)=>{
+   res.setHeader('content-type','application/json');
+   if(req.method==='GET'){res.end(JSON.stringify({result:{...f.server.identity,projectId:'alpha',revision:0}}));return;}
+   let text='';for await(const chunk of req)text+=chunk;const body=JSON.parse(text);originals.push(body);if(body.requestId==='cancelled-stage')cancellation.abort();
+   const timer=setTimeout(()=>{timers.delete(timer);if(!res.destroyed)res.end(JSON.stringify({requestId:body.requestId,result:{syntheticTransportOnly:true,originalRequestId:body.requestId}}));},16000);timers.add(timer);
+  });proxy.listen(0,'127.0.0.1');await once(proxy,'listening');f.put(f.connectionRef,{...f.connection,origin:'http://127.0.0.1:'+proxy.address().port});const client=createRuntimeHttpClient(f.connectionRef);
+  const stage=envelope('lifecycle.stage.request',{instanceId:'one',stageId:'scope'},{requestId:'slow-stage',expectedRevision:0}),draft=envelope('lifecycle.draft.save',{yaml:yaml(lifecycle())},{requestId:'slow-draft',expectedRevision:0}),cancelled={...stage,requestId:'cancelled-stage'};
+  const completed=client.request(stage),limited=assert.rejects(()=>client.request(draft),{code:'REQUEST_OUTCOME_UNKNOWN'}),cancel=assert.rejects(()=>client.request(cancelled,cancellation.signal),{code:'REQUEST_OUTCOME_UNKNOWN'});
+  const result=await completed;await Promise.all([limited,cancel]);assert.equal(result.requestId,stage.requestId);assert.equal(result.result.originalRequestId,stage.requestId);
+  assert.equal(originals.length,3);for(const expected of [stage,draft,cancelled])assert.deepEqual(originals.filter(v=>v.requestId===expected.requestId),[expected]);
+ }finally{for(const timer of timers)clearTimeout(timer);proxy?.closeAllConnections();await new Promise(resolve=>proxy?proxy.close(resolve):resolve());await f.cleanup();}
+});

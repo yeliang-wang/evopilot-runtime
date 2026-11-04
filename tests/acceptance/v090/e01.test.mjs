@@ -128,6 +128,36 @@ test('E01 actual installed GitHub lifecycle with external Codex and native owner
  assert.equal(preparation.source.provider,'github');assert.equal(preparation.source.repositoryId,'1443052780');assert.equal(fixture.syntheticAssets,true);assert.equal(fixture.syntheticDecisions,true);assert.equal(fixture.workspaceId,run.selection.workspaceId);assert.equal(fixture.scope.projectId,run.selection.projectId);
  const scope={visibility:'private',projectId:run.selection.projectId};let serial=0,executionDeadline=null,executionInstanceId=null;
  const assertWriteDeadline=(stageDeadline=null)=>{if(executionDeadline!==null){assert(Number.isFinite(executionDeadline));if(stageDeadline!==null)assert(Number.isFinite(stageDeadline));assert(Date.now()<Math.min(executionDeadline,stageDeadline??executionDeadline),'Original native execution deadline elapsed; no new business write or retry permitted');}};
+ const originalRequests=new Map(),interruptedReads=new Map();
+ const inspectOriginal=async id=>{
+  const original=await run.read('lifecycle.stage.request.inspect',{stageRequestId:id}),{request,progress}=original;
+  assert.equal(request.id,id);assert.equal(request.instanceId,executionInstanceId);assert.equal(original.automaticRedispatch,false);assert.equal(original.workerError,null);
+  const {digest:requestDigest,...content}=request;assert.equal(base.valueDigest(content),requestDigest);assert.equal(base.valueDigest(request.plan),request.planDigest);assert.equal(progress.requestId,id);
+  let fixed=originalRequests.get(id);if(!fixed){fixed={request,handle:null};originalRequests.set(id,fixed);}else assert.deepEqual(request,fixed.request,'Original request, input/plan pins and deadline cannot change during observation');
+  if(fixed.handle!==null)assert.deepEqual(progress.handle,fixed.handle,'Original provider handle cannot be replaced or lost');
+  else if(progress.handle!==null){assert(typeof progress.handle==='object'&&!Array.isArray(progress.handle)&&Object.keys(progress.handle).length>0,'Actual nonempty provider handle required');fixed.handle=progress.handle;}
+  assert.notEqual(progress.phase,'FAILED','Original execution failed; no retry or replacement is permitted');
+  let interrupted=interruptedReads.get(id);
+  if(progress.phase==='UNKNOWN'){
+   assert.equal(progress.reason,'OBSERVATION_INTERRUPTED','Only a bounded read interruption may await automatic original-request observation');assert.equal(progress.terminal,false);assert(progress.handle!==null,'An interrupted original provider handle is required');
+   if(!interrupted){
+    const cutoff=Math.min(Date.now()+60000,Date.parse(request.deadlineAt),executionDeadline??Infinity);assert(Number.isFinite(cutoff));
+    interrupted={deadline:cutoff,observations:new Set()};interruptedReads.set(id,interrupted);
+   }
+   if(!interrupted.observations.has(progress.observationRef)){
+    const retained=await run.read('lifecycle.stage.observation.read',{stageRequestId:id,observationRef:progress.observationRef});assert.equal(base.valueDigest(retained.evidence),progress.observationRef);assert.equal(retained.evidence.requestId,id);assert.equal(retained.evidence.reason,'OBSERVATION_INTERRUPTED');assert.deepEqual(retained.evidence.observation,progress.observation);
+    run.artifact('original-interrupted-observation.json',{request,progress,retained,readOnlyRecoveryDeadline:new Date(interrupted.deadline).toISOString(),newRequest:false,redispatch:false});interrupted.observations.add(progress.observationRef);
+   }
+   assert(Date.now()<interrupted.deadline,'Interrupted original request did not recover within its bounded remaining deadline');return{original,waiting:true};
+  }
+  if(interrupted){
+   assert(Date.now()<interrupted.deadline,'Original recovery exceeded the selected read-only window');
+   assert(progress.observation&&['WAITING_AGENT','CI_PENDING','CI_RUNNING','RUNNING','COMPLETE'].includes(progress.phase));
+   const retained=await run.read('lifecycle.stage.observation.read',{stageRequestId:id,observationRef:progress.observationRef});assert.equal(base.valueDigest(retained.evidence),progress.observationRef);assert.equal(retained.evidence.requestId,id);assert.deepEqual(retained.evidence.observation,progress.observation);
+   run.artifact('original-read-only-recovery.json',{request,progress,retained,interruptedObservationRefs:[...interrupted.observations],readOnlyRecoveryDeadline:new Date(interrupted.deadline).toISOString(),newRequest:false,redispatch:false});interruptedReads.delete(id);
+  }
+  return{original,waiting:false};
+ };
  const save=(name,value)=>fs.writeFileSync(path.join(root,name),JSON.stringify(value,null,2)+'\n',{mode:0o600,flag:'wx'});
  const syntheticDecision=subject=>{
   // Explicit test attestation, never an actual user's domain/release approval.
@@ -139,7 +169,7 @@ test('E01 actual installed GitHub lifecycle with external Codex and native owner
   const requestId=run.requestId('E01.journey',label);
   for(let attempt=0;attempt<20;attempt++){
    assertWriteDeadline();let stageDeadline=null;
-   if(input.stageRequestId){const original=await run.read('lifecycle.stage.request.inspect',{stageRequestId:input.stageRequestId});assert.equal(original.request.instanceId,executionInstanceId);stageDeadline=Date.parse(original.request.deadlineAt);assert(Number.isFinite(stageDeadline));}
+   if(input.stageRequestId){let observed;do{observed=await inspectOriginal(input.stageRequestId);if(observed.waiting)await pause(1000);}while(observed.waiting);stageDeadline=Date.parse(observed.original.request.deadlineAt);assert(Number.isFinite(stageDeadline));}
    const status=await run.read('runtime.status');assertWriteDeadline(stageDeadline);const r=await run.request(operation,input,{requestId,expectedRevision:status.revision});
    if(r.status===200)return r.body.result;
    // These two definite pre-effect rejections do not dispatch a stage. Keep
@@ -151,8 +181,12 @@ test('E01 actual installed GitHub lifecycle with external Codex and native owner
   throw Error('Original stage advance remained busy; inspect before continuing');
  };
  const until=async(operation,input,predicate,label,seconds=300)=>{
-  const end=Date.now()+seconds*1000;let last;
-  do{last=await run.read(operation,input);if(predicate(last))return last;
+  const end=Math.min(Date.now()+seconds*1000,executionDeadline??Infinity);let last;
+  do{
+   assert(Date.now()<end,'Original '+label+' inspection deadline elapsed');
+   const observed=input.stageRequestId?await inspectOriginal(input.stageRequestId):null;
+   if(observed?.waiting){await pause(1000);continue;}
+   last=operation==='lifecycle.stage.request.inspect'?observed.original:await run.read(operation,input);assert(Date.now()<end,'Original '+label+' read returned after its selected deadline');if(predicate(last))return last;
    assert(!['FAILED','UNKNOWN'].includes(last.progress?.phase),'Inspect original '+label+' outcome; no redispatch');await pause(1000);
   }while(Date.now()<end);throw Error('Original '+label+' inspection deadline exceeded: '+JSON.stringify(last));
  };

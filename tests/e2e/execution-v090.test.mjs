@@ -359,7 +359,7 @@ function stageAdapter(f){
     return{requestId:r.id,inputDigest:r.inputDigest,adapterDigest,phase,handle:mode==='unknown'?null:{syntheticRequest:r.id},outcome:{requestId:r.id,inputDigest:r.inputDigest,receiptRef:'synthetic:receipt/'+r.id,status:phase==='COMPLETE'?'COMPLETE':phase==='FAILED'?'FAILED':phase==='UNKNOWN'?'UNKNOWN':'RUNNING',expiresAt:new Date(Date.now()+60000).toISOString(),checks:phase==='COMPLETE'?i.definition.nodes.find(n=>n.id===r.stageId).checks.map(id=>({id,status:'PASS',evidenceRef:'synthetic:check/'+id})):[]}};
   }
   const adapter={
-    async prepare(i,stageId){if(state.prepare)await state.prepare();return{adapterId:'synthetic-stage-adapter',adapterDigest,action:'base.'+stageId,bindingDigest:valueDigest('synthetic-binding'),parameters:{synthetic:true}};},
+    async prepare(i,stageId,actor,signal){if(state.prepare)await state.prepare(signal);return{adapterId:'synthetic-stage-adapter',adapterDigest,action:'base.'+stageId,bindingDigest:valueDigest('synthetic-binding'),parameters:{synthetic:true}};},
     async dispatch(r,i,permit,signal){await permit();state.dispatches++;if(state.dispatch)return state.dispatch(r,i,signal);if(state.mode==='hang')return new Promise(()=>{});return observe(r,i,state.mode);},
     async inspect(r,i,p){state.inspections++;const o=observe(r,i,state.inspectMode);if(p.handle!==null)o.handle=p.handle;return o;},
   };
@@ -369,6 +369,52 @@ async function execWrite(f,op,input,actor='executor',meta={}){await request(f,'r
 async function stageState(f,id){return request(f,'lifecycle.stage.request.inspect',{stageRequestId:id},'reader');}
 async function until(probe,predicate,timeout=5000){const end=Date.now()+timeout;let value;do{value=await probe();if(predicate(value))return value;await new Promise(r=>setTimeout(r,10));}while(Date.now()<end);assert.fail('Timed out waiting for exact retained stage state: '+JSON.stringify(value));}
 async function executingFixture(){const f=fixture(),adapter=stageAdapter(f);await f.open();await activate(f);const g=await grant(f);assert.equal((await create(f,g)).status,200);return{f,g,...adapter};}
+
+test('fresh read-only preparation can exceed five seconds without renewing original execution pins',async()=>{
+  const {f,state}=await executingFixture();try{
+    const before=(await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance;
+    state.prepare=async signal=>{await new Promise(resolve=>setTimeout(resolve,6100));signal.throwIfAborted();assert.equal(state.dispatches,0);};
+    const sent=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'});assert.equal(sent.status,200,JSON.stringify(sent));
+    const original=(await until(()=>stageState(f,sent.result.result.stageRequestId),v=>v.result.progress.terminal)).result;
+    assert.equal(original.progress.phase,'COMPLETE');assert.equal(state.dispatches,1);
+    const after=(await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance;
+    assert.deepEqual(after.pins,before.pins);assert.equal(after.createdAt,before.createdAt);assert.equal(after.stages.scope.attempts,1);
+    assert(Date.parse(original.request.deadlineAt)<=Math.min(Date.parse(before.createdAt)+before.pins.budget.timeoutSeconds*1000,Date.parse(before.pins.authorityExpiresAt)));
+    assert.equal(original.request.pinsDigest,before.pinsDigest);
+  }finally{await f.server.close();f.cleanup();}
+});
+
+for(const cutoff of ['instance','authority'])test('the original '+cutoff+' deadline aborts read-only preparation before any receipt, attempt or dispatch',async()=>{
+  const f=fixture(),{state}=stageAdapter(f);let release,aborted=false,entered=false;await f.open();
+  try{
+    if(cutoff==='instance')for(const configuration of Object.values(f.data.config))if(configuration.budget)configuration.budget.timeoutSeconds=2;
+    await activate(f);const subject=executionSubject(f);if(cutoff==='instance')subject.budget.timeoutSeconds=2;else subject.expiresAt=new Date(Date.now()+2000).toISOString();
+    const g=await grant(f,'execution',subject);assert.equal((await create(f,g)).status,200);
+    const before=(await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance,revision=(await request(f,'runtime.status')).result.revision;
+    const late=new Promise(resolve=>release=resolve);state.prepare=async signal=>{entered=true;signal.addEventListener('abort',()=>{aborted=true;},{once:true});await late;};
+    const originalId='short-'+cutoff+'-original',result=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'},'executor',{requestId:originalId});
+    assert.equal(result.status,409,JSON.stringify(result));assert.equal(result.error.code,'OBSERVATION_INTERRUPTED');assert.equal(entered,true);assert.equal(aborted,true);
+    release();await new Promise(resolve=>setTimeout(resolve,50));
+    assert.equal(state.dispatches,0);assert.equal(state.inspections,0);assert.equal((await request(f,'runtime.receipt.read',{requestId:originalId},'executor')).status,404);
+    assert.deepEqual((await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance,before);assert.equal((await request(f,'runtime.status')).result.revision,revision);
+  }finally{release?.();await f.server.close();f.cleanup();}
+});
+
+for(const cutoff of ['instance','authority'])test('an already expired '+cutoff+' preserves native admission rejection without preparing or retaining a request',async()=>{
+  const f=fixture(),{state}=stageAdapter(f);let preparations=0;await f.open();
+  try{
+    if(cutoff==='instance')for(const configuration of Object.values(f.data.config))if(configuration.budget)configuration.budget.timeoutSeconds=2;
+    await activate(f);const subject=executionSubject(f);if(cutoff==='authority')subject.expiresAt=new Date(Date.now()+2000).toISOString();
+    const g=await grant(f,'execution',subject);assert.equal((await create(f,g)).status,200);
+    const before=(await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance,revision=(await request(f,'runtime.status')).result.revision;
+    state.prepare=async()=>{preparations++;};const deadline=cutoff==='instance'?Date.parse(before.createdAt)+before.pins.budget.timeoutSeconds*1000:Date.parse(before.pins.authorityExpiresAt);
+    await new Promise(resolve=>setTimeout(resolve,Math.max(1,deadline-Date.now()+25)));
+    const originalId='expired-'+cutoff+'-original',result=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'},'executor',{requestId:originalId});
+    assert.equal(result.status,cutoff==='authority'?400:409,JSON.stringify(result));assert.equal(result.error.code,cutoff==='authority'?'AUTHORITY_EXPIRED':'STAGE_BLOCKED');if(cutoff==='instance')assert.equal(result.error.message,'INSTANCE_TIME_BUDGET_EXHAUSTED');
+    assert.equal(preparations,0);assert.equal(state.dispatches,0);assert.equal(state.inspections,0);assert.equal((await request(f,'runtime.receipt.read',{requestId:originalId},'executor')).status,404);
+    assert.deepEqual((await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance,before);assert.equal((await request(f,'runtime.status')).result.revision,revision);
+  }finally{await f.server.close();f.cleanup();}
+});
 
 test('explicit stage advance retains the original plan and budget; replay and background inspection cannot repeat it',async()=>{
   const {f,state,adapter,observe}=await executingFixture();let advances=0;

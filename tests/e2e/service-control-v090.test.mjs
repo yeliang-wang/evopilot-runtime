@@ -72,6 +72,36 @@ test('replaced service ledger cannot be initialized or started under a retained 
  await assert.rejects(operateInstalledService(s,'start'),{code:'SERVICE_SELECTION_CHANGED'});assert.deepEqual(fs.readFileSync(file),fs.readFileSync(join(scratch,'service.sqlite')));fs.writeFileSync(file,old);
 });
 
+for(const kind of ['symlink','hard-link','mode','directory'])test('unsafe crashed SQLite '+kind+' material is rejected before touching the original ledger or starting',async t=>{
+ const f=fixture(t),s=inspectInstalledServiceSelection(f.selectedRoot),file=join(f.selectedRoot,'data/service.sqlite'),sidecar=file+'-wal',before=fs.readFileSync(file),outside=join(f.root,'unrelated-recovery-material');write(outside,'not owned SQLite recovery material');
+ if(kind==='symlink')fs.symlinkSync(outside,sidecar);else if(kind==='hard-link')fs.linkSync(outside,sidecar);else if(kind==='directory')fs.mkdirSync(sidecar,{mode:0o700});else{write(sidecar,'unsafe mode');fs.chmodSync(sidecar,0o644);}
+ const sidecarBefore=fs.lstatSync(sidecar),outsideBefore=fs.readFileSync(outside);
+ await assert.rejects(operateInstalledService(s,'start'),{code:'SERVICE_SELECTION_INVALID'});assert.deepEqual(fs.readFileSync(file),before);assert.deepEqual(fs.readFileSync(outside),outsideBefore);assert.equal(fs.lstatSync(sidecar).ino,sidecarBefore.ino);assert.equal(fs.lstatSync(sidecar).mode,sidecarBefore.mode);
+ const audit=fs.readdirSync(join(f.selectedRoot,'service-operations'));assert(audit.some(p=>p.endsWith('-failure.json')));assert(!audit.some(p=>p.endsWith('-result.json')));assert.equal((await operateInstalledService(s,'inspect')).service.registered,false);
+});
+
+test('failed SQLite copy recovery preserves every original database byte and recovery file',async t=>{
+ const f=fixture(t),s=inspectInstalledServiceSelection(f.selectedRoot),file=join(f.selectedRoot,'data/service.sqlite');
+ // Deliberately corrupt only this synthetic negative fixture. Neither the
+ // product preflight nor startup may repair or overwrite its original bytes.
+ write(file,'not a SQLite database');write(file+'-wal','retained invalid WAL');write(file+'-shm','retained invalid shared-memory index');
+ const originals=Object.fromEntries(['','-wal','-shm'].map(suffix=>[suffix,fs.readFileSync(file+suffix)]));
+ await assert.rejects(operateInstalledService(s,'start'));
+ for(const [suffix,bytes]of Object.entries(originals))assert.deepEqual(fs.readFileSync(file+suffix),bytes);
+ assert.equal((await operateInstalledService(s,'inspect')).service.registered,false);const audit=fs.readdirSync(join(f.selectedRoot,'service-operations'));assert(audit.some(p=>p.endsWith('-failure.json')));assert(!audit.some(p=>p.endsWith('-result.json')));
+});
+
+for(const drift of ['bytes','sidecar-set'])test('original SQLite '+drift+' drift during private copy validation prevents startup',async t=>{
+ const f=fixture(t),s=inspectInstalledServiceSelection(f.selectedRoot),file=join(f.selectedRoot,'data/service.sqlite'),before=fs.readFileSync(file),open=fs.openSync,sync=fs.fsyncSync;let copied,changed=false;
+ // A test-only concurrent filesystem fault at the copy boundary. The native
+ // writer lock remains held; no actual business process is racing this test.
+ fs.openSync=function(name,...args){const fd=open.call(this,name,...args);if(String(name).includes('/runtime-service-identity-')&&String(name).endsWith('/service.sqlite'))copied=fd;return fd;};
+ fs.fsyncSync=function(fd){const value=sync.call(this,fd);if(fd===copied&&!changed){changed=true;if(drift==='bytes')fs.appendFileSync(file,Buffer.from('synthetic concurrent drift'));else write(file+'-journal','');}return value;};
+ try{await assert.rejects(operateInstalledService(s,'start'),{code:'SERVICE_SELECTION_CHANGED'});}finally{fs.openSync=open;fs.fsyncSync=sync;}
+ assert.equal(changed,true);assert.deepEqual(fs.readFileSync(file),drift==='bytes'?Buffer.concat([before,Buffer.from('synthetic concurrent drift')]):before);if(drift==='sidecar-set')assert.deepEqual(fs.readFileSync(file+'-journal'),Buffer.alloc(0));
+ assert.equal((await operateInstalledService(s,'inspect')).service.registered,false);
+});
+
 test('installer CLI exposes explicit current selection without restaging and refuses loose argument forms',async t=>{
  const f=fixture(t),out=[];assert.equal(await installerMain(['service','select','--root',f.selectedRoot],{write:s=>out.push(s)}),0);
  const selected=JSON.parse(out.pop()),ref=join(f.root,'selected-service.json');write(ref,selected);

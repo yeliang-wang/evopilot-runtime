@@ -79,12 +79,36 @@ function stoppedIdentity(selection:InstalledServiceSelection):void {
   const lock=new DatabaseSync(lockFile,{allowExtension:false});let scratch:string|undefined;
   try{
     try{lock.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE');}catch{reject('WRITER_ACTIVE','The selected service ledger has another writer',409);}
-    const original=path.join(root,'data/service.sqlite');
-    for(const suffix of ['-wal','-shm','-journal'])if(fs.existsSync(original+suffix))reject('SERVICE_NOT_QUIESCENT','Stop original writers and close their database handles',409);
-    const before=fs.lstatSync(original);if(!before.isFile()||before.isSymbolicLink()||before.nlink!==1||before.uid!==process.getuid!()||(before.mode&0o777)!==0o600)reject('SERVICE_SELECTION_INVALID','Unsafe original service ledger');
-    scratch=fs.mkdtempSync(path.join(fs.realpathSync(tmpdir()),'runtime-service-identity-'));fs.copyFileSync(original,path.join(scratch,'service.sqlite'));
+    const directory=path.join(root,'data'),original=path.join(directory,'service.sqlite');
+    // A crashed SQLite writer can leave committed WAL and rollback material.
+    // Never delete it or inspect only the main file. Under the original writer
+    // lock, recover a byte-exact private copy first; the owned service alone
+    // may subsequently open/recover the original database during startup.
+    const capture=(destination?:string)=>{
+      canonicalPath(directory);const dir=fs.lstatSync(directory);
+      if(!dir.isDirectory()||dir.isSymbolicLink()||dir.uid!==process.getuid!()||(dir.mode&0o777)!==0o700)reject('SERVICE_SELECTION_INVALID','Unsafe original service state directory');
+      const files=[],entries=['','-wal','-shm','-journal'].map(suffix=>{try{return{suffix,before:fs.lstatSync(original+suffix)};}catch(error){if(suffix&&(error as NodeJS.ErrnoException).code==='ENOENT')return{suffix,before:null};throw error;}});
+      for(const {suffix,before} of entries){
+        const file=original+suffix;if(!before){files.push({suffix,absent:true});continue;}
+        if(!before.isFile()||before.isSymbolicLink()||before.nlink!==1||before.uid!==process.getuid!()||(before.mode&0o777)!==0o600)reject('SERVICE_SELECTION_INVALID','Unsafe original SQLite recovery material');
+        const metadata=(stat:fs.Stats)=>({device:stat.dev,inode:stat.ino,uid:stat.uid,mode:stat.mode,nlink:stat.nlink,bytes:stat.size,mtime:stat.mtimeMs,ctime:stat.ctimeMs});
+        const source=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW),hash=createHash('sha256');let target:number|undefined;
+        try{
+          if(canonical(metadata(fs.fstatSync(source)))!==canonical(metadata(before)))changed();
+          if(destination)target=fs.openSync(path.join(destination,'service.sqlite'+suffix),fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_EXCL,0o600);
+          const buffer=Buffer.alloc(65536);let offset=0;
+          while(offset<before.size){const count=fs.readSync(source,buffer,0,Math.min(buffer.length,before.size-offset),offset);if(!count)changed();hash.update(buffer.subarray(0,count));if(target!==undefined){let written=0;while(written<count){const size=fs.writeSync(target,buffer,written,count-written);if(!size)changed();written+=size;}}offset+=count;}
+          if(canonical(metadata(fs.fstatSync(source)))!==canonical(metadata(before)))changed();
+          if(target!==undefined)fs.fsyncSync(target);
+          files.push({suffix,...metadata(before),sha256:hash.digest('hex')});
+        }finally{if(target!==undefined)fs.closeSync(target);fs.closeSync(source);}
+      }
+      return{directory:{device:dir.dev,inode:dir.ino,uid:dir.uid,mode:dir.mode},files};
+    };
+    scratch=fs.mkdtempSync(path.join(fs.realpathSync(tmpdir()),'runtime-service-identity-'));const snapshot=capture(scratch);
     const copied=new RuntimeStore(scratch,selection.workspaceId);try{if(copied.serviceId!==selection.serviceId)changed();}finally{copied.close();}
-    if(selection.binding){const lease=acquireQuiescentManagedContext(selection.binding);lease.close();}
+    if(canonical(capture())!==canonical(snapshot))changed();
+    if(selection.binding){const lease=acquireQuiescentManagedContext(selection.binding);lease.close();if(canonical(capture())!==canonical(snapshot))changed();}
   }finally{lock.close();if(scratch)fs.rmSync(scratch,{recursive:true,force:true});}
 }
 export async function operateInstalledService(input:InstalledServiceSelection,operation:ServiceControlOperation):Promise<Record<string,unknown>> {

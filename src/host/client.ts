@@ -27,7 +27,8 @@ export interface RuntimeHttpClient {
 export function createRuntimeHttpClient(connectionRef:string):RuntimeHttpClient{
   const connection=readHostConnection(connectionRef),original=canonical(connection);
   function headers(){if(canonical(readHostConnection(connectionRef))!==original)reject('CONNECTION_CHANGED','Reconnect after an explicit connection change',409);return hostHeaders(connection);}
-  async function status(signal:AbortSignal=AbortSignal.timeout(10000)){
+  async function status(externalSignal?:AbortSignal){
+    const signal=externalSignal?AbortSignal.any([externalSignal,AbortSignal.timeout(10000)]):AbortSignal.timeout(10000);
     const response=await fetch(connection.origin+'/api/v1/status?projectId='+encodeURIComponent(connection.projectId),{headers:headers(),signal,redirect:'error'}),body=await boundedJson(response,signal);
     if(!response.ok){const error=record(body.error);reject(string(error.code),string(error.message),response.status);}
     const identity=record(body.result);
@@ -35,7 +36,12 @@ export function createRuntimeHttpClient(connectionRef:string):RuntimeHttpClient{
     return body;
   }
   return{connection:Object.freeze(connection),status,async request(value,externalSignal){
-    const {envelope,write}=validateEnvelope(connection,value),signal=externalSignal?AbortSignal.any([externalSignal,AbortSignal.timeout(15000)]):AbortSignal.timeout(15000);
+    const {envelope,write}=validateEnvelope(connection,value);
+    // Stage admission/preparation can include several fresh provider reads.
+    // Its bounded 18s server window plus the separate 10s identity check fit
+    // inside this transport allowance. This neither renews execution authority
+    // nor changes other operations, and caller cancellation remains shorter.
+    const timeout=AbortSignal.timeout(envelope.operation==='lifecycle.stage.request'?30000:15000),signal=externalSignal?AbortSignal.any([externalSignal,timeout]):timeout;
     await status(signal);signal.throwIfAborted();const authorization=headers(),body=canonical(envelope);let response:Response,result:Record<string,unknown>;
     try{
       response=await fetch(connection.origin+'/api/v1/request',{method:'POST',headers:{...authorization,'content-type':'application/json'},body,signal,redirect:'error'});result=await boundedJson(response,signal);

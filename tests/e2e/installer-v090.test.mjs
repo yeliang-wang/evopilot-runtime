@@ -7,6 +7,7 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {randomBytes,createHash} from 'node:crypto';
 import {createServer} from 'node:http';
 import {once} from 'node:events';
+import {spawn} from 'node:child_process';
 import {DatabaseSync} from 'node:sqlite';
 import {initializeCredentials,tokenDigest} from '../../dist/server/security.js';
 import {createRuntimeHttpClient} from '../../dist/host/client.js';
@@ -232,6 +233,34 @@ test('unbound installed operator controls its own service without treating packa
   for(const [p,bytes] of Object.entries(preserved))assert.deepEqual(readFileSync(join(f.plan.root,p)),bytes,p);
   await api.operateInstalledService(selection,'stop');
  }finally{if(spec)await stopUserService(spec);f.cleanup();}
+});
+
+test('installed current-selection start recovers real SIGKILL before and after commit and preserves the same service receipts', {timeout:120000},async()=>{
+ if(process.platform!=='darwin')return;
+ const f=developmentDistribution();let spec,child;
+ try{
+  f.plan.role='editor';const socket=createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');f.plan.port=socket.address().port;await new Promise(r=>socket.close(r));
+  const first=await runInstaller(f.plan,'install');spec=JSON.parse(readFileSync(join(f.plan.root,'service-specification.json')));
+  const api=await import(pathToFileURL(join(f.plan.root,'package/dist/installation/service-control.js')).href),selection=api.inspectInstalledServiceSelection(f.plan.root),client=createRuntimeHttpClient(join(f.plan.root,'connection.json')),stateRoot=join(f.plan.root,'data');
+  const preserved=Object.fromEntries(['installation-plan.json','connection.json','client.json','data/auth.json'].map(p=>[p,readFileSync(join(f.plan.root,p))]));
+  await api.operateInstalledService(selection,'stop');
+  for(const phase of ['before','after']){
+   // Source regression only: an actual installed RuntimeStore owns the writer
+   // and transaction; the process dies at the fixed native COMMIT boundary.
+   const script=`import {DatabaseSync} from 'node:sqlite';import {RuntimeStore} from ${JSON.stringify(pathToFileURL(join(f.plan.root,'package/dist/server/store.js')).href)};process.umask(0o077);const store=new RuntimeStore(${JSON.stringify(stateRoot)},${JSON.stringify(f.plan.workspaceId)});const actor={id:${JSON.stringify(f.plan.principalId)},projects:[${JSON.stringify(f.plan.projectId)}],permissions:['read','draft.write'],revision:1,expiresAt:'2030-01-01T00:00:00Z'};const original=DatabaseSync.prototype.exec;DatabaseSync.prototype.exec=function(sql){if(sql==='COMMIT;'&&${JSON.stringify(phase)}==='before')process.kill(process.pid,'SIGKILL');const value=original.call(this,sql);if(sql==='COMMIT;'&&${JSON.stringify(phase)}==='after')process.kill(process.pid,'SIGKILL');return value;};store.mutate(actor,{projectId:${JSON.stringify(f.plan.projectId)},operation:'fixture.write',requestId:'crash-owned-write',expectedRevision:0,input:{synthetic:true},permission:'draft.write'},()=>({value:{synthetic:true},event:{type:'fixture-written',data:{synthetic:true}}}));`;
+   child=spawn(node,['--input-type=module','-e',script],{stdio:['ignore','ignore','pipe']});let stderr='';child.stderr.on('data',bytes=>stderr+=bytes);const [code,signal]=await once(child,'exit',{signal:AbortSignal.timeout(10000)});assert.equal(code,null,stderr);assert.equal(signal,'SIGKILL');assert(existsSync(join(stateRoot,'service.sqlite-wal')));assert(existsSync(join(stateRoot,'service.sqlite-shm')));
+   const started=await api.operateInstalledService(selection,'start');assert.equal(started.service.running,true);assert.equal(started.service.identity.serviceId,first.service.identity.serviceId);assert.equal(started.service.identity.revision,phase==='after'?1:0);
+   if(phase==='before')await assert.rejects(()=>client.request({operation:'runtime.receipt.read',projectId:f.plan.projectId,input:{requestId:'crash-owned-write'}}),{code:'NOT_FOUND'});
+   else{const receipt=await client.request({operation:'runtime.receipt.read',projectId:f.plan.projectId,input:{requestId:'crash-owned-write'}});assert.equal(receipt.result.revision,1);assert.deepEqual(receipt.result.result,{synthetic:true});}
+   await api.operateInstalledService(selection,'stop');
+  }
+  const running=await api.operateInstalledService(selection,'start');const original=await client.request({operation:'lifecycle.draft.save',projectId:f.plan.projectId,input:{yaml:yaml(lifecycle())},requestId:'real-service-before-kill',expectedRevision:1});
+  assert(Number.isSafeInteger(running.service.pid)&&running.service.pid>1);process.kill(running.service.pid,'SIGKILL');const end=Date.now()+10000;let observed;do{observed=await inspectUserService(spec);if(!observed.running)break;await new Promise(r=>setTimeout(r,25));}while(Date.now()<end);assert.equal(observed.running,false);assert(existsSync(join(stateRoot,'service.sqlite-wal')));
+  const recovered=await api.operateInstalledService(selection,'start');assert.equal(recovered.service.identity.serviceId,first.service.identity.serviceId);assert.equal(recovered.service.identity.revision,2);
+  const read=await client.request({operation:'runtime.receipt.read',projectId:f.plan.projectId,input:{requestId:'real-service-before-kill'}});assert.deepEqual(read.result,original.result);
+  for(const [p,bytes] of Object.entries(preserved))assert.deepEqual(readFileSync(join(f.plan.root,p)),bytes,p);
+  await api.operateInstalledService(selection,'stop');
+ }finally{if(child&&child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await once(child,'exit');}if(spec)await stopUserService(spec);f.cleanup();}
 });
 test('actual installed service recovers committed adoption, preserves old receipts and restarts with one writer', {timeout:120000},async()=>{
  if(process.platform!=='darwin')return;

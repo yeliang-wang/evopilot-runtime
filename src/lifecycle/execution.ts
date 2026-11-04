@@ -95,13 +95,17 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     if(!actor||actor.revision!==r.initiatedBy.revision)reject('AUTHORITY_CHANGED','Original execution principal changed',403);
     authorize(actor,r.projectId,'execution.request');if(r.stageId==='publication')authorize(actor,r.projectId,'release.request');return actor;
   }
-  async function admission(saved:LifecycleInstance,stageId:string,actor:Principal){
+  async function admission(saved:LifecycleInstance,stageId:string,actor:Principal,signal?:AbortSignal){
+    signal?.throwIfAborted();
     const ref=store.object(saved.pins.projectId,'instance-authority',saved.id) as {evidenceRef:string}|null;
     if(!ref)reject('CORRUPT_INSTANCE','Instance authority reference missing',503);
     const authority=await resolveAuthority(deps.authorities,ref.evidenceRef,saved.definition,actor);
+    signal?.throwIfAborted();
     const checked=await validateBindings(saved.definition,actor,deps.bindings);
+    signal?.throwIfAborted();
     deps.verifyAuthority?.(authority,saved.definition,actor);
-    if(saved.definition.nodes.some(n=>n.action?.actionRef==='runtime.review.scope'&&saved.stages[n.id].status==='PASSED')){if(!deps.verifyProjectReviews)reject('EXTENSION_REVIEW_UNAVAILABLE','Current project review verification is required',409);await deps.verifyProjectReviews(saved,actor);}
+    if(saved.definition.nodes.some(n=>n.action?.actionRef==='runtime.review.scope'&&saved.stages[n.id].status==='PASSED')){if(!deps.verifyProjectReviews)reject('EXTENSION_REVIEW_UNAVAILABLE','Current project review verification is required',409);await deps.verifyProjectReviews(saved,actor,signal);}
+    signal?.throwIfAborted();
     const release=stageId==='publication'?deps.releaseAuthority?.(saved,actor):undefined;
     return{authority,checked,release,context:{authority,bindingsCurrent:checked.ready,releaseAuthority:release}};
   }
@@ -228,9 +232,25 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     const saved=instance(projectId,slug(input.instanceId)),stageId=string(input.stageId),node=saved.definition.nodes.find(n=>n.id===stageId);
     if(!node)reject('UNKNOWN_STAGE','Stage does not belong to this immutable instance');
     if(stageId==='publication')authorize(actor,projectId,'release.request');
-    const current=await admission(saved,stageId,actor),admitted=stageAdmission(saved,stageId,current.context);
-    if(!admitted.allowed)reject('STAGE_BLOCKED',admitted.reasons.join('; '),409);
-    const plan=await bounded(signal=>deps.adapter!.prepare(saved,stageId,actor,signal),new AbortController().signal,5000);
+    // Fresh admission and the multi-read provider preparation share one bounded
+    // response window. They do not create a receipt, attempt or external action.
+    // The original instance/authority cutoff always wins over transport limits;
+    // a late read-only promise cannot proceed to prepare or commit after abort.
+    const preparationDeadline=Math.min(Date.parse(saved.createdAt)+saved.pins.budget.timeoutSeconds*1000,Date.parse(saved.pins.authorityExpiresAt)),preparationRemaining=preparationDeadline-Date.now();
+    if(!Number.isFinite(preparationRemaining))reject('EXECUTION_DEADLINE','Original execution admission has an invalid deadline',409);
+    // An already expired request still reads native admission so its existing
+    // AUTHORITY_EXPIRED or STAGE_BLOCKED reasons remain authoritative. This
+    // bounded diagnostic path can never proceed to prepare or persistence.
+    const admissionWindow=preparationRemaining<=0?18000:Math.min(18000,preparationRemaining);
+    const {current,admitted,plan}=await bounded(async signal=>{
+      const current=await admission(saved,stageId,actor,signal);signal.throwIfAborted();
+      const admitted=stageAdmission(saved,stageId,current.context);
+      if(!admitted.allowed)reject('STAGE_BLOCKED',admitted.reasons.join('; '),409);
+      const remaining=Math.min(preparationDeadline,Date.parse(current.authority.expiresAt))-Date.now();
+      if(!Number.isFinite(remaining)||remaining<=0)reject('EXECUTION_DEADLINE','Original execution admission has expired',409);
+      const plan=await bounded(preparing=>deps.adapter!.prepare(saved,stageId,actor,preparing),signal,Math.min(15000,remaining));
+      signal.throwIfAborted();return{current,admitted,plan};
+    },new AbortController().signal,admissionWindow);
     exact(record(plan),['adapterId','adapterDigest','action','bindingDigest','parameters']);slug(plan.adapterId);hash(plan.adapterDigest);hash(plan.bindingDigest);record(plan.parameters);safeData(plan);
     if(plan.action!==(node.source==='base'?'base.'+node.id:node.action!.actionRef))reject('ACTION_MISMATCH','Adapter action does not match the fixed Base/extension action',409);
     const planned=copy(plan),now=Date.now(),limit=stageBudget(saved,node);
