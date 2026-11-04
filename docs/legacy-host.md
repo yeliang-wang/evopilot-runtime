@@ -645,14 +645,58 @@ remain under the Workspace's sibling `.evopilot-online-worker` directory.
 Stop the worker before Workspace maintenance; the maintenance guard recognizes
 the original worker label and refuses a still-loaded job.
 
-This local operator entry does not yet provide the online configuration-apply
-or Host MCP setup workflow. Those integrations and relocated online references
-still require their own implementation and acceptance before compatibility is
-complete.
+This local operator entry does not yet expose the online Host MCP setup
+workflow. That integration and relocated online references still require their
+own implementation and acceptance before compatibility is complete.
 
 独立 worker 通过各项目已有的受保护连接调用已发布 Harness，并通过 HTTP 将发现送回
 已运行的 Runtime。选择和检查不启动监测；启动也不会选择策略、执行业务任务或批准
 修复。配置中的每个项目都必须有明确授权，Alertmanager 消息只能匹配一个已选范围。
 关闭启动命令或 Codex 对话不会关闭 worker。配置变化后停止采集，仍可用原选择文件
 停止属于本轮的进程；保留原尝试、故障和停止记录。工作区维护前必须先停止 worker。
-当前这里只提供本机安装器入口，配置应用、Host MCP 设置及迁移引用尚未完成验收。
+当前这里只提供本机安装器入口，Host MCP 设置及迁移引用尚未完成验收。
+
+## Apply online configuration
+
+Create a private input with `serviceRoot`, `settings`, `expectedDigest`,
+`requestId` and `hosts`. The settings retain the original online schema. Each
+host uses the three fields described above and must already belong to the
+selected service and project. Include the installed primary Host and every
+configured project. Configuration changes preserve their existing call lists,
+scope, expiry and credentials.
+
+`expectedDigest` is the previous native configuration digest (`sha256:…`), or
+`null` for the first configuration. It differs from the raw canonical object
+digest in an online registration. Use a new request ID for a new configuration;
+keep the original request and material when recovering an interrupted one.
+
+```sh
+umask 077
+evopilot-runtime-install online select --input-ref /absolute/online-input.json > /absolute/online-material.json
+evopilot-runtime-install online inspect --material-ref /absolute/online-material.json
+# Stop the selected worker and Runtime service before applying the material.
+evopilot-runtime-install online apply --material-ref /absolute/online-material.json
+```
+
+Selection validates the exact installed package, current plugin, existing Host
+grants and private credential references without contacting telemetry endpoints
+or writing configuration. Application requires the selected service and worker
+to be stopped. It retains the exact request and original configuration, updates
+the online file and derived Host/plugin pins, and returns `hostsAfter` and
+`registration` for a new worker selection. It does not change the service
+specification, installation plan, authorization store or business records.
+Changing an existing online file invalidates its old Host and worker pins.
+
+After interruption, inspect and apply the same material. Only original or
+intended bytes can be recovered; other edits are rejected and left intact.
+Reusing the request ID with different input is a conflict. A completed replay
+returns the retained result with `currentEnvironmentVerified: false`, without
+rewriting configuration or restarting a worker. Explicitly start the Runtime,
+reconnect the Host and select/start a worker when ready. Configuring connections
+never selects a monitoring policy or proves that a service is healthy.
+
+在线配置使用原生 `expectedDigest` 和稳定的 `requestId`。选择材料时核对现有权限及
+凭据引用，不连接监测端点；应用前须停止对应 Runtime 和 worker。应用保留原文件与
+回执，只更新在线配置及 Host/plugin 摘要，不增加权限或改写业务记录。中断后沿用原
+材料恢复，其他修改会被拒绝；已完成请求的重放只返回历史结果。配置完成不自动启动
+服务、监测或业务执行，后续显式启动并重连。

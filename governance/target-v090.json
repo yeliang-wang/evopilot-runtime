@@ -332,7 +332,11 @@
         "src/installation/online/selection.ts",
         "src/installation/online/lifecycle.ts",
         "src/installation/online/worker.ts",
-        "tests/e2e/online-worker-v090.test.mjs"
+        "tests/e2e/online-worker-v090.test.mjs",
+        "src/installation/host-selection.ts",
+        "src/installation/online/configuration.ts",
+        "src/installation/online/application.ts",
+        "tests/e2e/online-configuration-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

@@ -21,6 +21,7 @@ interface AlertReceiver {
 }
 interface HarnessOnlineModule {
   validatePrometheusConnection(value:unknown):void;
+  readOnlineSecret(ref:string):string;
   createPrometheusCollector(connections:readonly PrometheusConnection[]):(input:OnlineProviderInput)=>Promise<OnlineMeasurement>;
   createAlertmanagerReceiver(connections:readonly AlertmanagerConnection[]):AlertReceiver;
 }
@@ -37,7 +38,11 @@ export function readOnlineConfiguration(selection:OnlineRegistration,workspaceId
   if(digest(v)!==selection.digest)reject('ONLINE_CONFIGURATION_CHANGED','Reconnect after an explicit online configuration change',409);
   const {digest:contentDigest,...subject}=v;
   if(v.schema!=='evopilot-online-configuration/v1'||v.workspaceId!==workspaceId||contentDigest!==nativeSha256(subject))reject('ONLINE_CONFIGURATION_IDENTITY','Online configuration differs from the selected workspace or original content digest',409);
-  const settings=record(v.settings);exact(settings,['scopes','prometheus','alertmanager','receiverPort','tickSeconds']);
+  validateOnlineSettings(v.settings);
+  return nativeFrozenClone(v) as unknown as OnlineConfiguration;
+}
+export function validateOnlineSettings(value:unknown):asserts value is OnlineSettings {
+  const settings=record(value);exact(settings,['scopes','prometheus','alertmanager','receiverPort','tickSeconds']);
   for(const key of ['scopes','prometheus','alertmanager']){
     const values=settings[key];if(!Array.isArray(values)||!values.length||values.length>ONLINE_LIMITS.bindings)reject('ONLINE_CONFIGURATION_LIMIT','Online configuration must contain bounded explicit connections and scopes');
   }
@@ -54,15 +59,23 @@ export function readOnlineConfiguration(selection:OnlineRegistration,workspaceId
     }
   }
   if(!Number.isSafeInteger(settings.receiverPort)||Number(settings.receiverPort)<1024||Number(settings.receiverPort)>65535||!Number.isSafeInteger(settings.tickSeconds)||Number(settings.tickSeconds)<1||Number(settings.tickSeconds)>300)reject('ONLINE_CONFIGURATION_LIMIT','Bounded receiver port and tick interval required');
-  return nativeFrozenClone(v) as unknown as OnlineConfiguration;
 }
-
-export async function openPublishedOnlineAdapters(packageRoot:string,selection:OnlineRegistration,workspaceId:string,assertCurrent:()=>void){
-  assertCurrent();const configuration=readOnlineConfiguration(selection,workspaceId);
+async function publishedOnlineModule(packageRoot:string):Promise<HarnessOnlineModule>{
   verifyOwnerDistribution('harness',packageRoot);
   const loaded=await import(pathToFileURL(join(packageRoot,'dist/online.js')).href) as Record<string,unknown>;
-  for(const name of ['validatePrometheusConnection','createPrometheusCollector','createAlertmanagerReceiver'])if(typeof loaded[name]!=='function')reject('ONLINE_CAPABILITY','The selected published Harness lacks its online adapter');
-  const api=loaded as unknown as HarnessOnlineModule;
+  for(const name of ['validatePrometheusConnection','readOnlineSecret','createPrometheusCollector','createAlertmanagerReceiver'])if(typeof loaded[name]!=='function')reject('ONLINE_CAPABILITY','The selected published Harness lacks its online adapter');
+  return loaded as unknown as HarnessOnlineModule;
+}
+/** Local setup validation uses the same pinned published validator. Reading
+ * selected private secret refs does not contact their remote endpoints. */
+export async function validatePublishedOnlineSettings(packageRoot:string,value:unknown):Promise<void>{
+  validateOnlineSettings(value);const api=await publishedOnlineModule(packageRoot);
+  value.prometheus.forEach(api.validatePrometheusConnection);
+  for(const ref of [...value.prometheus.map(v=>v.bearerTokenFile),...value.alertmanager.map(v=>v.bearerTokenFile)])if(ref!==null)api.readOnlineSecret(ref);
+  verifyOwnerDistribution('harness',packageRoot);
+}
+export async function openPublishedOnlineAdapters(packageRoot:string,selection:OnlineRegistration,workspaceId:string,assertCurrent:()=>void){
+  assertCurrent();const configuration=readOnlineConfiguration(selection,workspaceId),api=await publishedOnlineModule(packageRoot);
   configuration.settings.prometheus.forEach(api.validatePrometheusConnection);
   const collect=api.createPrometheusCollector(configuration.settings.prometheus),receiver=api.createAlertmanagerReceiver(configuration.settings.alertmanager);
   const fresh=()=>{assertCurrent();readOnlineConfiguration(selection,workspaceId);verifyOwnerDistribution('harness',packageRoot);};
