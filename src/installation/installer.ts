@@ -17,6 +17,7 @@ import {readLegacyProviderConfiguration} from '../compat/registered-providers.js
 import {adoptLegacyWorkspace,verifyLegacyBackup} from './migration.js';
 import {inspectUserService,observeUserService,startUserService,stopUserService,type UserServiceSpecification} from './service.js';
 import {serviceControlCommand} from './service-control.js';
+import {toolchainApplicationCommand} from './toolchain/application.js';
 
 type FilePin={type:'file';sha256:string;bytes:number;mode:number}|{type:'symlink';target:string};
 interface Distribution {schema:'runtime-standalone-distribution/v1';version:string;archiveDigest:string;files:Record<string,FilePin>;}
@@ -262,6 +263,9 @@ export async function runInstaller(plan:RuntimeInstallPlan,command:InstallerComm
 }
 export async function installerMain(argv:string[],output:{write(v:string):unknown}=process.stdout):Promise<number>{
   try{
+    if(argv[0]==='toolchain'){
+      output.write(canonicalEvidence(await toolchainApplicationCommand(argv.slice(1)))+'\n');return 0;
+    }
     if(argv[0]==='service'){
       output.write(canonicalEvidence(await serviceControlCommand(argv.slice(1)))+'\n');return 0;
     }

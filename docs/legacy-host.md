@@ -514,3 +514,40 @@ and dependency locations must still exist when the current service uses them.
 工作区绑定或迁移之后，使用上述当前服务入口。`select` 只输出准确安装身份；配置
 变化会使旧选择失效，不会自动覆盖原安装计划。`start`、`stop` 分别显式启停选中的
 服务，保留本机操作记录；不会派发业务任务、启动在线 worker 或重新安装 Codex 插件。
+
+## Apply prepared native dependency bindings
+
+After fixed dependency preparation, use the installed local operator to select
+and apply the exact current material while the Runtime and online worker are
+stopped. The selector verifies the installed distribution, current grants and
+every locked dependency; a caller-supplied descriptor is not sufficient.
+
+```sh
+umask 077
+evopilot-runtime-install toolchain select --root /absolute/current-service > /absolute/toolchain-material.json
+evopilot-runtime-install toolchain inspect --material-ref /absolute/toolchain-material.json
+evopilot-runtime-install toolchain apply --material-ref /absolute/toolchain-material.json
+```
+
+Application retains the material and original configuration under the selected
+installation, holds Workspace/installer/writer exclusion, and publishes only
+the selected owner/provider/integration/plugin/service configuration. It
+preserves scope, expiry, credentials, original installation plans, dependency
+preparation receipts and business records. A completed first-use wrapper becomes
+the bound maintenance entry without changing its permitted calls.
+
+After interruption, inspect and resume the same material. Only exact original
+or intended destination bytes are accepted; other changes are rejected and
+retained as a separate failure. A successful replay returns the historical
+receipt with `currentEnvironmentVerified: false`; it does not reapply the
+configuration or restart a running service.
+
+An `APPLIED` result leaves the service stopped. Select its new current service
+configuration, explicitly start it, reconnect the plugin and activate the
+session before using the permitted native validation tools. Dependency binding
+does not approve assets, dispatch business work or establish product acceptance.
+
+依赖准备完成后，使用以上本机安装器命令核对并应用准确绑定。操作要求对应服务和
+在线 worker 已停止；原权限、有效期、凭据、安装计划及历史回执保持不变。中断后检查
+并恢复同一份材料，其他配置修改会被拒绝。完成后的重复调用只返回历史回执，不启动
+服务。随后选择新的当前服务配置、显式启动、重连插件并激活，再执行已授权的原生验证。
