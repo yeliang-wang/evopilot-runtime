@@ -7,10 +7,10 @@ import {tmpdir} from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {inspectAcceptanceEvidence} from '../../dist/release/evidence.js';
+import {inspectAcceptanceEvidence,inspectE20PrerequisiteEvidence} from '../../dist/release/evidence.js';
 
 const repository=fileURLToPath(new URL('../../',import.meta.url)),sha=b=>createHash('sha256').update(b).digest('hex');
-function fixture(t){
+function fixture(t,{prerequisitesOnly=false}={}){
  const root=fs.mkdtempSync(join(fs.realpathSync(tmpdir()),'runtime-evidence-audit-')),source=join(root,'source'),evidenceRoot=join(root,'evidence');
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));fs.mkdirSync(source);fs.mkdirSync(evidenceRoot,{mode:0o700});
  const put=(file,value)=>{fs.mkdirSync(dirname(file),{recursive:true});const bytes=Buffer.isBuffer(value)?value:Buffer.from(typeof value==='string'?value:JSON.stringify(value,null,2)+'\n');fs.writeFileSync(file,bytes,{mode:0o600});return{ref:file,sha256:sha(bytes)};};
@@ -21,8 +21,8 @@ function fixture(t){
  const archive=put(join(evidenceRoot,'synthetic.tgz'),'SYNTHETIC archive bytes; not an installable Release.\n'),manifest=put(join(evidenceRoot,'manifest.json'),{schema:'runtime-standalone-distribution/v1',version:'0.9.0',archiveDigest:archive.sha256,files:{'package.json':{type:'file',sha256:sha(Buffer.from('{}')),bytes:2,mode:0o644}}}),sourceRevision=put(join(evidenceRoot,'source.txt'),sourceCommit+'\n');
  const matrixBytes=fs.readFileSync(join(source,'governance/parameter-matrix-v090.json')),matrix=JSON.parse(matrixBytes),candidate={manifestDigest:manifest.sha256,archiveDigest:archive.sha256,version:'0.9.0',serviceId:'synthetic',workspaceId:'synthetic',projectId:'synthetic'},candidateDigest='sha256:'+manifest.sha256;
  const input={schema:'runtime-release-evidence-input/v1',sourceCommit,manifest,archive,sourceRevision,reports:[]};
- for(let i=1;i<=20;i++){
-  const scenario='E'+String(i).padStart(2,'0'),dir=join(evidenceRoot,scenario),ids=matrix.caseInstances.filter(c=>c.scenario===scenario).map(c=>c.caseInstanceId),collectorPins=Object.fromEntries(['support.mjs',scenario.toLowerCase()+'.test.mjs',...(['E04','E05','E06','E07','E12','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(scenario==='E13'?['execution.mjs']:[])].map(name=>[name,sha(fs.readFileSync(join(source,'tests/acceptance/v090',name)))]));
+ for(let i=1;i<=(prerequisitesOnly?19:20);i++){
+  const scenario='E'+String(i).padStart(2,'0'),dir=join(evidenceRoot,scenario),ids=matrix.caseInstances.filter(c=>c.scenario===scenario).map(c=>c.caseInstanceId),collectorPins=Object.fromEntries(['support.mjs',scenario.toLowerCase()+'.test.mjs',...(['E01','E04','E05','E06','E07','E12','E13','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(scenario==='E13'?['execution.mjs']:[])].map(name=>[name,sha(fs.readFileSync(join(source,'tests/acceptance/v090',name)))]));
   const selection=put(join(dir,'selection.json'),{scenario,qualification:'FINAL_CANDIDATE',candidate,candidateDigest,collectorPins,matrixDigest:sha(matrixBytes),selectedCaseIds:ids,scenarioDenominator:ids.length,fullDenominator:664});
   const records=id=>{const prefix=id??'setup',request=put(join(dir,prefix+'-request.json'),{caseInstanceId:id,synthetic:true,request:'read-only fixture'}),response=put(join(dir,prefix+'-response.json'),{caseInstanceId:id,synthetic:true,response:'fixture result'});return{caseInstanceId:id,request:prefix+'-request.json',requestDigest:request.sha256,response:prefix+'-response.json',fileDigest:response.sha256};};
   const results=ids.map(caseInstanceId=>{const r={caseInstanceId,status:'PASS',qualification:'FINAL_CANDIDATE',candidateDigest,assertions:{synthetic:'Schema/integrity fixture only; not product acceptance'},evidence:[records(caseInstanceId)]};put(join(dir,caseInstanceId+'.json'),r);return r;});
@@ -62,7 +62,7 @@ test('changed candidate, wrong source revision and edited collectors cannot reus
 });
 test('browser, maintenance and interruption helpers are part of exact collector evidence bindings',t=>{
  const f=fixture(t);
- const pairs=[...['E04','E05','E06','E07','E12','E17','E19'].map(scenario=>[scenario,'browser.mjs']),...['E05','E14','E15','E17'].map(scenario=>[scenario,'maintenance.mjs']),['E13','execution.mjs']];
+ const pairs=[...['E01','E04','E05','E06','E07','E12','E13','E17','E19'].map(scenario=>[scenario,'browser.mjs']),...['E05','E14','E15','E17'].map(scenario=>[scenario,'maintenance.mjs']),['E13','execution.mjs']];
  for(const [scenario,helper] of pairs){
   const entry=f.input.reports.find(r=>r.scenario===scenario),selectionRef=join(f.evidenceRoot,scenario,'selection.json'),selection=JSON.parse(fs.readFileSync(selectionRef)),original=structuredClone(selection),report=JSON.parse(fs.readFileSync(entry.report.ref));
   for(const value of [null,'0'.repeat(64)]){
@@ -72,4 +72,49 @@ test('browser, maintenance and interruption helpers are part of exact collector 
   report.selectionDigest=f.put(selectionRef,original).sha256;entry.report=f.put(entry.report.ref,report);
  }
  assert.equal(f.audit().passed,655);
+});
+test('E20 prerequisites require exactly 652 records without an E20 placeholder and cannot satisfy the full 655 audit',t=>{
+ const f=fixture(t,{prerequisitesOnly:true}),input={...f.input,schema:'runtime-e20-prerequisite-evidence-input/v1'};
+ assert.equal(fs.existsSync(join(f.evidenceRoot,'E20')),false);
+ const r=inspectE20PrerequisiteEvidence(f.source,input);
+ assert.equal(r.required,652);assert.equal(r.passed,652);assert.equal(r.fullPreReleaseRequired,655);
+ assert.equal(r.remainingE20,3);assert.deepEqual(r.remainingE20CaseIds,['E20.journey','E20.EX12','E20.CV07']);
+ assert.equal(r.postReleaseRemaining,9);assert.equal(r.fullReleaseAuditRequired,true);
+ assert.equal(r.evidenceFiles,2*(652+19));assert.equal(r.productAcceptance,'NOT_EVALUATED');assert.equal(r.releaseAuthorized,false);
+ assert.equal(r.executionAuthenticity,'NOT_ESTABLISHED_BY_FILE_HASHES');
+ assert.throws(()=>inspectAcceptanceEvidence(f.source,input),/Wrong source input/);
+ assert.throws(f.audit,/Exactly E01–E20 reports are required/);
+ for(const extra of [{exclude:['E01']},{expectedCount:652},{remainingE20:0}])assert.throws(()=>inspectE20PrerequisiteEvidence(f.source,{...input,...extra}),/Unexpected input fields/);
+ const complete=fixture(t),full=complete.audit();assert.equal(full.passed,r.passed+r.remainingE20);
+ assert.throws(()=>inspectE20PrerequisiteEvidence(complete.source,{...complete.input,schema:input.schema}),/Exactly E01–E19 prerequisite reports are required/);
+});
+test('fixed E20 prerequisite audit rejects missing, duplicated and foreign scenarios before reading their reports',t=>{
+ const f=fixture(t,{prerequisitesOnly:true}),input={...f.input,schema:'runtime-e20-prerequisite-evidence-input/v1'};
+ for(const reports of [[],input.reports.slice(1),[...input.reports.slice(0,18),input.reports[0]],[...input.reports.slice(0,18),{...input.reports[18],scenario:'E21'}]]){
+  assert.throws(()=>inspectE20PrerequisiteEvidence(f.source,{...input,reports}),/Exactly E01–E19 prerequisite reports are required/);
+ }
+ assert.equal(inspectE20PrerequisiteEvidence(f.source,input).passed,652);
+});
+test('E20 prerequisite negative cases reach the actual partial, candidate, case-set, status and raw-evidence guards',t=>{
+ const f=fixture(t,{prerequisitesOnly:true}),input={...f.input,schema:'runtime-e20-prerequisite-evidence-input/v1'},entry=input.reports[0],original=fs.readFileSync(entry.report.ref),pin=entry.report.sha256;
+ const audit=()=>inspectE20PrerequisiteEvidence(f.source,input);
+ for(const [mutate,reason] of [
+  [r=>r.selected=0,/Partial, failed, skipped or stale report/],
+  [r=>r.unexecutedCaseIds=['E01.journey'],/Partial, failed, skipped or stale report/],
+  [r=>r.failed=1,/Partial, failed, skipped or stale report/],
+  [r=>r.qualification='DEVELOPMENT',/Report is not for this final candidate/],
+  [r=>r.candidateDigest='sha256:'+'b'.repeat(64),/Report is not for this final candidate/],
+  [r=>r.results.pop(),/Result set is missing, duplicated or foreign/],
+  [r=>r.results[0]=r.results[1],/Result set is missing, duplicated or foreign/],
+  [r=>r.results[0].caseInstanceId='E21.journey',/Result set is missing, duplicated or foreign/],
+  [r=>r.results[0].status='SKIP',/Nonpassing or unasserted case/],
+  [r=>r.results[0].status='XFAIL',/Nonpassing or unasserted case/],
+  [r=>r.results[0].assertions={},/Nonpassing or unasserted case/],
+ ]){
+  const report=JSON.parse(original);mutate(report);entry.report=f.put(entry.report.ref,report);assert.throws(audit,reason);
+  fs.writeFileSync(entry.report.ref,original);entry.report.sha256=pin;
+ }
+ const raw=join(f.evidenceRoot,'E01/E01.journey-response.json'),bytes=fs.readFileSync(raw);fs.appendFileSync(raw,' ');
+ assert.throws(audit,/Original evidence bytes changed/);fs.writeFileSync(raw,bytes);
+ assert.equal(audit().passed,652);assert.equal(fs.existsSync(join(f.evidenceRoot,'E20')),false);
 });

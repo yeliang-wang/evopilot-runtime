@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {chromium,expect} from '@playwright/test';
 import {openScenario} from './support.mjs';
+import {openBrowser} from './browser.mjs';
 import {exactKeys,interruptionFixture,openExecution} from './execution.mjs';
 
-// The three implemented branches consume an explicitly prepared isolated
+// The implemented branches consume an explicitly prepared isolated
 // service. 01/02 require a genuinely admitted instance with real native scope
 // and plan completion, and implementation still PENDING. They create only its
 // original external-Agent handoff, never a Host claim/report, CI or Release.
@@ -19,14 +21,13 @@ import {exactKeys,interruptionFixture,openExecution} from './execution.mjs';
 //  syntheticDecisions:true,casePlans:{[fixedCaseId]:plan}}.
 // 01/02 plan={instanceId,allowServiceRestart:true}; use distinct instances.
 // 06 plan={instanceId,targetVersion}.
+// 07/MC04 plan={}; each runs new actual browser conflicts and one activation.
 // A fixture is selection, never a supplied expected outcome or new authority.
 const unsupported={
  'E13.journey':'Full original Host, provider-channel interruption, cancellation and managed-action budget journey is not yet implemented.',
  'E13.variant.03':'Requires original native owner one-sided success and recovery without redispatch.',
  'E13.variant.04':'Requires actual test-channel response loss and independent original provider readback.',
  'E13.variant.05':'Requires original real Host availability evidence correlated with the exact report, task and Target version; measurement:null alone does not prove that metrics were unavailable.',
- 'E13.variant.07':'Requires a new actual two-client MC04 closure; another scenario result is not an alias.',
- 'E13.MC04':'Requires a new actual two-client MC04 closure and postcommit response loss.',
  'E13.CV03':'Requires the full original eight-stage admission and supported measured-budget matrix; one fixed loop is not a fabricated exhausted-loop result.',
  'E13.CV04':'No reproducible installed-service transaction-middle fault point is selected; a socket abort is not transaction interruption.',
  'E13.CV05':'Requires actual Host exit/reentry and exact authority recovery conversation.'
@@ -98,6 +99,57 @@ async function unsupportedLimit(run,driver,c,plan){
  return{unsupportedConstraint:'budget.maxTokens',requestedLimit:1,nativeRejection:rejected.body.error.code,authorityGranted:false,executionDispatched:false,existingInstanceUnchanged:true,normalReadbackStillAvailable:true,usageCoverage:report.report.coverage,newBudgetEngine:false,unknownUsageTreatedAsZero:false};
 }
 
+async function definitionConflict(run,driver,c,plan){
+ exactKeys(plan,[]);
+ const view=await run.read('lifecycle.definition.inspect');assert(view.active);
+ const originalSource=await run.source(view.active.id),validation=await run.read('lifecycle.definition.validate',{yaml:originalSource});assert.equal(validation.ready,true);
+ const baselineEvents=await driver.events(),baselineSources={};
+ for(const revision of [view.active,view.draft].filter(Boolean))baselineSources[revision.id]=await run.source(revision.id);
+ const restored=await run.request('lifecycle.draft.save',{yaml:originalSource},{requestId:run.requestId(c.caseInstanceId,'initial-draft'),expectedRevision:view.revision});assert.equal(restored.status,200);assert.equal(restored.body.result.result.status,'DRAFT');
+ const browser=await chromium.launch({headless:true});let first,second,recovery,observer,routeFailure;
+ try{
+  first=await openBrowser(run,browser);second=await openBrowser(run,browser);
+  const before=await first.monitor();assert.equal(before.nextAfter,null,'Use the bounded isolated interruption project, not a partial instance page');
+  const instances={};for(const row of before.instances)instances[row.id]=(await driver.instance(row.id)).instance;
+  const staleSource=originalSource+'\n# E13 stale '+c.caseInstanceId+' '+run.selection.runId+'\n';
+  await first.source.fill(staleSource);await first.preview();await expect(first.page.getByRole('button',{name:'保存并启用',exact:true})).toBeEnabled();
+  const concurrentSource=originalSource+'\n# E13 concurrent '+c.caseInstanceId+' '+run.selection.runId+'\n';
+  await second.source.fill(concurrentSource);await second.save();
+  await first.page.getByRole('button',{name:'保存并启用',exact:true}).click();await expect(first.page.getByRole('button',{name:'重新读取',exact:true})).toBeVisible();await expect(first.source).toHaveValue(staleSource);await first.flush();
+  const refused=first.network.filter(n=>n.request.operation==='lifecycle.definition.save-and-activate');assert.equal(refused.length,1);assert.equal(refused[0].status,409);assert.equal(JSON.parse(refused[0].rawBody).error.code,'REVISION_CONFLICT');
+  const afterConflict=await run.read('lifecycle.definition.inspect');assert.deepEqual(afterConflict.active,view.active);assert.equal(await run.source(afterConflict.draft.id),concurrentSource);
+  await second.preview();await second.source.fill(concurrentSource+'# edit invalidates preview\n');await expect(second.page.getByRole('button',{name:'保存并启用',exact:true})).toBeDisabled();await second.save();
+  await first.close();await second.close();
+  recovery=await openBrowser(run,browser);observer=await openBrowser(run,browser);
+  const source=await recovery.source.inputValue()+'# original response loss '+c.caseInstanceId+'\n';await recovery.source.fill(source);await recovery.preview();
+  let submitted=0,envelope,receipt;
+  await recovery.page.route('**/api/v1/dashboard/request',async route=>{
+   const input=route.request().postDataJSON();if(input.operation!=='lifecycle.definition.save-and-activate')return route.continue();
+   try{
+    assert.equal(++submitted,1,'Never redispatch an activation with an unknown response');envelope=input;
+    const response=await route.fetch({timeout:30000,maxRetries:0});assert.equal(response.status(),200);receipt=await response.json();
+    run.artifact('definition-commit-response-loss.json',{fault:'EXPLICIT_BROWSER_RESPONSE_LOSS_AFTER_REAL_SERVICE_COMMIT',request:envelope,status:response.status(),body:receipt,browserReceivedResponse:false,transportCancellationImpliesRollback:false});
+    await route.abort('connectionreset');
+   }catch(error){routeFailure=error;try{await route.abort('failed');}catch{}}
+  });
+  await recovery.page.getByRole('button',{name:'保存并启用',exact:true}).click();await expect(recovery.page.getByRole('button',{name:'核对原请求',exact:true})).toBeEnabled();if(routeFailure)throw routeFailure;
+  await expect(recovery.page.getByRole('button',{name:'保存并启用',exact:true})).toBeDisabled();await recovery.page.getByRole('button',{name:'核对原请求',exact:true}).click();await expect(recovery.page.getByRole('button',{name:'重新读取',exact:true})).toBeVisible();assert.equal(submitted,1);
+  const retained=await run.read('runtime.receipt.read',{requestId:envelope.requestId});assert.deepEqual(retained,receipt.result);assert.equal(retained.result.status,'ACTIVE');assert.equal(retained.result.executionAuthorized,false);assert.equal(retained.result.releaseAuthorized,false);
+  const replay=await recovery.sessionRequest(envelope.operation,envelope.input,{requestId:envelope.requestId,expectedRevision:envelope.expectedRevision});assert.equal(replay.status,200);assert.deepEqual(replay.body.result,retained);
+  const changed=await recovery.sessionRequest(envelope.operation,{...envelope.input,yaml:source+'# forbidden same-key change\n'},{requestId:envelope.requestId,expectedRevision:envelope.expectedRevision});assert.equal(changed.status,409);assert.equal(changed.body.error.code,'REQUEST_CONFLICT');
+  const finalView=await run.read('lifecycle.definition.inspect');assert.equal(finalView.active.id,retained.result.revisionId);assert.equal(await run.source(finalView.active.id),source);assert.equal(finalView.active.semanticDigest,view.active.semanticDigest);
+  for(const ui of [recovery,observer]){const readback=await ui.sessionRequest('lifecycle.definition.inspect');assert.equal(readback.status,200);assert.deepEqual(readback.body.result.active,finalView.active);assert.deepEqual((await ui.monitor()).instances,before.instances);await ui.flush();}
+  for(const [id,value]of Object.entries(instances))assert.deepEqual((await driver.instance(id)).instance,value,'Definition editing cannot execute or repin an existing instance');
+  for(const [id,value]of Object.entries(baselineSources))assert.equal(await run.source(id),value);
+  const events=await driver.events();assert.deepEqual(events.slice(0,baselineEvents.length),baselineEvents);const added=events.slice(baselineEvents.length),activations=added.filter(e=>e.type==='definition-activated');assert.equal(activations.length,1);assert.equal(activations[0].data.revisionId,finalView.active.id);
+  assert(added.every(e=>['definition-draft-saved','definition-activated'].includes(e.type)),'No new instance, stage, grant, Agent, CI or owner dispatch may occur');
+  run.artifact('definition-concurrency-recovery.json',{caseInstanceId:c.caseInstanceId,originalRequest:envelope,receipt:retained,staleRefusal:JSON.parse(refused[0].rawBody),priorActive:view.active,currentActive:finalView.active,addedEvents:added,existingInstancesUnchanged:Object.keys(instances),originalSourcesUnchanged:Object.keys(baselineSources),sameKeyReplay:replay.body,sameKeyChangedContent:changed.body});
+  return{twoActualBrowserClients:true,staleRevisionRejected:true,editInvalidatesPreview:true,postCommitResponseLost:true,originalRequestReconciled:true,automaticRedispatch:false,activationEvents:activations.length,sameKeySameResult:true,sameKeyChangedContentRejected:true,bothClientsReadSameActive:true,existingInstancesUnchanged:true,executionDispatched:false};
+ }finally{
+  const failures=[];for(const ui of [first,second,recovery,observer])if(ui)try{await ui.close();}catch(error){failures.push(error);}await browser.close();if(failures.length)throw new AggregateError(failures,'E13 browser evidence cleanup failed');
+ }
+}
+
 test('E13 installed interruption and truthful unavailable measurement branches',{timeout:240000},async t=>{
  const captured=await openScenario('E13'),run={...captured};
  // A bounded request already in flight retains its original response through
@@ -109,6 +161,7 @@ test('E13 installed interruption and truthful unavailable measurement branches',
   for(const c of run.cases)await run.collect(c,async()=>{
    if(unsupported[c.caseInstanceId])throw Error('UNIMPLEMENTED_ORIGINAL_CASE: '+unsupported[c.caseInstanceId]);
    const plan=fixture.casePlans[c.caseInstanceId];assert(plan,'A fixed case requires its exact native fixture selection');
+   if(['E13.variant.07','E13.MC04'].includes(c.caseInstanceId))return definitionConflict(run,driver,c,plan);
    if(['E13.variant.01','E13.variant.02'].includes(c.caseInstanceId)){assert(!used.has(plan.instanceId),'Interruption cases require independent original instances');used.add(plan.instanceId);return interruption(run,driver,c,plan);}
    if(c.caseInstanceId==='E13.variant.06')return unsupportedLimit(run,driver,c,plan);
    throw Error('UNIMPLEMENTED_ORIGINAL_CASE: '+c.caseInstanceId);

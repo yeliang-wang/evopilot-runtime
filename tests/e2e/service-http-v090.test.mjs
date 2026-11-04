@@ -187,6 +187,30 @@ test('unknown schema and wrong workspace fail without silently adopting state',(
   }finally{f.cleanup();}
 });
 
+test('restart adds bounded revision lookup to an existing ledger without rewriting its history',()=>{
+  const f=fixture();let store=new RuntimeStore(f.root,'test');
+  try{
+    const receipts=[];for(let i=0;i<64;i++)receipts.push(store.mutate(f.actor,mutation('history-'+i,i),()=>change(i)));
+    const originalEvents=store.events(f.actor,'alpha'),serviceId=store.serviceId;store.close();store=null;
+    const old=new DatabaseSync(join(f.root,'service.sqlite'));
+    old.exec('DROP INDEX events_project_revision;');
+    const before={audit:old.prepare('SELECT * FROM audit ORDER BY project_id,revision').all(),events:old.prepare('SELECT * FROM events ORDER BY seq').all(),receipts:old.prepare('SELECT * FROM receipts ORDER BY project_id,principal_id,request_id').all()};old.close();
+    store=new RuntimeStore(f.root,'test');assert.equal(store.serviceId,serviceId);assert.equal(store.revision('alpha'),64);
+    assert.deepEqual(store.events(f.actor,'alpha'),originalEvents);
+    for(let i=0;i<receipts.length;i++)assert.deepEqual(store.receipt(f.actor,'alpha','history-'+i),receipts[i]);
+    store.close();store=null;
+    const read=new DatabaseSync(join(f.root,'service.sqlite'),{readOnly:true});
+    try{
+      assert.equal(read.prepare('PRAGMA user_version').get().user_version,1);
+      assert.deepEqual({audit:read.prepare('SELECT * FROM audit ORDER BY project_id,revision').all(),events:read.prepare('SELECT * FROM events ORDER BY seq').all(),receipts:read.prepare('SELECT * FROM receipts ORDER BY project_id,principal_id,request_id').all()},before);
+      for(const select of ['count(*) AS n','type,data,at']){
+        const plan=read.prepare('EXPLAIN QUERY PLAN SELECT '+select+' FROM events WHERE project_id=? AND revision=?').all('alpha',32);
+        assert(plan.some(row=>/SEARCH events .*\(project_id=\? AND revision=\?\)/.test(row.detail)),'Both integrity lookups must constrain project and revision, rather than scan all project events');
+      }
+    }finally{read.close();}
+  }finally{store?.close();f.cleanup();}
+});
+
 test('restart detects forged receipt contents and a missing required table',()=>{
   const f=fixture(),s=new RuntimeStore(f.root,'test');s.mutate(f.actor,mutation(),()=>change());s.close();
   try{

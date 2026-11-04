@@ -10,7 +10,7 @@ const dashboardReads=new Set(['runtime.status','runtime.receipt.read','lifecycle
 
 export async function openBrowser(run,browser,{route='/lifecycle',viewport={width:1440,height:1000},principalAlias='default',monitorEvidence=false,performanceEvidence=false}={}){
  const selected=run.principal(principalAlias),context=await browser.newContext({viewport,reducedMotion:'reduce'}),page=await context.newPage(),network=[],monitorNetwork=[],monitorReadbacks=[],sseFrames=[],errors=[],actions=[],pending=new Set(),external=[];
- let bytes=0,closed=false,session,cdp;
+ let bytes=0,closed=false,session,cdp,traceReference;
  // APIRequestContext failures can include request headers (Cookie/CSRF).
  // Discard the original exception, including its message/cause, at this edge.
  const safeHttp=async(operation,route,action)=>{try{return await action();}catch{throw Error('BROWSER_HTTP_FAILURE: '+operation+' '+route);}};
@@ -140,7 +140,7 @@ export async function openBrowser(run,browser,{route='/lifecycle',viewport={widt
   await cdp.send('Network.enable');
  }
  const drain=()=>bounded((async()=>{while(pending.size)await Promise.all([...pending]);assert.deepEqual(errors,[]);})(),15000,'finite-response-drain');
- const step=async(action,fn)=>{const row={action,startedAt:new Date().toISOString(),status:'STARTED'};actions.push(row);try{const value=await fn();row.status='COMPLETED';return value;}catch(error){row.status='FAILED';row.error=error.message;throw error;}finally{row.finishedAt=new Date().toISOString();}};
+ const step=async(action,fn)=>{const row={action,startedAt:new Date().toISOString(),status:'STARTED'};actions.push(row);try{const value=await fn(row);row.status='COMPLETED';return value;}catch(error){row.status='FAILED';row.error=error.message;throw error;}finally{row.finishedAt=new Date().toISOString();}};
  const login=async(route='/lifecycle')=>step('Open installed '+route+' with a one-use project connection',async()=>{
   await drain();await page.goto(run.serviceOrigin+route);
   const code=page.getByLabel('一次性连接码'),heading=page.getByRole('heading',{name:route==='/lifecycle'?'生命周期定义':'生命周期监控',exact:true});
@@ -160,6 +160,24 @@ export async function openBrowser(run,browser,{route='/lifecycle',viewport={widt
  const retained=async(operation,since)=>{const yaml=await source.inputValue();await expect.poll(async()=>{await drain();return network.slice(since).some(n=>n.request?.operation===operation&&n.request.input.yaml===yaml&&n.status===200&&n.transportOutcome==='RESPONSE_RETAINED');},{message:'The UI-consumed exact request needs its original complete response: '+operation,timeout:10000}).toBe(true);};
  const save=()=>step('Save exact YAML draft from the current page',async()=>{const since=network.length;await page.getByRole('button',{name:'保存草稿',exact:true}).click();await expect(page.getByText('草稿已保存。',{exact:true})).toBeVisible();await expect(source).toBeEditable();await retained('lifecycle.draft.save',since);});
  const preview=()=>step('Validate exact YAML and display its active-definition diff',async()=>{const since=network.length;await page.getByRole('button',{name:'校验与差异预览',exact:true}).click();await expect(page.getByRole('heading',{name:'与当前生效版本的准确差异'})).toBeVisible();await retained('lifecycle.definition.validate',since);});
+ // Capture this while performing the original UI edit. A qualification input
+ // cannot retrospectively attribute an unrelated response to an action label.
+ const validateEdit=async(entry,yaml,edit)=>{
+  assert(['graph','yaml'].includes(entry));assert.equal(typeof yaml,'string');assert(Buffer.byteLength(yaml)<=262144);await drain();
+  const actionIndex=actions.length;
+  return step(entry==='graph'?'Apply exact extension properties through the actual SeeCode graph and validate':'Edit the exact YAML source and validate',async action=>{
+   const start=network.length;await edit();await expect(source).toHaveValue(yaml);
+   await expect(page.getByRole('heading',{name:'与当前生效版本的准确差异'})).not.toBeVisible();
+   const afterEdit=network.length;await page.getByRole('button',{name:'校验与差异预览',exact:true}).click();
+   await expect(page.getByRole('heading',{name:'与当前生效版本的准确差异'})).toBeVisible();await retained('lifecycle.definition.validate',afterEdit);await drain();
+   const end=network.length,index=network.findLastIndex((n,i)=>i>=afterEdit&&i<end&&n.request?.operation==='lifecycle.definition.validate'&&n.request.projectId===selected.projectId&&n.request.input?.yaml===yaml&&n.status===200&&n.transportOutcome==='RESPONSE_RETAINED');assert(index>=start);
+   const response=JSON.parse(network[index].rawBody);assert(!response.error&&response.result?.compilation);assert(/^[-a-f0-9]{36}$/.test(response.requestId));
+   const matches=network.slice(start,end).filter(n=>n.transportOutcome==='RESPONSE_RETAINED'&&typeof n.rawBody==='string'&&JSON.parse(n.rawBody).requestId===response.requestId);assert.equal(matches.length,1);
+   assert(Date.parse(network[index].at)>=Date.parse(action.startedAt));
+   action.validationEvidence={entry,operation:'lifecycle.definition.validate',projectId:selected.projectId,yamlSha256:createHash('sha256').update(yaml).digest('hex'),requestId:response.requestId,networkRange:{start,end}};
+   return{actionIndex,networkIndex:index,requestId:response.requestId,result:response.result};
+  });
+ };
  const activate=()=>step('Activate the exact preview in the same browser page',async()=>{const since=network.length;await expect(page.getByRole('button',{name:'保存并启用',exact:true})).toBeEnabled();await page.getByRole('button',{name:'保存并启用',exact:true}).click();await expect(page.getByText('已启用此精确定义。既有实例继续使用原版本。',{exact:true})).toBeVisible();await expect(source).toBeEditable();await retained('lifecycle.definition.save-and-activate',since);});
  const screenshot=async()=>run.imageArtifact(await page.screenshot({fullPage:true,mask:[page.getByLabel('一次性连接码')],timeout:5000}));
  const monitor=async(input={})=>{assert(Object.keys(input).every(k=>['after','revision'].includes(k)));const query=new URLSearchParams(Object.entries(input).map(([k,v])=>[k,String(v)])),observed=await safeHttp('monitor.read','/api/v1/dashboard/monitor',async()=>{const response=await context.request.get(run.serviceOrigin+'/api/v1/dashboard/monitor'+(query.size?'?'+query:''),{timeout:10000});const rawBody=await response.text();assert(Buffer.byteLength(rawBody)<=262144);return{status:response.status(),body:JSON.parse(rawBody),rawBody,bytes:Buffer.byteLength(rawBody),query:Object.fromEntries(query)};});run.artifact('browser-monitor-readback.json',observed);assert.equal(observed.status,200);monitorReadbacks.push(observed);return observed.body.result;};
@@ -179,16 +197,16 @@ export async function openBrowser(run,browser,{route='/lifecycle',viewport={widt
  };
  const flush=async()=>{await drain();assert.deepEqual(external,[]);};
  const close=async()=>{
-  if(closed)return;closed=true;page.off('response',listener);let failure;
+  if(closed)return traceReference;closed=true;page.off('response',listener);let failure;
   try{await drain();}catch(error){failure=error;}
   try{await screenshot();}catch(error){failure??=error;errors.push('Final screenshot: '+error.message);}
   let performanceObservation;
   if(performanceEvidence)try{performanceObservation=await bounded(performanceReadback(),3000,'performance-observation');}catch(error){failure??=error;}
-  run.artifact('installed-browser-trace.json',{browserVersion:browser.version(),viewport,principal:selected,actions,network,monitorNetwork,sseFrames,...(performanceEvidence?{performanceObservation}:{}),errors,external,pending:unfinished(),recording:'Actual browser responses and CDP EventSource frames; no authorization, cookies, session bodies or one-use codes'});
+  traceReference=run.artifact('installed-browser-trace.json',{browserVersion:browser.version(),viewport,principal:selected,actions,network,monitorNetwork,sseFrames,...(performanceEvidence?{performanceObservation}:{}),errors,external,pending:unfinished(),recording:'Actual browser responses and CDP EventSource frames; no authorization, cookies, session bodies or one-use codes'});
   try{if(cdp)await bounded(cdp.detach(),3000,'detach-cdp');}catch(error){failure??=error;}
   try{await bounded(context.close(),5000,'close-browser-context');}catch(error){failure??=error;}
-  if(failure)throw failure;
+  if(failure)throw failure;return traceReference;
  };
  try{await login(route);}catch(error){await close();throw error;}
- return{page,context,network,monitorNetwork,monitorReadbacks,sseFrames,errors,source,node:id=>page.locator('[data-sc-node="'+id+'"]'),step,login,valid,save,preview,activate,screenshot,monitor,performanceReadback,sessionRequest,restart,flush,close};
+ return{page,context,network,monitorNetwork,monitorReadbacks,sseFrames,errors,source,node:id=>page.locator('[data-sc-node="'+id+'"]'),step,login,valid,save,preview,validateEdit,activate,screenshot,monitor,performanceReadback,sessionRequest,restart,flush,close};
 }

@@ -11,6 +11,9 @@ export interface AcceptanceEvidenceRequest {
   manifest:FileReference;archive:FileReference;sourceRevision:FileReference;
   reports:{scenario:string;report:FileReference}[];
 }
+export interface E20PrerequisiteEvidenceRequest extends Omit<AcceptanceEvidenceRequest,'schema'> {
+  schema:'runtime-e20-prerequisite-evidence-input/v1';
+}
 type ObjectValue=Record<string,unknown>;
 const sha=(bytes:Buffer):string=>createHash('sha256').update(bytes).digest('hex');
 const reject=(message:string):never=>{throw new Error('RELEASE_EVIDENCE: '+message);};
@@ -34,11 +37,11 @@ function pinned(value:unknown,maximum:number):Buffer {
 const parse=(bytes:Buffer):ObjectValue=>object(JSON.parse(bytes.toString('utf8')) as unknown);
 const numbered=(prefix:string,count:number):string[]=>Array.from({length:count},(_,i)=>prefix+String(i+1).padStart(2,'0'));
 
-/** Audit complete candidate-bound records. This does not authenticate a human
- * decision, fetch source CI, evaluate a business model or authorize publication. */
-export function inspectAcceptanceEvidence(repositoryRoot:string,input:AcceptanceEvidenceRequest) {
+// The only two inventories are fixed here. No caller can omit a case, choose a
+// scenario range or turn a prerequisite audit into the complete release audit.
+function inspectFixedEvidence(repositoryRoot:string,input:AcceptanceEvidenceRequest|E20PrerequisiteEvidenceRequest,scope:'FULL'|'PRE_E20') {
   exact(object(input),['schema','sourceCommit','manifest','archive','sourceRevision','reports']);
-  requireValue(input.schema==='runtime-release-evidence-input/v1'&&/^[a-f0-9]{40}$/.test(input.sourceCommit),'Wrong source input');
+  requireValue(input.schema===(scope==='FULL'?'runtime-release-evidence-input/v1':'runtime-e20-prerequisite-evidence-input/v1')&&/^[a-f0-9]{40}$/.test(input.sourceCommit),'Wrong source input');
   requireValue(isAbsolute(repositoryRoot)&&realpathSync(repositoryRoot)===repositoryRoot,'Use the exact source checkout');
   const env={PATH:'/usr/bin:/bin',LC_ALL:'C',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_OPTIONAL_LOCKS:'0'};
   const git=(args:string[]):Buffer=>execFileSync('/usr/bin/git',['-c','core.fsmonitor=false','-C',repositoryRoot,...args],{env,timeout:15000,maxBuffer:4194304,stdio:['ignore','pipe','pipe']});
@@ -53,11 +56,15 @@ export function inspectAcceptanceEvidence(repositoryRoot:string,input:Acceptance
   const archive=pinned(input.archive,268435456);requireValue(sha(archive)===digest(manifest.archiveDigest),'Original archive differs from the distribution inventory');
   requireValue(pinned(input.sourceRevision,128).toString()===input.sourceCommit+'\n','Source revision differs from the selected candidate');
   const matrixBytes=read(join(repositoryRoot,'governance/parameter-matrix-v090.json'),2097152,false),matrix=parse(matrixBytes),matrixDigest=sha(matrixBytes);
-  const cases=array(matrix.caseInstances).map(object),required=cases.filter(c=>c.phase==='PRE_RELEASE');
-  requireValue(cases.length===664&&required.length===655&&cases.every(c=>c.required===true),'Fixed acceptance denominator changed');
+  const cases=array(matrix.caseInstances).map(object),allPreRelease=cases.filter(c=>c.phase==='PRE_RELEASE');
+  requireValue(cases.length===664&&allPreRelease.length===655&&cases.every(c=>c.required===true),'Fixed acceptance denominator changed');
+  const e20=allPreRelease.filter(c=>c.scenario==='E20').map(c=>string(c.caseInstanceId)).sort();
+  requireValue(isDeepStrictEqual(e20,['E20.CV07','E20.EX12','E20.journey']),'Fixed E20 remainder changed');
+  const required=scope==='FULL'?allPreRelease:allPreRelease.filter(c=>c.scenario!=='E20'),expectedCount=scope==='FULL'?655:652;
+  requireValue(required.length===expectedCount,'Fixed prerequisite denominator changed');
   const reports=array(input.reports).map(object);
-  const scenarioIds=numbered('E',20);
-  requireValue(reports.length===20&&isDeepStrictEqual(reports.map(r=>r.scenario).sort(),scenarioIds),'Exactly E01–E20 reports are required');
+  const scenarioIds=numbered('E',scope==='FULL'?20:19);
+  requireValue(reports.length===scenarioIds.length&&isDeepStrictEqual(reports.map(r=>r.scenario).sort(),scenarioIds),scope==='FULL'?'Exactly E01–E20 reports are required':'Exactly E01–E19 prerequisite reports are required');
   let evidenceFiles=0,evidenceBytes=0;const observed=new Set<string>(),reportPins:Record<string,string>={};
   function evidence(root:string,value:unknown,caseId:string|null):void {
     const item=object(value);requireValue(item.caseInstanceId===caseId,'Evidence belongs to another case');
@@ -82,7 +89,7 @@ export function inspectAcceptanceEvidence(repositoryRoot:string,input:Acceptance
     const selection=parse(selectionBytes);
     requireValue(selection.scenario===scenario&&selection.matrixDigest===matrixDigest&&selection.qualification==='FINAL_CANDIDATE'&&selection.candidateDigest===candidateDigest&&isDeepStrictEqual(selection.candidate,report.candidate),'Selection differs from the report or frozen cases');
     requireValue(isDeepStrictEqual(array(selection.selectedCaseIds).map(string).sort(),expected),'Selected case list is incomplete or duplicated');
-    const collectorPins=object(selection.collectorPins),collectorNames=['support.mjs',scenario.toLowerCase()+'.test.mjs',...(['E04','E05','E06','E07','E12','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(scenario==='E13'?['execution.mjs']:[])];exact(collectorPins,collectorNames);
+    const collectorPins=object(selection.collectorPins),collectorNames=['support.mjs',scenario.toLowerCase()+'.test.mjs',...(['E01','E04','E05','E06','E07','E12','E13','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(scenario==='E13'?['execution.mjs']:[])];exact(collectorPins,collectorNames);
     for(const name of collectorNames){
       const relative='tests/acceptance/v090/'+name,committed=git(['show',input.sourceCommit+':'+relative]);
       requireValue(sha(committed)===digest(collectorPins[name])&&sha(read(join(repositoryRoot,relative),4194304,false))===sha(committed),'Collector differs from the tested source');
@@ -99,6 +106,19 @@ export function inspectAcceptanceEvidence(repositoryRoot:string,input:Acceptance
     const setup=array(report.setupEvidence);requireValue(setup.length>0,'Initial installed service evidence is missing');
     for(const item of setup)evidence(root,item,null);
   }
-  requireValue(observed.size===655,'Required pre-release cases remain');
-  return{schema:'runtime-release-evidence-audit/v1' as const,sourceCommit:input.sourceCommit,candidateDigest,archiveDigest:sha(archive),matrixDigest,reportPins,required:655,passed:655,failed:0,skipped:0,postReleaseRemaining:9,evidenceFiles,evidenceBytes,recordIntegrity:'VERIFIED' as const,productAcceptance:'NOT_EVALUATED' as const,releaseAuthorized:false as const,remainingChecks:['Independent source CI and original artifact readback','Actual precise release decision','Public delivery and current Host acceptance']};
+  requireValue(observed.size===expectedCount,'Required pre-release cases remain');
+  return{sourceCommit:input.sourceCommit,candidateDigest,archiveDigest:sha(archive),matrixDigest,reportPins,failed:0,skipped:0,postReleaseRemaining:9,evidenceFiles,evidenceBytes,recordIntegrity:'VERIFIED' as const,productAcceptance:'NOT_EVALUATED' as const,releaseAuthorized:false as const};
+}
+
+/** Audit all 655 pre-release records, including the three completed E20 cases.
+ * This remains the only original-acceptance audit used by release preflight. */
+export function inspectAcceptanceEvidence(repositoryRoot:string,input:AcceptanceEvidenceRequest) {
+  return{schema:'runtime-release-evidence-audit/v1' as const,...inspectFixedEvidence(repositoryRoot,input,'FULL'),required:655,passed:655,remainingChecks:['Independent source CI and original artifact readback','Actual precise release decision','Public delivery and current Host acceptance']};
+}
+
+/** E20 may inspect its fixed 652 prerequisites before its own report exists.
+ * Byte integrity cannot establish authentic execution, product acceptance or
+ * release authority. The full 655-case audit is still mandatory afterwards. */
+export function inspectE20PrerequisiteEvidence(repositoryRoot:string,input:E20PrerequisiteEvidenceRequest) {
+  return{schema:'runtime-e20-prerequisite-evidence-audit/v1' as const,...inspectFixedEvidence(repositoryRoot,input,'PRE_E20'),required:652,passed:652,fullPreReleaseRequired:655,remainingE20:3,remainingE20CaseIds:['E20.journey','E20.EX12','E20.CV07'],executionAuthenticity:'NOT_ESTABLISHED_BY_FILE_HASHES' as const,fullReleaseAuditRequired:true as const,remainingChecks:['Complete the three fixed E20 cases, then independently audit all 655 pre-release cases','Independent source CI and original execution authenticity review','Additive usage acceptance, exact release decision and post-release delivery']};
 }

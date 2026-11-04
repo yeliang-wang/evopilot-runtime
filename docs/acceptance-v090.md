@@ -62,7 +62,20 @@ readiness. These cases have no model turn and do not satisfy Expert dialogue
 obligations. `maintenance.casePlans` binds each selected case's plan reference,
 SHA256 and isolated Codex home; the campaign root must not already exist.
 
-E13 currently implements three interruption/measurement branches. Its protected
+E11's primary journey uses two real ephemeral Codex conversations with separate
+project credentials against the same installed service. Its protected
+`multiClient` fixture pins both generated plugin materials, exact Host executable
+and a synthetic PENDING instance. Each conversation edits its own draft and
+retains native cross-project refusals; closing one client must preserve the
+service and the other client's access. A fresh conversation reads the server's
+current state. Existing Host login is used without copying credentials or
+changing global settings. The isolated Host process registers the existing
+installed Skill directory through its process-local discovery API and verifies
+the exact enabled Skill path before a model turn; plugin metadata alone is
+insufficient. This fixture dispatches no CI and cannot satisfy the
+separate CV05 requirement for an already dispatched task across exit/reentry.
+
+E13 currently implements five interruption/measurement/concurrency branches. Its protected
 `interruptionFixture` selects original native instances and records; it cannot
 supply stage outcomes or Host reports. The two interruption cases require actual
 native scope and plan completion and distinct PENDING implementation stages.
@@ -71,7 +84,13 @@ recover the original receipt, reject conflicting/duplicate requests, restart the
 owned installed service and check the original Agent handoff and prerequisite
 evidence. They do not start a model turn or submit a Host report. The
 unsupported-limit case verifies schema refusal without a new budget engine.
-The remaining nine E13 instances remain required, including variant 05. That
+The two concurrency branches each execute new actual browser sessions: a stale
+revision is refused, editing invalidates an earlier preview, and a committed
+activation response is deliberately lost. Both clients must read the same
+recovered active definition. Exact request replay, changed-content refusal,
+one activation event, unchanged historical sources and unchanged instances are
+verified independently. No result from another scenario is reused as a pass.
+The remaining seven E13 instances remain required, including variant 05. That
 variant needs original real Host availability evidence correlated with the exact
 report, task and Target version; an authenticated report containing null alone
 does not establish unavailability. An actual unsupported or unavailable source
@@ -149,6 +168,17 @@ omit it for the complete scenario. The output root must be new. The installed
 manifest and all package bytes are verified before and after execution. Final
 candidate mode requires version `0.9.0`; this alone does not establish release
 eligibility or replace E20 source/evidence qualification.
+
+E20 requires a clean exact source commit, authenticated readback of its successful
+GitHub CI and original six artifact files, complete E01–E19 results and the 23
+pre-release usage cases. The fixed prerequisite audit covers 652 original cases;
+the three E20 cases then verify qualification, extension-entry evidence and
+denominator rejection guards. The full release preflight still requires all 655
+original pre-release cases and cannot accept the 652-case prerequisite audit.
+Concrete documentation locations are bound to original behavior evidence.
+Missing actual campaigns, CI or extension observations remain failures; source
+regressions and file hashes alone do not prove authentic execution or authorize
+publication. Select the protected fixture through `releaseQualification`.
 
 Selecting Expert instances also requires `codexHost` with the canonical
 `executable`, its `executableSha256`, and `timeoutSeconds` (60–600). The actual
@@ -337,11 +367,21 @@ inspect the actual execution provenance and independent original acceptance.
 
 E04 collects installed Base/extension constraints through API, CLI, MCP and the
 actual graph/YAML pages. Positive extension activation requires a current,
-registered configuration, supplied as optional protected
+registered configuration, supplied to E03 and E04 as optional protected
 `extensionConfiguration: {yamlRef, yamlSha256}` or already present in the active
 definition. Compiler-only structural controls are labeled as such; unresolved
 synthetic references never establish a usable extension. Actual parallel joins,
 frozen execution budgets and owner outcomes keep their separate fixed variants.
+
+The paired E03.EX12 and E04.EX12 cases use the same exact legal YAML and a single
+extension-scope change as the illegal input. E03 exercises HTTP, MCP, CLI and a
+real Expert conversation; E04 exercises the installed graph property editor and
+YAML editor. Each entry retains its actual validation response and source digest.
+Browser validation must fall within the recorded edit action and carry its exact
+request identity; a later unrelated validation cannot establish that edit's
+result. These cases save isolated drafts but do not activate a definition or
+dispatch execution. E20 independently checks all six original entries and their
+matching inputs; implementing the collectors alone does not pass these cases.
 
 E05 accepts `revisionEvolution: {instanceId, allowSyntheticDecisions: true}` only
 for its isolated test campaign. It reads an actual unfinished instance and

@@ -2,9 +2,43 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import {stringify,parse} from 'yaml';
+import {stringify,parse,parseDocument} from 'yaml';
 import {chromium,expect} from '@playwright/test';
-import {openScenario,repository} from './support.mjs';
+import {openScenario,repository,sha} from './support.mjs';
+
+function extensionInputs(run){
+ const selected=run.selection.extensionConfiguration;assert(selected,'EX12 needs one protected registered extension YAML shared with E04');
+ assert.equal(path.resolve(selected.yamlRef),selected.yamlRef);assert.equal(fs.realpathSync(selected.yamlRef),selected.yamlRef);const stat=fs.lstatSync(selected.yamlRef);assert(stat.isFile()&&!stat.isSymbolicLink()&&stat.nlink===1&&stat.size<=262144&&stat.uid===process.getuid()&&(stat.mode&0o077)===0);
+ const bytes=fs.readFileSync(selected.yamlRef);assert.equal(sha(bytes),selected.yamlSha256);const legal=bytes.toString('utf8'),value=parse(legal);assert.equal(value.projectId,run.selection.projectId);assert(value.extensions?.length);assert.equal(value.extensions[0].scopeRef,'scope:'+run.selection.projectId);assert(legal.endsWith('\n')&&!legal.endsWith('\n\n'));
+ const replace=entry=>{const doc=parseDocument(legal,{version:'1.2',strict:true,uniqueKeys:true,stringKeys:true,keepSourceTokens:true,prettyErrors:false});assert.deepEqual(doc.errors,[]);assert.deepEqual(doc.warnings,[]);doc.setIn(['extensions',0],entry);return doc.toString({lineWidth:0});};
+ assert.equal(replace(value.extensions[0]),legal,'The shared input must retain exact bytes when its extension properties are applied in the actual graph editor');
+ const illegal=replace({...value.extensions[0],scopeRef:'scope:foreign'}),{extensions:good,...rest}=value,{extensions:bad,...other}=parse(illegal);assert.notDeepEqual(good,bad);assert.deepEqual(rest,other);
+ return{legal,illegal,reference:selected,legalSha256:sha(legal),illegalSha256:sha(illegal)};
+}
+function extensionResult(result,valid){
+ assert.equal(result.compilation.valid,valid);assert.equal(result.ready,valid);
+ if(!valid){assert.equal(result.validationDigest,null);const issues=result.compilation.issues.filter(i=>i.code==='EXTENSION_SCOPE'&&i.path==='extensions.0.scopeRef');assert.equal(issues.length,1);assert(issues[0].rule&&issues[0].remedy);assert(result.issues.some(i=>i.code===issues[0].code&&i.path===issues[0].path&&i.rule===issues[0].rule));}
+ return result.issues.map(i=>({code:i.code,path:i.path,rule:i.rule}));
+}
+async function extensionEntries(run,c,expert){
+ const inputs=extensionInputs(run),before=await run.read('lifecycle.definition.inspect'),observations=[];let rejection;
+ run.artifact('extension-exact-inputs.json',{...inputs,purpose:'Same exact original legal/illegal extension YAML for all six entry producers; no source-test substitute'});
+ for(const entry of ['http-api','http-mcp','cli'])for(const [kind,source]of [['valid',inputs.legal],['invalid',inputs.illegal]]){
+  const response=await run.configurationEntry(entry,'lifecycle.definition.validate',{yaml:source}),issues=extensionResult(response.result,kind==='valid');
+  if(kind==='invalid'){if(rejection)assert.deepEqual(issues,rejection);else rejection=issues;}
+  observations.push({entry,kind,requestId:response.requestId,yamlSha256:sha(source),issues,originalEvidence:'Original case-owned native request/response pair'});
+ }
+ const prompt='Validate these two exact lifecycle YAML inputs, in order, using runtime_read lifecycle.definition.validate with input containing only yaml. They are deliberately paired extension test inputs. Do not save, activate, repair, change references or dispatch work. Preserve every YAML byte, including one final LF. Report each actual server result and extension diagnostic. Runtime tools are selected; no resource discovery is needed.\n\nLEGAL YAML:\n```yaml\n'+inputs.legal+'```\n\nILLEGAL YAML:\n```yaml\n'+inputs.illegal+'```';
+ const observed=await expert.configurationTurn(prompt);assert(!observed.calls.some(call=>call.tool==='runtime_write'));
+ const validations=observed.calls.filter(call=>call.tool==='runtime_read'&&call.arguments.operation==='lifecycle.definition.validate');assert(validations.every(call=>[inputs.legal,inputs.illegal].includes(call.arguments.input?.yaml)),'The Expert must not repair or replace either exact input');
+ for(const [kind,source]of [['valid',inputs.legal],['invalid',inputs.illegal]]){
+  const calls=validations.filter(call=>call.arguments.input.yaml===source);assert(calls.length,'Both inputs require actual completed Expert tool calls');const call=calls.at(-1);assert.deepEqual(Object.keys(call.arguments.input),['yaml']);assert.equal(call.arguments.projectId,run.selection.projectId);assert.equal(call.status,'completed');assert(!call.result.isError);const response=JSON.parse(call.result.content[0].text),issues=extensionResult(response.result,kind==='valid');if(kind==='invalid')assert.deepEqual(issues,rejection);
+  observations.push({entry:'expert',kind,itemId:call.id,threadId:observed.threadId,turnId:observed.turnId,requestId:response.requestId,yamlSha256:sha(source),issues,originalEvidence:'Original actual-model Expert configuration transcript'});
+ }
+ assert.deepEqual(await run.read('lifecycle.definition.inspect'),before,'Read-only extension probes must not mutate any definition');assert.deepEqual(extensionInputs(run),inputs);
+ run.artifact('extension-entry-observations.json',{observations,actualModelTurn:true,legalSha256:inputs.legalSha256,illegalSha256:inputs.illegalSha256,remainingEntries:['graph','yaml'],fullTwelveContractQualification:'SEPARATE_E20_EX12_REQUIREMENT'});
+ return{entries:['http-api','http-mcp','cli','expert'],observations,exactSameInputs:true,onlyExtensionChanged:true,actualNativeRefusal:'EXTENSION_SCOPE',definitionUnchanged:true,executionDispatched:false,remainingBrowserProducer:'E04.EX12',allTwelveContractsRemainRequired:true};
+}
 
 function set(object,field,value){const parts=field.split('.');let at=object;for(const key of parts.slice(0,-1))at=at[key]??={};if(value===undefined)delete at[parts.at(-1)];else at[parts.at(-1)]=value;}
 function structuralInput(base,provider,projectId){
@@ -119,8 +153,9 @@ test('E03 fixed candidate service admission cases',async()=>{
    assert.equal(control.compilation.valid,true,'The negative-case control must be structurally valid');variants.set(provider,data);
   }
   if(run.cases.some(c=>['dashboard-graph','dashboard-yaml'].includes(c.parameters.entry)))browser=await chromium.launch({headless:true});
-  if(run.cases.some(c=>c.parameters.entry==='expert'))expert=await run.openExpert();
+  if(run.cases.some(c=>c.parameters.entry==='expert'||c.caseInstanceId==='E03.EX12'))expert=await run.openExpert();
   for(const c of run.cases)await run.collect(c,async()=>{
+   if(c.caseInstanceId==='E03.EX12')return extensionEntries(run,c,expert);
    assert(['REAL_SERVICE_PARAMETER','ENTRY_ADMISSION'].includes(c.kind),'This frozen journey still requires its actual collector; it may not be skipped or replaced by a field test');
    if(c.parameters.entry==='expert'){
     const result=await expertCase(run,expert,c,fields,variants.get(c.parameters.provider),initial,activeSource);

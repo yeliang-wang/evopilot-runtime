@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {stringify,parse} from 'yaml';
+import {stringify,parse,parseDocument} from 'yaml';
 import {chromium,expect} from '@playwright/test';
 import {openScenario} from './support.mjs';
 import {openBrowser} from './browser.mjs';
@@ -46,6 +46,108 @@ function controlSource(run,fallback){
  const stat=fs.lstatSync(selected.yamlRef);assert(stat.isFile()&&!stat.isSymbolicLink()&&stat.nlink===1&&stat.size<=262144&&stat.uid===process.getuid()&&(stat.mode&0o077)===0);
  const bytes=fs.readFileSync(selected.yamlRef);assert.equal(sha(bytes),selected.yamlSha256);return bytes.toString('utf8');
 }
+function extensionInputs(run){
+ assert(run.selection.extensionConfiguration,'EX12 needs the protected registered extension YAML shared with E03');const legal=controlSource(run),value=parse(legal);assert.equal(value.projectId,run.selection.projectId);assert(value.extensions?.length);assert.equal(value.extensions[0].scopeRef,'scope:'+run.selection.projectId);assert(legal.endsWith('\n')&&!legal.endsWith('\n\n'));
+ const replace=entry=>{const doc=parseDocument(legal,{version:'1.2',strict:true,uniqueKeys:true,stringKeys:true,keepSourceTokens:true,prettyErrors:false});assert.deepEqual(doc.errors,[]);assert.deepEqual(doc.warnings,[]);doc.setIn(['extensions',0],entry);return doc.toString({lineWidth:0});};
+ assert.equal(replace(value.extensions[0]),legal,'The shared input must retain exact bytes through the actual graph property editor');const invalid={...value.extensions[0],scopeRef:'scope:foreign'},illegal=replace(invalid),{extensions:good,...rest}=value,{extensions:bad,...other}=parse(illegal);assert.notDeepEqual(good,bad);assert.deepEqual(rest,other);
+ return{legal,illegal,good:value.extensions[0],bad:invalid,legalSha256:sha(legal),illegalSha256:sha(illegal)};
+}
+async function extensionBrowserEntries(run,c,browser){
+ const inputs=extensionInputs(run),before=await run.read('lifecycle.definition.inspect'),oldDraft=before.draft?await run.source(before.draft.id):null;
+ run.artifact('extension-exact-inputs.json',{reference:run.selection.extensionConfiguration,...inputs,purpose:'Exact same legal/illegal source bytes used by E03.EX12; real graph and YAML actions below'});
+ // Start from the illegal source so the first graph action truly changes the
+ // selected extension. This native setup is not counted as browser evidence.
+ const setup=await run.configurationEntry('http-api','lifecycle.draft.save',{yaml:inputs.illegal},{requestId:run.requestId(c.caseInstanceId,'initial-illegal-draft'),expectedRevision:before.revision});assert.equal(setup.result.result.status,'DRAFT');
+ const ui=await openBrowser(run,browser),entries=[];let diagnostic;
+ try{
+  await expect(ui.source).toHaveValue(inputs.illegal);
+  for(const entry of ['graph','yaml']){
+   const selected={entry};
+   for(const [kind,source,properties]of [['valid',inputs.legal,inputs.good],['invalid',inputs.illegal,inputs.bad]]){
+    const observation=await ui.validateEdit(entry,source,async()=>{
+     if(entry==='graph'){
+      await expect(ui.node(inputs.good.id)).toBeVisible();await ui.node(inputs.good.id).click();await ui.page.getByLabel('扩展属性（JSON）').fill(JSON.stringify(properties,null,2));await ui.page.getByRole('button',{name:'应用扩展属性',exact:true}).click();
+     }else await ui.source.fill(source);
+    });
+    const valid=kind==='valid',result=observation.result;assert.equal(result.compilation.valid,valid);assert.equal(result.ready,valid);
+    if(valid)await expect(ui.page.getByRole('button',{name:'保存并启用',exact:true})).toBeEnabled();
+    else{
+     assert.equal(result.validationDigest,null);const issues=result.compilation.issues.filter(i=>i.code==='EXTENSION_SCOPE'&&i.path==='extensions.0.scopeRef');assert.equal(issues.length,1);assert(issues[0].rule&&issues[0].remedy);assert(result.issues.some(i=>i.code===issues[0].code&&i.path===issues[0].path&&i.rule===issues[0].rule));const exact=result.issues.map(i=>({code:i.code,path:i.path,rule:i.rule}));if(diagnostic)assert.deepEqual(exact,diagnostic);else diagnostic=exact;await expect(ui.page.getByRole('button',{name:'保存并启用',exact:true})).toBeDisabled();
+    }
+    await ui.screenshot();selected[kind]={actionIndex:observation.actionIndex,networkIndex:observation.networkIndex};
+   }
+   entries.push(selected);
+  }
+  await ui.flush();assert(!ui.network.some(row=>row.request&&['lifecycle.draft.save','lifecycle.definition.activate','lifecycle.definition.save-and-activate','lifecycle.instance.create','lifecycle.stage.request'].includes(row.request.operation)),'UI probes only edit and validate; no write or execution may be inferred from them');
+  const after=await run.read('lifecycle.definition.inspect');assert.equal(after.revision,before.revision+1);assert.deepEqual(after.active,before.active);assert.equal(await run.source(after.draft.id),inputs.illegal);if(before.draft)assert.equal(await run.source(before.draft.id),oldDraft);assert.deepEqual(extensionInputs(run),inputs);
+  const trace=await ui.close(),proofs=entries.map(item=>({entry:item.entry,...Object.fromEntries(['valid','invalid'].map(kind=>[kind,{caseInstanceId:c.caseInstanceId,artifact:trace.artifact,...item[kind]}]))}));
+  run.artifact('extension-entry-observations.json',{entries:proofs,legalSha256:inputs.legalSha256,illegalSha256:inputs.illegalSha256,issues:diagnostic,remainingEntries:['expert','http-mcp','http-api','cli'],fullTwelveContractQualification:'SEPARATE_E20_EX12_REQUIREMENT'});
+  return{entries:proofs,exactSameInputs:true,onlyExtensionChanged:true,actualGraphAndYaml:true,causalValidationEvidence:true,actualNativeRefusal:'EXTENSION_SCOPE',activeUnchanged:true,executionDispatched:false,remainingProducer:'E03.EX12',allTwelveContractsRemainRequired:true};
+ }finally{await ui.close();}
+}
+async function eventInventory(run){
+ const events=[];let cursor;
+ for(let page=0;page<400;page++){const result=await run.read('runtime.events.read',cursor?{cursor}:{});assert(result.events.length<=50);events.push(...result.events);cursor=result.cursor;if(!result.events.length)return{events,cursor};}
+ throw Error('EX03_EVENT_BOUND: select a bounded isolated fixture');
+}
+async function parameterBoundaries(run,base){
+ const observations=[],selected=base.fields.filter(f=>f.type==='integer'||f.type==='enum'||f.rules.fixed!==undefined||f.rules.minItems!==undefined||Array.isArray(f.rules.values));
+ const probe=async(field,provider,name,value,expected,ruleClass)=>{
+  let actualProvider=provider;if(expected&&field.path==='config.implementation.provider')actualProvider=value;if(expected&&field.path==='config.publication.channel')actualProvider=value==='github-release'?'github':'gitlab';
+  const input=structural(base,actualProvider,run.selection.projectId);set(input,field.path,value);const source=yaml(input),response=await run.configurationEntry('http-api','lifecycle.definition.validate',{yaml:source}),result=response.result;
+  assert.equal(result.compilation.valid,expected,field.path+' '+name+' '+JSON.stringify(result.compilation.issues));
+  if(!expected){assert.equal(result.ready,false);assert.equal(result.validationDigest,null);assert(result.compilation.issues.some(i=>i.code==='INVALID_VALUE'&&i.path===field.path&&i.rule==='field.'+field.policy.toLowerCase()&&i.remedy),'The refusal must identify the tested field/rule, not unrelated missing bindings');}
+  observations.push({fieldId:field.id,path:field.path,ruleClass,case:name,declaredRules:field.rules,requestedProvider:provider,actualProvider,value,expectedCompilation:expected,observedCompilation:result.compilation.valid,requestId:response.requestId,sourceSha256:sha(source),bindingReadiness:result.ready,bindingReadinessNotUsedAsParameterVerdict:true});
+ };
+ for(const field of selected)for(const provider of field.providers){
+  const r=field.rules;
+  if(r.fixed!==undefined){await probe(field,provider,'only-allowed-value',r.fixed,true,'fixed');await probe(field,provider,'different-value',String(r.fixed)+'-changed',false,'fixed');continue;}
+  if(field.type==='integer'){
+   assert(Number.isSafeInteger(r.minimum)&&Number.isSafeInteger(r.maximum)&&r.maximum-r.minimum>=2);
+   for(const [name,value,ok]of [['below-minimum',r.minimum-1,false],['minimum',r.minimum,true],['strict-interior',r.minimum+1,true],['maximum',r.maximum,true],['above-maximum',r.maximum+1,false]])await probe(field,provider,name,value,ok,'min/max');continue;
+  }
+  if(field.type==='enum'){
+   assert(Array.isArray(r.values)&&r.values.length);for(const value of r.values)await probe(field,provider,'allowed-member',value,true,'enum');await probe(field,provider,'outside-enumeration','not-an-allowed-member',false,'enum');continue;
+  }
+  const allowed=r.values,required=r.contains??[];
+  if(allowed){
+   for(const value of allowed)await probe(field,provider,'allowed-list-member',[...new Set([...required,value])],true,'enum-list');
+   await probe(field,provider,'all-allowed-members',[...allowed],true,'enum-list');await probe(field,provider,'outside-list-enumeration',[...required,'not-an-allowed-member'],false,'enum-list');
+   await probe(field,provider,'below-required-list-minimum',[],false,'min/list');
+   if(required.length)await probe(field,provider,'missing-required-member',required.slice(1),false,'fixed/list-contains');
+  }else{
+   const minimum=r.minItems??1,values=n=>Array.from({length:n},(_,i)=>field.type==='bindingList'?'binding:acceptance/boundary-'+i:'boundary-'+i+'.md');
+   for(const [name,count,ok]of [['below-minimum',minimum-1,false],['minimum',minimum,true],['strict-interior',minimum+1,true],['maximum-supported-items',64,true],['above-supported-items',65,false]])await probe(field,provider,name,values(count),ok,'min/max-list');
+  }
+ }
+ assert(selected.every(f=>observations.some(o=>o.fieldId===f.id)));run.artifact('parameter-boundary-observations.json',{fields:selected.map(f=>({id:f.id,path:f.path,type:f.type,rules:f.rules})),observations,entry:'ACTUAL_INSTALLED_HTTP_API',structuralParametersOnly:true,actualRunBudgetProofStillRequired:true});return observations;
+}
+async function frozenRunBudget(run,c,base,activeSource){
+ const baseline=await eventInventory(run),created=baseline.events.filter(e=>e.type==='lifecycle-instance-created'),candidates=[];
+ for(const event of created){
+  const instance=(await run.read('lifecycle.instance.inspect',{instanceId:event.data.instanceId})).instance;
+  if(instance.requestIds.length&&instance.stages.scope?.status==='PASSED'&&instance.stages.plan?.status==='PASSED'&&instance.stages.implementation?.requestId)candidates.push({instance,authorityRef:event.data.authorityRef});
+ }
+ assert(candidates.length,'EX03 needs an existing actual admitted Run and original execution request; an inert PENDING fixture cannot replace it');candidates.sort((a,b)=>a.instance.id.localeCompare(b.instance.id));const chosen=candidates[0],original=chosen.instance,stageRequestId=original.stages.implementation.requestId;
+ const request=await run.read('lifecycle.stage.request.inspect',{stageRequestId}),handoff=await run.read('lifecycle.agent.handoff.read',{stageRequestId}),authority=await run.read('lifecycle.authority.inspect',{authorityRef:chosen.authorityRef});assert.equal(request.progress.phase,'WAITING_AGENT');assert.equal(request.request.instanceId,original.id);assert.equal(request.request.pinsDigest,original.pinsDigest);assert.equal(request.request.authorityRef,chosen.authorityRef);assert.equal(handoff.handoff.runtimeStartsAgent,false);assert.equal(handoff.claim,null);assert.equal(handoff.latestReport,null);assert.equal(authority.decision.subject.instanceId,original.id);assert.deepEqual(authority.decision.subject.budget,original.pins.budget);
+ const before=await run.read('lifecycle.definition.inspect'),oldDraft=before.draft?await run.source(before.draft.id):null;assert.equal(await run.source(before.active.id),activeSource);const enlarged=parse(activeSource);
+ for(const phase of ['plan','verification'])for(const key of ['timeoutSeconds','maxAttempts','maxConcurrency','maxLoops']){const field=base.fields.find(f=>f.path==='config.'+phase+'.budget.'+key);assert(field&&Number.isSafeInteger(field.rules.maximum));assert(original.pins.budget[key]<field.rules.maximum,'Select an original Run with a real remaining enlargement attempt');enlarged.config[phase].budget[key]=field.rules.maximum;}
+ const nextSource=yaml(enlarged);assert.notEqual(nextSource,activeSource);const preview=(await run.configurationEntry('http-api','lifecycle.definition.validate',{yaml:nextSource})).result;assert.equal(preview.ready,true,'Use genuine current registered bindings for the actual definition transition');
+ run.artifact('frozen-run-budget-original.json',{selectionReason:'Deterministic first existing actual admitted Run with native scope/plan completion and original WAITING_AGENT request; no new grant or execution',candidateIds:candidates.map(c=>c.instance.id),instance:original,request:request.request,originalPhase:request.progress.phase,handoff,decision:authority.decision,authorityCurrentlyUsable:authority.usable,authorityCurrentReason:authority.reason,enlargedDefinitionBudgets:{plan:enlarged.config.plan.budget,verification:enlarged.config.verification.budget},expiryDoesNotSubstituteForBudgetEvidence:true});
+ const unchanged=async phase=>{const instance=(await run.read('lifecycle.instance.inspect',{instanceId:original.id})).instance;assert.deepEqual(instance,original);const current=await run.read('lifecycle.stage.request.inspect',{stageRequestId});assert.deepEqual(current.request,request.request);assert.equal(current.progress.phase,'WAITING_AGENT');assert.deepEqual(await run.read('lifecycle.agent.handoff.read',{stageRequestId}),handoff);const decision=await run.read('lifecycle.authority.inspect',{authorityRef:chosen.authorityRef});assert.deepEqual(decision.decision,authority.decision);assert.deepEqual(decision.revocation,authority.revocation);run.artifact('frozen-run-budget-readback.json',{phase,instanceId:original.id,pinsDigest:instance.pinsDigest,budget:instance.pins.budget,originalDefinitionRevisionId:instance.pins.definitionRevisionId,stageRequestId,originalDeadlineAt:current.request.deadlineAt,originalDecisionUnchanged:true,originalRequestAndHandoffUnchanged:true,actualAuthorityUsable:decision.usable,actualAuthorityReason:decision.reason});};
+ let activated=false,restored=false;
+ try{
+  const draft=await run.configurationEntry('http-api','lifecycle.draft.save',{yaml:nextSource},{requestId:run.requestId(c.caseInstanceId,'enlarged-draft'),expectedRevision:before.revision});assert.equal(draft.result.result.status,'DRAFT');await unchanged('AFTER_ENLARGED_DRAFT');
+  const exact=(await run.configurationEntry('http-api','lifecycle.definition.validate',{yaml:nextSource})).result;assert.equal(exact.ready,true);const current=await run.read('lifecycle.definition.inspect');const enabled=await run.configurationEntry('http-api','lifecycle.definition.save-and-activate',{yaml:nextSource,validationDigest:exact.validationDigest},{requestId:run.requestId(c.caseInstanceId,'enlarged-definition'),expectedRevision:current.revision});assert.equal(enabled.result.result.status,'ACTIVE');activated=true;assert.equal(enabled.result.result.executionAuthorized,false);assert.notEqual(enabled.result.result.activeRevisionId,original.pins.definitionRevisionId);await unchanged('AFTER_ENLARGED_ACTIVE_DEFINITION');
+ }finally{
+  // Reversible fixture restoration uses a fresh exact native preview. A missing
+  // or uncertain activation receipt is never interpreted as permission to retry.
+  if(activated){const preview=(await run.configurationEntry('http-api','lifecycle.definition.validate',{yaml:activeSource})).result;assert.equal(preview.ready,true);const view=await run.read('lifecycle.definition.inspect'),result=await run.configurationEntry('http-api','lifecycle.definition.save-and-activate',{yaml:activeSource,validationDigest:preview.validationDigest},{requestId:run.requestId(c.caseInstanceId,'restore-active'),expectedRevision:view.revision});assert.equal(result.result.result.status,'ACTIVE');assert.equal(result.result.result.activeRevisionId,before.active.id);if(oldDraft!==null&&oldDraft!==activeSource){const view=await run.read('lifecycle.definition.inspect'),saved=await run.configurationEntry('http-api','lifecycle.draft.save',{yaml:oldDraft},{requestId:run.requestId(c.caseInstanceId,'restore-draft'),expectedRevision:view.revision});assert.equal(saved.result.result.revisionId,before.draft.id);}restored=true;}
+ }
+ assert(activated&&restored);await unchanged('AFTER_ORIGINAL_DEFINITION_RESTORED');const final=await run.read('lifecycle.definition.inspect');assert.deepEqual(final.active,before.active);assert.deepEqual(final.draft,before.draft);const added=await run.read('runtime.events.read',{cursor:baseline.cursor});assert.deepEqual(added.events.map(e=>e.type),['definition-draft-saved','definition-activated','definition-activated',...(oldDraft!==null&&oldDraft!==activeSource?['definition-draft-saved']:[])]);
+ return{instanceId:original.id,stageRequestId,pinsDigest:original.pinsDigest,originalBudget:original.pins.budget,originalRequestDeadline:request.request.deadlineAt,realNativePrerequisites:['scope','plan'],realOriginalHandoff:true,enlargedDraftCannotReplenishRun:true,enlargedActiveDefinitionCannotReplenishRun:true,originalDefinitionRestored:true,newGrants:0,newInstances:0,newStageRequests:0,expiryNotUsedAsBudgetProof:true};
+}
+async function budgetBoundaries(run,c,base,activeSource){const parameters=await parameterBoundaries(run,base),frozenRun=await frozenRunBudget(run,c,base,activeSource);return{parameterProbes:parameters.length,allExplicitRuleFields:[...new Set(parameters.map(p=>p.fieldId))],ruleFamilies:['min','max','enum','fixed'],actualNativeParameterResults:true,frozenRun,compilerOnlyEvidenceNotSubstituted:true};}
 function diagnostic(preview,code,expectedPath){
  assert.equal(preview.compilation.valid,false);assert.equal(preview.ready,false);
  assert(preview.compilation.issues.some(i=>i.code===code&&i.path&&(!expectedPath||i.path===expectedPath)&&i.rule&&i.remedy),'Missing exact server diagnosis '+code+(expectedPath?' at '+expectedPath:''));
@@ -145,11 +247,9 @@ async function actionAttacks(run,c,base,activeData){
 }
 const unavailable={
  'E04.EX01':'Two distinct authenticated project bindings and legitimate configurations, plus exact single-Base inheritance attack receipts, are required; one-project validation cannot replace project isolation.',
- 'E04.EX03':'All min/max/enum/fixed boundary values AND an actual existing Run whose frozen execution budget cannot be enlarged are required; compiler bounds alone cannot qualify this variant.',
  'E04.EX04':'Actual registered four-slot execution and two parallel checks with FAILED, UNKNOWN, NOT_RUN then PASS observations are required; an effective graph is insufficient.',
  'E04.EX07':'Actual Base-failed/extension-passed, Base-passed/extension-failed, and all-passed-without-release-authority admissions are required.',
  'E04.EX11':'Actual pinned owner report plus failed current Target, rejected latest/forged PASS, and removing the draft check while preserving current obligations are required.',
- 'E04.EX12':'All six actual Expert/MCP/API/CLI/graph/YAML entries and all twelve exact extension subcontracts must have current final-candidate evidence; a narrower entry loop cannot qualify it.',
 };
 test('E04 exact installed Base inheritance and constrained extension cases',async()=>{
  const run=await openScenario('E04');let browser;
@@ -158,9 +258,11 @@ test('E04 exact installed Base inheritance and constrained extension cases',asyn
   const initial=await run.read('lifecycle.definition.inspect');assert(initial.active,'Use a real natively activated isolated baseline, never seeded database state');
   const activeSource=await run.source(initial.active.id),activeData=parse(activeSource),positiveSource=controlSource(run,activeSource);
   assert.equal(activeData.projectId,run.selection.projectId);assert.deepEqual(activeData.extends,base.pin);
-  if(run.cases.some(c=>['E04.variant.01','E04.variant.02'].includes(c.caseInstanceId)))browser=await chromium.launch({headless:true});
+  if(run.cases.some(c=>['E04.variant.01','E04.variant.02','E04.EX12'].includes(c.caseInstanceId)))browser=await chromium.launch({headless:true});
   for(const c of run.cases)await run.collect(c,async()=>{
    if(unavailable[c.caseInstanceId]){run.artifact('required-uncollected-contract.json',{contract:c.parameters.variantContract,reason:unavailable[c.caseInstanceId],sourceTestsNotSubstituted:true});throw Error('UNIMPLEMENTED_REQUIRED_VARIANT: '+unavailable[c.caseInstanceId]);}
+   if(c.caseInstanceId==='E04.EX12')return extensionBrowserEntries(run,c,browser);
+   if(c.caseInstanceId==='E04.EX03')return budgetBoundaries(run,c,base,activeSource);
    if(['E04.journey','E04.variant.03','E04.variant.04','E04.variant.05'].includes(c.caseInstanceId))return entryCase(run,c,base,positiveSource,c.caseInstanceId==='E04.variant.04'?'cli':c.caseInstanceId==='E04.variant.05'?'http-mcp':'http-api');
    if(['E04.variant.01','E04.variant.02'].includes(c.caseInstanceId))return browserEntry(run,c,base,positiveSource,browser,c.caseInstanceId==='E04.variant.01');
    if(c.caseInstanceId==='E04.EX02')return schemaCase(run,c,base);

@@ -54,6 +54,7 @@ export class RuntimeStore {
         CREATE TABLE IF NOT EXISTS receipts (project_id TEXT NOT NULL, principal_id TEXT NOT NULL, request_id TEXT NOT NULL, request_digest TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(project_id,principal_id,request_id));
         CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, revision INTEGER NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL, at TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS events_project_seq ON events(project_id,seq);
+        CREATE INDEX IF NOT EXISTS events_project_revision ON events(project_id,revision);
         CREATE TABLE IF NOT EXISTS audit (project_id TEXT NOT NULL, revision INTEGER NOT NULL, principal_id TEXT NOT NULL, request_id TEXT NOT NULL, request_digest TEXT NOT NULL, receipt_digest TEXT NOT NULL, event_digest TEXT NOT NULL, PRIMARY KEY(project_id,revision));`);
       database.prepare('INSERT OR IGNORE INTO service_meta VALUES(1,?,?,?)').run(workspaceId, randomUUID(), randomBytes(32).toString('hex'));
       const meta = database.prepare('SELECT * FROM service_meta WHERE singleton=1').get()!;
@@ -65,6 +66,8 @@ export class RuntimeStore {
   }
   private guard(): void { if (this.closed) reject('CLOSED', 'Service store is closed', 503); }
   private verifyLedger(): void {
+    // Every receipt is still verified. The revision index avoids scanning the
+    // project's complete event history twice for each original receipt.
     const totals=this.db.prepare('SELECT (SELECT count(*) FROM audit) AS audit,(SELECT count(*) FROM receipts) AS receipts,(SELECT count(*) FROM events) AS events,COALESCE((SELECT sum(revision) FROM project_revisions),0) AS revision').get()!;
     if(totals.audit!==totals.receipts || totals.audit!==totals.events || totals.audit!==totals.revision)reject('CORRUPT_STATE','Receipt, audit and event counts disagree',503);
     for(const row of this.db.prepare('SELECT * FROM receipts').all()) {
