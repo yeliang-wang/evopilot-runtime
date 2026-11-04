@@ -2,9 +2,10 @@
 
 [English](../runtime-v090.md) | 简体中文
 
-本指南面向本机运维人员和 Codex 用户，描述已实现的 v0.9 开发目标。
-当前分支的包版本已设为 0.9.0，用于候选验证；尚未发布，也不表示完整验收通过。
-使用时核对准确制品摘要、源码提交和验收报告；完成标准以[固定验收清单](../acceptance-v090.md)为准。
+本指南面向本机运维人员和 Codex 用户，描述 Runtime 0.9.0 Preview。
+发布状态和下载文件以[对应版本的 Release 页面](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.9.0)为准。
+使用时核对准确制品摘要、源码提交和验收记录；文档与源码可访问不等于已发布或已完成验收。
+完成标准以[固定验收清单](../acceptance-v090.md)为准。
 
 ## 职责与前提
 

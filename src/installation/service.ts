@@ -60,8 +60,8 @@ export function renderUserServicePlist(spec:UserServiceSpecification):string{
     '<key>StandardOutPath</key><string>'+xml(join(spec.root,'service.stdout.log'))+'</string>\n<key>StandardErrorPath</key><string>'+xml(join(spec.root,'service.stderr.log'))+'</string>\n</dict></plist>\n';
 }
 interface CommandResult {code:number;stdout:string;stderr:string;}
-function launchctl(argv:string[]):Promise<CommandResult>{
-  return new Promise((resolve,rejectPromise)=>execFile('/bin/launchctl',argv,{encoding:'utf8',timeout:10000,maxBuffer:262144,shell:false},(error,stdout,stderr)=>{
+function launchctl(argv:string[],timeout=10000):Promise<CommandResult>{
+  return new Promise((resolve,rejectPromise)=>execFile('/bin/launchctl',argv,{encoding:'utf8',timeout,maxBuffer:262144,shell:false},(error,stdout,stderr)=>{
     if(error&&(error.killed||typeof error.code!=='number')){rejectPromise(new ServiceError('SERVICE_OPERATION_UNKNOWN','Inspect the original launchd operation before retrying',503));return;}
     resolve({code:error?Number(error.code):0,stdout,stderr});
   }));
@@ -69,8 +69,9 @@ function launchctl(argv:string[]):Promise<CommandResult>{
 const domain=()=>'gui/'+process.getuid!();
 const target=(spec:UserServiceSpecification)=>domain()+'/'+userServiceLabel(spec);
 const plistPath=(spec:UserServiceSpecification)=>join(spec.root,'service.plist');
-export async function inspectUserService(spec:UserServiceSpecification):Promise<LaunchdObservation>{
-  validate(spec);const label=userServiceLabel(spec),result=await launchctl(['print',target(spec)]);
+export async function inspectUserService(spec:UserServiceSpecification):Promise<LaunchdObservation>{return inspectSelectedUserService(spec,10000);}
+async function inspectSelectedUserService(spec:UserServiceSpecification,timeout:number):Promise<LaunchdObservation>{
+  validate(spec);const label=userServiceLabel(spec),result=await launchctl(['print',target(spec)],timeout);
   if(result.code!==0){
     if(/Could not find service/.test(result.stderr)&&result.stderr.includes('"'+label+'"'))return{label,registered:false,running:false,pid:null,lastExitCode:null};
     return reject('SERVICE_INSPECTION_FAILED','Could not establish the selected launchd service identity',503);
@@ -125,9 +126,20 @@ export async function startUserService(spec:UserServiceSpecification):Promise<Us
 export async function stopUserService(spec:UserServiceSpecification):Promise<LaunchdObservation>{
   const before=await inspectUserService(spec);if(!before.registered)return before;
   const result=await launchctl(['bootout',target(spec)]);if(result.code!==0)reject('SERVICE_STOP_UNKNOWN','Inspect the original service before repeating a stop',503);
-  const after=await inspectUserService(spec);if(after.registered)reject('SERVICE_STOP_UNKNOWN','The service is still registered',503);
+  // bootout acknowledges the one removal request before launchd has always
+  // removed the job. Observe that SAME job; never resend bootout or kill a PID.
+  // Registration and original-process exit share one finite observation window.
+  const deadline=Date.now()+10000;let after:LaunchdObservation|undefined;
+  while(Date.now()<deadline){
+    const remaining=deadline-Date.now();if(remaining<=0)break;
+    after=await inspectSelectedUserService(spec,remaining);
+    if(Date.now()>=deadline)break;
+    if(!after.registered)break;
+    if(after.pid!==null&&after.pid!==before.pid)reject('SERVICE_STOP_UNKNOWN','The selected job has a different process; inspect before taking further action',503);
+    await new Promise(resolve=>setTimeout(resolve,Math.min(50,Math.max(0,deadline-Date.now()))));
+  }
+  if(!after||after.registered||Date.now()>=deadline)reject('SERVICE_STOP_UNKNOWN','The original removal was not confirmed within its observation window',503);
   if(before.pid){
-    const deadline=Date.now()+10000;
     while(Date.now()<deadline){try{process.kill(before.pid,0);}catch(error){if((error as NodeJS.ErrnoException).code==='ESRCH')return after;return reject('SERVICE_STOP_UNKNOWN','Cannot verify the original process exit',503);}await new Promise(resolve=>setTimeout(resolve,50));}
     return reject('SERVICE_STOP_UNKNOWN','The original service process has not exited',503);
   }

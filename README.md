@@ -2,7 +2,7 @@
 
 English | [简体中文](README_CN.md)
 
-**Development status:** package version 0.9.0 is prepared for candidate qualification. Full acceptance and publication are pending. The [planned Release location](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.9.0) is not evidence that downloads are available.
+**Version and release evidence:** This guide describes Runtime 0.9.0 Preview. The [versioned Release page](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.9.0) provides the publication status and downloads. Verify the selected source revision, package checksums and applicable acceptance records before use; source availability alone establishes neither publication nor completed acceptance.
 
 Runtime is an independent lifecycle service. It owns project definitions, goals, targets, instances, execution gates, receipts and audit. Codex supplies reasoning and coding through one Runtime Expert/HTTP MCP plugin. Runtime requires no LLM Profile and runs no autonomous model loop.
 

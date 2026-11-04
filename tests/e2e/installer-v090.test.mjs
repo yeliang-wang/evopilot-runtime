@@ -7,7 +7,8 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {randomBytes,createHash} from 'node:crypto';
 import {createServer} from 'node:http';
 import {once} from 'node:events';
-import {spawn} from 'node:child_process';
+import childProcess,{spawn} from 'node:child_process';
+import {syncBuiltinESMExports} from 'node:module';
 import {DatabaseSync} from 'node:sqlite';
 import {initializeCredentials,tokenDigest} from '../../dist/server/security.js';
 import {createRuntimeHttpClient} from '../../dist/host/client.js';
@@ -303,4 +304,67 @@ test('Workspace operator grants are explicit managed-installation selections and
   await runInstaller(f.plan,'stage');assert(!existsSync(join(f.plan.root,'workspace-operator.json')));assert(!existsSync(join(f.plan.root,'plugin')));
   await assert.rejects(()=>runInstaller({...f.plan,workspaceOperator:{...grant,calls:['arbitrary.execute']}},'stage'),{code:'WORKSPACE_OPERATOR_CONFIGURATION'});
  }finally{f.cleanup();}
+});
+
+// Deterministic operator observation regression. Real package/spec/credential
+// validation still runs; only launchctl completion/time and kill(pid,0) are
+// simulated. These are source fault guards, never actual installed acceptance.
+test('one bootout waits for exact launchd removal and original PID exit without redispatch',async t=>{
+ if(process.platform!=='darwin')return;
+ const variants=[
+  ['asynchronous-removal','ok'],['already-absent','ok'],['bootout-rejected','SERVICE_STOP_UNKNOWN'],
+  ['replacement-identity','SERVICE_IDENTITY_CONFLICT'],['replacement-pid','SERVICE_STOP_UNKNOWN'],
+  ['registration-timeout','SERVICE_STOP_UNKNOWN'],['original-pid-timeout','SERVICE_STOP_UNKNOWN'],
+  ['pid-observation-denied','SERVICE_STOP_UNKNOWN'],['print-unknown','SERVICE_OPERATION_UNKNOWN'],
+  ['bootout-unknown','SERVICE_OPERATION_UNKNOWN'],
+ ];
+ for(const [name,expected]of variants)await t.test(name,async sub=>{
+  const f=await fixture(),originalPid=987654321,calls=[],probes=[];let clock=1000,prints=0,bootouts=0;
+  const spec=f.spec,label=userServiceLabel(spec),target='gui/'+process.getuid()+'/'+label;
+  const originalArgs=[spec.nodeExecutable,join(spec.packageRoot,'dist/server/cli.js'),'serve','--state-root',join(spec.root,'data'),'--workspace-id',spec.workspaceId,'--port',String(spec.port)];
+  const registered=(pid=originalPid,foreign=false)=>'path = '+join(spec.root,'service.plist')+'\nprogram = '+(foreign?'/foreign/node':spec.nodeExecutable)+'\narguments = {\n'+originalArgs.join('\n')+'\n}\nstate = running\npid = '+pid+'\n';
+  const absent=()=>({code:113,stderr:'Could not find service "'+label+'" in domain for user gui: '+process.getuid()});
+  sub.mock.method(Date,'now',()=>clock);
+  sub.mock.method(childProcess,'execFile',(executable,args,options,callback)=>{
+   assert.equal(executable,'/bin/launchctl');assert.deepEqual(args.slice(1),[target]);assert.equal(options.shell,false);assert(options.timeout>0&&options.timeout<=10000);
+   calls.push({args:[...args],timeout:options.timeout});let result;
+   if(args[0]==='bootout'){
+    bootouts++;assert.equal(bootouts,1,'Never repeat a state-changing stop');
+    result=name==='bootout-rejected'?{code:5,stderr:'synthetic rejection'}:name==='bootout-unknown'?{code:'ETIMEDOUT',killed:true,stderr:''}:{code:0,stdout:'',stderr:''};
+   }else{
+    assert.equal(args[0],'print');prints++;
+    if(prints===1)result=name==='already-absent'?absent():{code:0,stdout:registered()};
+    else if(name==='replacement-identity')result={code:0,stdout:registered(originalPid,true)};
+    else if(name==='replacement-pid')result={code:0,stdout:registered(originalPid+1)};
+    else if(name==='print-unknown')result={code:'ETIMEDOUT',killed:true};
+    else if(name==='registration-timeout'){clock+=2500;result={code:0,stdout:registered()};}
+    else if(name==='asynchronous-removal'&&prints<4){clock+=100;result={code:0,stdout:registered()};}
+    else result=absent();
+   }
+   queueMicrotask(()=>callback(result.code?Object.assign(Error('synthetic launchctl observation'),{code:result.code,killed:!!result.killed}):null,result.stdout??'',result.stderr??''));
+   return{};
+  });syncBuiltinESMExports();
+  sub.mock.method(process,'kill',(pid,signal)=>{
+   probes.push({pid,signal});assert.equal(pid,originalPid);assert.equal(signal,0,'Observation must not signal or kill a process');
+   if(name==='pid-observation-denied')throw Object.assign(Error('synthetic denied observation'),{code:'EPERM'});
+   if(name==='original-pid-timeout'){clock+=2500;return true;}
+   if(name==='asynchronous-removal'&&probes.length<3){clock+=100;return true;}
+   throw Object.assign(Error('synthetic original process exited'),{code:'ESRCH'});
+  });
+  try{
+   if(expected==='ok'){const result=await stopUserService(spec);assert.equal(result.registered,false);assert.equal(result.running,false);assert.equal(result.pid,null);}
+   else await assert.rejects(()=>stopUserService(spec),{code:expected});
+   assert.equal(bootouts,name==='already-absent'?0:1);
+   if(name==='asynchronous-removal'){assert.equal(prints,4);assert.equal(probes.length,3);assert(calls.filter(x=>x.args[0]==='print').slice(2).every(x=>x.timeout<10000),'Each subsequent print must use the remaining original deadline');}
+   if(['bootout-rejected','bootout-unknown'].includes(name)){assert.equal(prints,1);assert.equal(probes.length,0);}
+   if(['replacement-identity','replacement-pid','print-unknown'].includes(name)){assert.equal(prints,2);assert.equal(probes.length,0);}
+   if(name==='registration-timeout'){assert.equal(prints,5);assert.equal(probes.length,0);}
+   if(name==='original-pid-timeout')assert.equal(probes.length,4);
+   assert(calls.every(x=>['print','bootout'].includes(x.args[0])));
+  }finally{
+   sub.mock.restoreAll();syncBuiltinESMExports();
+   // No real service was registered; never issue a cleanup stop for a mock job.
+   if(f.occupied.listening)await new Promise(resolve=>f.occupied.close(resolve));rmSync(f.root,{recursive:true,force:true});
+  }
+ });
 });

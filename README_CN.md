@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-**开发状态：** 包版本 0.9.0 已用于候选验证，完整验收与发布尚未完成。[计划中的 Release 地址](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.9.0)不代表当前已有可下载发行包。
+**版本与发布证据：** 本指南描述 Runtime 0.9.0 Preview。发布状态和下载文件以[对应版本的 Release 页面](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.9.0)为准。使用前核对所选源码提交、制品校验和及适用验收记录；仅有源码不代表已发布或已完成验收。
 
 Runtime 是独立生命周期服务，负责项目定义、目标、Target、实例、执行门禁、回执与审计。Codex 通过一个 Runtime Expert/HTTP MCP 插件承担推理与编码。Runtime 不需要 LLM Profile，也不运行自主模型循环。
 

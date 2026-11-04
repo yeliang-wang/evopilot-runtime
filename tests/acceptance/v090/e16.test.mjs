@@ -9,12 +9,13 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {parseDocument} from 'yaml';
 import {openScenario,sha} from './support.mjs';
+import {chromium,expect} from '@playwright/test';
+import {openBrowser} from './browser.mjs';
 
 const owners=['ontology','harness'];
 const unsupported={
  'E16.journey':'Actual native owner validation failures, one-owner recovery, independent feedback readback and complete original execution evidence remain required.',
  'E16.variant.01':'An actual unknown owner response and original-request recovery without redispatch are required.',
- 'E16.CV02':'Actual permission/dependency loss at every fixed timing boundary and fresh same-entry validation recovery are required.',
  'E16.CV06':'Actual published-owner REUSE and DELIVER decisions, exact references and valid/invalid evidence reuse are required.',
 };
 const changed=(source,keys,value,label)=>{const doc=parseDocument(source);assert.equal(doc.errors.length,0);doc.setIn(keys,value);return doc.toString({lineWidth:0})+'# E16 isolated scope refusal '+label+'\n';};
@@ -362,11 +363,128 @@ async function assetVersionEvolution(run,c){
  return{actualInstalledHttp:true,candidateDigest:run.candidateDigest,oldAssetReferences:oldRefs,newAssetReferences:newRefs,oldInstanceId:old.id,newInstanceId:newId,oldDefinitionRevisionId:before.active.id,newDefinitionRevisionId:final.active.id,versionWithoutMappingRejected:true,realNewBindingActivated:true,newNativeOwnerReports:Object.fromEntries(owners.map(o=>[o,{reportDigest:nextChain.planEvidence.owners[o].receipt.result.reportDigest,context:nextChain.planEvidence.owners[o].action.context}])),originalInstancePinsRequestsAndReportsUnchanged:true,newNativeStageCalls:2,oldRunRedispatches:0,newSyntheticExecutionDecisions:1,ownerAssetPublications:0,newCI:0,newAgentCalls:0,softwareAcceptanceClaimed:false,l3BusinessGradeClaimed:false,remainingIndependentCases:Object.keys(unsupported)};
 }
 
-test('E16 installed owner boundaries and original feedback replay',async()=>{
+const permissions={monitor:['read'],editor:['read','draft.write'],activator:['read','draft.write','definition.activate']};
+function identity(run,alias){const value=run.principal(alias);assert.deepEqual([...value.expectedPermissions].sort(),[...permissions[alias]].sort());assert.equal(value.projectId,run.selection.projectId);return value;}
+function denied(response,codes){assert([400,401,403,413].includes(response.status),'Security probe must receive a definite client rejection');assert(response.body?.error&&codes.includes(response.body.error.code),JSON.stringify({status:response.status,error:response.body?.error}));assert(!Object.hasOwn(response.body,'result'),'An error cannot disclose a successful result');return{status:response.status,code:response.body.error.code};}
+async function selectedActive(run){const view=await run.read('lifecycle.definition.inspect');assert(view.active,'Use an existing natively activated isolated project');const source=await run.source(view.active.id);return{view,source};}
+async function noChanges(run,before){assert.deepEqual(await run.read('lifecycle.definition.inspect'),before,'A denied request cannot create a draft or alter active/revision');}
+async function noCredentialExposure(run,ui,extra=[]){
+ const surfaces=[{name:'page-url',text:ui.page.url()},{name:'page-html',text:await ui.page.content()},{name:'page-visible-text',text:await ui.page.locator('body').innerText()},{name:'browser-request-responses',text:JSON.stringify(ui.network)},...extra];
+ if(await ui.source.count())surfaces.push({name:'yaml-editor',text:await ui.source.inputValue()});
+ return run.assertNoCredentialExposure(surfaces,{logs:true});
+}
+
+async function monitorCase(run,browser,c){
+ const principal=identity(run,'monitor'),initial=await selectedActive(run),ui=await openBrowser(run,browser,{principalAlias:'monitor',route:'/monitor',monitorEvidence:true});
+ try{
+  const before=await ui.monitor();assert.equal(before.readOnly,true);
+  await expect(ui.source).toHaveCount(0);
+  for(const name of ['保存草稿','保存并启用','执行','暂停','重试','取消','发布'])await expect(ui.page.getByRole('button',{name,exact:true})).toHaveCount(0);
+  assert(!Object.hasOwn(before,'yaml')&&!Object.hasOwn(before,'semantic'));for(const instance of before.instances){assert(!Object.hasOwn(instance,'definition'));assert(!Object.hasOwn(instance,'yaml'));}
+  const previews=await run.principalRequest('monitor','lifecycle.definition.validate',{yaml:initial.source});assert.equal(previews.status,200);
+  const probes=[
+   ['lifecycle.draft.save',{yaml:initial.source+'\n# denied monitor draft\n'}],
+   ['lifecycle.definition.save-and-activate',{yaml:initial.source,validationDigest:previews.body.result.validationDigest}],
+   ['lifecycle.instance.create',{instanceId:'e16-denied-instance',definitionRevisionId:initial.view.active.id,authorityRef:'synthetic:never-authorized'}],
+   ['lifecycle.stage.request',{instanceId:'e16-denied-instance',stageId:'scope'}],
+   ['lifecycle.stage.advance',{stageRequestId:'e16-denied-request'}],
+  ];
+  const findings=[];
+  for(let i=0;i<probes.length;i++){
+   const [operation,input]=probes[i],meta={requestId:run.requestId(c.caseInstanceId,'monitor-native-'+i),expectedRevision:initial.view.revision};
+   const api=await run.principalRequest('monitor',operation,input,meta);findings.push({entry:'native-http',operation,...denied(api,['FORBIDDEN'])});
+   const browserResponse=await ui.sessionRequest(operation,input,{...meta,requestId:run.requestId(c.caseInstanceId,'monitor-browser-'+i)});
+   findings.push({entry:'browser-session',operation,...denied(browserResponse,i<2?['FORBIDDEN']:['DASHBOARD_OPERATION'])});
+  }
+  await noChanges(run,initial.view);assert.deepEqual((await ui.monitor()).instances,before.instances);
+  await ui.screenshot();await ui.login('/lifecycle');await expect(ui.source).toHaveAttribute('readonly','');
+  for(const name of ['保存草稿','保存并启用'])await expect(ui.page.getByRole('button',{name,exact:true})).toBeDisabled();
+  const leakCheck=await noCredentialExposure(run,ui,[{name:'monitor-snapshot',text:JSON.stringify(before)}]);await ui.flush();
+  return{phase:'PRE_RELEASE',requirements:['CV02'],candidate:run.candidate,actualMonitorPrincipal:principal,actualBrowserAndNativeRequests:true,monitorHasNoEditorOrRunControls:true,monitorPayloadOmitsEditorConfiguration:true,readOnlyDefinitionView:true,findings,activeDraftRevisionAndInstancesUnchanged:true,credentialExposure:leakCheck,postReleaseAcceptance:false};
+ }finally{await ui.close();}
+}
+
+async function activateCurrent(ui,run,source){
+ await expect(ui.source).toBeEditable();await ui.source.fill(source);await ui.preview();await expect(ui.page.getByRole('button',{name:'保存并启用',exact:true})).toBeEnabled();await ui.activate();
+ const after=await run.read('lifecycle.definition.inspect');assert.equal(await run.source(after.active.id),source);
+ await ui.flush();
+ const latest=ui.network.filter(r=>r.request?.operation==='lifecycle.definition.save-and-activate').at(-1);assert(latest);
+ const receipt=JSON.parse(latest.rawBody).result;assert.equal(receipt.result.status,'ACTIVE');assert.equal(receipt.result.executionAuthorized,false);assert.equal(receipt.result.releaseAuthorized,false);
+ return{activeRevisionId:after.active.id,requestId:receipt.requestId,executionAuthorized:false,releaseAuthorized:false};
+}
+async function permissionFixture(run,c){
+ assert.equal(c.caseInstanceId,'E16.CV02');assert(run.cases.some(item=>item.caseInstanceId==='E16.CV02'),'Selected campaign must contain the actual permission case');const f=run.permissionFixture;assert(f);assert.deepEqual(f.caseIds,['E16.CV02']);for(const role of ['monitor','editor','activator'])identity(run,role);
+ const original=(await run.read('lifecycle.instance.inspect',{instanceId:f.instanceId})).instance;assert.equal(original.id,f.instanceId);assert.equal(original.pins.projectId,run.selection.projectId);assert(Object.values(original.stages).every(s=>s.status==='PENDING'&&s.attempts===0&&s.requestId===null));
+ const originalSource=await run.source(original.pins.definitionRevisionId),originalRevision=await run.read('lifecycle.definition.read',{revisionId:original.pins.definitionRevisionId});assert.deepEqual(original.definition.semantic.assets,originalRevision.compilation.effective.semantic.assets);return{fixture:f,original,originalSource,originalRevision};
+}
+async function intactPermissionHistory(run,initial){
+ assert.deepEqual((await run.read('lifecycle.instance.inspect',{instanceId:initial.fixture.instanceId})).instance,initial.original);assert.equal(await run.source(initial.original.pins.definitionRevisionId),initial.originalSource);assert.deepEqual(await run.read('lifecycle.definition.read',{revisionId:initial.original.pins.definitionRevisionId}),initial.originalRevision);
+}
+async function permissionEvents(run){let cursor,rows=[];for(let i=0;i<80;i++){const r=await run.read('runtime.events.read',cursor?{cursor}:{});assert(Array.isArray(r.events)&&r.events.length<=50);if(!r.events.length)return rows;rows.push(...r.events);assert.notEqual(r.cursor,cursor);cursor=r.cursor;}throw Error('Permission fixture event bound exceeded');}
+function actualPreview(ui,source){const row=ui.network.filter(v=>v.request?.operation==='lifecycle.definition.validate'&&v.request.input?.yaml===source&&v.status===200&&v.transportOutcome==='RESPONSE_RETAINED').at(-1);assert(row);const body=JSON.parse(row.rawBody);assert.equal(body.result.ready,true);assert(/^sha256:[a-f0-9]{64}$/.test(body.result.validationDigest));return{digest:body.result.validationDigest,responseRequestId:body.requestId};}
+async function previewPermissionSource(ui,source){await expect(ui.source).toBeEditable();await ui.source.fill(source);await ui.preview();return actualPreview(ui,source);}
+async function deniedUiActivation(ui,run,source,preview,{holdBeforeSubmit=false,stepId}){
+ const start=ui.network.length;let captured=null,release=null,arrived=null,released=false,routeFailure=null;
+ const ready=new Promise(resolve=>{arrived=resolve;}),gate=new Promise(resolve=>{release=resolve;});
+ const handler=async route=>{const request=route.request();let envelope;try{envelope=request.postDataJSON();}catch{}if(envelope?.operation!=='lifecycle.definition.save-and-activate')return route.continue();if(captured){routeFailure='Unexpected duplicate UI activation request';return route.abort('failed');}
+  try{assert.equal(envelope.projectId,run.selection.projectId);assert.equal(envelope.input.yaml,source);assert.equal(envelope.input.validationDigest,preview.digest);assert.equal(typeof envelope.requestId,'string');captured={envelope,at:new Date().toISOString(),interception:'ACTUAL_UI_REQUEST_BEFORE_TRANSPORT_NO_PAYLOAD_CHANGE'};arrived();const forward=await gate;if(!forward)return route.abort('failed');await route.continue();}catch{routeFailure='Exact held activation forwarding failed';try{await route.abort('failed');}catch{}}
+ };
+ try{
+  if(holdBeforeSubmit)await ui.page.route('**/api/v1/dashboard/request',handler);
+  if(!holdBeforeSubmit)run.permissionFault(stepId);
+  const click=ui.page.getByRole('button',{name:'保存并启用',exact:true}).click({timeout:10000});
+  if(holdBeforeSubmit){let timer;try{await Promise.race([ready,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Actual submit interception timed out')),10000);})]);}finally{clearTimeout(timer);}run.artifact('permission-submit-boundary.json',captured);run.permissionFault(stepId);released=true;release(true);}
+  await click;await expect.poll(()=>ui.network.slice(start).filter(v=>v.request?.operation==='lifecycle.definition.save-and-activate'&&v.transportOutcome==='RESPONSE_RETAINED').length,{timeout:10000}).toBeGreaterThan(0);assert.equal(routeFailure,null);
+  const row=ui.network.slice(start).find(v=>v.request?.operation==='lifecycle.definition.save-and-activate'&&v.transportOutcome==='RESPONSE_RETAINED');assert.equal(row.request.input.validationDigest,preview.digest);assert.equal(row.request.input.yaml,source);const result=denied({status:row.status,body:JSON.parse(row.rawBody)},['BROWSER_SESSION_REVOKED','UNAUTHENTICATED']);assert.equal(result.status,401);return{...result,actualUiRequest:row.request,heldBeforeTransport:holdBeforeSubmit,previewResponseRequestId:preview.responseRequestId};
+ }finally{if(!released){released=true;release(false);}if(holdBeforeSubmit)await ui.page.unroute('**/api/v1/dashboard/request',handler);}
+}
+async function restorePreview(run,ui,c,initial,source,preview,restoreId,pendingRequestId=null){
+ run.permissionFault(restoreId);const old=await ui.sessionRequest('runtime.status');assert.equal(old.status,401);denied(old,['UNAUTHENTICATED','BROWSER_SESSION_REVOKED']);await ui.login('/lifecycle');
+ let originalRequestRecovery=null;
+ if(pendingRequestId!==null){
+  assert.equal(typeof pendingRequestId,'string');const button=ui.page.getByRole('button',{name:'核对原请求',exact:true});await expect(button).toBeEnabled();await expect(ui.page.getByText('待核对原请求',{exact:false})).toContainText(pendingRequestId);await expect(ui.source).toHaveAttribute('readonly','');
+  const since=ui.network.length;await button.click();await expect(ui.source).toBeEditable();await expect(button).toHaveCount(0);await expect.poll(()=>ui.network.slice(since).filter(row=>row.request?.operation==='runtime.receipt.read'&&row.request.input?.requestId===pendingRequestId&&row.transportOutcome==='RESPONSE_RETAINED').length,{timeout:10000}).toBe(1);
+  const rows=ui.network.slice(since),row=rows.find(row=>row.request?.operation==='runtime.receipt.read'&&row.request.input?.requestId===pendingRequestId);assert.equal(row.status,404);assert.equal(JSON.parse(row.rawBody).error.code,'NOT_FOUND');assert(!rows.some(row=>['lifecycle.draft.save','lifecycle.definition.save-and-activate'].includes(row.request?.operation)));await expect(ui.page.getByRole('button',{name:'保存并启用',exact:true})).toBeDisabled();
+  originalRequestRecovery={originalRequestId:pendingRequestId,entry:'ACTUAL_DASHBOARD_ORIGINAL_REQUEST_BUTTON',receiptRead:row,missingReceiptConfirmed:true,newWrites:0};run.artifact('permission-original-request-recovery.json',originalRequestRecovery);
+ }
+ const before=await run.read('lifecycle.definition.inspect'),requestId=run.requestId(c.caseInstanceId,restoreId+'-old-preview'),stale=await ui.sessionRequest('lifecycle.definition.save-and-activate',{yaml:source,validationDigest:preview.digest},{requestId,expectedRevision:before.revision});assert.equal(stale.status,200);assert.equal(stale.body.result.result.status,'BLOCKED');assert(stale.body.result.result.issues.some(i=>i.code==='VALIDATION_STALE'));assert.deepEqual((await run.read('lifecycle.definition.inspect')).active,before.active);
+ // The real BLOCKED request retains its draft and advances revision. Reconnect
+ // this same Dashboard page before obtaining and consuming a genuinely new preview.
+ await ui.login('/lifecycle');const fresh=await previewPermissionSource(ui,source);assert.notEqual(fresh.digest,preview.digest);const activated=await activateCurrent(ui,run,source);await intactPermissionHistory(run,initial);return{oldSessionRejected:true,originalRequestRecovery,oldPreviewRequestId:requestId,oldPreviewBlocked:true,freshPreview:fresh,activated};
+}
+async function afterActivationRevocation(run,browser,c,initial,ids){
+ const ui=await openBrowser(run,browser,{principalAlias:'activator',route:'/lifecycle',monitorEvidence:true});
+ try{
+  const selected=await selectedActive(run),source=selected.source+'\n# exact post-active revocation '+run.selection.runId+'\n',preview=await previewPermissionSource(ui,source),activation=await activateCurrent(ui,run,source),before=await run.read('lifecycle.definition.inspect');
+  await ui.login('/monitor');const start=ui.sseFrames.length;await expect.poll(()=>ui.sseFrames.filter(f=>['snapshot','heartbeat'].includes(f.eventName)).length,{timeout:10000}).toBeGreaterThan(0);const connected=ui.sseFrames.find(f=>['snapshot','heartbeat'].includes(f.eventName));assert(connected);const fault=run.permissionFault(ids.expire);
+  const native=await run.principalRequest('activator','runtime.status');assert.equal(native.status,401);denied(native,['UNAUTHENTICATED']);
+  await expect.poll(()=>ui.sseFrames.slice(start).filter(f=>f.eventName==='error'&&f.requestId===connected.requestId).length,{timeout:10000}).toBeGreaterThan(0);const errorIndex=ui.sseFrames.findIndex((f,i)=>i>=start&&f.eventName==='error'&&f.requestId===connected.requestId),frame=ui.sseFrames[errorIndex];assert.equal(JSON.parse(frame.data).code,'UNAUTHENTICATED');
+  await expect(ui.page.getByLabel('一次性连接码')).toBeVisible();const session=await ui.sessionRequest('runtime.status');assert.equal(session.status,401);denied(session,['UNAUTHENTICATED','BROWSER_SESSION_REVOKED']);
+  let stream;try{const response=await ui.context.request.get(run.serviceOrigin+'/api/v1/dashboard/events',{timeout:10000,maxRedirects:0});const raw=await response.text();assert(Buffer.byteLength(raw)<=8192);stream={status:response.status(),body:JSON.parse(raw),rawBody:raw};}catch{throw Error('Revoked stream read failed before a bounded safe response');}assert.equal(stream.status,401);denied(stream,['UNAUTHENTICATED','BROWSER_SESSION_REVOKED']);run.artifact('permission-revoked-stream.json',{path:'/api/v1/dashboard/events',...stream,originalFrame:frame,authenticationFieldsOmitted:true});
+  assert(!ui.sseFrames.slice(errorIndex+1).some(f=>f.requestId===connected.requestId&&['snapshot','events','heartbeat','reset'].includes(f.eventName)));await noChanges(run,before);await intactPermissionHistory(run,initial);
+  const recovery=await restorePreview(run,ui,c,initial,source,preview,ids.restore);await noCredentialExposure(run,ui,[{name:'revoked stream',text:JSON.stringify(stream)}]);await ui.flush();return{activation,fault,nativeRevoked:native.body.error.code,browserRevoked:session.body.error.code,originalSseError:frame,newSseRejected:true,recovery};
+ }finally{run.restorePermissionFault();await ui.close();}
+}
+async function permissionTiming(run,browser,c){
+ const initial=await permissionFixture(run,c),events=await permissionEvents(run),roleMonitor=await monitorCase(run,browser,c);let editor;
+ try{editor=await openBrowser(run,browser,{principalAlias:'editor',route:'/lifecycle'});const old=await selectedActive(run),source=old.source+'\n# editor retained draft\n';await editor.source.fill(source);await editor.save();await editor.preview();await expect(editor.page.getByRole('button',{name:'保存并启用',exact:true})).toBeDisabled();const preview=actualPreview(editor,source),view=await run.read('lifecycle.definition.inspect'),denial=await editor.sessionRequest('lifecycle.definition.save-and-activate',{yaml:source,validationDigest:preview.digest},{requestId:run.requestId(c.caseInstanceId,'editor-denied'),expectedRevision:view.revision});assert.equal(denial.status,403);denied(denial,['FORBIDDEN']);await noChanges(run,view);}finally{await editor?.close();}
+ const timings=[];
+ for(const name of ['after-preview','before-submit']){
+  const ui=await openBrowser(run,browser,{principalAlias:'activator',route:'/lifecycle',monitorEvidence:true});
+  try{const selected=await selectedActive(run),source=selected.source+'\n# '+name+' '+run.selection.runId+'\n',preview=await previewPermissionSource(ui,source),before=await run.read('lifecycle.definition.inspect');const rejected=await deniedUiActivation(ui,run,source,preview,{holdBeforeSubmit:name==='before-submit',stepId:name+'-revoke'});
+   const native=await run.principalRequest('activator','lifecycle.definition.save-and-activate',{yaml:source,validationDigest:preview.digest},{requestId:run.requestId(c.caseInstanceId,name+'-native-denied'),expectedRevision:before.revision});assert.equal(native.status,403);denied(native,['FORBIDDEN']);assert.equal((await run.principalRequest('activator','lifecycle.instance.inspect',{instanceId:initial.original.id})).status,200);await noChanges(run,before);await intactPermissionHistory(run,initial);const recovery=await restorePreview(run,ui,c,initial,source,preview,name+'-restore',rejected.actualUiRequest.requestId);await ui.flush();timings.push({boundary:name,rejected,nativeDenied:true,recovery});
+  }finally{run.restorePermissionFault();await ui.close();}
+ }
+ const post=await afterActivationRevocation(run,browser,c,initial,{expire:'after-active-expire',restore:'after-active-restore'});const after=await permissionEvents(run);assert.deepEqual(after.slice(0,events.length),events);const added=after.slice(events.length);assert(added.every(e=>['definition-draft-saved','definition-activation-blocked','definition-activated'].includes(e.type)));
+ return{actualInstalledCandidate:true,actualThreeRoles:true,monitor:roleMonitor,timings,postActivation:post,oldInstanceAndPinsUnchanged:true,authFaultInjection:true,productMembershipManagement:false,newInstanceOrStageDispatches:0,newModelCalls:0,newCiRuns:0,originalOwnerReferences:initial.original.definition.semantic.assets,originalRevisionId:initial.original.pins.definitionRevisionId,ownerFeedbackBranchesNotCredited:true,l3SoftwareAcceptanceClaimed:false};
+}
+
+test('E16 installed owner boundaries and original feedback replay',{timeout:240000},async()=>{
  const run=await openScenario('E16');
  try{
   assert.equal(run.all.length,7,'The frozen E16 denominator must remain unchanged');
   for(const c of run.cases)await run.collect(c,async()=>{
+   if(c.caseInstanceId==='E16.CV02'){const browser=await chromium.launch({headless:true});try{return await permissionTiming(run,browser,c);}finally{await browser.close();}}
    if(c.caseInstanceId==='E16.variant.02')return duplicateFeedback(run,c);
    if(c.caseInstanceId==='E16.variant.03')return scopeMismatch(run,c);
    if(c.caseInstanceId==='E16.variant.04')return assetVersionEvolution(run,c);

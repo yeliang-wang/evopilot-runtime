@@ -2,11 +2,12 @@
 
 English | [简体中文](zh-CN/runtime-v090.md)
 
-This guide describes the implemented v0.9 development target for local operators
-and Codex users. The branch carries package version 0.9.0 for candidate qualification.
-It is not a released v0.9 distribution or a claim that acceptance is complete.
-Use the exact selected package manifest, source revision and acceptance report;
-the [fixed acceptance catalog](acceptance-v090.md) remains the completion rule.
+This guide describes Runtime 0.9.0 Preview for local operators and Codex users.
+Consult the [versioned Release page](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.9.0)
+for publication status and downloads. Verify the selected package manifest, source
+revision and acceptance records; documentation and source availability alone do
+not establish release or completed acceptance. The [fixed acceptance catalog](acceptance-v090.md)
+remains the completion rule.
 
 ## Responsibilities and prerequisites
 

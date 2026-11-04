@@ -2,13 +2,13 @@
 
 [English](../README.md) | 简体中文
 
-独立 v0.9 开发目标请使用[中文使用指南](runtime-v090.md)、[生命周期 API（英文）](../lifecycle-api.md)、
+独立 Runtime 0.9.0 Preview 请使用[中文使用指南](runtime-v090.md)、[生命周期 API（英文）](../lifecycle-api.md)、
 [兼容与迁移参考（英文）](../legacy-host.md)和[固定验收](../acceptance-v090.md)。
-这些文档描述候选分支，不代表 v0.9 已发布。
+文档描述版本能力与要求，不能替代验收或发布回执。发布状态和下载文件以[对应版本的 Release 页面](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.9.0)为准。
 
 [已记录 Token 消耗](token-usage-v090.md)说明 v0.9 候选的明确 Codex 来源、阶段／版本快照和独立统计恢复。
 
-适用 v0.9.0 Preview 的开发分支，完整验收与发布尚未完成。先阅读[中文首页](../../README_CN.md)，了解该组件职责、安装方式与边界。
+适用 Runtime 0.9.0 Preview；使用前另行核对准确制品与验收证据。先阅读[中文首页](../../README_CN.md)，了解该组件职责、安装方式与边界。
 
 | 任务 | 入口 |
 |---|---|

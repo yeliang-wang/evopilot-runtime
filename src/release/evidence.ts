@@ -89,7 +89,7 @@ function inspectFixedEvidence(repositoryRoot:string,input:AcceptanceEvidenceRequ
     const selection=parse(selectionBytes);
     requireValue(selection.scenario===scenario&&selection.matrixDigest===matrixDigest&&selection.qualification==='FINAL_CANDIDATE'&&selection.candidateDigest===candidateDigest&&isDeepStrictEqual(selection.candidate,report.candidate),'Selection differs from the report or frozen cases');
     requireValue(isDeepStrictEqual(array(selection.selectedCaseIds).map(string).sort(),expected),'Selected case list is incomplete or duplicated');
-    const collectorPins=object(selection.collectorPins),collectorNames=['support.mjs',scenario.toLowerCase()+'.test.mjs',...(['E01','E04','E05','E06','E07','E12','E13','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(scenario==='E13'?['execution.mjs']:[])];exact(collectorPins,collectorNames);
+    const collectorPins=object(selection.collectorPins),collectorNames=['support.mjs',scenario.toLowerCase()+'.test.mjs',...(['E01','E02','E04','E05','E06','E07','E12','E13','E16','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(['E01','E02','E13'].includes(scenario)?['execution.mjs']:[])];exact(collectorPins,collectorNames);
     for(const name of collectorNames){
       const relative='tests/acceptance/v090/'+name,committed=git(['show',input.sourceCommit+':'+relative]);
       requireValue(sha(committed)===digest(collectorPins[name])&&sha(read(join(repositoryRoot,relative),4194304,false))===sha(committed),'Collector differs from the tested source');

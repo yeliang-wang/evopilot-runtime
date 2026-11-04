@@ -1,13 +1,13 @@
 # Runtime documentation
 
-Start with the [v0.9.0 Preview quickstart](../README.md#quickstart) for prerequisites and source setup. Full acceptance and publication remain pending.
+Start with the [v0.9.0 Preview quickstart](../README.md#quickstart) for prerequisites and source setup. Consult the [versioned Release page](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.9.0) for publication status and downloads; verify applicable acceptance records separately.
 
 English | [简体中文](zh-CN/README.md)
 
-For the independent v0.9 development target, use the
+For independent Runtime 0.9.0 Preview, use the
 [operator and lifecycle guide](runtime-v090.md), [HTTP lifecycle API](lifecycle-api.md),
 [legacy Host/migration reference](legacy-host.md) and [fixed acceptance](acceptance-v090.md).
-These describe the candidate branch, not an already published v0.9 release.
+These guides describe versioned capabilities and requirements, not an acceptance or publication receipt.
 The historical version sections below retain their original scope.
 
 [Recorded token usage](token-usage-v090.md) covers explicit Codex sources, immutable

@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.9.0 Preview — development
+## 0.9.0 Preview
 
-Publication and full candidate acceptance are pending. The [planned versioned Release location](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.9.0) is not evidence of publication.
+This entry describes the versioned changes. The [versioned Release page](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.9.0) records publication status and downloads. Verify exact package/source identities and the applicable acceptance records separately; this changelog is not a release or acceptance receipt.
 
 Runtime becomes an independently versioned lifecycle service with HTTP API, Streamable HTTP MCP, one Expert/plugin, and two Dashboard pages. Publisher-owned Base rules, mandatory project configuration, fixed instances, scoped execution and durable receipts share server-side gates. Codex supplies reasoning and coding; Runtime has no model profile or autonomous model loop. The parent remains navigation, and published Ontology/Harness APIs retain their asset authority.
 

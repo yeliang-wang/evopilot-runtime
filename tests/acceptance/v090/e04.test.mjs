@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
+import {pathToFileURL} from 'node:url';
 import {stringify,parse,parseDocument} from 'yaml';
 import {chromium,expect} from '@playwright/test';
 import {openScenario} from './support.mjs';
@@ -305,9 +306,140 @@ async function exactSingleBaseProjects(run,c,browser,base){
  return{projects:proofs.map(p=>({projectId:p.projectId,originalActive:p.originalActive,newActive:p.positive.revisionId,originalInstanceIds:p.originalInstanceIds,negativeFamilies:p.negative.map(n=>n.name),trace:p.trace})),basePin:base.pin,independentLegalConfigurations:2,actualInheritanceRefusals:8,baseBytesUnchanged:true,otherProjectUnchangedDuringEachWrite:true,originalInstancePinsUnchanged:true,executionDispatched:false};
 }
 
+// Private proposal for insertion into the already-bound e04.test.mjs. No code
+// here is active product/collector code until the parent reviews and lands it.
+// The external producer may execute only Base stages; this collector owns the
+// exact extension requests and denied successor probes below. It never grants
+// authority, writes owner state, dispatches CI or fabricates an observation.
+
+const slots=['after-plan','before-candidate','candidate-checks','before-release-decision'];
+const boundaries={'after-plan':['plan','implementation'],'before-candidate':['implementation','candidate'],'candidate-checks':['candidate','verification'],'before-release-decision':['verification','release-decision']};
+const pause=ms=>new Promise(r=>setTimeout(r,ms));
+const object=x=>x&&typeof x==='object'&&!Array.isArray(x);
+function exact(value,fields){assert(object(value));assert.deepEqual(Object.keys(value).sort(),[...fields].sort());}
+function readPinned(pin){
+ exact(pin,['ref','sha256']);assert.equal(path.resolve(pin.ref),pin.ref);assert.equal(fs.realpathSync(pin.ref),pin.ref);const s=fs.lstatSync(pin.ref);assert(s.isFile()&&!s.isSymbolicLink()&&s.nlink===1&&s.uid===process.getuid()&&(s.mode&0o077)===0&&s.size<=1048576);
+ const bytes=fs.readFileSync(pin.ref);assert.equal(sha(bytes),pin.sha256);return JSON.parse(bytes);
+}
+export function assertExtensionDenialReasons(reasons,required,{caseInstanceId,stageId}){
+ assert(Array.isArray(reasons)&&reasons.length>0&&new Set(reasons).size===reasons.length);
+ assert(Array.isArray(required)&&required.length>0);for(const reason of required)assert(reasons.includes(reason));
+ const releaseOnly=caseInstanceId==='E04.EX07'&&stageId==='publication'&&required.length===1&&required[0]==='EXACT_RELEASE_AUTHORITY_REQUIRED';
+ for(const reason of reasons){
+  assert(typeof reason==='string');
+  assert(!['AUTHORITY_REQUIRED','AUTHORITY_STALE','BINDINGS_NOT_CURRENT','HISTORICAL_BASE_READ_ONLY'].includes(reason),'Execution authority/currentness cannot replace graph evidence');
+  assert(!reason.includes('EXHAUSTED')&&!reason.startsWith('PREDECESSOR_EVIDENCE_STALE:'),'Original execution budget and predecessor evidence must remain current');
+  if(reason==='EXACT_RELEASE_AUTHORITY_REQUIRED')assert(releaseOnly,'Only the fixed EX07 publication probe expects absent release authority');
+  else assert(reason.startsWith('PREDECESSOR_NOT_PASSED:'),'Unexpected native refusal cannot satisfy this exact graph probe');
+ }
+ return reasons;
+}
+
+async function extensionExecution(run,c,browser,openBrowser){
+ const pin=run.selection.extensionExecution;assert(pin,'Select exact native extension fixture; absent evidence is never a PASS');const fixture=readPinned(pin);
+ exact(fixture,['schema','candidateDigest','workspaceId','projectId','syntheticAssets','syntheticDecisions','exchangeRoot','casePlans']);assert.equal(fixture.schema,'runtime-v090-extension-execution-fixture/v1');assert.equal(fixture.candidateDigest,run.candidateDigest);assert.equal(fixture.workspaceId,run.selection.workspaceId);assert.equal(fixture.projectId,run.selection.projectId);assert.equal(fixture.syntheticAssets,true);assert.equal(fixture.syntheticDecisions,true);
+ assert.equal(fs.realpathSync(fixture.exchangeRoot),fixture.exchangeRoot);const ds=fs.lstatSync(fixture.exchangeRoot);assert(ds.isDirectory()&&ds.uid===process.getuid()&&(ds.mode&0o077)===0);
+ const plan=fixture.casePlans[c.caseInstanceId];assert(plan,'Fixed case has no prepared native inputs');
+ const load=relative=>import(pathToFileURL(path.join(run.selection.installedRoot,'package/dist',relative)).href),base=await load('lifecycle/base.js'),instances=await load('lifecycle/instance.js');
+ const vd=base.valueDigest,created=[];let serial=0,ui;
+ const marker=(name,content)=>{assert(/^[a-z0-9-]+$/.test(name));const ref=path.join(fixture.exchangeRoot,c.caseInstanceId+'-'+name+'.json');fs.writeFileSync(ref,JSON.stringify({schema:'runtime-extension-producer-checkpoint/v1',caseInstanceId:c.caseInstanceId,candidateDigest:run.candidateDigest,projectId:run.selection.projectId,at:new Date().toISOString(),...content},null,2)+'\n',{flag:'wx',mode:0o600});run.artifact('extension-producer-checkpoint.json',{ref,...content});return ref;};
+ const inspect=async id=>{const r=await run.read('lifecycle.instance.inspect',{instanceId:id});instances.inspectInstance(r.instance);assert.equal(r.instance.id,id);assert.equal(r.instance.pins.projectId,run.selection.projectId);assert.equal(base.isCurrentBase(r.instance.pins.base),true);return r;};
+ const deadline=i=>Math.min(Date.parse(i.createdAt)+i.pins.budget.timeoutSeconds*1000,Date.parse(i.pins.authorityExpiresAt));
+ const beforeWrite=async id=>{const r=await inspect(id);assert(Date.now()<deadline(r.instance),'Original instance deadline elapsed; never extend or reset the grant');return r;};
+ const original=async(i,stageId)=>{
+  const stage=i.stages[stageId];assert(stage?.requestId);const r=await run.read('lifecycle.stage.request.inspect',{stageRequestId:stage.requestId}),{digest,...body}=r.request;
+  assert.equal(digest,vd(body));assert.equal(r.request.planDigest,vd(r.request.plan));assert.equal(r.request.workspaceId,run.selection.workspaceId);assert.equal(r.request.projectId,run.selection.projectId);assert.equal(r.request.instanceId,i.id);assert.equal(r.request.pinsDigest,i.pinsDigest);assert.equal(r.request.stageId,stageId);assert.equal(r.request.inputDigest,stage.inputDigest);assert.equal(r.automaticRedispatch,false);
+  if(r.progress.observationRef){const o=await run.read('lifecycle.stage.observation.read',{stageRequestId:r.request.id,observationRef:r.progress.observationRef});assert.equal(vd(o.evidence),r.progress.observationRef);assert.equal(o.evidence.requestId,r.request.id);assert.deepEqual(o.evidence.observation,r.progress.observation);assert.equal(vd(o.evidence.observation.outcome),stage.outcomeDigest);}
+  return r;
+ };
+ const finished=async(id,stageId,wanted)=>{
+  const {instance:i}=await inspect(id),r=await original(i,stageId);assert.equal(i.stages[stageId].status,wanted==='COMPLETE'?'PASSED':wanted);assert.equal(r.progress.phase,wanted);assert.equal(r.progress.observation.outcome.status,wanted);assert.equal(r.progress.terminal,wanted==='COMPLETE'||wanted==='FAILED');return{i,r};
+ };
+ const nativeCheck=async(id,stageId,wanted)=>{
+  const {i,r}=await finished(id,stageId,wanted),node=i.definition.nodes.find(n=>n.id===stageId);assert.equal(node.source,'project');assert.equal(node.action.type,'check');assert.equal(r.request.plan.adapterId,'runtime-native-extension-stage-v1');
+  const view=await run.read('lifecycle.extension.evidence.read',{stageRequestId:r.request.id});assert.deepEqual(view.request,r.request);assert.equal(view.historical,true);assert.equal(view.executionAuthorized,false);assert.equal(view.releaseAuthorized,false);assert.equal(view.automaticRedispatch,false);assert(view.action,'A stage UNKNOWN before owner invocation is not this fixture');assert.equal(view.action.request.operation,'native.package.validate');assert.equal(view.action.request.requestId,'extension-native-'+vd({requestDigest:r.request.digest}).slice(7,51));
+  const {digest,...action}=view.action;assert.equal(digest,vd(action));assert(view.evidence&&view.receipt,'Original native owner receipt/observation is required');assert.equal(vd(view.evidence),view.evidenceRef);assert.equal(view.evidence.receiptRef,vd(view.receipt));assert.equal(view.evidence.requestDigest,r.request.digest);assert.equal(view.evidence.planDigest,r.request.planDigest);assert.equal(view.evidence.actionDigest,view.action.digest);assert.equal(view.receipt.requestId,view.action.request.requestId);assert.deepEqual(view.receipt.scope,view.action.request.scope);
+  const desired=wanted==='COMPLETE'?'PASS':wanted==='FAILED'?'FAIL':'UNKNOWN';assert.equal(view.evidence.result.status,desired);
+  if(wanted==='UNKNOWN'){assert.equal(view.receipt.status,'RUNNING');assert.equal(view.evidence.receiptTerminal,false);assert.equal(view.evidence.result.receiptDigest,null);}
+  else{assert.equal(view.receipt.status,'SUCCEEDED');if(wanted==='FAILED'){assert.equal(r.request.plan.parameters.kind,'harness');assert.equal(view.receipt.result.qualityStatus,'FAIL');assert(view.receipt.result.criteria.some(v=>v.criterionId==='H001'&&v.variantId==='actual-observation'&&v.status==='FAIL'));assert(view.action.request.input.observation.values.runtimeExtension.preparation.target.scope.includes('EX04_EXPECT_EXTENSION_DENIAL'));}assert.equal(view.evidence.receiptTerminal,true);assert.equal(view.evidence.result.receiptDigest,vd(view.receipt));assert.equal(r.progress.observation.outcome.checks.length,node.checks.length);assert(r.progress.observation.outcome.checks.every(x=>x.status===(wanted==='COMPLETE'?'PASS':'FAIL')));}
+  for(const previous of r.request.plan.parameters.predecessors){const s=i.stages[previous.stageId],p=await original(i,previous.stageId);assert.equal(s.status,'PASSED');assert.equal(p.progress.phase,'COMPLETE');assert.equal(previous.requestDigest,p.request.digest);assert.equal(previous.outcomeDigest,s.outcomeDigest);}
+  if(['candidate-checks','before-release-decision'].includes(node.stage)){assert(i.candidate&&i.candidateDigest);assert.equal(r.request.plan.parameters.candidateDigest,i.candidateDigest);assert.equal(instances.candidateDigest(r.request.plan.parameters.candidateInput.manifest),i.candidateDigest);}
+  run.artifact('extension-native-action-observation.json',{instance:i,request:r,view});return{i,r,view};
+ };
+ const graph=async id=>{
+  const {instance:i}=await inspect(id),extensions=i.definition.nodes.filter(n=>n.source==='project');assert.equal(extensions.length,8);assert.equal(i.pins.budget.maxConcurrency,2);
+  for(const slot of slots){const pair=extensions.filter(n=>n.stage===slot);assert.equal(pair.length,2);assert.deepEqual(pair.map(n=>n.action.actionRef).sort(),['runtime.check.harness','runtime.check.ontology']);for(const n of pair){assert.deepEqual(n.dependsOn,[boundaries[slot][0]]);assert.equal(n.action.budget.maxAttempts,1);assert.equal(n.action.budget.maxConcurrency,2);}const successor=i.definition.nodes.find(n=>n.id===boundaries[slot][1]);for(const n of pair)assert(successor.dependsOn.includes(n.id));assert(successor.dependsOn.includes(boundaries[slot][0]));}
+  return i;
+ };
+ const deny=async(id,stageId,required)=>{
+  const before=await beforeWrite(id),admission=await run.read('lifecycle.stage.admission',{instanceId:id,stageId});assert.equal(admission.allowed,false);assertExtensionDenialReasons(admission.reasons,required,{caseInstanceId:c.caseInstanceId,stageId});
+  const status=await run.read('runtime.status');await beforeWrite(id);const result=await run.request('lifecycle.stage.request',{instanceId:id,stageId},{requestId:run.requestId(c.caseInstanceId,'extension-blocked-'+(++serial)),expectedRevision:status.revision});assert.equal(result.status,409);assert.equal(result.body.error.code,'STAGE_BLOCKED');assert.deepEqual(result.body.error.message.split('; ').sort(),[...admission.reasons].sort(),'Native STAGE_BLOCKED must report the complete original admission reasons');
+  const after=await inspect(id);assert.deepEqual(after.instance,before.instance);assert.equal(after.projectRevision??after.revision,before.projectRevision??before.revision);run.artifact('extension-native-blocked-request.json',{instanceId:id,stageId,before,admission,response:result,after,executionDispatched:false});return admission;
+ };
+ const request=async(id,stageId)=>{
+  const current=await beforeWrite(id);assert.equal(current.instance.stages[stageId].status,'PENDING');assert.equal(current.instance.stages[stageId].attempts,0);const admission=await run.read('lifecycle.stage.admission',{instanceId:id,stageId});assert.equal(admission.allowed,true,JSON.stringify(admission.reasons));
+  const status=await run.read('runtime.status');await beforeWrite(id);const r=await run.request('lifecycle.stage.request',{instanceId:id,stageId},{requestId:run.requestId(c.caseInstanceId,'extension-run-'+(++serial)),expectedRevision:status.revision});assert.equal(r.status,200,JSON.stringify(r.body));const requestId=r.body.result.result.stageRequestId;created.push(requestId);return requestId;
+ };
+ const wait=async(id,stageId,wanted,ms=90000)=>{
+  const i=(await inspect(id)).instance,end=Math.min(Date.now()+ms,deadline(i));
+  while(Date.now()<end){const state=(await inspect(id)).instance,stage=state.stages[stageId];assert(Date.now()<end);if(stage.status===wanted)return state;if(['PASSED','FAILED'].includes(stage.status))assert.equal(stage.status,wanted,'Unexpected terminal original outcome');await pause(300);}throw Error('EXACT_EXTENSION_CHECKPOINT_TIMEOUT: '+stageId+' '+wanted);
+ };
+ const monitor=async(id,label)=>{if(!ui)ui=await openBrowser(run,browser,{route:'/monitor',monitorEvidence:true});await ui.page.getByLabel('生命周期实例',{exact:true}).selectOption(id);const current=(await inspect(id)).instance,expected=current.definition.nodes.filter(n=>n.source==='project').map(n=>({id:n.id,status:current.stages[n.id].status,requestId:current.stages[n.id].requestId}));await ui.page.waitForFunction(({id,projectId,expected})=>document.querySelector('#instance')?.value===id&&document.querySelector('.monitor-strip')?.getAttribute('data-project-id')===projectId&&expected.every(e=>{const row=[...document.querySelectorAll('tbody tr')].find(r=>r.querySelector('button')?.textContent===e.id);return row?.querySelector('.status')?.classList.contains(e.status)&&row.querySelector('code')?.textContent===(e.requestId??'尚无请求');}),{id,projectId:run.selection.projectId,expected});await ui.screenshot();await ui.flush();const trace=await ui.close();ui=null;run.artifact('extension-browser-checkpoint.json',{label,instanceId:id,monitorOnly:true,originalRequestIds:current.requestIds,renderedExtensions:expected,trace});};
+ const pair=async(id,slot)=>{const i=await graph(id);return i.definition.nodes.filter(n=>n.source==='project'&&n.stage===slot).sort((a,b)=>b.action.actionRef.localeCompare(a.action.actionRef));};
+ try{
+  if(c.caseInstanceId==='E04.EX04'){
+   exact(plan,['failed','unknown','passing']);for(const p of [plan.failed,plan.passing])exact(p,['instanceId']);exact(plan.unknown,['instanceId','faultPlan']);assert.equal(new Set(Object.values(plan).map(p=>p.instanceId)).size,3);
+   // Negative instances retain their original failed/unknown actions forever.
+   for(const [mode,p]of [['FAILED',plan.failed],['UNKNOWN',plan.unknown]]){
+    const nodes=await pair(p.instanceId,'after-plan'),harness=nodes.find(n=>n.action.actionRef==='runtime.check.harness'),ontology=nodes.find(n=>n.action.actionRef==='runtime.check.ontology');await finished(p.instanceId,'plan','COMPLETE');
+    const initial=await inspect(p.instanceId);for(const n of nodes)assert.equal(initial.instance.stages[n.id].status,'PENDING');
+    await deny(p.instanceId,'implementation',nodes.map(n=>'PREDECESSOR_NOT_PASSED:'+n.id));
+    await request(p.instanceId,ontology.id);await wait(p.instanceId,ontology.id,'PASSED');await nativeCheck(p.instanceId,ontology.id,'COMPLETE');
+    const notRun=(await inspect(p.instanceId)).instance.stages[harness.id];assert.deepEqual({status:notRun.status,attempts:notRun.attempts,requestId:notRun.requestId},{status:'PENDING',attempts:0,requestId:null});await deny(p.instanceId,'implementation',['PREDECESSOR_NOT_PASSED:'+harness.id]);
+    if(mode==='UNKNOWN'){
+     const fault=readPinned(p.faultPlan);exact(fault,['schema','installedRoot','serviceSelection','candidateDigest','workspaceId','projectId','instanceId','stageId','faultRoot','driver','maxWallSeconds']);assert.equal(fault.schema,'runtime-e04-owned-native-claim-fault-plan/v1');assert.equal(fault.installedRoot,run.selection.installedRoot);assert.equal(fault.candidateDigest,run.candidateDigest);assert.equal(fault.workspaceId,run.selection.workspaceId);assert.equal(fault.projectId,run.selection.projectId);assert.equal(fault.instanceId,p.instanceId);assert.equal(fault.stageId,harness.id);assert.equal(fault.maxWallSeconds,60);assert(fault.faultRoot.startsWith(fixture.exchangeRoot+'/'));assert(!fs.existsSync(fault.faultRoot));
+     const protectedJson=ref=>{assert.equal(fs.realpathSync(ref),ref);const st=fs.lstatSync(ref);assert(st.isFile()&&!st.isSymbolicLink()&&st.nlink===1&&st.uid===process.getuid()&&(st.mode&0o077)===0&&st.size<=1048576);const bytes=fs.readFileSync(ref);return{value:JSON.parse(bytes),pin:{ref,sha256:sha(bytes)}};};
+     const waitFile=async name=>{const ref=path.join(fault.faultRoot,name),end=Math.min(Date.now()+65000,deadline(initial.instance));while(!fs.existsSync(ref)){assert(Date.now()<end,'Exact fault operator did not finish within the existing instance budget');await pause(200);}assert(Date.now()<end);return protectedJson(ref);};
+     marker('arm-owner-interruption',{instanceId:p.instanceId,stageId:harness.id,faultPlan:p.faultPlan,originalInstanceDeadlineAt:new Date(deadline(initial.instance)).toISOString(),requiredBoundary:'Harness native_receipts INSERT then same-owner SQLite COMMIT return 0; exact owned Runtime SIGKILL only',prohibitReceiptInjection:true});
+     const armed=await waitFile('ARMED.json'),input=protectedJson(path.join(fault.faultRoot,'INPUT.json')),identity=protectedJson(path.join(fault.faultRoot,'IDENTITY.json'));assert.equal(armed.value.inputSha256,input.pin.sha256);assert.equal(input.value.identitySha256,identity.pin.sha256);assert.equal(armed.value.pid,identity.value.pid);assert.equal(identity.value.candidateDigest,run.candidateDigest);assert.equal(identity.value.serviceId,run.candidate.serviceId);assert.equal(identity.value.instanceId,p.instanceId);assert.equal(identity.value.stageId,harness.id);assert.equal(identity.value.onlyOriginalExtensionInFlight,false);const quiet=readPinned(identity.value.quietInventory);assert.equal(quiet.pending.length,0);assert.equal(quiet.status.observationWorker.inFlight,0);assert.equal(identity.value.ownedSyntheticService,true);
+     const originalRequestId=await request(p.instanceId,harness.id),restored=await waitFile('RESTORED.json');for(const k of ['candidateDigest','serviceId','instanceId','stageId'])assert.equal(restored.value[k],identity.value[k]);const debug=readPinned(restored.value.debugger);assert.equal(debug.status,'FAULT_INJECTED_NOT_ACCEPTANCE');assert.equal(debug.killed,true);assert.equal(debug.pid,identity.value.pid);const witness=readPinned(debug.exclusiveWitness);assert.equal(witness.serviceId,run.candidate.serviceId);assert.equal(witness.pid,identity.value.pid);assert.equal(witness.processIdentity,identity.value.processIdentity);assert.equal(witness.status.observationWorker.inFlight,1);assert.equal(witness.pending.length,1);assert.equal(witness.pending[0].instanceId,p.instanceId);assert.equal(witness.pending[0].stageId,harness.id);assert.equal(witness.original.request.id,originalRequestId);assert.equal(witness.original.automaticRedispatch,false);const ev=debug.events;assert.deepEqual(ev.map(e=>e.kind),['PROCESS_IDENTITY_VERIFIED','ATTACHED_AND_ARMED','NATIVE_CLAIM_INSERT_PREPARE','NATIVE_CLAIM_COMMIT_ENTRY','NATIVE_CLAIM_COMMIT_RETURN','PROCESS_IDENTITY_VERIFIED','OWNED_SIGKILL']);assert.equal(ev[2].sqliteHandle,ev[3].sqliteHandle);assert.equal(ev[3].sqliteHandle,ev[4].sqliteHandle);assert.equal(ev[4].returnCode,0);assert.equal(ev[0].processIdentity,ev[5].processIdentity);assert.equal(ev[0].processIdentity,identity.value.processIdentity);const stop=readPinned(restored.value.stop),start=readPinned(restored.value.start);assert.equal(stop.operation,'stop');assert.equal(start.operation,'start');assert.equal(stop.service.running,false);assert.equal(start.service.running,true);assert.equal(start.service.identity.serviceId,run.candidate.serviceId);
+     const end=Math.min(Date.now()+30000,deadline(initial.instance));let evidence;
+     do{assert(Date.now()<end);evidence=await run.read('lifecycle.extension.evidence.read',{stageRequestId:originalRequestId});if(evidence.evidence?.result?.status==='UNKNOWN'&&evidence.receipt?.status==='RUNNING')break;await pause(300);}while(Date.now()<end);
+     assert.equal(evidence?.receipt?.status,'RUNNING');await wait(p.instanceId,harness.id,'UNKNOWN',5000);const unknown=await nativeCheck(p.instanceId,harness.id,'UNKNOWN');assert.equal(unknown.r.request.id,originalRequestId);await deny(p.instanceId,'implementation',['PREDECESSOR_NOT_PASSED:'+harness.id]);await monitor(p.instanceId,'UNKNOWN-ORIGINAL-OWNER-RUNNING');
+     const status=await run.read('runtime.status');await beforeWrite(p.instanceId);const reconciled=await run.request('lifecycle.stage.reconcile',{stageRequestId:originalRequestId},{requestId:run.requestId(c.caseInstanceId,'original-owner-inspection'),expectedRevision:status.revision});assert.equal(reconciled.status,200);assert.equal(reconciled.body.result.result.automaticRedispatch,false);await pause(2200);const after=await nativeCheck(p.instanceId,harness.id,'UNKNOWN');assert.deepEqual(after.view.action,unknown.view.action);assert.deepEqual(after.view.receipt,unknown.view.receipt);assert.equal(after.i.stages[harness.id].attempts,1);assert.equal(after.r.request.id,originalRequestId);assert.deepEqual(readPinned(p.faultPlan),fault);run.artifact('extension-original-owner-fault-and-inspection.json',{armed,identity,input,restored,debug,stop,start,originalRequestId,reconciled,ownerClaimStillUnknown:true,ownerRedispatched:false,allPassingRunMustBeIndependent:true});continue;
+    }
+    await request(p.instanceId,harness.id);await wait(p.instanceId,harness.id,mode);await nativeCheck(p.instanceId,harness.id,mode);await deny(p.instanceId,'implementation',['PREDECESSOR_NOT_PASSED:'+harness.id]);await monitor(p.instanceId,mode);
+   }
+   marker('prepare-positive-instance',{instanceId:plan.passing.instanceId,permitted:'Fresh exact native preparation/execution decision and instance; scope may pass, plan and all extensions must remain PENDING',originalFailuresPreserved:true});
+   const readyEnd=Date.now()+60000;while(true){const response=await run.request('lifecycle.instance.inspect',{instanceId:plan.passing.instanceId});if(response.status===200)break;assert.equal(response.status,404);assert(Date.now()<readyEnd);await pause(300);}
+   const id=plan.passing.instanceId,original=await graph(id);assert.equal(original.stages.plan.status,'PENDING');
+   for(const slot of slots)for(const node of await pair(id,slot))await deny(id,node.id,['PREDECESSOR_NOT_PASSED:'+boundaries[slot][0]]);
+   marker('predecessor-denials-complete',{instanceId:id,allowedBaseSuccessor:'plan',allEightActualExtensionRequestsRefused:true});
+   for(const slot of slots){
+    const [predecessor,successor]=boundaries[slot],nodes=await pair(id,slot);marker('await-'+slot,{instanceId:id,onlyBaseProducerMayComplete:predecessor,extensionNodes:nodes.map(n=>n.id),successorMayNotRun:true});await wait(id,predecessor,'PASSED',240000);await finished(id,predecessor,'COMPLETE');
+    await deny(id,successor,nodes.map(n=>'PREDECESSOR_NOT_PASSED:'+n.id));
+    for(const n of nodes){const allowed=await run.read('lifecycle.stage.admission',{instanceId:id,stageId:n.id});assert.equal(allowed.allowed,true);}
+    // Serialize HTTP CAS admissions while both owner actions remain genuine;
+    // graph independence is checked above and both requests must overlap.
+    const first=await request(id,nodes[0].id),second=await request(id,nodes[1].id);
+    for(const n of nodes){await wait(id,n.id,'PASSED');await nativeCheck(id,n.id,'COMPLETE');}
+    const i=(await inspect(id)).instance,a=await originalRequest(i,first),b=await originalRequest(i,second);
+    assert(Date.parse(a.request.requestedAt)<=Date.parse(b.request.requestedAt));assert(Date.parse(b.request.requestedAt)<Date.parse(a.progress.observedAt),'Two checks must actually overlap; a sequential run cannot be labelled parallel');
+    const admitted=await run.read('lifecycle.stage.admission',{instanceId:id,stageId:successor});assert.equal(admitted.allowed,true,JSON.stringify(admitted.reasons));await monitor(id,slot+'-ALL-PASS');marker('passed-'+slot,{instanceId:id,allowedBaseSuccessor:successor,extensionRequestIds:[first,second],candidateDigest:i.candidateDigest});
+   }
+   const final=(await inspect(id)).instance;assert.equal(final.pinsDigest,original.pinsDigest);assert(final.candidateDigest);return{fourRealSlots:true,parallelChecksPerSlot:2,negativeStates:['PENDING','FAILED','UNKNOWN'],originalFailuresPreserved:true,allPassedInstanceId:id,releaseAuthorized:false};
+  }
+  assert.equal(c.caseInstanceId,'E04.EX07');exact(plan,['baseFailedExtensionPassed','basePassedExtensionFailed','allPassedNoReleaseAuthority']);for(const p of Object.values(plan))exact(p,['instanceId']);
+  const a=plan.baseFailedExtensionPassed.instanceId;await graph(a);await finished(a,'implementation','FAILED');for(const n of await pair(a,'after-plan'))await nativeCheck(a,n.id,'COMPLETE');await deny(a,'candidate',['PREDECESSOR_NOT_PASSED:implementation']);await monitor(a,'BASE-FAILED-EXTENSIONS-PASSED');
+  const b=plan.basePassedExtensionFailed.instanceId;await graph(b);await finished(b,'plan','COMPLETE');const nodes=await pair(b,'after-plan'),failed=nodes.find(n=>n.action.actionRef==='runtime.check.harness');await nativeCheck(b,failed.id,'FAILED');await nativeCheck(b,nodes.find(n=>n.id!==failed.id).id,'COMPLETE');await deny(b,'implementation',['PREDECESSOR_NOT_PASSED:'+failed.id]);await monitor(b,'BASE-PASSED-EXTENSION-FAILED');
+  const d=plan.allPassedNoReleaseAuthority.instanceId,i=await graph(d);for(const name of ['scope','plan','implementation','candidate','verification'])await finished(d,name,'COMPLETE');for(const node of i.definition.nodes.filter(n=>n.source==='project'))await nativeCheck(d,node.id,'COMPLETE');
+  const before=(await inspect(d)).instance;assert.equal(before.stages['release-decision'].status,'RUNNING');const pending=await original(before,'release-decision');assert.equal(pending.progress.phase,'RUNNING');assert.equal(pending.progress.terminal,false);assert.equal(before.stages.publication.status,'PENDING');assert.equal(before.stages.publication.attempts,0);assert.equal(before.stages.publication.requestId,null);await deny(d,'publication',['EXACT_RELEASE_AUTHORITY_REQUIRED']);const release=await run.read('lifecycle.release.evidence.read',{stageRequestId:before.stages['release-decision'].requestId});assert.equal(release.releaseAuthorized,false);assert.equal(release.material.releaseAuthorized,false);assert.equal(release.material.candidateDigest,before.candidateDigest);assert.equal(release.material.pinsDigest,before.pinsDigest);const {digest:materialDigest,...materialBody}=release.material;assert.equal(materialDigest,vd(materialBody));await monitor(d,'ALL-TECHNICAL-PASS-NO-RELEASE-AUTHORITY');
+  return{baseAndExtensionAreConjunctive:true,independentNativeFailures:[a,b],allTechnicalPassWithoutReleaseAuthority:d,publicationDispatched:false,newReleaseDecisions:0};
+ }finally{await ui?.close();assert.deepEqual(readPinned(pin),fixture);run.artifact('extension-case-execution-limits.json',{caseInstanceId:c.caseInstanceId,createdExtensionRequests:created,newBaseStages:0,newAuthorities:0,newReleaseDecisions:0,newOwnerDecisions:0,qualification:'DEVELOPMENT',formalCaseCredit:0});}
+ async function originalRequest(i,requestId){const name=Object.keys(i.stages).find(name=>i.stages[name].requestId===requestId);assert(name);return original(i,name);}
+}
+
 const unavailable={
- 'E04.EX04':'Actual registered four-slot execution and two parallel checks with FAILED, UNKNOWN, NOT_RUN then PASS observations are required; an effective graph is insufficient.',
- 'E04.EX07':'Actual Base-failed/extension-passed, Base-passed/extension-failed, and all-passed-without-release-authority admissions are required.',
  'E04.EX11':'Actual pinned owner report plus failed current Target, rejected latest/forged PASS, and removing the draft check while preserving current obligations are required.',
 };
 test('E04 exact installed Base inheritance and constrained extension cases',async()=>{
@@ -317,9 +449,10 @@ test('E04 exact installed Base inheritance and constrained extension cases',asyn
   const initial=await run.read('lifecycle.definition.inspect');assert(initial.active,'Use a real natively activated isolated baseline, never seeded database state');
   const activeSource=await run.source(initial.active.id),activeData=parse(activeSource),positiveSource=controlSource(run,activeSource);
   assert.equal(activeData.projectId,run.selection.projectId);assert.deepEqual(activeData.extends,base.pin);
-  if(run.cases.some(c=>['E04.variant.01','E04.variant.02','E04.EX01','E04.EX12'].includes(c.caseInstanceId)))browser=await chromium.launch({headless:true});
+  if(run.cases.some(c=>['E04.variant.01','E04.variant.02','E04.EX01','E04.EX12','E04.EX04','E04.EX07'].includes(c.caseInstanceId)))browser=await chromium.launch({headless:true});
   for(const c of run.cases)await run.collect(c,async()=>{
    if(unavailable[c.caseInstanceId]){run.artifact('required-uncollected-contract.json',{contract:c.parameters.variantContract,reason:unavailable[c.caseInstanceId],sourceTestsNotSubstituted:true});throw Error('UNIMPLEMENTED_REQUIRED_VARIANT: '+unavailable[c.caseInstanceId]);}
+   if(['E04.EX04','E04.EX07'].includes(c.caseInstanceId))return extensionExecution(run,c,browser,openBrowser);
    if(c.caseInstanceId==='E04.EX01')return exactSingleBaseProjects(run,c,browser,base);
    if(c.caseInstanceId==='E04.EX12')return extensionBrowserEntries(run,c,browser);
    if(c.caseInstanceId==='E04.EX03')return budgetBoundaries(run,c,base,activeSource);

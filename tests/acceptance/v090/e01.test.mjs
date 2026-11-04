@@ -6,18 +6,17 @@ import {pathToFileURL} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import {openScenario,sha} from './support.mjs';
 import {openBrowser} from './browser.mjs';
+import {LIFECYCLE_READBACK_CASES,collectLifecycleReadback} from './execution.mjs';
 
-// E01 journey only. The seven other fixed instances retain their own required
-// contracts and cannot receive credit from this successful-path collection.
+// E01 journey and independently collected non-RC/feedback readbacks.
+// Remaining fixed instances keep their own unmet contracts.
 // Native service requests own all dispatch. Direct installed GitHub-adapter
 // calls below are read-only independent observations of those original requests.
 const stages=['scope','plan','implementation','candidate','verification','release-decision','publication','closure'];
 const unsupported={
- 'E01.variant.01':'Requires its own non-RC candidate and actual verification evidence.',
  'E01.variant.02':'Requires a genuinely changed candidate, rejection of old evidence and actual affected checks.',
  'E01.variant.03':'This separate frozen instance also requires its original changed-candidate/revalidation evidence.',
  'E01.variant.04':'Requires all eight stage allow/deny representative input, permission and prerequisite combinations.',
- 'E01.variant.05':'Requires its own exact two-owner feedback and publication readback collection.',
  'E01.CV03':'Requires the complete actual managed-action time/attempt/resource boundary matrix and external call counts.',
  'E01.CV07':'Requires the exact collected branch/variant inventory and the independent final E20 check.',
 };
@@ -120,6 +119,7 @@ async function proveCodingHost(run,selected,handoff,reported,claim,nodeExecutabl
 test('E01 actual installed GitHub lifecycle with external Codex and native owners',async()=>{
  const run=await openScenario('E01');let expert,browser,ui,primaryFailure;
  try{
+ if(!run.cases.some(c=>c.caseInstanceId==='E01.journey')){for(const c of run.cases)await run.collect(c,async()=>{if(Object.hasOwn(LIFECYCLE_READBACK_CASES,c.caseInstanceId))return collectLifecycleReadback(run,c,'github',proveCodingHost);throw Error('UNIMPLEMENTED_ORIGINAL_CASE: '+unsupported[c.caseInstanceId]);});return;}
  const cfg=run.selection.lifecycleExecution;assert(cfg);const root=cfg.exchangeRoot;
  assert.equal(fs.realpathSync(root),root);assert.deepEqual(fs.readdirSync(root),['CODING-HOST-SELECTION.json'],'Only the preselected original Host source may exist before a new external Agent exchange');assert.equal(fs.lstatSync(root).mode&0o777,0o700);
  const selectedHost=selectCodingHost(root);
@@ -234,6 +234,7 @@ test('E01 actual installed GitHub lifecycle with external Codex and native owner
   return{request:ci,observation:observed,verified,client,transport};
  }
   for(const c of run.cases)await run.collect(c,async()=>{
+   if(Object.hasOwn(LIFECYCLE_READBACK_CASES,c.caseInstanceId))return collectLifecycleReadback(run,c,'github',proveCodingHost,selectedHost);
    if(unsupported[c.caseInstanceId])throw Error('UNIMPLEMENTED_ORIGINAL_CASE: '+unsupported[c.caseInstanceId]);assert.equal(c.caseInstanceId,'E01.journey');
    const input=run.selection.expertConfiguration,yaml=pinned(input.ref,input.sha256).toString();assert(yaml.endsWith('\n')&&!yaml.endsWith('\n\n'));
    run.artifact('github-exact-fixture-inputs.json',{preparation,preparationSha256:cfg.preparationSha256,ownerFixtureSha256:cfg.ownerFixtureSha256,yaml,yamlSha256:input.sha256,syntheticAssets:true,syntheticDecisions:true});
