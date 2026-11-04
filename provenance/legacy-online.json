@@ -7,16 +7,20 @@
   "runtimeDependencyOnParent": false,
   "referenceSources": {
     "integration/online/config.ts": "f45e604c05549793e9bccdaa61ba0946f2bac00e11c27e830a061c21b16ea9a2",
-    "integration/native-composition.ts": "bcc986d8d2ce6dc61cc7a3b10af8c1cf5d465150fc729c353e64e1fd567d8941"
+    "integration/native-composition.ts": "bcc986d8d2ce6dc61cc7a3b10af8c1cf5d465150fc729c353e64e1fd567d8941",
+    "integration/online/lifecycle.ts": "3211b96ccdeeaef12abdffb70004b6d20d22fa1366a2f0b463c6b449b180e56f",
+    "integration/online/worker.ts": "9d91a02ad2a653314a507620f537c8ec936138f37c0138b3e73851d074eaa60b"
   },
   "implementation": [
     "Runtime-owned protected online configuration reader and exact published Harness adapter wiring.",
     "Prometheus collection and Alertmanager authentication remain in the verified published Harness package; no owner source is copied or imported.",
-    "Original finding delivery uses authenticated independent Runtime HTTP, fixed original identity and review-required repair semantics."
+    "Original finding delivery uses authenticated independent Runtime HTTP, fixed original identity and review-required repair semantics.",
+    "Runtime-owned local worker selection verifies an installed distribution and explicit existing per-project connections without creating permissions.",
+    "Independent owned launchd worker uses scoped published Harness calls and the existing HTTP service, with immutable attempts, authenticated bounded loopback alerts, retained stop and original supervised recovery."
   ],
   "remaining": [
     "Explicit configuration application workflow",
-    "Independent supervised worker and receiver",
+    "Host MCP worker configuration and online-reference relocation coverage",
     "Current installed candidate and complete fixed E2E"
   ]
 }

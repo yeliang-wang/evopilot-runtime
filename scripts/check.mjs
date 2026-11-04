@@ -186,7 +186,12 @@ export async function checkSource() {
     if (!path.endsWith('.mjs') && !path.endsWith('.ts') && !path.endsWith('.mts')) continue;
     const source = await readFile(path, 'utf8');
     if(!path.includes('/src/installation/'))assert.doesNotMatch(source,/from\s+['"][^'"]*installation\/[^'"]+['"]/,'Operator installation must not be reachable from Runtime service code');
-    const operatorHostReader=path.endsWith('/src/installation/installer.ts')||path.endsWith('/src/installation/workspace/configuration.ts')||path.endsWith('/src/installation/workspace/binding.ts')||path.endsWith('/src/installation/toolchain/registration.ts');
+    const operatorHostReader=path.endsWith('/src/installation/installer.ts')||path.endsWith('/src/installation/workspace/configuration.ts')||path.endsWith('/src/installation/workspace/binding.ts')||path.endsWith('/src/installation/toolchain/registration.ts')||path.endsWith('/src/installation/online/selection.ts')||path.endsWith('/src/installation/online/worker.ts');
+    if(path.endsWith('/src/installation/online/selection.ts'))assert.doesNotMatch(source,/\b(?:openLegacyOwnerRoutes|createLegacyOwnerProviders|createProjectHostRoutes)\b/,'Worker selection may read current grants but must never invoke owner work');
+    if(path.endsWith('/src/installation/online/worker.ts')){
+      assert.match(source,/openLegacyOwnerRoutes\(h\.ownerConfigRef,createRuntimeHttpClient\(h\.connectionRef\),h\.ownerConfigDigest\)/,'Worker must use explicit per-project published owner Host bindings');
+      assert.doesNotMatch(source,/\b(?:RuntimeStore|createComposition|startUserService|runInstaller)\b/,'Worker must not become a second Runtime writer or implicitly start a service');
+    }
     if(path.endsWith('/src/installation/workspace/binding.ts'))assert.doesNotMatch(source,/\b(?:openLegacyOwnerRoutes|createLegacyOwnerProviders|createProjectHostRoutes)\b/,'Workspace binding may inspect protected Host configuration, not invoke Host work');
     if(path.endsWith('/src/installation/workspace/configuration.ts')||path.endsWith('/src/installation/toolchain/registration.ts')){
       assert.match(source,/import\s*\{readLegacyOwnerHostConfiguration\}\s*from\s*['"]\.\.\/\.\.\/host\/legacy-owners\.js['"]/);

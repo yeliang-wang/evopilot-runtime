@@ -328,7 +328,11 @@
         "tests/e2e/toolchain-application-v090.test.mjs",
         "src/host/online.ts",
         "tests/e2e/legacy-online-v090.test.mjs",
-        "provenance/legacy-online.json"
+        "provenance/legacy-online.json",
+        "src/installation/online/selection.ts",
+        "src/installation/online/lifecycle.ts",
+        "src/installation/online/worker.ts",
+        "tests/e2e/online-worker-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",

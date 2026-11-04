@@ -599,3 +599,60 @@ a missing cache ready or authorize replacement execution under an old request.
 配置及新的当前清单，并沿用原迁移日志恢复。原缓存、清单、准备回执和业务历史不改写。
 新的受保护配置绑定历史准备回执的准确字节；搬迁后仍显示其原目录与安装身份，并标明
 `historical: true`。历史成功不能替代目标目录中的实际依赖检查，回执缺失或变化会被拒绝。
+
+## Independent online worker
+
+The local installer can explicitly select and supervise the original published
+Harness online schedules independently of a Codex chat. The Runtime service must
+already be running. The worker uses each project's protected Host connection and
+the published Harness API; findings reach the existing Runtime service over its
+authenticated HTTP connection. It never opens a second Runtime writer, selects
+monitoring, dispatches business work or approves a repair.
+
+Create a private input file with `serviceRoot`, the online `configuration`
+(`ref` and its canonical object `digest`), and `hosts`. Each host entry contains
+`connectionRef`, `ownerConfigRef` and `ownerConfigDigest`. Every configured
+project needs exactly one corresponding owner Host grant containing
+`native:online.inspect`, `native:online.tick` and `native:online.alert.ingest`.
+Existing configuration, scope, expiration and credential checks still apply;
+these inputs cannot widen a grant. The online configuration retains its v0.8.3
+schema and native content digest. Store secrets only in its private file refs.
+
+```sh
+umask 077
+evopilot-runtime-install online-worker select --input-ref /absolute/online-input.json > /absolute/online-selection.json
+evopilot-runtime-install online-worker inspect --selection-ref /absolute/online-selection.json
+evopilot-runtime-install online-worker start --selection-ref /absolute/online-selection.json
+evopilot-runtime-install online-worker stop --selection-ref /absolute/online-selection.json
+```
+
+Selection and inspection are passive. Startup verifies the full installed
+package and pins the Node interpreter, installation, configuration, per-project
+credentials and owner distributions. A fixed owned launchd job continues after
+the starter exits. Its loopback receiver accepts bounded authenticated
+Alertmanager messages only when their labels match exactly one selected scope.
+The published Harness retains its scheduling, observation and finding-delivery
+semantics. Worker `ready` reports operational readiness; it is not a health,
+asset-quality or release verdict.
+
+Use the retained selection to inspect the original job after a timeout. A
+changed configuration blocks further collection and requires a new explicit
+selection. The original owned job can still be stopped with its old selection
+after configuration or credentials expire. A foreign launchd job is never
+stopped. Attempts, original job material, stop records and diagnostic output
+remain under the Workspace's sibling `.evopilot-online-worker` directory.
+`uninstall --selection-ref` unloads the selected job and retains that evidence.
+Stop the worker before Workspace maintenance; the maintenance guard recognizes
+the original worker label and refuses a still-loaded job.
+
+This local operator entry does not yet provide the online configuration-apply
+or Host MCP setup workflow. Those integrations and relocated online references
+still require their own implementation and acceptance before compatibility is
+complete.
+
+独立 worker 通过各项目已有的受保护连接调用已发布 Harness，并通过 HTTP 将发现送回
+已运行的 Runtime。选择和检查不启动监测；启动也不会选择策略、执行业务任务或批准
+修复。配置中的每个项目都必须有明确授权，Alertmanager 消息只能匹配一个已选范围。
+关闭启动命令或 Codex 对话不会关闭 worker。配置变化后停止采集，仍可用原选择文件
+停止属于本轮的进程；保留原尝试、故障和停止记录。工作区维护前必须先停止 worker。
+当前这里只提供本机安装器入口，配置应用、Host MCP 设置及迁移引用尚未完成验收。
