@@ -22,6 +22,8 @@ import type {LegacyProviderFactory} from '../compat/provider-context.js';
 import {createBrowserSessions} from './browser-session.js';
 import {dashboardEnvelope,monitorEvents,monitorSnapshot} from './dashboard.js';
 import {serveDashboard} from './static-ui.js';
+import {createUsageService,USAGE_READS,USAGE_WRITES} from '../usage/service.js';
+import {createUsageWorker} from '../usage/worker.js';
 
 const VERSION = String(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version);
 export interface ServerOptions { stateRoot: string; workspaceId: string; port?: number; legacyBindingRef?:string; }
@@ -46,6 +48,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
   catch(error){await execution.close();store.close();throw error;}
   const streams = new Set<ServerResponse>();
   const browserSessions=createBrowserSessions(id=>currentPrincipal(options.stateRoot,options.workspaceId,id));
+  const usage=createUsageService(store),usageWorker=createUsageWorker(store,id=>currentPrincipal(options.stateRoot,options.workspaceId,id));
   let port = 0, closing = false;
   const status = () => ({ product: 'evopilot-runtime', version: VERSION, developmentTarget: '0.9.0', contract: 'runtime-service/v1', workspaceId: options.workspaceId, serviceId: store.serviceId, transport: 'streamable-http', protocols: HTTP_PROTOCOLS, operations: [...READ_OPERATIONS,...WRITE_OPERATIONS], legacy:legacy?{bound:true,migrationDigest:legacy.inspect().migrationDigest,revisionNamespace:'original-family'}:null, independentLlm: false, productAcceptance: 'NOT_EVALUATED' });
   function principal(req: IncomingMessage) { return authenticate(options.stateRoot,options.workspaceId,req.headers.authorization); }
@@ -62,10 +65,12 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     }
     if(WRITE_OPERATIONS.includes(operation as typeof WRITE_OPERATIONS[number])){
       exact(envelope,['operation','projectId','input','requestId','expectedRevision']);if(!Number.isSafeInteger(envelope.expectedRevision)||Number(envelope.expectedRevision)<0)reject('INVALID_REVISION','Expected a nonnegative revision');
+      if(USAGE_WRITES.includes(operation as typeof USAGE_WRITES[number]))return usage.write(actor,projectId,operation,input,string(envelope.requestId),Number(envelope.expectedRevision),reauthenticate);
       const service=EXTENSION_REVIEW_WRITES.includes(operation as typeof EXTENSION_REVIEW_WRITES[number])?extensionReviews:IMPLEMENTATION_REVIEW_WRITES.includes(operation as typeof IMPLEMENTATION_REVIEW_WRITES[number])?implementationReviews:AGENT_WRITES.includes(operation as typeof AGENT_WRITES[number])?agents:PREPARATION_WRITES.includes(operation as typeof PREPARATION_WRITES[number])?preparations:AUTHORITY_WRITES.includes(operation as typeof AUTHORITY_WRITES[number])?authorities:EXECUTION_WRITES.includes(operation as typeof EXECUTION_WRITES[number])?execution:definitions;
       return service.write(actor,projectId,operation,input,string(envelope.requestId),Number(envelope.expectedRevision),reauthenticate);
     }
     exact(envelope,['operation','projectId','input']);
+    if(USAGE_READS.includes(operation as typeof USAGE_READS[number]))return usage.read(actor,projectId,operation,input);
     if(DEFINITION_READS.includes(operation as typeof DEFINITION_READS[number]))return definitions.read(actor,projectId,operation,input);
     if(AUTHORITY_READS.includes(operation as typeof AUTHORITY_READS[number]))return authorities.read(actor,projectId,operation,input);
     if(EXECUTION_READS.includes(operation as typeof EXECUTION_READS[number]))return execution.read(actor,projectId,operation,input);
@@ -74,7 +79,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     if(EXTENSION_REVIEW_READS.includes(operation as typeof EXTENSION_REVIEW_READS[number]))return extensionReviews.read(actor,projectId,operation,input);
     if(IMPLEMENTATION_REVIEW_READS.includes(operation as typeof IMPLEMENTATION_REVIEW_READS[number]))return implementationReviews.read(actor,projectId,operation,input);
     switch (operation) {
-      case 'runtime.status': exact(input,[]); return { ...status(), projectId, revision: store.revision(projectId),observationWorker:execution.health(projectId) };
+      case 'runtime.status': exact(input,[]); return { ...status(), projectId, revision: store.revision(projectId),observationWorker:execution.health(projectId),usageWorker:usageWorker.health(projectId) };
       case 'runtime.projects.list': exact(input,[],['cursor','limit']); return store.projects(actor,input.cursor===undefined?undefined:string(input.cursor,2048),input.limit===undefined?50:input.limit as number);
       case 'runtime.events.read': exact(input,[],['cursor']); return store.events(actor,projectId,input.cursor === undefined ? undefined : string(input.cursor,1024));
       case 'runtime.receipt.read': exact(input,['requestId']); return store.receipt(actor,projectId,string(input.requestId));
@@ -202,12 +207,12 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
   });
   server.requestTimeout=15000;server.headersTimeout=10000;server.keepAliveTimeout=5000;server.maxRequestsPerSocket=100;
   try { await new Promise<void>((resolve,reject) => {server.once('error',reject);server.listen(options.port ?? 0,'127.0.0.1',() => {server.removeListener('error',reject);resolve();});}); }
-  catch(e){await legacy?.close();await execution.close();store.close();throw e;}
-  const address=server.address(); if(!address || typeof address==='string'){await legacy?.close();await execution.close();store.close();reject('START_FAILED','No loopback listener',500);}
+  catch(e){usageWorker.close();await legacy?.close();await execution.close();store.close();throw e;}
+  const address=server.address(); if(!address || typeof address==='string'){usageWorker.close();await legacy?.close();await execution.close();store.close();reject('START_FAILED','No loopback listener',500);}
   port=address.port;
   const legacyIntentSource=legacy?.intentSource(actor=>{const current=currentPrincipal(options.stateRoot,options.workspaceId,actor.id);if(!current)reject('UNAUTHENTICATED','Original principal is no longer available',401);return current;});
   return Object.freeze({ url:'http://127.0.0.1:'+port,port,identity:status(),legacyIntentSource, async close(){
-    if(closing)return;closing=true;browserSessions.clear();for(const res of streams)res.end();streams.clear();
+    if(closing)return;closing=true;usageWorker.close();browserSessions.clear();for(const res of streams)res.end();streams.clear();
     server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));await legacy?.close();await execution.close();store.close();
   }});
 }

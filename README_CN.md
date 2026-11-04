@@ -63,6 +63,7 @@ node dist/server/cli.js help
 ## 文档与贡献
 
 - [中文文档入口](docs/zh-CN/README.md)、[CLI（英文）](docs/cli.md)、[规划（英文）](docs/planning-api.md)和[可读 API（英文）](docs/readable-api.md)。
+- [已记录 Token 消耗](docs/zh-CN/token-usage-v090.md)：明确的 Codex 来源、Base 阶段快照和版本报告；统计不作为执行门禁。
 - [兼容与迁移（英文）](docs/legacy-host.md)、[反馈（英文）](docs/feedback.md)和[经审阅响应（英文）](docs/response.md)。
 - [更新记录](CHANGELOG.md)、[Roadmap](docs/roadmap.md)、[贡献指南](CONTRIBUTING.md)和[双语维护](docs/zh-CN/documentation-languages.md)。
 - [安全](SECURITY.md)、[Apache-2.0 许可证](LICENSE)、[声明](NOTICE)和[来源](provenance/)。

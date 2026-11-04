@@ -11,13 +11,22 @@ import { openRegisteredBindings } from '../adapters/bindings.js';
 import { registeredAuthorityPolicy } from '../adapters/authority.js';
 import type {LegacyIntentSource} from '../compat/gateway.js';
 import {openRegisteredLegacyProviders} from '../compat/registered-providers.js';
+import {inspectCodexSource,inspectCodexCursor} from '../usage/codex.js';
+import {readHostUsage,installUsageGrant} from '../host/usage.js';
 
 export async function serviceMain(argv: string[], output: { write(value: string): unknown } = process.stdout): Promise<number> {
   const print=(v:unknown)=>output.write(canonical(v)+'\n');
   try {
     const [command,...args]=argv, flags: Record<string,string>=Object.create(null);
     for(let i=0;i<args.length;i+=2){const name=args[i];if(!/^--[a-z-]+$/.test(name)||!args[i+1]||args[i+1].startsWith('--')||Object.hasOwn(flags,name.slice(2)))reject('INVALID_ARGUMENT','Expected unique named arguments');flags[name.slice(2)]=args[i+1];}
-    if(command==='help' || !command){exact(flags,[]);print({commands:['auth-init','serve','status','request','browser-code'],developmentTarget:'0.9.0',releaseReady:false,credentials:'Use protected credential files; do not pass raw tokens on the command line.',request:'request --url <origin> --token-ref <protected file> --project <id> --request-ref <protected JSON envelope>; no automatic retry after uncertain transport results.',browser:'browser-code --connection-ref <protected connection>; enter the one-use code on /monitor or /lifecycle. No token in the URL.'});return 0;}
+    if(command==='usage-inspect'){exact(flags,['source'],['after-offset']);print({source:inspectCodexSource(flags.source),...(flags['after-offset']===undefined?{}:{initialCursor:inspectCodexCursor(flags.source,Number(flags['after-offset']))}),readOnly:true,registered:false});return 0;}
+    if(command==='usage-grant'){exact(flags,['state-root','workspace-id','grant-ref']);print(installUsageGrant(flags['state-root'],flags['workspace-id'],flags['grant-ref']));return 0;}
+    if(command==='usage-report'){
+      exact(flags,['connection-ref','query-ref','format']);if(!['json','markdown'].includes(flags.format))reject('USAGE_FORMAT','Choose json or markdown');
+      const result=await readHostUsage(flags['connection-ref'],flags['query-ref'],flags.format as 'json'|'markdown');
+      if(flags.format==='markdown')output.write(String(record(result.result).markdown));else print(result);return 0;
+    }
+    if(command==='help' || !command){exact(flags,[]);print({commands:['auth-init','serve','status','request','browser-code','usage-inspect','usage-grant','usage-report'],developmentTarget:'0.9.0',releaseReady:false,credentials:'Use protected credential files; do not pass raw tokens on the command line.',request:'request --url <origin> --token-ref <protected file> --project <id> --request-ref <protected JSON envelope>; no automatic retry after uncertain transport results.',browser:'browser-code --connection-ref <protected connection>; enter the one-use code on /monitor or /lifecycle. No token in the URL.'});return 0;}
     if(command==='browser-code'){
       exact(flags,['connection-ref']);const connection=readHostConnection(flags['connection-ref']);await createRuntimeHttpClient(flags['connection-ref']).status();
       const response=await fetch(connection.origin+'/api/v1/dashboard-code',{method:'POST',headers:{...hostHeaders(connection),'content-type':'application/json'},body:canonical({projectId:connection.projectId}),signal:AbortSignal.timeout(10000),redirect:'error'});

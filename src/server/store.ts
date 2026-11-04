@@ -77,6 +77,25 @@ export class RuntimeStore {
     const row = this.db.prepare('SELECT data FROM objects WHERE project_id=? AND kind=? AND id=?').get(projectId,kind,id);
     return row ? JSON.parse(String(row.data)) as unknown : null;
   }
+  /** Internal bounded object traversal. Public callers must authorize their
+   * project before using a feature-specific projection; kinds never come from
+   * an HTTP input. This also keeps usage data inside existing backup/receipts. */
+  objectsPage(projectId:string,kind:string,after='',limit=100):{id:string;value:unknown}[]{
+    this.guard();slug(projectId);slug(kind);
+    if(!Number.isSafeInteger(limit)||limit<1||limit>200)reject('INVALID_LIMIT','Invalid internal object page');
+    return this.db.prepare('SELECT id,data FROM objects WHERE project_id=? AND kind=? AND id>? ORDER BY id LIMIT ?').all(projectId,kind,after,limit).map(r=>({id:String(r.id),value:JSON.parse(String(r.data)) as unknown}));
+  }
+  usageSourcePage(after?:{projectId:string;id:string}):{projectId:string;id:string}[]{
+    this.guard();
+    return this.db.prepare("SELECT project_id,id FROM objects WHERE kind='usage-source' AND (project_id>? OR (project_id=? AND id>?)) ORDER BY project_id,id LIMIT 50").all(after?.projectId??'',after?.projectId??'',after?.id??'').map(r=>({projectId:String(r.project_id),id:String(r.id)}));
+  }
+  usageThreadOwner(threadId:string,epoch:string):{projectId:string;id:string}|null{
+    this.guard();const row=this.db.prepare("SELECT project_id,id FROM objects WHERE kind='usage-source' AND json_extract(data,'$.threadId')=? AND json_extract(data,'$.epoch')=? LIMIT 1").get(threadId,epoch);
+    return row?{projectId:String(row.project_id),id:String(row.id)}:null;
+  }
+  usageThreadSources(threadId:string):{projectId:string;id:string}[]{
+    this.guard();return this.db.prepare("SELECT project_id,id FROM objects WHERE kind='usage-source' AND json_extract(data,'$.threadId')=? ORDER BY project_id,id LIMIT 100").all(threadId).map(r=>({projectId:String(r.project_id),id:String(r.id)}));
+  }
   /** Internal bounded scan for the owned observation worker, never an HTTP
    * cross-project read. The worker may inspect an existing request, not dispatch. */
   pendingStageRequests(after?:{projectId:string;id:string}):{rows:{projectId:string;id:string}[];next:{projectId:string;id:string}|null}{

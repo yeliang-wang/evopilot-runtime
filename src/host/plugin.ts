@@ -11,7 +11,7 @@ export const PLUGIN_NAME='evopilot-runtime';
 export const PLUGIN_STATIC_FILES=[
   '.codex-plugin/plugin.json','skills/evopilot-runtime-expert/SKILL.md',
   'skills/evopilot-runtime-expert/agents/openai.yaml',
-  ...['configuration','execution','recovery'].map(n=>'skills/evopilot-runtime-expert/references/'+n+'.md'),
+  ...['configuration','execution','recovery','usage'].map(n=>'skills/evopilot-runtime-expert/references/'+n+'.md'),
 ] as const;
 export interface PluginMaterial {name:typeof PLUGIN_NAME;version:string;files:ReadonlyMap<string,Buffer>;transport:'streamable-http';credentialEmbedded:false;}
 export interface LegacyPluginSelection {ownerConfigRef?:string;ownerConfigDigest?:string;workspaceConfigRef?:string;workspaceConfigDigest?:string;setupConfigRef?:string;setupConfigDigest?:string;}

@@ -10,6 +10,9 @@ For the independent v0.9 development target, use the
 These describe the candidate branch, not an already published v0.9 release.
 The historical version sections below retain their original scope.
 
+[Recorded token usage](token-usage-v090.md) covers explicit Codex sources, immutable
+stage/version reports and nonblocking collection recovery on the independent development branch.
+
 - [Conversation-driven planning](planning-api.md): scoped revisions, exact human decisions and immutable execution bindings.
 - [Service API](service.md): embed the durable service, configure trusted providers and recover uncertain execution.
 - [Reviewed response execution](response.md): exact runbook and source pins, one actual action, independent verification and reviewed closure.

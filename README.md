@@ -63,6 +63,7 @@ Secrets stay in protected references, outside YAML and ordinary logs. Service-ma
 ## Documentation and contribution
 
 - [Documentation index](docs/README.md), [CLI](docs/cli.md), [planning](docs/planning-api.md) and [readable API](docs/readable-api.md).
+- [Recorded token usage](docs/token-usage-v090.md): explicit Codex sources, Base-stage snapshots and version reports; statistics do not gate execution.
 - [Compatibility and migration](docs/legacy-host.md), [feedback](docs/feedback.md) and [reviewed response](docs/response.md).
 - [Changelog](CHANGELOG.md), [Roadmap](docs/roadmap.md), [contributing](CONTRIBUTING.md) and [bilingual maintenance](docs/documentation-languages.md).
 - [Security](SECURITY.md), [Apache-2.0 license](LICENSE), [notices](NOTICE) and [provenance](provenance/).
