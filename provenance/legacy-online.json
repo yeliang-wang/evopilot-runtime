@@ -1,0 +1,22 @@
+{
+  "schema": "runtime-legacy-online-provenance/v1",
+  "sourceRepository": "https://github.com/yeliang-wang/evopilot",
+  "sourceCommit": "c24aace7a0e73e41323d3bbb044924070e1595f1",
+  "releaseBaseline": "0.8.3",
+  "license": "Apache-2.0",
+  "runtimeDependencyOnParent": false,
+  "referenceSources": {
+    "integration/online/config.ts": "f45e604c05549793e9bccdaa61ba0946f2bac00e11c27e830a061c21b16ea9a2",
+    "integration/native-composition.ts": "bcc986d8d2ce6dc61cc7a3b10af8c1cf5d465150fc729c353e64e1fd567d8941"
+  },
+  "implementation": [
+    "Runtime-owned protected online configuration reader and exact published Harness adapter wiring.",
+    "Prometheus collection and Alertmanager authentication remain in the verified published Harness package; no owner source is copied or imported.",
+    "Original finding delivery uses authenticated independent Runtime HTTP, fixed original identity and review-required repair semantics."
+  ],
+  "remaining": [
+    "Explicit configuration application workflow",
+    "Independent supervised worker and receiver",
+    "Current installed candidate and complete fixed E2E"
+  ]
+}

@@ -48,6 +48,31 @@ do not refresh CAS or redispatch to remove uncertainty. Optional online telemetr
 needs explicitly registered real providers and selected bindings; reading a
 finding or a guide does not start a worker or establish service health.
 
+The protected owner Host registration can select an `online` reference and its
+exact configuration digest. It reads the existing
+`evopilot-online-configuration/v1` schema: explicit workspace/scopes, Prometheus
+connections, Alertmanager credential file references and bounded receiver/tick
+settings. Discovery does not read token values, collect metrics or select a
+binding. The exact published Harness 0.8.3 package supplies the Prometheus
+collector, authenticated Alertmanager receiver and evaluation; Runtime does not
+copy their algorithms or read an owner database directly.
+
+Calls remain restricted to the registered project and explicit owner operation
+allowlist. Changed configuration, revoked registration, expired scope or modified
+published package blocks use. Alert payloads become readable by Harness only
+during the authenticated receiver's original ingestion callback. Finding delivery
+uses the same authenticated Runtime HTTP service and original finding request
+identity; Runtime independently reads the Harness finding. The resulting repair
+candidate requires review and grants no code-change, asset or release authority.
+This adapter does not itself implement the local configuration workflow or
+supervised worker lifecycle; those remain separate v0.9 compatibility work.
+
+受保护的 owner Host 配置可绑定准确的 `online` 配置引用及摘要，复用原有配置格式。
+发现入口不读取密钥、不采集指标，也不自动选中监测绑定。实际采集、告警认证与评定
+由已发布 Harness 0.8.3 提供；配置、权限或发行字节变化会阻止继续使用。告警反馈经
+同一 Runtime HTTP 服务形成待审阅候选，不授权修改代码或发布。配置工作流及独立
+worker 生命周期仍是另外的兼容实现义务，不能用适配器测试替代。
+
 ## Definition and operation boundaries
 
 Legacy project preparation, private Goal/Target/Loop records and content grades

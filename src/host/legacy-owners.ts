@@ -21,6 +21,8 @@ import {forwardLegacyRuntime} from './legacy-tools.js';
 import {nativeBytesDigest,nativeSha256} from '../../vendor/compatibility/v1/native.mjs';
 import {randomUUID} from 'node:crypto';
 import {withWorkspaceLease} from '../compat/workspace-lease.js';
+import {openPublishedOnlineAdapters,readOnlineConfiguration,validateOnlineRegistration,type OnlineRegistration,type PublishedOnlineAdapters} from './online.js';
+import type {OnlineProviderInput,OnlineAlertBatch} from '../../vendor/compatibility/online/v1/online.mjs';
 
 export type LegacyOwnerEntry='request'|'native';
 interface Registration {packageRoot:string;calls:string[];}
@@ -29,6 +31,7 @@ interface Configuration {
   legacyBindingRef:string;expiresAt:string;owners:Record<Owner,Registration>;
   nativeToolchain?:NativeToolchainRegistration;
   project?:ProjectHostSelection;
+  online?:OnlineRegistration;
 }
 type Method='execute'|'classify'|'native'|'readiness'|'readable'|'feedback'|'response'|'online'|'usability';
 interface OwnerService {
@@ -44,13 +47,15 @@ export interface LegacyOwnerRoutes {
   capabilities():unknown;
   call(owner:Owner,entry:LegacyOwnerEntry,envelope:unknown,signal?:AbortSignal):Promise<unknown>;
   project?:{calls:string[];call(family:'native'|'workspace',operation:string,input:unknown,requestId?:string,signal?:AbortSignal):Promise<unknown>};
+  online?:{configurationDigest:string;scopes:readonly Call['scope'][];receive(sourceId:string,authorization:string|undefined,body:Buffer,consume:(batch:OnlineAlertBatch)=>Promise<unknown>):Promise<unknown>};
   close():Promise<void>;
 }
 export function readLegacyOwnerHostConfiguration(ref:string):Configuration {
   string(ref,4096);if(!isAbsolute(ref)||resolve(ref)!==ref||realpathSync(ref)!==ref)reject('OWNER_HOST_CONFIGURATION','Use an exact protected owner Host configuration');
-  const value=record(readPrivateJson(ref));exact(value,['schema','workspaceId','projectId','legacyBindingRef','expiresAt','owners'],['nativeToolchain','project']);
+  const value=record(readPrivateJson(ref));exact(value,['schema','workspaceId','projectId','legacyBindingRef','expiresAt','owners'],['nativeToolchain','project','online']);
   if(value.schema!=='runtime-legacy-owner-host/v1')reject('OWNER_HOST_CONFIGURATION','Unsupported owner Host configuration');
   slug(value.workspaceId);slug(value.projectId);string(value.legacyBindingRef,4096);
+  if(value.online!==undefined){const online=readOnlineConfiguration(validateOnlineRegistration(value.online),String(value.workspaceId));if(!online.settings.scopes.some(s=>s.projectId===value.projectId))reject('ONLINE_SCOPE','This owner Host project is not configured for online access',403);}
   const expires=Date.parse(string(value.expiresAt,128));if(!Number.isFinite(expires)||expires<=Date.now())reject('OWNER_HOST_EXPIRED','Owner Host registration has expired',403);
   const owners=record(value.owners);exact(owners,['ontology','harness']);
   for(const item of Object.values(owners)){
@@ -71,6 +76,7 @@ export async function openLegacyOwnerRoutes(configRef:string,client:RuntimeHttpC
   if(config.workspaceId!==client.connection.workspaceId||config.projectId!==client.connection.projectId||binding.workspaceId!==config.workspaceId||binding.serviceId!==client.connection.serviceId)reject('OWNER_HOST_SCOPE','Owner Host and Runtime connection must share the exact migrated workspace/service/project',403);
   const services=new Map<Owner,OwnerService>(),factories=new Map<Owner,()=>OwnerService>(),capabilities=new Map<Owner,Record<string,unknown>>(),calls=new AsyncLocalStorage<Call>(),pending=new Set<Promise<unknown>>();let closing=false;
   let projectRoutes:ProjectHostRoutes|undefined;
+  let online:PublishedOnlineAdapters|undefined;
   const validatorModules=new Map<Owner,Record<string,unknown>>();
   const currentToolchain=()=>config.nativeToolchain?readRegisteredNativeToolchain({schema:'runtime-integrations/v1',workspaceId:config.workspaceId,revision:1,platforms:[],credentials:[],owners:[],resources:[],nativeToolchain:config.nativeToolchain}):undefined;
   function hostError(error:unknown):ServiceError {if(error instanceof ServiceError)return error;const code=error&&typeof error==='object'&&'code'in error&&typeof error.code==='string'&&/^[A-Z_]{1,64}$/.test(error.code)?error.code:'OWNER_CALL_OUTCOME_UNKNOWN';return new ServiceError(code,'Inspect the original owner/project request before retrying; no automatic retry was made',409);}
@@ -110,6 +116,7 @@ export async function openLegacyOwnerRoutes(configRef:string,client:RuntimeHttpC
   }
   try{
     await connected();
+    if(config.online)online=await openPublishedOnlineAdapters(config.owners.harness.packageRoot,config.online,config.workspaceId,fresh);
     const toolchain=currentToolchain();
     if(config.project){
       const root=config.project.root;for(const other of [binding.workspaceRoot,codeRoot,...Object.values(config.owners).map(o=>o.packageRoot)])if(root===other||root.startsWith(other+'/')||other.startsWith(root+'/'))reject('OWNER_HOST_SCOPE','Project files must be separate from state and installation roots');
@@ -125,7 +132,11 @@ export async function openLegacyOwnerRoutes(configRef:string,client:RuntimeHttpC
       const factory=module[owner==='ontology'?'createOntologyService':'createHarnessService'];if(typeof factory!=='function')reject('OWNER_CAPABILITY','Published owner public factory is missing');
       const providers=createLegacyOwnerProviders({workspaceId:config.workspaceId,projectId:config.projectId,client,guard:()=>{fresh();const context=calls.getStore();if(!context)reject('OWNER_HOST_SCOPE','Provider access requires a current Host call',403);return context;},readOwner:(other,envelope)=>invoke(other,'native',envelope,true),...(config.project?{readWorkspaceEvidence:(request:Parameters<ProjectHostRoutes['readWorkspaceEvidence']>[0])=>{if(!projectRoutes)reject('OWNER_HOST_SCOPE','Current project preparation required');return projectRoutes.readWorkspaceEvidence(request);}}:{})},owner);
       const admission=config.project?{resolveNativeAuthoring:(request:Parameters<ProjectHostRoutes['providers']['resolveNativeAuthoring']>[0])=>{fresh();if(!calls.getStore()||!projectRoutes||canonical(request.scope)!==canonical(calls.getStore()!.scope))reject('OWNER_HOST_SCOPE','Current project preparation required');return projectRoutes.providers.resolveNativeAuthoring(request);},resolveReadinessAuthoring:(request:Parameters<ProjectHostRoutes['providers']['resolveReadinessAuthoring']>[0])=>{fresh();if(!calls.getStore()||!projectRoutes||canonical(request.scope)!==canonical(calls.getStore()!.scope))reject('OWNER_HOST_SCOPE','Current project preparation required');return projectRoutes.providers.resolveReadinessAuthoring(request);}}:{};
-      const make=()=>(factory as (options:{workspaceRoot:string;workspaceId:string},providers:Record<string,unknown>)=>OwnerService)({workspaceRoot:binding.workspaceRoot,workspaceId:config.workspaceId},{...providers,...admission,...(toolchain?{nativeToolchain:toolchain}:{})});factories.set(owner,make);
+      const onlineProviders=owner==='harness'&&online?{
+        collectOnline:async(input:OnlineProviderInput)=>{const call=calls.getStore();if(!call||canonical(call.scope)!==canonical(input.binding.scope))reject('ONLINE_SCOPE','Collection requires its current scoped owner invocation',403);call.signal?.throwIfAborted();const value=await online!.collectOnline(input);fresh();call.signal?.throwIfAborted();return value;},
+        inspectOnlineAlert:async(input:{sourceId:string;digest:string})=>{if(!calls.getStore())reject('ONLINE_SCOPE','Alert readback requires its current owner invocation',403);return online!.inspectOnlineAlert(input);},
+      }:{};
+      const make=()=>(factory as (options:{workspaceRoot:string;workspaceId:string},providers:Record<string,unknown>)=>OwnerService)({workspaceRoot:binding.workspaceRoot,workspaceId:config.workspaceId},{...providers,...admission,...onlineProviders,...(toolchain?{nativeToolchain:toolchain}:{})});factories.set(owner,make);
       const service=make();services.set(owner,service);
       const cap=record(service.capabilities());if(cap.product!==owner||cap.version!==identity.version)reject('OWNER_CAPABILITY','Published owner API identity differs from its verified package');capabilities.set(owner,cap);
       for(const call of config.owners[owner].calls){const at=call.indexOf(':'),operation=call.slice(at+1),selected=route(owner,call.slice(0,at) as LegacyOwnerEntry,operation);if(!Array.isArray(cap[selected.catalog])||!(cap[selected.catalog] as unknown[]).includes(operation)||typeof service[selected.method]!=='function')reject('OWNER_CAPABILITY','A registered call is not supported by the selected published owner');}
@@ -143,7 +154,7 @@ export async function openLegacyOwnerRoutes(configRef:string,client:RuntimeHttpC
       const toolchains={node:{toolchainLockDigest:nativeSha256(toolFiles),toolFiles,readRoots:[]}};
       projectRoutes=createProjectHostRoutes({projectRoot:config.project.root,stateRoot:binding.workspaceRoot,workspaceId:config.workspaceId},config.projectId,config.project,{ownerValidation,toolchains,...(toolchain?{nativeToolchain:()=>toolchain}:{}),readCompletedProject:async(scope,id)=>{current();const result=await forwardLegacyRuntime(client,'native',{operation:'project.inspect',scope,input:{id}},calls.getStore()?.signal);current();return result.result as NativeProject;}},current);
     }
-    return{...(projectRoutes?{project:{calls:[...config.project!.calls],async call(family:'native'|'workspace',operation:string,value:unknown,requestId?:string,signal?:AbortSignal){
+    return{...(online?{online:{configurationDigest:online.configuration.digest,scopes:online.configuration.settings.scopes.filter(s=>s.projectId===config.projectId),async receive(sourceId:string,authorization:string|undefined,body:Buffer,consume:(batch:OnlineAlertBatch)=>Promise<unknown>){await connected();const result=await online!.receive(sourceId,authorization,body,consume);await connected();return result;}}}:{}),...(projectRoutes?{project:{calls:[...config.project!.calls],async call(family:'native'|'workspace',operation:string,value:unknown,requestId?:string,signal?:AbortSignal){
       // Original template-upgrade inputs have no projectId: the protected
       // registration selects the private project, never caller-supplied paths.
       fresh();const input=JSON.parse(canonicalEvidence(value)) as Record<string,unknown>,scope=family==='native'?guardScope(operation==='preflight'?record(input.project).scope:input.scope):guardScope({projectId:operation==='template.upgrade'?config.projectId:input.projectId,visibility:'private'});

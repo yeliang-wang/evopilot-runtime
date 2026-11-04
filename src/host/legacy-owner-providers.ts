@@ -10,6 +10,7 @@ import {validateFeedbackEvent} from '../../vendor/compatibility/feedback/v1/feed
 import {validateReadinessIntent,verifyReadinessProjection,type ReadinessProjection} from '../../vendor/compatibility/usability/v2/contract.mjs';
 import {responseReference,validateResponseEvidence,type ResponseEvidence,type ResponseEvidenceRef} from '../../vendor/compatibility/response/v1/response.mjs';
 import {readRuntimeResponseEvidence} from '../compat/response-evidence.js';
+import {validateOnlineFinding,type OnlineFinding} from '../../vendor/compatibility/online/v1/online.mjs';
 
 interface Context {
   workspaceId:string;projectId:string;client:RuntimeHttpClient;
@@ -62,6 +63,16 @@ export function createLegacyOwnerProviders(context:Context,owner:Owner='harness'
       if(!projection.published||projection.workspaceId!==context.workspaceId||!same(projection.reference,request.reference)||!same(projection.scope,selected.scope))reject('OWNER_REFERENCE_CHANGED','Readiness projection differs from its exact published package');return projection;
     },
     readOnlineRepair:async(request:{scope:NativeScope;id:string})=>runtime('online','online.repair.inspect',request,{id:request.id}),
+    deliverOnlineFinding:async(finding:OnlineFinding)=>{
+      validateOnlineFinding(finding);scope(finding);
+      // Findings only create review-required repair candidates. The Runtime
+      // rereads the original Harness finding under the authenticated principal.
+      const state=record(await runtime('online','online.inspect',finding,{}));scope(finding);
+      const value=record((await forwardLegacyRuntime(context.client,'online',{operation:'online.repair.ingest',scope:finding.scope,input:{id:finding.id},requestId:'online-finding-'+finding.id.slice(7),expectedRevision:state.revision},context.guard().signal)).result);scope(finding);
+      const result=record(value.result);
+      if(result.id!==finding.incidentId||!/^sha256:[a-f0-9]{64}$/.test(String(result.digest)))reject('OWNER_REFERENCE_CHANGED','Runtime online repair reference differs from the original finding');
+      return{id:String(result.id),digest:String(result.digest)};
+    },
     readResponseEvidence:responseEvidence,
     readResponseRecovery:async(request:{scope:NativeScope;reference:{owner:string;id:string}})=>{
       scope(request);if(request.reference.owner!=='harness')reject('OWNER_REFERENCE_CHANGED','Response recovery belongs to Harness');const value=record(await context.readOwner('harness',{operation:'response.recovery.inspect',scope:request.scope,input:{id:request.reference.id}}));if(!same(value.reference,request.reference))reject('OWNER_REFERENCE_CHANGED','Recovery reference differs');return value;

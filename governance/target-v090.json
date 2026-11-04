@@ -325,7 +325,10 @@
         "src/installation/toolchain/registration.ts",
         "tests/e2e/toolchain-registration-v090.test.mjs",
         "src/installation/toolchain/application.ts",
-        "tests/e2e/toolchain-application-v090.test.mjs"
+        "tests/e2e/toolchain-application-v090.test.mjs",
+        "src/host/online.ts",
+        "tests/e2e/legacy-online-v090.test.mjs",
+        "provenance/legacy-online.json"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",
