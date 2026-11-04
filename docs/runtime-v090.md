@@ -124,6 +124,30 @@ stages/checks, turn required checks optional, inject arbitrary shell code,
 increase authority/budgets or bypass candidate evidence before verification.
 See the [accepted architecture](architecture/runtime-v090-independence.md).
 
+Base changes use an explicit stopped-service upgrade into a new installation.
+The `evopilot-runtime-install service-upgrade` operator accepts `inspect
+--selection-ref`, `migrate --plan-ref` and `rollback --plan-ref`. Inspection binds
+the exact source installation and snapshot; migration requires a fresh backup
+directory and exact destination installation plan. A running source, pending
+request or unresolved execution blocks migration. It does not start the new
+service or register its Codex plugin automatically.
+
+The backup seals the original publisher Base, definitions, instances, receipts,
+events and audit. The new service may read these exact historical records; only
+its current publisher Base can admit activation, new instances or new execution.
+An old YAML file does not gain historical authority merely by being saved. While
+the new service runs, it holds the original service's writer lease to prevent
+both installations from writing under the same identity.
+
+Validation returns `baseTransition` for a retained old definition. The existing
+Dashboard difference preview shows added required fields, removed slots,
+tightened constraints, schema changes and original extension IDs. YAML remains
+unchanged until the user edits it. Correct the configuration and preview again
+before activating; changing the original revision invalidates the old preview.
+Rollback first preserves the complete new installation and its evidence, then
+verifies the original installation/backup. It never overwrites new evidence with
+an old database or makes the older Base selectable in the new service.
+
 ## Use the two Dashboard pages
 
 `/lifecycle` shows the SeeCode graph above the YAML editor. Select a node to edit
@@ -176,4 +200,6 @@ entries, Workspace bootstrap, toolchain preparation and stopped maintenance.
 Runtime, Ontology and Harness evolve and release independently. The parent
 EvoPilot provides navigation; it receives no new product SemVer from this target.
 Source checks, development probes and a running service do not replace all
-655 pre-release and nine post-delivery acceptance instances.
+655 pre-release and nine post-delivery acceptance instances. The approved usage
+addendum adds 23 pre-release and one post-delivery case: 688 in total, with 678
+before release and 10 after delivery.

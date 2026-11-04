@@ -1,0 +1,23 @@
+{
+  "schema": "runtime-base-qualification-profile/v1",
+  "classification": "PRIVATE_EX10_QUALIFICATION_ONLY",
+  "officialRelease": false,
+  "sourceVersion": "0.9.0",
+  "qualificationVersion": "0.9.0-ex10-a",
+  "baseVersion": "0.9.0-ex10-a",
+  "baseSchema": "runtime-base-lifecycle/ex10-a",
+  "projectSchema": "runtime-project-lifecycle/ex10-a",
+  "removedRequiredField": "config.scope.deliveryTargetRef",
+  "addedSlot": {
+    "id": "legacy-after-plan",
+    "predecessor": "plan",
+    "successor": "implementation",
+    "types": ["review", "check"]
+  },
+  "relaxedConstraint": {
+    "path": "config.plan.budget.timeoutSeconds",
+    "originalMaximum": 3600,
+    "maximum": 7200
+  },
+  "purpose": "Create an explicit predecessor for E05.EX10/E17.EX10. It is not a historical public Release, an install target for daily use, or an alternative Base in the final Runtime."
+}

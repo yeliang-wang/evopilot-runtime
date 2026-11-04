@@ -24,6 +24,7 @@ import {dashboardEnvelope,monitorEvents,monitorSnapshot} from './dashboard.js';
 import {serveDashboard} from './static-ui.js';
 import {createUsageService,USAGE_READS,USAGE_WRITES} from '../usage/service.js';
 import {createUsageWorker} from '../usage/worker.js';
+import {acquireUpgradeSourceLease,loadServiceUpgradeContext,verifyHistoricalRecord,type VerifiedServiceUpgrade} from '../lifecycle/base-upgrade.js';
 
 const VERSION = String(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version);
 export interface ServerOptions { stateRoot: string; workspaceId: string; port?: number; legacyBindingRef?:string; }
@@ -33,19 +34,46 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
   if(options.legacyBindingRef!==undefined)string(options.legacyBindingRef,4096);
   if (options.port !== undefined && (!Number.isSafeInteger(options.port) || options.port < 0 || options.port > 65535)) reject('INVALID_PORT','Invalid loopback port');
   assertCredentials(options.stateRoot,options.workspaceId);
-  const store = new RuntimeStore(options.stateRoot, options.workspaceId);
-  const preparations=createPreparationService(store,trustedPreparation);
-  const authorities=createAuthorityService(store,trustedPolicy,id=>currentPrincipal(options.stateRoot,options.workspaceId,id),preparations.verify);
-  const definitions=createDefinitionService(store,trustedBindings,trustedAuthorities??authorities.resolveExecution,trustedAuthorities?undefined:authorities.verifyExecution,authorities.resolveRelease);
-  const extensionReviews=createExtensionReviewService(store,trustedExtensionReview?.(store),id=>currentPrincipal(options.stateRoot,options.workspaceId,id));
+  const sourceLease=await acquireUpgradeSourceLease(options.stateRoot);
+  const throwCleanupErrors=(errors:unknown[]):void=>{if(errors.length===1)throw errors[0];if(errors.length>1)throw new AggregateError(errors,'Runtime cleanup failed',{cause:errors[0]});};
+  let store:RuntimeStore;
+  try{store=new RuntimeStore(options.stateRoot, options.workspaceId);}catch(error){const errors=[error];try{sourceLease?.close();}catch(cleanup){errors.push(cleanup);}throwCleanupErrors(errors);throw error;}
+  const closeStore=(errors:unknown[]=[])=>{
+    try{store.close();}catch(error){errors.push(error);}
+    finally{try{sourceLease?.close();}catch(error){errors.push(error);}}
+    throwCleanupErrors(errors);
+  };
+  let history:VerifiedServiceUpgrade|null;
+  try{
+    history=loadServiceUpgradeContext(options.stateRoot,options.workspaceId,store.serviceId);
+    if(history)for(const row of history.context.historicalRecords)verifyHistoricalRecord(history,row.projectId,row.kind,row.id,store.object(row.projectId,row.kind,row.id));
+  }catch(error){closeStore([error]);throw error;}
+  let initialServices;
+  try{
+    const preparations=createPreparationService(store,trustedPreparation);
+    const authorities=createAuthorityService(store,trustedPolicy,id=>currentPrincipal(options.stateRoot,options.workspaceId,id),preparations.verify);
+    const definitions=createDefinitionService(store,trustedBindings,trustedAuthorities??authorities.resolveExecution,trustedAuthorities?undefined:authorities.verifyExecution,authorities.resolveRelease,history);
+    const extensionReviews=createExtensionReviewService(store,trustedExtensionReview?.(store),id=>currentPrincipal(options.stateRoot,options.workspaceId,id));
+    initialServices={preparations,authorities,definitions,extensionReviews};
+  }catch(error){closeStore([error]);throw error;}
+  const {preparations,authorities,definitions,extensionReviews}=initialServices;
   let execution:ReturnType<typeof createExecutionService>;
   try{execution=createExecutionService(store,{bindings:trustedBindings,authorities:trustedAuthorities??authorities.resolveExecution,verifyAuthority:trustedAuthorities?undefined:authorities.verifyExecution,releaseAuthority:authorities.resolveRelease,principal:id=>currentPrincipal(options.stateRoot,options.workspaceId,id),verifyProjectReviews:extensionReviews.verifyPassed,verifyProjectReviewState:extensionReviews.verifyCurrentDecisions,adapter:typeof trustedExecutor==='function'?trustedExecutor(store,{releaseAuthority:authorities.resolveRelease,authorityPolicy:trustedPolicy,extensionReviews}):trustedExecutor});}
-  catch(e){store.close();throw e;}
+  catch(e){closeStore([e]);throw e;}
   const agents=createAgentService(store,(actor,projectId,id)=>execution.authorizeOriginal(actor,projectId,id));
   const implementationReviews=createImplementationReviewService(store,trustedImplementationReview,id=>currentPrincipal(options.stateRoot,options.workspaceId,id));
   let legacy:ReturnType<typeof createLegacyGateway>|undefined;
+  // Each owner must be closed even if an earlier owner fails. Keep the original
+  // failure as the cause instead of allowing a cleanup error to replace it.
+  async function closeServices(errors:unknown[]=[]):Promise<void>{
+    try{await legacy?.close();}catch(error){errors.push(error);}
+    finally{
+      try{await execution.close();}catch(error){errors.push(error);}
+      finally{closeStore(errors);}
+    }
+  }
   try{if(options.legacyBindingRef)legacy=createLegacyGateway(store,readLegacyBinding(options.legacyBindingRef),trustedLegacyProviders);}
-  catch(error){await execution.close();store.close();throw error;}
+  catch(error){await closeServices([error]);throw error;}
   const streams = new Set<ServerResponse>();
   const browserSessions=createBrowserSessions(id=>currentPrincipal(options.stateRoot,options.workspaceId,id));
   const usage=createUsageService(store),usageWorker=createUsageWorker(store,id=>currentPrincipal(options.stateRoot,options.workspaceId,id));
@@ -219,12 +247,23 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
   });
   server.requestTimeout=15000;server.headersTimeout=10000;server.keepAliveTimeout=5000;server.maxRequestsPerSocket=100;
   try { await new Promise<void>((resolve,reject) => {server.once('error',reject);server.listen(options.port ?? 0,'127.0.0.1',() => {server.removeListener('error',reject);resolve();});}); }
-  catch(e){usageWorker.close();await legacy?.close();await execution.close();store.close();throw e;}
-  const address=server.address(); if(!address || typeof address==='string'){usageWorker.close();await legacy?.close();await execution.close();store.close();reject('START_FAILED','No loopback listener',500);}
+  catch(e){const errors=[e];try{usageWorker.close();}catch(error){errors.push(error);}finally{await closeServices(errors);}throw e;}
+  const address=server.address(); if(!address || typeof address==='string'){
+    const errors:unknown[]=[new ServiceError('START_FAILED','No loopback listener',500)];
+    try{usageWorker.close();}catch(error){errors.push(error);}finally{await closeServices(errors);}
+    return reject('START_FAILED','No loopback listener',500);
+  }
   port=address.port;
   const legacyIntentSource=legacy?.intentSource(actor=>{const current=currentPrincipal(options.stateRoot,options.workspaceId,actor.id);if(!current)reject('UNAUTHENTICATED','Original principal is no longer available',401);return current;});
   return Object.freeze({ url:'http://127.0.0.1:'+port,port,identity:status(),legacyIntentSource, async close(){
-    if(closing)return;closing=true;usageWorker.close();browserSessions.clear();for(const res of streams)res.end();streams.clear();
-    server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));await legacy?.close();await execution.close();store.close();
+    if(closing)return;closing=true;const errors:unknown[]=[];
+    try{usageWorker.close();}catch(error){errors.push(error);}
+    finally{
+      try{browserSessions.clear();for(const res of streams)res.end();streams.clear();}catch(error){errors.push(error);}
+      finally{
+        try{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}catch(error){errors.push(error);}
+        finally{await closeServices(errors);}
+      }
+    }
   }});
 }

@@ -2,7 +2,21 @@ import {useEffect,useRef,useState} from 'react';
 import {Graph} from './Graph';
 import {ApiError,call,source as readSource,savePending,loadPending,clearPending} from './api';
 import {addExtension,at,changeExtension,changeField,connectExtension,data,diffLines,draftNodes,displayValue,extensions,fieldValue,moveNode,removeExtension,stageLabels} from './model';
-import type {Base,DefinitionView,Field,GraphNode,Issue,Pending,Receipt,Session,Validation} from './types';
+import type {Base,BaseTransitionPreview,DefinitionView,Field,GraphNode,Issue,Pending,Receipt,Session,Validation} from './types';
+
+function BaseTransition({value}:{value:BaseTransitionPreview}){
+ return <div className="base-transition" data-testid="base-transition"><h3>Base 升级差异</h3>
+  <p>原定义：<strong>{value.from.id} @{value.from.version}</strong> → 当前发布版本：<strong>{value.to.id} @{value.to.version}</strong></p>
+  <p>升级不会自动修改 YAML 或删除扩展。请处理以下差异，重新校验后启用；历史实例仍保留原版本。</p>
+  <h4>新增必填配置</h4>{value.addedRequiredFields.length?<ul>{value.addedRequiredFields.map(field=><li key={field}><code>{field}</code></li>)}</ul>:<p>无新增必填配置。</p>}
+  <h4>移除的扩展槽位</h4>{value.removedSlots.length?<ul>{value.removedSlots.map(slot=><li key={slot}><code>{slot}</code></li>)}</ul>:<p>无移除的槽位。</p>}
+  <h4>收紧的约束</h4>{value.tightenedConstraints.length?<ul>{value.tightenedConstraints.map((change,index)=><li key={change.path+'-'+index}><code>{change.path}</code><p>原约束：<code>{JSON.stringify(change.before)}</code></p><p>当前约束：<code>{JSON.stringify(change.after)}</code></p></li>)}</ul>:<p>无收紧的约束。</p>}
+  <p>Schema：<code>{value.from.schemaVersion}</code>{value.schemaChanged?<> → <code>{value.to.schemaVersion}</code>，需要重新校验。</>:'，版本未变。'}</p>
+  <h4>保留的原项目扩展</h4>{value.retainedExtensionIds.length?<ul>{value.retainedExtensionIds.map(id=><li key={id}><code>{id}</code></li>)}</ul>:<p>原定义无项目扩展。</p>}
+  {value.issues.length?<ul className="issues">{value.issues.map((issue,index)=><li key={issue.path+'-'+index}><code>{issue.path}</code><strong>{issue.code}</strong><p>{issue.message}</p><small>{issue.remedy}</small></li>)}</ul>:null}
+  <details><summary>核对原修订与版本摘要</summary><dl><dt>原定义修订</dt><dd><code>{value.sourceRevisionId}</code></dd><dt>原 Base 摘要</dt><dd><code>{value.from.digest}</code></dd><dt>当前 Base 摘要</dt><dd><code>{value.to.digest}</code></dd><dt>本次差异摘要</dt><dd><code>{value.previewDigest}</code></dd></dl></details>
+ </div>;
+}
 
 function FieldInput({field,value,disabled,onChange}:{field:Field;value:unknown;disabled:boolean;onChange:(value:unknown)=>void}){
  const [text,setText]=useState(displayValue(value)),[error,setError]=useState('');useEffect(()=>setText(displayValue(value)),[value]);
@@ -43,7 +57,7 @@ export function Editor({session,onDirty,onAuthLost}:{session:Session;onDirty:(va
   {!canEdit?<div className="notice">当前身份仅可浏览定义。</div>:null}
   {pending?<div className="notice warning">待核对原请求 <code>{pending.requestId}</code>。<button type="button" disabled={busy} onClick={()=>void inspectPending()}>核对原请求</button></div>:null}
   {conflict?<div className="notice warning">服务端版本已变化或需重新读回。当前编辑内容仍保留。<button type="button" disabled={busy} onClick={()=>{if(text===saved||window.confirm('重新读取将替换当前未保存内容，是否继续？'))void reload(true);}}>重新读取</button><button type="button" onClick={()=>void navigator.clipboard.writeText(text).then(()=>setMessage('已复制当前 YAML。')).catch(()=>setMessage('无法访问剪贴板，请在源码框中复制。'))}>复制当前 YAML</button></div>:null}
-  {base?<div className="base-banner"><span>继承 <strong>{base.pin.id} @{base.pin.version}</strong></span><span>Base 由 Runtime 发布者维护 · 配置修订 {view?.revision??0}</span></div>:null}
+  {base?<div className="base-banner"><span>{currentValidation?.baseTransition?<>原定义继承 <strong>{currentValidation.baseTransition.from.id} @{currentValidation.baseTransition.from.version}</strong> · 当前发布版本 <strong>{base.pin.version}</strong></>:<>继承 <strong>{base.pin.id} @{base.pin.version}</strong></>}</span><span>Base 由 Runtime 发布者维护 · 配置修订 {view?.revision??0}</span></div>:null}
   <p className="muted" role="status">{currentValidation?.compilation.valid?'图形已与当前源码结构核对；启用仍需全部配置与绑定校验通过。':'草稿图形预览 · 当前源码尚未通过结构校验，不代表可启用。'}</p>
   <Graph nodes={nodes} layout={layout??{}} selected={selected} onSelect={setSelected} onMove={locked||!parsed?undefined:(id,x,y)=>edit(()=>moveNode(text,nodes,id,x,y))}/>
   <div className="editor-grid"><section className="panel properties"><div className="section-heading"><h2>{stageLabels[selected]??selected}</h2><span className="badge">{selectedNode?.source==='project'?'项目扩展':'Base 阶段'}</span></div>
@@ -57,7 +71,7 @@ export function Editor({session,onDirty,onAuthLost}:{session:Session;onDirty:(va
    <div className="button-row"><button type="button" disabled={locked||!text} onClick={()=>void save(false)}>保存草稿</button><button type="button" disabled={busy||loading||!text||!!pending} onClick={()=>void preview()}>校验与差异预览</button><button type="button" className="primary" disabled={locked||!canActivate||previewSource!==text||!previewValidation?.ready} onClick={()=>void save(true)}>保存并启用</button></div>
    <p className="muted">定义启用仅供后续新实例使用，不启动任务、不批准资产或软件发布。</p>
   </section></div>
-  {previewSource!==null?<section className="panel diff"><h2>与当前生效版本的准确差异</h2><pre tabIndex={0}>{diffLines(activeSource,text)}</pre></section>:null}
+  {previewSource!==null?<section className="panel diff"><h2>与当前生效版本的准确差异</h2>{previewValidation?.baseTransition?<BaseTransition value={previewValidation.baseTransition}/>:null}<pre tabIndex={0}>{diffLines(activeSource,text)}</pre></section>:null}
   {issues.length?<section className="panel"><h2>需要处理的配置（{issues.length}）</h2><ul className="issues">{issues.map((i,n)=><li key={n}><code>{i.path}</code><strong>{i.code}</strong><p>{i.message}</p><small>{i.remedy}</small></li>)}</ul></section>:null}
  </>;
 }

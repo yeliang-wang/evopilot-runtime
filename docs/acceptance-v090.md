@@ -52,6 +52,38 @@ lists every unexecuted ID. Complete product qualification still requires all
 other scenarios, exact source CI, actual Codex/browser/platform journeys,
 publication and current-host delivery evidence.
 
+E14's five fixed cases use separate new installation roots and protected exact
+plans with a non-null, version-pinned Codex selection. They exercise native plugin
+registration, real App Server discovery and HTTP reads, service/plugin failure
+recovery, occupied-port and duplicate-writer rejection, and native uninstall with
+retained data, credentials and audit. Read-only discovery waits for the original
+asynchronous Host startup; it does not reinstall or dispatch a tool to create
+readiness. These cases have no model turn and do not satisfy Expert dialogue
+obligations. `maintenance.casePlans` binds each selected case's plan reference,
+SHA256 and isolated Codex home; the campaign root must not already exist.
+
+E15 binds a separate installed migrated workspace and explicit synthetic assets
+from the published Ontology/Harness 0.8.3 packages. Its actual Codex plugin exposes
+one HTTP service and its stdio compatibility route. The collector verifies the
+same project, one new synthetic goal, original receipt and exact replay through
+both entries. Each owner performs one new native validation with original receipt
+readback; the published owners commit a RUNNING claim and completion separately,
+so the exact revision increment is two. Readback and replay must not advance it
+again. Harness readiness reads the original Ontology projection and Runtime
+intent. This is technical validation of isolated assets, not semantic approval,
+business execution, asset publication or actual Expert dialogue.
+
+The private EX10 predecessor can be built with
+`node scripts/package-base-qualification.mjs /absolute/private/new-output` from
+clean committed source. Its fixed profile produces version `0.9.0-ex10-a`, marks
+it as qualification-only, and records every source transformation. It is not a
+historical public Release. It is compiled before packaging; neither the final
+Base nor installed package bytes are patched. Its purpose is the real A-to-B
+upgrade, difference/denial/correction and rollback journey. Source regressions,
+synthetic UI presentation and this package's construction do not themselves
+satisfy E05.EX10 or E17.EX10; those collectors still need the exact installed
+candidate, native migration and original browser/recovery evidence.
+
 Set `EVOPILOT_V090_ACCEPTANCE_SELECTION` to a protected JSON file containing
 `schema: runtime-v090-acceptance-selection/v1`, `installedRoot`,
 `expectedManifestDigest`, `connectionRef`, `workspaceId`, `projectId`, `runId`,

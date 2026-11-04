@@ -1,4 +1,4 @@
-import { loadPublisherBase, valueDigest } from './base.js';
+import { isCurrentBase, loadPublisherBase, requireCurrentBase, valueDigest } from './base.js';
 import { atPath, containsInlineSecret, type EffectiveDefinition, type Issue } from './compiler.js';
 import { canonical, exact, record, string } from '../server/errors.js';
 import type { Principal } from '../server/security.js';
@@ -9,6 +9,7 @@ export interface BindingCheck { path:string; inputDigest:string; status:'VALID'|
 export type DefinitionBindingProvider=(definition:EffectiveDefinition,principal:Principal,requirements:readonly BindingRequirement[],signal:AbortSignal)=>Promise<readonly BindingCheck[]>;
 export interface BindingValidation { ready:boolean; issues:Issue[]; stamp:string|null; expiresAt:string|null; checks:readonly BindingCheck[]; }
 export function bindingRequirements(definition:EffectiveDefinition):BindingRequirement[]{
+  requireCurrentBase(definition.base);
   const requirements:BindingRequirement[]=[];
   const add=(path:string,value:unknown)=>{requirements.push({path,value,inputDigest:valueDigest(value)});};
   for(const f of loadPublisherBase().base.fields){const value=atPath(definition.semantic,f.path);if(value!==undefined&&['bindingRef','credentialRef','bindingList'].includes(f.type))add(f.path,value);}
@@ -20,6 +21,7 @@ export function bindingRequirements(definition:EffectiveDefinition):BindingRequi
 export async function validateBindings(definition:EffectiveDefinition,principal:Principal,provider?:DefinitionBindingProvider,now=Date.now(),timeoutMs=5000):Promise<BindingValidation>{
   const issues:Issue[]=[];
   const fail=(path:string,code:string,message:string)=>issues.push({code,path,rule:'binding.current-scoped-evidence',message,remedy:'Complete or repair the owning configuration/asset/credential binding, then validate this exact revision again.'});
+  if(!isCurrentBase(definition.base)){fail('extends','HISTORICAL_BASE_READ_ONLY','Historical definitions cannot obtain current binding admission');return{ready:false,issues,stamp:null,expiresAt:null,checks:[]};}
   if(!provider){fail('$','BINDINGS_UNAVAILABLE','Published owner and platform adapters are not configured');return{ready:false,issues,stamp:null,expiresAt:null,checks:[]};}
   const required=bindingRequirements(definition);let checks:readonly BindingCheck[];
   const controller=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;

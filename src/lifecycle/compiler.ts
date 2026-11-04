@@ -1,6 +1,7 @@
 import { parseDocument, isAlias, isNode, visit } from 'yaml';
 import { canonical, record, ServiceError } from '../server/errors.js';
 import { byteDigest, loadPublisherBase, valueDigest, type BasePin, type FieldRule } from './base.js';
+import { historicalBaseForRevision, type VerifiedServiceUpgrade } from './base-upgrade.js';
 
 export interface Issue { code:string; path:string; rule:string; message:string; remedy:string; }
 export interface EffectiveNode { id:string; source:'base'|'project'; stage:string; required:true; dependsOn:string[]; checks:string[]; action?:Record<string,unknown>; }
@@ -16,6 +17,15 @@ function relativePath(v:unknown):boolean{return typeof v==='string'&&v.length>0&
 export function containsInlineSecret(source:string):boolean {return /\b(?:glpat-|gh[pousr]_|sk-(?:proj-)?)[A-Za-z0-9_-]{16,}|\bBearer\s+[A-Za-z0-9_-]{24,}|(?:^|[\n{,])\s*["']?(?:password|api[_-]?key|access[_-]?token|secret|token)["']?\s*:\s*[^\s#]/i.test(source);}
 
 export function compileLifecycle(source:string,projectId:string):Compilation {
+  return compile(source,projectId,loadPublisherBase);
+}
+/** Readback only: the old Base is never accepted by ordinary compilation or
+ * admission, and only an exact migration record can reach this resolver. */
+export function compileHistoricalRevision(context:VerifiedServiceUpgrade,projectId:string,id:string,revision:unknown):Compilation{
+  const trusted=historicalBaseForRevision(context,projectId,id,revision),source=record(revision).yaml;
+  return compile(typeof source==='string'?source:'',projectId,()=>trusted);
+}
+function compile(source:string,projectId:string,resolveBase:typeof loadPublisherBase):Compilation {
   const issues:Issue[]=[];
   const issue=(code:string,path:string,rule:string,message:string,remedy='Correct this field using the publisher schema; keep the previous active revision until validation succeeds.')=>{if(issues.length<128)issues.push({code,path,rule,message,remedy});};
   const result:Compilation={valid:false,issues,sourceDigest:byteDigest(typeof source==='string'?source:''),presentationDigest:null,effective:null};
@@ -34,7 +44,7 @@ export function compileLifecycle(source:string,projectId:string):Compilation {
     data=record(document.toJS({maxAliasCount:0}));canonical(data);
   }catch(e){issue('YAML_STRUCTURE','$','yaml.plain-data',e instanceof ServiceError?e.code:'Invalid YAML structure');return result;}
   let trusted:ReturnType<typeof loadPublisherBase>;
-  try{trusted=loadPublisherBase();}catch(e){issue('UNTRUSTED_BASE','extends','base.publisher-anchor',e instanceof ServiceError?e.message:'Publisher Base unavailable');return result;}
+  try{trusted=resolveBase();}catch(e){issue('UNTRUSTED_BASE','extends','base.publisher-anchor',e instanceof ServiceError?e.message:'Publisher Base unavailable');return result;}
   const {base,pin}=trusted,provider=atPath(data,'config.implementation.provider');
   const allFields=new Map(base.fields.map(f=>[f.path,f]));
   const prefixes=new Set(base.fields.flatMap(f=>f.path.split('.').map((_x,i,a)=>a.slice(0,i).join('.')).filter(Boolean)));

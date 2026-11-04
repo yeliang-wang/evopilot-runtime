@@ -1,5 +1,5 @@
 import { canonical, exact, record, reject, ServiceError, slug, string } from '../server/errors.js';
-import { valueDigest, type BasePin } from './base.js';
+import { isCurrentBase, requireCurrentBase, valueDigest, type BasePin } from './base.js';
 import { atPath, compileLifecycle, type EffectiveDefinition, type EffectiveNode } from './compiler.js';
 import type { Principal } from '../server/security.js';
 
@@ -91,6 +91,7 @@ export function candidateDigest(candidate:CandidateManifest):string{
 /** Creates an inert snapshot. Caller must have independently verified authority
  * and current definition admission; this function neither dispatches nor grants it. */
 export function pinInstance(id:string,definitionRevisionId:string,definition:EffectiveDefinition,authority:ExecutionAuthority,now=Date.now()):LifecycleInstance{
+  requireCurrentBase(definition.base);
   slug(id);if(!hash(definitionRevisionId))reject('INVALID_DEFINITION','An immutable definition revision is required');
   const compilation=compileLifecycle(canonical(definition.semantic),definition.projectId);
   if(!compilation.valid||compilation.effective!.semanticDigest!==definition.semanticDigest)reject('INVALID_DEFINITION','Instance requires a valid publisher-resolved definition');
@@ -113,6 +114,7 @@ export function stageAdmission(instance:LifecycleInstance,stageId:string,context
   verify(instance);const now=context.now??Date.now(),node=instance.definition.nodes.find(n=>n.id===stageId);
   if(!node)reject('UNKNOWN_STAGE','Stage is not in the fixed instance');
   const state=instance.stages[stageId],reasons:string[]=[],limit=stageBudget(instance,node);
+  if(!isCurrentBase(instance.pins.base))reasons.push('HISTORICAL_BASE_READ_ONLY');
   if(!context.authority)reasons.push('AUTHORITY_REQUIRED');
   else{validateAuthority(context.authority);if(valueDigest(context.authority)!==instance.pins.authorityDigest||Date.parse(context.authority.expiresAt)<=now)reasons.push('AUTHORITY_STALE');}
   if(!context.bindingsCurrent)reasons.push('BINDINGS_NOT_CURRENT');
@@ -142,7 +144,7 @@ export function requestStage(instance:LifecycleInstance,stageId:string,requestId
 /** Only adapter-observed receipts reach this reducer. A client PASS is not one.
  * UNKNOWN can be resolved only against its original request/input, never retried. */
 export function recordStageOutcome(instance:LifecycleInstance,stageId:string,outcome:StageOutcome,now=Date.now()):LifecycleInstance{
-  verify(instance);const node=instance.definition.nodes.find(n=>n.id===stageId),stage=instance.stages[stageId];
+  verify(instance);requireCurrentBase(instance.pins.base);const node=instance.definition.nodes.find(n=>n.id===stageId),stage=instance.stages[stageId];
   if(!node||!stage)reject('UNKNOWN_STAGE','Stage is not in the fixed instance');
   exact(record(outcome),['requestId','inputDigest','receiptRef','status','expiresAt','checks'],['candidate']);
   string(outcome.receiptRef,512);if(outcome.requestId!==stage.requestId||outcome.inputDigest!==stage.inputDigest)reject('RECEIPT_MISMATCH','Receipt belongs to another exact request/input',409);

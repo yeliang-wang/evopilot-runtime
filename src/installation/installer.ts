@@ -20,6 +20,7 @@ import {serviceControlCommand} from './service-control.js';
 import {toolchainApplicationCommand} from './toolchain/application.js';
 import {onlineWorkerCommand} from './online/lifecycle.js';
 import {onlineConfigurationCommand} from './online/application.js';
+import {serviceUpgradeCommand} from './service-upgrade.js';
 
 type FilePin={type:'file';sha256:string;bytes:number;mode:number}|{type:'symlink';target:string};
 interface Distribution {schema:'runtime-standalone-distribution/v1';version:string;archiveDigest:string;files:Record<string,FilePin>;}
@@ -226,6 +227,13 @@ function preparePlugin(plan:RuntimeInstallPlan,spec:UserServiceSpecification,ser
   for(const [name,bytes] of material.files){const p=join(plan.root,'plugin',name);mkdirSync(dirname(p),{recursive:true,mode:0o700});exactFile(p,bytes);}
   const catalog=join(plan.root,'.agents/plugins/marketplace.json');mkdirSync(dirname(catalog),{recursive:true,mode:0o700});exactFile(catalog,canonical({name:marketplaceName(plan.root),plugins:[{name:'evopilot-runtime',source:{source:'local',path:'./plugin'},policy:{installation:'AVAILABLE',authentication:'ON_INSTALL'}}]})+'\n');
 }
+/** Prepare inactive connection/plugin material after a verified independent
+ * service migration. This neither starts the service nor registers the Host. */
+export function prepareStagedHostMaterial(plan:RuntimeInstallPlan,serviceId:string):void{
+  const spec=verifyInstalledRuntimePackage(plan);
+  if(canonical(readPrivateJson(join(plan.root,'service-specification.json')))!==canonical(spec))reject('INSTALLATION_CHANGED','Staged specification differs from the retained plan',409);
+  string(serviceId,128);preparePlugin(plan,spec,serviceId);
+}
 /** This is an explicit local operator entry, never a Runtime operation. A plan
  * is configuration, not release approval. Calling install may register exactly
  * this plugin when codex is selected; a null codex stages it without claiming a
@@ -267,6 +275,9 @@ export async function runInstaller(plan:RuntimeInstallPlan,command:InstallerComm
 }
 export async function installerMain(argv:string[],output:{write(v:string):unknown}=process.stdout):Promise<number>{
   try{
+    if(argv[0]==='service-upgrade'){
+      output.write(canonicalEvidence(await serviceUpgradeCommand(argv.slice(1)))+'\n');return 0;
+    }
     if(argv[0]==='online'){
       output.write(canonicalEvidence(await onlineConfigurationCommand(argv.slice(1)))+'\n');return 0;
     }

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync } from 'node:fs';
-import { digest, reject } from '../server/errors.js';
+import { canonical, digest, reject } from '../server/errors.js';
 
 export interface BasePin { id: string; version: string; digest: string; schemaVersion: string; }
 export interface FieldRule { id: string; path: string; stage: string; type: string; policy: 'CONFIGURABLE'|'CONSTRAINED'|'ADDITIVE'|'LOCKED'; required: boolean; providers: string[]; question: string; rules: Record<string,unknown>; }
@@ -27,3 +27,5 @@ export function loadPublisherBase():Readonly<{pin:BasePin;base:PublisherBase}> {
   for(const path of [manifest,source]){const stat=lstatSync(path);if(!stat.isFile()||stat.isSymbolicLink()||stat.size>131072)reject('UNTRUSTED_BASE','Invalid installed Base resource',409);}
   return verifyBaseDistribution(readFileSync(manifest),readFileSync(source));
 }
+export function isCurrentBase(pin:BasePin):boolean{return canonical(pin)===canonical(loadPublisherBase().pin);}
+export function requireCurrentBase(pin:BasePin):void{if(!isCurrentBase(pin))reject('HISTORICAL_BASE_READ_ONLY','Historical Base records are read-only; validate and activate a new revision against the current publisher Base',409);}

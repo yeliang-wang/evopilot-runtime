@@ -1,8 +1,9 @@
 import { canonical, exact, record, reject, string } from '../server/errors.js';
 import { authorize, type Principal } from '../server/security.js';
 import { RuntimeStore, type StoredObject, type Receipt } from '../server/store.js';
-import { loadPublisherBase, valueDigest } from './base.js';
-import { compileLifecycle, containsInlineSecret, type Compilation, type Issue } from './compiler.js';
+import { isCurrentBase, loadPublisherBase, requireCurrentBase, valueDigest } from './base.js';
+import { compileHistoricalRevision, compileLifecycle, containsInlineSecret, type Compilation, type Issue } from './compiler.js';
+import { baseTransition, verifyHistoricalRecord, type BaseTransition, type VerifiedServiceUpgrade } from './base-upgrade.js';
 import { validateBindings, type DefinitionBindingProvider, type BindingValidation } from './bindings.js';
 import { pinInstance, inspectInstance, stageAdmission, resolveAuthority, type LifecycleInstance, type AuthorityResolver, type ExecutionAuthority, type ReleaseAuthority } from './instance.js';
 import type { EffectiveDefinition } from './compiler.js';
@@ -10,18 +11,25 @@ import type { EffectiveDefinition } from './compiler.js';
 export const DEFINITION_READS=['lifecycle.base.inspect','lifecycle.definition.inspect','lifecycle.definition.read','lifecycle.definition.source.read','lifecycle.definition.validate','lifecycle.instance.inspect','lifecycle.stage.admission'] as const;
 export const DEFINITION_WRITES=['lifecycle.draft.save','lifecycle.definition.activate','lifecycle.definition.save-and-activate','lifecycle.instance.create'] as const;
 interface Revision { schema:'runtime-definition-revision/v1'; id:string; yaml:string; compilation:Compilation; createdBy:string; createdAt:string; }
-export interface DefinitionValidation { compilation:Compilation; bindings:BindingValidation|null; ready:boolean; validationDigest:string|null; issues:Issue[]; }
+export interface DefinitionValidation { compilation:Compilation; bindings:BindingValidation|null; ready:boolean; validationDigest:string|null; issues:Issue[]; baseTransition:BaseTransition|null; }
 function yamlInput(value:unknown):string{if(typeof value!=='string'||Buffer.byteLength(value)>262144)reject('YAML_LIMIT','YAML must be at most 256 KiB',413);if(containsInlineSecret(value))reject('INLINE_SECRET','Use protected credential references; inline secrets cannot be stored');return value;}
 const ref=(value:unknown):string=>{const v=string(value,128);if(!/^sha256:[a-f0-9]{64}$/.test(v))reject('INVALID_REFERENCE','An exact revision digest is required');return v;};
 
-export function createDefinitionService(store:RuntimeStore,bindings?:DefinitionBindingProvider,authorities?:AuthorityResolver,verifyAuthority?:(grant:ExecutionAuthority,definition:EffectiveDefinition,actor:Principal)=>void,releaseAuthority?:(instance:LifecycleInstance,actor:Principal)=>ReleaseAuthority|undefined){
+export function createDefinitionService(store:RuntimeStore,bindings?:DefinitionBindingProvider,authorities?:AuthorityResolver,verifyAuthority?:(grant:ExecutionAuthority,definition:EffectiveDefinition,actor:Principal)=>void,releaseAuthority?:(instance:LifecycleInstance,actor:Principal)=>ReleaseAuthority|undefined,history?:VerifiedServiceUpgrade|null){
   function revision(projectId:string,id:string):Revision{
     const stored=store.object(projectId,'definition-revision',ref(id)) as Revision|null;
     if(!stored)reject('NOT_FOUND','Definition revision not found',404);
     if(stored.id!==id||valueDigest({yaml:stored.yaml,compilation:stored.compilation})!==id)reject('CORRUPT_DEFINITION','Stored definition integrity mismatch',503);
+    const historical=history?verifyHistoricalRecord(history,projectId,'definition-revision',id,stored):false;
+    if(stored.compilation.effective&&!isCurrentBase(stored.compilation.effective.base)){
+      if(!historical||!history)reject('UNVERIFIED_HISTORICAL_BASE','Historical definition has no native migration evidence',409);
+      if(canonical(compileHistoricalRevision(history,projectId,id,stored))!==canonical(stored.compilation))reject('CORRUPT_DEFINITION','Historical compilation differs from its exact source Base',503);
+    }
     return stored;
   }
   const pointer=(projectId:string,which:'draft'|'active')=>store.object(projectId,'definition-pointer',which) as {revisionId:string}|null;
+  const revisionBinding=(projectId:string)=>({draft:pointer(projectId,'draft')?.revisionId??null,active:pointer(projectId,'active')?.revisionId??null});
+  const previewDigest=(projectId:string,actor:Principal,compilation:Compilation,checked:BindingValidation,transition:BaseTransition|null,pointers:ReturnType<typeof revisionBinding>)=>valueDigest({sourceDigest:compilation.sourceDigest,semanticDigest:compilation.effective!.semanticDigest,bindings:checked.stamp,projectId,principalId:actor.id,principalRevision:actor.revision,revisionBinding:pointers,baseTransitionDigest:transition?.previewDigest??null});
   function snapshot(projectId:string,yaml:string,actor:Principal):Revision{
     const compilation=compileLifecycle(yaml,projectId),id=valueDigest({yaml,compilation});
     const existing=store.object(projectId,'definition-revision',id);
@@ -30,15 +38,23 @@ export function createDefinitionService(store:RuntimeStore,bindings?:DefinitionB
   }
   async function validate(projectId:string,yaml:string,actor:Principal):Promise<DefinitionValidation>{
     const compilation=compileLifecycle(yaml,projectId);
+    const pointers=revisionBinding(projectId);
+    let transition:BaseTransition|null=null;
+    if(history)for(const id of [pointers.draft,pointers.active]){
+      if(!id)continue;const source=revision(projectId,id);
+      if(verifyHistoricalRecord(history,projectId,'definition-revision',id,source)){transition=baseTransition(history,projectId,id,source,compilation);if(transition)break;}
+    }
     const checked=compilation.effective?await validateBindings(compilation.effective,actor,bindings):null;
     const ready=compilation.valid&&checked?.ready===true;
-    return{compilation,bindings:checked,ready,validationDigest:ready?valueDigest({sourceDigest:compilation.sourceDigest,semanticDigest:compilation.effective!.semanticDigest,bindings:checked!.stamp,projectId,principalId:actor.id,principalRevision:actor.revision}):null,issues:[...compilation.issues,...(checked?.issues??[])]};
+    return{compilation,bindings:checked,ready,validationDigest:ready?previewDigest(projectId,actor,compilation,checked!,transition,pointers):null,issues:[...compilation.issues,...(checked?.issues??[])],baseTransition:transition};
   }
   function summary(value:Revision|null){return value?{id:value.id,sourceDigest:value.compilation.sourceDigest,semanticDigest:value.compilation.effective?.semanticDigest??null,presentationDigest:value.compilation.presentationDigest,structurallyValid:value.compilation.valid,issues:value.compilation.issues,createdAt:value.createdAt}:null;}
   function instance(projectId:string,id:string):LifecycleInstance{
     const saved=store.object(projectId,'lifecycle-instance',id) as LifecycleInstance|null;
     if(!saved)reject('NOT_FOUND','Lifecycle instance not found',404);
     if(saved.pins.projectId!==projectId||saved.id!==id)reject('CORRUPT_INSTANCE','Instance scope does not match storage',503);
+    const historical=history?verifyHistoricalRecord(history,projectId,'lifecycle-instance',id,saved):false;
+    if(!isCurrentBase(saved.pins.base)&&!historical)reject('UNVERIFIED_HISTORICAL_BASE','Historical instance has no native migration evidence',409);
     return inspectInstance(saved);
   }
   async function read(actor:Principal,projectId:string,operation:string,input:Record<string,unknown>):Promise<unknown>{
@@ -50,6 +66,7 @@ export function createDefinitionService(store:RuntimeStore,bindings?:DefinitionB
     if(operation==='lifecycle.stage.admission'){
       exact(input,['instanceId','stageId']);authorize(actor,projectId,'execution.request');
       const saved=instance(projectId,string(input.instanceId));
+      requireCurrentBase(saved.pins.base);
       const authorityBinding=store.object(projectId,'instance-authority',saved.id) as {evidenceRef:string}|null;
       if(!authorityBinding)reject('CORRUPT_INSTANCE','Instance authority reference is missing',503);
       const authority=await resolveAuthority(authorities,string(authorityBinding.evidenceRef,512),saved.definition,actor);
@@ -89,6 +106,7 @@ export function createDefinitionService(store:RuntimeStore,bindings?:DefinitionB
       if(store.findReceipt(actor,projectId,requestId))return store.mutate(actor,mutation,()=>{throw new Error('Unreachable replay callback');},reauthorize);
       const selected=revision(projectId,definitionRevisionId);
       if(pointer(projectId,'active')?.revisionId!==definitionRevisionId||!selected.compilation.effective)reject('DEFINITION_NOT_ACTIVE','New instances require the exact active definition',409);
+      requireCurrentBase(selected.compilation.effective.base);
       const authority=await resolveAuthority(authorities,authorityRef,selected.compilation.effective,actor);
       const checked=await validateBindings(selected.compilation.effective,actor,bindings);
       if(!checked.ready)reject('BINDINGS_NOT_CURRENT','Repair current scoped references before creating an instance',409);
@@ -120,7 +138,7 @@ export function createDefinitionService(store:RuntimeStore,bindings?:DefinitionB
       const active=pointer(projectId,'active');
       const objects:StoredObject[]=activationOnly?[]:[{kind:'definition-revision',id:snap.id,value:snap},{kind:'definition-pointer',id:'draft',value:{revisionId:snap.id}}];
       const issues=[...(validation?.issues??[])];
-      const ready=validation?.ready===true&&canonical(snap.compilation)===canonical(validation.compilation)&&validation.validationDigest===input.validationDigest&&current.id===actor.id&&current.revision===actor.revision&&Date.parse(validation.bindings!.expiresAt!)>Date.now();
+      const ready=validation?.ready===true&&canonical(snap.compilation)===canonical(validation.compilation)&&validation.validationDigest===input.validationDigest&&validation.validationDigest===previewDigest(projectId,current,validation.compilation,validation.bindings!,validation.baseTransition,revisionBinding(projectId))&&current.id===actor.id&&current.revision===actor.revision&&Date.parse(validation.bindings!.expiresAt!)>Date.now();
       if(activating&&validation?.ready&&!ready)issues.push({code:'VALIDATION_STALE',path:'validationDigest',rule:'activation.exact-current-preview',message:'The preview, bindings or authority changed',remedy:'Validate this exact YAML and current references again in the same entry.'});
       if(activating&&ready)objects.push({kind:'definition-pointer',id:'active',value:{revisionId:snap.id,semanticDigest:snap.compilation.effective!.semanticDigest,validationDigest:validation!.validationDigest,bindingStamp:validation!.bindings!.stamp,activatedBy:current.id,principalRevision:current.revision}});
       const status=activating?(ready?'ACTIVE':'BLOCKED'):'DRAFT';

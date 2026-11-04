@@ -2,7 +2,8 @@ export interface Issue {code:string;path:string;message:string;remedy:string;rul
 export interface GraphNode {id:string;source:'base'|'project';stage:string;dependsOn:string[];checks:string[];}
 export interface Field {id:string;path:string;stage:string;type:string;policy:'CONFIGURABLE'|'CONSTRAINED'|'ADDITIVE'|'LOCKED';required:boolean;providers:string[];question:string;rules:Record<string,unknown>;}
 export interface Base {pin:{id:string;version:string;digest:string;schemaVersion:string};fields:Field[];stages:{id:string;requires:string[];checks:string[]}[];slots:Record<string,{predecessor:string;successor:string;types:string[]}>;actions:{id:string;version:string;type:string;digest:string;parameterSchema:Record<string,string>}[];}
-export interface Validation {ready:boolean;validationDigest:string|null;issues:Issue[];compilation:{valid:boolean;effective:{nodes:GraphNode[];semanticDigest:string;fieldSources:Record<string,string>}|null;issues:Issue[]};}
+export interface BaseTransitionPreview {from:Base['pin'];to:Base['pin'];sourceRevisionId:string;addedRequiredFields:string[];removedSlots:string[];tightenedConstraints:{path:string;before:unknown;after:unknown}[];schemaChanged:boolean;retainedExtensionIds:string[];issues:Issue[];previewDigest:string;sourceRewritten:false;}
+export interface Validation {ready:boolean;validationDigest:string|null;issues:Issue[];compilation:{valid:boolean;effective:{nodes:GraphNode[];semanticDigest:string;fieldSources:Record<string,string>}|null;issues:Issue[]};baseTransition?:BaseTransitionPreview|null;}
 export interface Summary {id:string;sourceDigest:string;semanticDigest:string|null;structurallyValid:boolean;issues:Issue[];}
 export interface DefinitionView {projectId:string;revision:number;draft:Summary|null;active:Summary|null;}
 export interface Session {projectId:string;principalId:string;permissions:string[];csrf:string;expiresAt:string;serviceId:string;workspaceId:string;}

@@ -33,6 +33,30 @@ test('same-page exact validation/diff activation preserves old active on stale b
  await expect(source(page)).toBeEditable();const local=f.initialSource+'\n# unsaved local';await source(page).fill(local);await f.write('lifecycle.draft.save',{yaml:f.initialSource+'\n# concurrent agent'});await page.getByRole('button',{name:'保存草稿',exact:true}).click();await expect(page.getByRole('button',{name:'重新读取',exact:true})).toBeVisible();await expect(source(page)).toHaveValue(local);await expect(page.getByRole('button',{name:'保存草稿',exact:true})).toBeDisabled();
 });
 
+test('synthetic Base-transition presentation preserves invalid YAML and requires a fresh preview after edits',async({page},info)=>{
+ // Presentation regression only. Native B still rejects this input. The exact
+ // installed A -> B migration/browser journey is a separate EX10 obligation.
+ const base=await f.call('lifecycle.base.inspect'),before=await f.call('lifecycle.definition.inspect'),old={...base.pin,version:'0.9.0-ex10-a',schemaVersion:'runtime-base-lifecycle/ex10-a',digest:'sha256:'+'a'.repeat(64)};
+ const value=parse(f.initialSource);value.schema='runtime-project-lifecycle/ex10-a';value.extends=old;delete value.config.scope.deliveryTargetRef;value.config.plan.budget.timeoutSeconds=5000;
+ value.extensions=[{...extension('legacy'),slot:'legacy-after-plan'}];const original='# Synthetic Base transition presentation only\n'+yaml(value);
+ let observedPreview=0;
+ await page.route('**/api/v1/dashboard/request',async route=>{
+  const request=route.request().postDataJSON();if(request.operation!=='lifecycle.definition.validate'||request.input.yaml!==original){await route.continue();return;}
+  const response=await route.fetch(),body=await response.json();expect(response.status()).toBe(200);expect(body.result.ready).toBe(false);
+  body.result.baseTransition={from:old,to:base.pin,sourceRevisionId:before.draft.id,addedRequiredFields:['config.scope.deliveryTargetRef'],removedSlots:['legacy-after-plan'],tightenedConstraints:[{path:'config.plan.budget.timeoutSeconds',before:{maximum:7200},after:{maximum:3600}}],schemaChanged:true,retainedExtensionIds:['project.legacy'],issues:body.result.issues,previewDigest:'sha256:'+'b'.repeat(64),sourceRewritten:false};
+  observedPreview++;await route.fulfill({response,body:JSON.stringify(body)});
+ });
+ await login(page);await source(page).fill(original);await page.getByRole('button',{name:'校验与差异预览',exact:true}).click();
+ const transition=page.getByTestId('base-transition');await expect(transition).toBeVisible();await expect(transition.getByRole('heading',{name:'Base 升级差异'})).toBeVisible();
+ for(const text of ['config.scope.deliveryTargetRef','legacy-after-plan','config.plan.budget.timeoutSeconds','project.legacy'])await expect(transition.getByText(text,{exact:true}).first()).toBeVisible();
+ await expect(transition).toContainText('runtime-base-lifecycle/ex10-a');await expect(transition).toContainText(base.pin.schemaVersion);await expect(transition).toContainText('7200');await expect(transition).toContainText('3600');
+ await expect(source(page)).toHaveValue(original);await expect(page.getByRole('button',{name:'保存并启用',exact:true})).toBeDisabled();await expect(page.locator('.base-banner')).toContainText('原定义继承');
+ await page.screenshot({path:info.outputPath('synthetic-base-transition-preview.png'),fullPage:true});expect(observedPreview).toBeGreaterThan(0);
+ await save(page);const draft=await f.call('lifecycle.definition.inspect');expect(draft.active).toBeNull();expect(await f.source(draft.draft.id)).toBe(original);
+ await source(page).fill(f.initialSource);await expect(transition).toHaveCount(0);await expect(page.getByRole('button',{name:'保存并启用',exact:true})).toBeDisabled();await valid(page);
+ await page.getByRole('button',{name:'校验与差异预览',exact:true}).click();await expect(page.getByRole('button',{name:'保存并启用',exact:true})).toBeEnabled();expect((await f.call('lifecycle.definition.inspect')).active).toBeNull();
+});
+
 test('incomplete extension stays editable; both source and graph form changes preserve required AND dependencies',async({page})=>{
  await login(page);await valid(page);await page.getByText('添加项目扩展',{exact:true}).click();await page.getByLabel('扩展标识',{exact:true}).fill('project.review');await page.getByRole('button',{name:'加入草稿'}).click();await expect(node(page,'project.review')).toBeVisible();await node(page,'project.review').click();await expect(page.getByLabel('扩展属性（JSON）')).toBeVisible();await page.getByLabel('扩展属性（JSON）').fill(JSON.stringify(extension('review')));await page.getByRole('button',{name:'应用扩展属性'}).click();await valid(page);
  const value=parse(await source(page).inputValue());value.extensions.push(extension('security'));await source(page).fill(yaml(value));await valid(page);await node(page,'project.security').click();await page.getByLabel('同槽位前置节点').selectOption('project.review');await page.getByRole('button',{name:'添加依赖',exact:true}).click();await expect.poll(async()=>parse(await source(page).inputValue()).extensions[1].dependsOn).toEqual(['project.review']);await valid(page);
