@@ -6,6 +6,7 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {isDeepStrictEqual} from 'node:util';
 import {verifyDecisionEvidence,type DecisionSubject} from '../../vendor/compatibility/v1/decision-evidence.mjs';
 import {canonical} from '../server/errors.js';
+import {evaluateGovernance} from '../governance.js';
 import {inspectSourceCiRecords} from './source-ci.js';
 import {inspectAcceptanceEvidence} from './evidence.js';
 import {inspectUsageAcceptanceEvidence} from './usage-evidence.js';
@@ -23,6 +24,10 @@ export interface RuntimeReleasePreflightInput {
  schema:'runtime-release-preflight-input/v1';candidate:RuntimeReleaseCandidateInput;
  scope:{workspaceId:string;projectId:string;};
  reports:{scenario:string;report:ReleaseFileReference;}[];usageReport:ReleaseFileReference;releaseNotes:ReleaseFileReference;
+}
+export interface RuntimeReleaseGovernance {
+ status:'VALID';targetId:'runtime-v090-independent-lifecycle';targetVersion:'0.9.0';
+ roadmapDigest:string;targetDigest:string;approvedPlanDigest:string;acceptanceDigest:string;usageAddendumDigest:string;
 }
 type Obj=Record<string,unknown>;
 const fail=(message:string):never=>{throw Error('RELEASE_GATE: '+message);};
@@ -54,6 +59,18 @@ function source(repositoryRoot:string,commit:string):void {
  requireValue(git(['rev-parse','HEAD']).toString().trim()===commit&&git(['status','--porcelain']).length===0,'Release requires exact clean committed source');
  const pkg=parse(read(join(repositoryRoot,'package.json'),1048576,false));requireValue(pkg.name==='@evopilot-next/runtime'&&pkg.version==='0.9.0','Only independent Runtime 0.9.0 is supported');
 }
+function governance(repositoryRoot:string):RuntimeReleaseGovernance {
+ const check=evaluateGovernance(repositoryRoot,{mode:'check'});
+ requireValue(check.status==='VALID'&&check.releaseAuthorized===false,'Current approved Roadmap/Target governance is not valid');
+ const roadmapBytes=read(join(repositoryRoot,'governance/roadmap.json'),2097152,false),targetBytes=read(join(repositoryRoot,'governance/target-v090.json'),2097152,false),target=parse(targetBytes);
+ requireValue(target.id==='runtime-v090-independent-lifecycle'&&target.targetVersion==='0.9.0'&&target.roadmapDigest===sha(roadmapBytes),'Current release Target identity or Roadmap binding differs');
+ return{status:'VALID',targetId:'runtime-v090-independent-lifecycle',targetVersion:'0.9.0',roadmapDigest:sha(roadmapBytes),targetDigest:sha(targetBytes),approvedPlanDigest:hash(target.approvedPlanDigest),acceptanceDigest:hash(target.acceptanceDigest),usageAddendumDigest:sha(read(join(repositoryRoot,'governance/token-usage-v090.json'),2097152,false))};
+}
+/** Read-only recheck of the governance already covered by the exact reviewed
+ * release. This function never authenticates a decision or grants authority. */
+export function verifyRuntimeReleaseGovernanceCurrent(repositoryRoot:string,sourceCommit:string,expected:RuntimeReleaseGovernance):void{
+ source(repositoryRoot,sourceCommit);requireValue(isDeepStrictEqual(governance(repositoryRoot),expected),'Reviewed release governance changed');
+}
 
 /** E20 uses this lower layer before its own report exists. It verifies source
  * CI and the exact six public assets, not E20 completion or release authority. */
@@ -76,6 +93,7 @@ export async function inspectRuntimeReleaseCandidate(repositoryRoot:string,raw:R
  * object or the six-file publication allowlist. No network or write occurs. */
 export async function prepareRuntimeRelease(repositoryRoot:string,raw:RuntimeReleasePreflightInput,signal:AbortSignal) {
  const input=structuredClone(raw);exact(input,['schema','candidate','scope','reports','usageReport','releaseNotes']);requireValue(input.schema==='runtime-release-preflight-input/v1','Wrong preflight schema');exact(input.scope,['workspaceId','projectId']);slug(input.scope.workspaceId);slug(input.scope.projectId);
+ const governed=governance(repositoryRoot);
  // Markdown is text; its original bytes, including line endings, are reviewed.
  // Do not normalize it or add the private file to the six public attachments.
  const notesBytes=pinned(input.releaseNotes,262144);let notesText:string;
@@ -88,7 +106,8 @@ export async function prepareRuntimeRelease(repositoryRoot:string,raw:RuntimeRel
  const usage=inspectUsageAcceptanceEvidence(repositoryRoot,{schema:'runtime-usage-evidence-input/v1',...common,report:input.usageReport});signal.throwIfAborted();
  for(const audit of [original,usage])requireValue(audit.sourceCommit===candidate.sourceCommit&&audit.candidateDigest===candidate.candidateDigest&&audit.archiveDigest===candidate.archiveDigest&&audit.failed===0&&audit.skipped===0&&audit.releaseAuthorized===false,'Acceptance scope differs from candidate');
  requireValue(original.required===655&&original.passed===655&&original.postReleaseRemaining===9&&usage.required===23&&usage.passed===23&&usage.usagePostReleaseRemaining===1,'Fixed pre/post denominator differs');
- const review={schema:'runtime-release-review/v1' as const,scope:input.scope,publication:{repository:candidate.repository,version:candidate.version,tag:candidate.tag,title:candidate.title,prerelease:candidate.prerelease,latest:candidate.latest,sourceCommit:candidate.sourceCommit,candidateDigest:candidate.candidateDigest,archiveDigest:candidate.archiveDigest,files:candidate.files,releaseNotes},sourceCi:candidate.sourceCi,acceptance:{original,usage,requiredPreRelease:678 as const,passedPreRelease:678 as const,combinedRequired:688 as const,postRelease:{required:10 as const,passed:0 as const,status:'NOT_EVALUATED' as const,scenarios:['E21','E22','UT24']}},privacy:{publicAssets:[...RUNTIME_RELEASE_ASSETS],privateEvidenceUploadAllowed:false as const},recordIntegrity:'VERIFIED' as const,executionAuthenticity:'TRUSTED_REVIEW_REQUIRED' as const,productAcceptance:'NOT_EVALUATED' as const,releaseAuthorized:false as const};
+ verifyRuntimeReleaseGovernanceCurrent(repositoryRoot,candidate.sourceCommit,governed);
+ const review={schema:'runtime-release-review/v1' as const,scope:input.scope,governance:governed,publication:{repository:candidate.repository,version:candidate.version,tag:candidate.tag,title:candidate.title,prerelease:candidate.prerelease,latest:candidate.latest,sourceCommit:candidate.sourceCommit,candidateDigest:candidate.candidateDigest,archiveDigest:candidate.archiveDigest,files:candidate.files,releaseNotes},sourceCi:candidate.sourceCi,acceptance:{original,usage,requiredPreRelease:678 as const,passedPreRelease:678 as const,combinedRequired:688 as const,postRelease:{required:10 as const,passed:0 as const,status:'NOT_EVALUATED' as const,scenarios:['E21','E22','UT24']}},privacy:{publicAssets:[...RUNTIME_RELEASE_ASSETS],privateEvidenceUploadAllowed:false as const},recordIntegrity:'VERIFIED' as const,executionAuthenticity:'TRUSTED_REVIEW_REQUIRED' as const,productAcceptance:'NOT_EVALUATED' as const,releaseAuthorized:false as const};
  return{...review,reviewDigest:digest(review)};
 }
 export type RuntimeReleaseReview=Awaited<ReturnType<typeof prepareRuntimeRelease>>;
@@ -135,5 +154,5 @@ export async function verifyRuntimeReleaseDecision(repositoryRoot:string,raw:Run
  requireValue(authenticated.decision==='APPROVE'&&authenticated.humanIdentity.kind==='human'&&/^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$/.test(text(authenticated.humanIdentity.id))&&authenticated.decisionAuthentication==='AUTHENTICATED_HUMAN_DECISION'&&authenticated.sourceCiAuthentication==='AUTHENTICATED_PROVIDER_READS'&&authenticated.acceptanceAuthentication==='REVIEWED_ORIGINAL_EXECUTION','Actual human, provider and execution-source authentication is required');
  const at=Date.parse(authenticated.authenticatedAt),expires=Date.parse(authenticated.expiresAt),now=Date.now();requireValue(Number.isFinite(at)&&at>=started-60000&&at<=now+5000&&Number.isFinite(expires)&&expires>now&&expires>at&&expires<=started+900000,'Authentication is stale or unbounded');signal.throwIfAborted();
  const fresh=await prepareRuntimeRelease(repositoryRoot,input,signal);requireValue(fresh.reviewDigest===review.reviewDigest,'Release material changed during authentication');decision(reference,subject);requireValue(expires>Date.now(),'Authentication expired during final revalidation');signal.throwIfAborted();
- return{schema:'runtime-release-authorization/v1' as const,reviewDigest:review.reviewDigest,publication:review.publication,decisionEvidenceDigest:reference.sha256,decisionSourceDigest:sourceRef.sha256,authenticationDigest:digest(authenticated),expiresAt:authenticated.expiresAt,authorizedOperation:'github.preview.publish' as const,releaseAuthorized:true as const,installationAuthorized:false as const,migrationAuthorized:false as const,postRelease:review.acceptance.postRelease,overallCompletion:'NOT_COMPLETE' as const,privateEvidenceUploadAllowed:false as const};
+ return{schema:'runtime-release-authorization/v1' as const,reviewDigest:review.reviewDigest,governance:review.governance,publication:review.publication,decisionEvidenceDigest:reference.sha256,decisionSourceDigest:sourceRef.sha256,authenticationDigest:digest(authenticated),expiresAt:authenticated.expiresAt,authorizedOperation:'github.preview.publish' as const,releaseAuthorized:true as const,installationAuthorized:false as const,migrationAuthorized:false as const,postRelease:review.acceptance.postRelease,overallCompletion:'NOT_COMPLETE' as const,privateEvidenceUploadAllowed:false as const};
 }

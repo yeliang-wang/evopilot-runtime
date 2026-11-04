@@ -47,7 +47,8 @@ test('scope gate rejects drift, unbound milestones, unapproved files and release
     assert.equal(evaluateGovernance(dir,{...request,intent:'runtime-v0.9/M1: start service'}).status,'BLOCKED');
     assert.equal(evaluateGovernance(dir,{...request,authorization:undefined}).status,'BLOCKED');
     assert.equal(evaluateGovernance(dir,{...request,intent:'any arbitrary new feature'}).status,'UNKNOWN');
-    assert.equal(evaluateGovernance(dir,{mode:'release'}).status,'BLOCKED');
+    const release=evaluateGovernance(dir,{mode:'release'});assert.equal(release.status,'BLOCKED');assert.equal(release.releaseAuthorized,false);assert.match(release.reasons.join(' '),/native review.*scripts\/release-gate\.mjs preflight/);
+    assert.equal(evaluateGovernance(dir,{mode:'release',authorization}).releaseAuthorized,false);
     const matrixPath = join(dir,'governance/parameter-matrix-v090.json');
     const matrixBytes = readFileSync(matrixPath);
     const matrix = JSON.parse(matrixBytes); matrix.caseInstances.pop();

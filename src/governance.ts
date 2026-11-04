@@ -147,7 +147,7 @@ export function evaluateGovernance(root: string, request: GovernanceRequest): Ga
     sameIds(ids(roadmap.value.milestones), ['M0','M1','M2','M3','M4','M5','M6'], 'Roadmap milestones changed');
     sameIds(list(target.value.milestones).map(text), ['M0','M1','M2','M3','M4','M5','M6'], 'Target milestones changed');
     if (request.mode === 'check') return result('VALID', 'Scope and coverage structure are consistent; product results are not evaluated.');
-    if (request.mode === 'release') return result('BLOCKED', 'This M0 gate cannot approve release; exact candidate acceptance and actual release decision remain required.');
+    if (request.mode === 'release') return result('BLOCKED', 'Governance structure is valid, but this scope-only command has no exact candidate evidence or authenticated release decision. Prepare the native review with node scripts/release-gate.mjs preflight <private-input.json> <new-private-output>; the trusted local publication entry rechecks this governance and verifies the existing exact release decision. No CLI flag or implementation authorization grants publication.');
     const match = /^runtime-v0\.9\/(M[0-6]):\s*\S.+$/.exec(request.intent ?? '');
     if (!match) return result('UNKNOWN', 'Use a scoped runtime-v0.9/Mn: concrete intent.');
     const packet = object(target.value.workPackets)[match[1]];
