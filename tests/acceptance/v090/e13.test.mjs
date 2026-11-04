@@ -14,10 +14,9 @@ import {exactKeys,interruptionFixture,openExecution} from './execution.mjs';
 // service. 01/02 require a genuinely admitted instance with real native scope
 // and plan completion, and implementation still PENDING. They create only its
 // original external-Agent handoff, never a Host claim/report, CI or Release.
-// 05 remains unimplemented until real Host availability evidence is correlated
-// with the exact original report and Target version. A null field alone proves
-// omission, not unavailability; an actual unsupported or unavailable source can
-// qualify without manufacturing a collection failure.
+// 05 independently reads the exact real Host report, original token/context and
+// tool bytes, original native readbacks and current task attribution. Shared
+// thread counters stay known; task nulls need real scope limits, never omission.
 // 06 rejects an unsupported exact token cap through the native preview schema;
 // it does not add token-budget semantics to Runtime's reporting addendum.
 //
@@ -25,6 +24,7 @@ import {exactKeys,interruptionFixture,openExecution} from './execution.mjs';
 // {schema,candidateDigest,workspaceId,projectId,syntheticAssets:true,
 //  syntheticDecisions:true,casePlans:{[fixedCaseId]:plan}}.
 // 01/02 plan={instanceId,allowServiceRestart:true}; use distinct instances.
+// 05 plan={instanceId,stageRequestId,reportDigest,hostAvailabilityEvidence:{ref,sha256},codingHostEvidence:{ref,sha256}}.
 // 06 plan={instanceId,targetVersion}.
 // 07/MC04 plan={}; each runs new actual browser conflicts and one activation.
 // A fixture is selection, never a supplied expected outcome or new authority.
@@ -32,7 +32,6 @@ const unsupported={
  'E13.journey':'Full original Host, provider-channel interruption, cancellation and managed-action budget journey is not yet implemented.',
  'E13.variant.03':'Requires original native owner one-sided success and recovery without redispatch.',
  'E13.variant.04':'Requires actual test-channel response loss and independent original provider readback.',
- 'E13.variant.05':'Requires original real Host availability evidence correlated with the exact report, task and Target version; measurement:null alone does not prove that metrics were unavailable.',
  'E13.CV03':'Requires the full original eight-stage admission and supported measured-budget matrix; one fixed loop is not a fabricated exhausted-loop result.',
  'E13.CV05':'Requires actual Host exit/reentry and exact authority recovery conversation.'
 };
@@ -287,6 +286,280 @@ async function activationAtomicity(run,driver,c,plan){
  }
 }
 
+// Private source reader and original Host proof verifier for variant 05.
+const MAX=8*1024*1024,KEYS=['input_tokens','cached_input_tokens','cache_write_input_tokens','output_tokens','reasoning_output_tokens','total_tokens'];
+const METRICS=['input','output','total','cachedInput','cacheWriteInput','reasoningOutput'];
+// White-list the observed pinned Host profile. Values outside the few fields
+// projected below (including nested instructions) are never retained.
+const CONTEXT_KEYS=['active_permission_profile','approval_policy','approvals_reviewer','collaboration_mode','comp_hash','cwd','cyber_access_program','disabled_plugin_ids','effort','model','model_provider','multi_agent_version','permission_profile','realtime_active','root_turn_id','sandbox_policy','summary','turn_id'];
+const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
+const canonical=v=>v===null||typeof v!=='object'?JSON.stringify(v):Array.isArray(v)?'['+v.map(canonical).join(',')+']':'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}';
+const fail=code=>{const e=new Error(code);e.code=code;throw e;};
+const requireThat=(value,code)=>{if(!value)fail(code);};
+const exact=(v,keys,code='MEASUREMENT_FIELDS')=>requireThat(v&&typeof v==='object'&&!Array.isArray(v)&&canonical(Object.keys(v).sort())===canonical([...keys].sort()),code);
+function privateBytes(ref,max=MAX){
+ requireThat(path.isAbsolute(ref)&&fs.realpathSync(ref)===ref,'MEASUREMENT_UNSAFE_FILE');const s=fs.lstatSync(ref);
+ requireThat(s.isFile()&&!s.isSymbolicLink()&&s.nlink===1&&s.uid===process.getuid()&&(s.mode&0o777)===0o600&&s.size<=max,'MEASUREMENT_UNSAFE_FILE');return fs.readFileSync(ref);
+}
+function readAt(fd,offset,length){const b=Buffer.alloc(length);let got=0;while(got<length){const n=fs.readSync(fd,b,got,length-got,offset+got);requireThat(n>0,'MEASUREMENT_SOURCE_SHORT_READ');got+=n;}return b;}
+function counter(v){
+ requireThat(v&&typeof v==='object'&&!Array.isArray(v),'MEASUREMENT_SOURCE_PROFILE_CHANGED');
+ requireThat(Object.keys(v).every(k=>KEYS.includes(k)),'MEASUREMENT_SOURCE_PROFILE_CHANGED');
+ for(const n of Object.values(v))requireThat(n===null||Number.isSafeInteger(n)&&n>=0,'MEASUREMENT_SOURCE_COUNTER');
+ // Host counters are independently reported values. Preserve a real total
+ // even when it differs from input + output; never normalize or attribute it.
+ return structuredClone(v); // Missing and known zero remain distinguishable.
+}
+const safeName=v=>typeof v==='string'&&/^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,255}$/.test(v);
+
+/** Read only selected raw metadata and token rows. Other content is neither
+ * parsed nor copied. cutoffBytes is used by offline verification, never allowed
+ * beyond actual bytes or in a partial line. No task totals are derived. */
+function inspectHostSource(receipt,cutoffBytes,contextPin,invocation){
+ const source=receipt.selection.rolloutRef;requireThat(path.isAbsolute(source)&&fs.realpathSync(source)===source&&source.endsWith('.jsonl'),'MEASUREMENT_SOURCE_IDENTITY');
+ const st=fs.lstatSync(source);requireThat(st.isFile()&&!st.isSymbolicLink()&&st.nlink===1&&st.uid===process.getuid()&&(st.mode&0o022)===0&&st.size<=512*1024*1024,'MEASUREMENT_SOURCE_IDENTITY');
+ requireThat(st.dev===receipt.device&&st.ino===receipt.inode,'MEASUREMENT_SOURCE_IDENTITY');
+ const fd=fs.openSync(source,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW),observedAt=new Date().toISOString();let actualReadBytes=0;
+ const take=(offset,length)=>{requireThat(Number.isSafeInteger(length)&&length>=0&&actualReadBytes+length<=MAX,'MEASUREMENT_SOURCE_READ_LIMIT');actualReadBytes+=length;return readAt(fd,offset,length);};
+ try{
+  const opened=fs.fstatSync(fd);requireThat(opened.dev===st.dev&&opened.ino===st.ino,'MEASUREMENT_SOURCE_IDENTITY');
+  requireThat(Number.isSafeInteger(receipt.metaBytes)&&receipt.metaBytes>0&&receipt.metaBytes<=1024*1024,'MEASUREMENT_METADATA_BOUND');
+  const metaRaw=take(0,receipt.metaBytes);requireThat(sha(metaRaw)===receipt.metaSha256,'MEASUREMENT_SOURCE_IDENTITY');
+  const meta=JSON.parse(metaRaw);requireThat(meta.type==='session_meta','MEASUREMENT_SOURCE_PROFILE_CHANGED');
+  const identity={sessionId:meta.payload.id,hostVersion:meta.payload.cli_version,provider:meta.payload.model_provider??null};
+  requireThat(identity.sessionId===receipt.metadata.sessionId&&identity.hostVersion===receipt.metadata.hostVersion&&identity.provider===receipt.metadata.provider,'MEASUREMENT_SOURCE_IDENTITY');
+  requireThat(identity.hostVersion==='0.166.0-alpha.5.1'&&safeName(identity.provider),'MEASUREMENT_SOURCE_PROFILE_CHANGED');
+  let end=cutoffBytes;
+  if(end===undefined){if(take(opened.size-1,1)[0]===10)end=opened.size;else{const tailStart=Math.max(receipt.startOffset,opened.size-65536),tail=take(tailStart,opened.size-tailStart),newline=tail.lastIndexOf(10);requireThat(newline>=0,'MEASUREMENT_SOURCE_NO_COMPLETE_CUTOFF');end=tailStart+newline+1;}}
+  exact(contextPin,['offset','bytes','sha256'],'MEASUREMENT_CONTEXT_PIN');
+  requireThat(Number.isSafeInteger(contextPin.offset)&&contextPin.offset>=receipt.metaBytes&&Number.isSafeInteger(contextPin.bytes)&&contextPin.bytes>0&&contextPin.bytes<=1024*1024&&/^[a-f0-9]{64}$/.test(contextPin.sha256)&&contextPin.offset+contextPin.bytes<=receipt.startOffset,'MEASUREMENT_CONTEXT_PIN');
+  requireThat(Number.isSafeInteger(end)&&end<=opened.size&&end>=receipt.startOffset&&end-receipt.startOffset<=MAX,'MEASUREMENT_SOURCE_CUTOFF');
+  requireThat(take(end-1,1)[0]===10&&take(receipt.startOffset-1,1)[0]===10,'MEASUREMENT_SOURCE_CUTOFF');
+  requireThat(take(contextPin.offset-1,1)[0]===10,'MEASUREMENT_CONTEXT_PIN');
+  const contextRaw=take(contextPin.offset,contextPin.bytes);requireThat(sha(contextRaw)===contextPin.sha256&&contextRaw.at(-1)===10&&contextRaw.subarray(0,-1).indexOf(10)===-1,'MEASUREMENT_CONTEXT_PIN');
+  function contextValue(row,pin){
+   requireThat(row.type==='turn_context'&&safeName(row.payload.model)&&typeof row.payload.turn_id==='string','MEASUREMENT_MODEL_UNAVAILABLE');
+   requireThat(!Object.keys(row.payload).some(k=>/^(task_?id|stage_?request_?id|instance_?id|claim_?digest|cost|amount|currency|total_?cost)$/i.test(k)),'MEASUREMENT_CONTEXT_ATTRIBUTION_PRESENT');
+   requireThat(Object.keys(row.payload).every(k=>CONTEXT_KEYS.includes(k)),'MEASUREMENT_SOURCE_PROFILE_CHANGED');
+   requireThat(typeof row.timestamp==='string'&&Number.isFinite(Date.parse(row.timestamp))&&Date.parse(row.timestamp)<=Date.parse(observedAt)+1000,'MEASUREMENT_FUTURE_OBSERVATION');
+   const provider=row.payload.model_provider??identity.provider;requireThat(safeName(provider),'MEASUREMENT_MODEL_UNAVAILABLE');
+   return{rawPin:pin,turnId:row.payload.turn_id,model:row.payload.model,provider};
+  }
+  const fixed=JSON.parse(contextRaw);requireThat(canonical(Object.keys(fixed).filter(k=>k!=='ordinal').sort())===canonical(['payload','timestamp','type']),'MEASUREMENT_SOURCE_PROFILE_CHANGED');
+  const start=receipt.startOffset,raw=take(start,end-start);let local=0,latestContext=contextValue(fixed,contextPin);
+  const events=[],contexts=[latestContext],calls=[];
+  requireThat(invocation&&typeof invocation.command==='string'&&typeof invocation.workdir==='string'&&typeof invocation.driverRef==='string','MEASUREMENT_INVOCATION_REQUIRED');
+  while(local<raw.length){
+   const next=raw.indexOf(10,local);requireThat(next>=0,'MEASUREMENT_SOURCE_CUTOFF');const line=raw.subarray(local,next+1),offset=start+local;local=next+1;
+   // Inspect only the first two structural type names. In particular, an
+   // agent_reasoning/response_item body containing example JSON is not parsed.
+   const types=[...line.subarray(0,512).toString().matchAll(/"type"\s*:\s*"([a-z_]+)"/g)].map(v=>v[1]);
+   const context=types[0]==='turn_context',token=types[0]==='event_msg'&&types[1]==='token_count',tool=types[0]==='response_item'&&types[1]==='custom_tool_call'&&line.includes(Buffer.from(invocation.driverRef));if(!context&&!token&&!tool)continue;
+   requireThat(line.length<=1024*1024,'MEASUREMENT_SOURCE_ROW_LIMIT');const row=JSON.parse(line),pin={offset,bytes:line.length,sha256:sha(line)};
+   if(tool){
+    if(row.payload?.type!=='custom_tool_call'||row.payload.name!=='exec')continue;const input=row.payload.input?.trim(),prefix='text(await tools.exec_command(';
+    if(typeof input!=='string'||!input.startsWith(prefix)||!input.endsWith('));'))continue;
+    let args;try{args=JSON.parse(input.slice(prefix.length,-3));}catch{continue;}
+    if(args.cmd!==invocation.command||args.workdir!==invocation.workdir)continue;
+    const turnId=row.payload.internal_chat_message_metadata_passthrough?.turn_id;requireThat(turnId===latestContext.turnId,'MEASUREMENT_TOOL_TURN_MISMATCH');
+    calls.push({rawPin:pin,turnId,callId:row.payload.call_id,contextPin:latestContext.rawPin});continue;
+   }
+   const topKeys=Object.keys(row).filter(k=>k!=='ordinal');requireThat(canonical(topKeys.sort())===canonical(['payload','timestamp','type']),'MEASUREMENT_SOURCE_PROFILE_CHANGED');
+   if(context){
+    latestContext=contextValue(row,pin);contexts.push(latestContext);continue;
+   }
+   if(offset<receipt.startOffset)continue;
+   requireThat(row.type==='event_msg'&&row.payload?.type==='token_count','MEASUREMENT_SOURCE_PROFILE_CHANGED');
+   const p=row.payload;exact(p,['type','info','rate_limits'],'MEASUREMENT_SOURCE_PROFILE_CHANGED');exact(p.info,['total_token_usage','last_token_usage','model_context_window'],'MEASUREMENT_SOURCE_PROFILE_CHANGED');
+   requireThat(typeof row.timestamp==='string'&&Number.isFinite(Date.parse(row.timestamp))&&Date.parse(row.timestamp)<=Date.parse(observedAt)+1000,'MEASUREMENT_FUTURE_OBSERVATION');
+   events.push({rawPin:pin,ordinal:row.ordinal??null,timestamp:row.timestamp,contextPin:latestContext?.rawPin??null,total:counter(p.info.total_token_usage),last:counter(p.info.last_token_usage),payloadKeys:Object.keys(p).sort(),infoKeys:Object.keys(p.info).sort(),accountRateLimitsExcluded:true});
+  }
+  requireThat(events.length>0&&events.length<=10000&&latestContext!==null,'MEASUREMENT_NO_ORIGINAL_OBSERVATIONS');
+  requireThat(calls.length===1&&calls[0].turnId===latestContext.turnId,'MEASUREMENT_INVOCATION_NOT_EXACT');
+  requireThat(events.every(e=>e.contextPin!==null),'MEASUREMENT_MODEL_UNAVAILABLE');
+  requireThat(events.some(e=>Object.values(e.total).some(v=>Number.isSafeInteger(v))),'MEASUREMENT_NO_KNOWN_COUNTERS');
+  const after=fs.fstatSync(fd);requireThat(after.dev===opened.dev&&after.ino===opened.ino&&after.size>=end,'MEASUREMENT_SOURCE_IDENTITY');
+  requireThat(sha(take(start,end-start))===sha(raw)&&sha(take(0,receipt.metaBytes))===receipt.metaSha256&&sha(take(contextPin.offset,contextPin.bytes))===contextPin.sha256,'MEASUREMENT_SOURCE_CHANGED');
+  return{source:{reference:source,device:opened.dev,inode:opened.ino,metadata:{rawPin:{offset:0,bytes:receipt.metaBytes,sha256:receipt.metaSha256},...identity}},range:{contextPin,startOffset:receipt.startOffset,endOffset:end,actualReadBytes,maximumReadBytes:MAX,sourceSizeAtCapture:opened.size,observedAt,sha256:sha(raw)},invocation:calls[0],model:{provider:latestContext.provider,model:latestContext.model,turnId:latestContext.turnId,rawPin:latestContext.rawPin},contexts,tokenEvents:events,cost:{value:null,reason:'NOT_PROVIDED_IN_SELECTED_SOURCE',checkedFields:['token_count top-level row','event_msg.token_count.payload','event_msg.token_count.payload.info','total_token_usage','last_token_usage'],accountRateLimitsNotTaskCost:true},threadCountersKnown:true,independentTaskCountersProvided:false,containsReasoningOrInstructions:false};
+ }finally{fs.closeSync(fd);}
+}
+
+/** All called operation names/input shapes are the current native read API.
+ * Empty output is never accepted as a successful native response. */
+async function inspectTaskAttribution({request,serviceId,workspaceId,projectId,handoff}){
+ const reads=[];
+ async function read(operation,input={}){const response=await request(operation,input);requireThat(response&&typeof response==='object'&&Object.hasOwn(response,'result')&&!response.error,'MEASUREMENT_NATIVE_READ_UNKNOWN');const result=response.result;requireThat(result&&typeof result==='object'&&Buffer.byteLength(JSON.stringify(result))<=1024*1024,'MEASUREMENT_NATIVE_READ_UNKNOWN');reads.push({operation,input,result,resultDigest:'sha256:'+sha(canonical(result))});return result;}
+ function status(s){requireThat(s.serviceId===serviceId&&s.workspaceId===workspaceId&&s.projectId===projectId&&Number.isSafeInteger(s.revision),'MEASUREMENT_NATIVE_SCOPE');}
+ const before=await read('runtime.status');status(before);
+ const inspected=await read('lifecycle.instance.inspect',{instanceId:handoff.instanceId}),instance=inspected.instance;
+ requireThat(instance?.id===handoff.instanceId&&instance.pins?.projectId===projectId&&instance.pins.targetRef===handoff.preparationRef&&instance.stages?.implementation?.requestId===handoff.stageRequestId,'MEASUREMENT_NATIVE_SCOPE');
+ requireThat(typeof instance.pinsDigest==='string'&&instance.pinsDigest.startsWith('sha256:'),'MEASUREMENT_NATIVE_SCOPE');
+ async function pages(operation,key){let after,seen=new Set(),all=[];for(let n=0;n<20;n++){const v=await read(operation,after===undefined?{}:{after});requireThat(Array.isArray(v[key])&&v[key].length<=50&&Object.hasOwn(v,'nextAfter'),'MEASUREMENT_NATIVE_PAGE');all.push(...v[key]);if(v.nextAfter===null)return all;requireThat(typeof v.nextAfter==='string'&&v.nextAfter.length>0&&!seen.has(v.nextAfter)&&v[key].length===50,'MEASUREMENT_NATIVE_PAGE');seen.add(v.nextAfter);after=v.nextAfter;}fail('MEASUREMENT_NATIVE_PAGE_LIMIT');}
+ const sources=await pages('usage.sources.list','sources'),bindings=await pages('usage.attributions.list','bindings');
+ for(const s of sources)requireThat(s?.projectId===projectId&&typeof s.id==='string','MEASUREMENT_NATIVE_SCOPE');
+ for(const item of bindings){const b=item?.binding;requireThat(b&&b.projectId===projectId&&typeof b.instanceId==='string'&&typeof b.stageId==='string'&&typeof b.targetVersion==='string','MEASUREMENT_NATIVE_READ_UNKNOWN');if(b.instanceId===handoff.instanceId&&b.stageId==='implementation')fail('MEASUREMENT_TASK_ATTRIBUTION_EXISTS');}
+ const targetVersion=handoff.preparation?.target?.version;requireThat(typeof targetVersion==='string'&&targetVersion.length>0,'MEASUREMENT_NATIVE_SCOPE');
+ const query={targetVersion,instanceId:handoff.instanceId,stageId:'implementation',format:'json'},report=await read('usage.report.read',query);
+ requireThat(report.schema==='runtime-token-report/v1'&&report.projectId===projectId&&report.targetVersion===targetVersion&&report.instanceId===handoff.instanceId&&report.stageId==='implementation'&&report.coverage==='REGISTERED_SOURCES_ONLY'&&report.completeVersionTotal===false&&Number.isSafeInteger(report.records)&&Array.isArray(report.sources),'MEASUREMENT_NATIVE_READ_UNKNOWN');
+ requireThat(report.records===0&&report.sources.length===0,'MEASUREMENT_TASK_MEASUREMENT_EXISTS');exact(report.counts,METRICS,'MEASUREMENT_NATIVE_READ_UNKNOWN');
+ for(const metric of METRICS){const c=report.counts[metric];requireThat(c&&c.recorded===null&&c.unknownRecords===0,'MEASUREMENT_TASK_MEASUREMENT_EXISTS');}
+ const after=await read('runtime.status');status(after);requireThat(after.revision===before.revision&&report.cutoffRevision===before.revision,'MEASUREMENT_NATIVE_SCOPE_CHANGED');
+ return{instanceId:instance.id,instancePinsDigest:instance.pinsDigest,targetRef:instance.pins.targetRef,targetVersion,ledgerRevision:before.revision,matchingTaskBindings:0,noRegisteredTaskMeasurement:true,emptyReportAloneProvesUnavailability:false,reads};
+}
+
+const MEASUREMENT_SUMMARY='已知模型/provider；原始共享聊天 token 计数随来源证据保留。本任务没有可独立核实的 token 归属，因此任务 token 数未提供；所选原始来源没有任务金额/币种，实际费用未提供。观测仅截至本报告前的原事件，不代表整个 stage、turn 或版本总量。';
+
+
+function pinned(ref,digest,max=262144){const bytes=privateBytes(ref,max);assert.equal(sha(bytes),digest);return bytes;}
+function parseCodingHostStdout(stdout,phase){
+ assert.equal(typeof stdout,'string');assert(Buffer.byteLength(stdout)>0&&Buffer.byteLength(stdout)<=1048576);assert(['inspect','claim','propose','submit'].includes(phase));
+ // Preserve stdout verbatim in the original Host evidence. This is a separate
+ // interpretation of exactly one Node 24.14 SQLite notice, not a log filter.
+ const pattern=/\(node:([1-9][0-9]{0,9})\) ExperimentalWarning: SQLite is an experimental feature and might change at any time\n\(Use `node --trace-warnings \.\.\.` to show where the warning was created\)\n/g;
+ const matches=[...stdout.matchAll(pattern)];assert(matches.length<=1,'Multiple notices are not the selected single-import output');let json=stdout,notice=null;
+ if(matches.length){
+  assert.equal(phase,'propose','Only the pinned propose phase imports the SQLite-backed configuration module');const m=matches[0],pid=Number(m[1]);assert(Number.isSafeInteger(pid)&&pid<=2147483647);
+  const before=m.index===0,after=m.index+m[0].length===stdout.length;assert(before||after,'The notice must be a separate prefix or suffix, never inside the JSON value');if(after&&!before)assert.equal(stdout[m.index-1],'\n');json=stdout.slice(0,m.index)+stdout.slice(m.index+m[0].length);
+  notice={kind:'NODE_SQLITE_EXPERIMENTAL_WARNING',nodeVersion:'v24.14.0',pid,position:before?'before-json':'after-json',bytes:Buffer.byteLength(m[0]),sha256:sha(m[0])};
+ }
+ assert(/^\{[^\r\n]*\}\n?$/.test(json),'Exactly one original JSON line and no other output is required');const value=JSON.parse(json);assert(value&&typeof value==='object'&&!Array.isArray(value));
+ return{value,interpretation:{rawStdoutBytes:Buffer.byteLength(stdout),rawStdoutSha256:sha(stdout),jsonBytes:Buffer.byteLength(json),jsonSha256:sha(json),notice,originalToolOutputRetained:true,unknownOutputIgnored:false}};
+}
+
+const quote=value=>"'"+value.replaceAll("'","'\\''")+"'";
+
+async function proveMeasurementCodingHost(run,selected,handoff,reported,claim,nodeExecutable,valueDigest,proofPin){
+ const ref=proofPin.ref;assert(fs.existsSync(ref),'Original Host proof must already exist; this read-only case never starts or resumes the Host');
+ const proofBytes=pinned(ref,proofPin.sha256,1048576),proof=JSON.parse(proofBytes);
+ exact(proof,['schema','candidateDigest','stageRequestId','handoffDigest','claimDigest','reportDigest','turnContexts','inspect','claim','edits','validation','propose','submit']);assert.equal(proof.schema,'runtime-v090-coding-host-evidence/v1');assert.equal(proof.candidateDigest,run.candidateDigest);
+ assert.equal(proof.stageRequestId,handoff.stageRequestId);assert.equal(proof.handoffDigest,handoff.digest);assert.equal(proof.claimDigest,claim.digest);assert.equal(proof.reportDigest,reported.digest);assert.equal(claim.host.sessionId,selected.metadata.sessionId);assert.equal(claim.host.version,selected.metadata.hostVersion);assert.equal(handoff.agent.version,selected.metadata.hostVersion);assert.equal(claim.handoffDigest,handoff.digest);assert.equal(reported.claimDigest,claim.digest);
+ const current=fs.lstatSync(selected.selection.rolloutRef);assert.equal(current.ino,selected.inode);assert.equal(current.dev,selected.device);assert(current.size>=selected.startOffset);assert.equal(sha(privateBytes(selected.selectionRef)),selected.selectionSha256);pinned(selected.selection.driverRef,selected.selection.driverSha256,1048576);
+ const fd=fs.openSync(selected.selection.rolloutRef,'r'),records=[],used=new Set(),turns=new Map();let total=0;
+ function record(pin,kind,history=false){
+  exact(pin,['offset','bytes','sha256']);assert(Number.isSafeInteger(pin.offset)&&pin.offset>=0&&Number.isSafeInteger(pin.bytes)&&pin.bytes>0&&pin.bytes<=1048576&&/^[a-f0-9]{64}$/.test(pin.sha256));assert(history||pin.offset>=selected.startOffset,'Historical Host events cannot qualify a new coding run');assert(pin.offset+pin.bytes<=current.size);assert(!used.has(pin.offset),'A source record cannot be reused as another action');used.add(pin.offset);total+=pin.bytes;assert(total<=16777216);
+  const raw=Buffer.alloc(pin.bytes);assert.equal(fs.readSync(fd,raw,0,raw.length,pin.offset),raw.length);assert.equal(sha(raw),pin.sha256);assert.equal(raw.at(-1),10);assert.equal(raw.subarray(0,-1).indexOf(10),-1);if(pin.offset){const prior=Buffer.alloc(1);assert.equal(fs.readSync(fd,prior,0,1,pin.offset-1),1);assert.equal(prior[0],10);}
+  const row=JSON.parse(raw);assert(Number.isFinite(Date.parse(row.timestamp)));assert(Number.isSafeInteger(row.ordinal));assert.equal(row.type,kind);records.push({pin,raw,row});return row;
+ }
+ function turn(row){const id=row.payload.internal_chat_message_metadata_passthrough?.turn_id,context=turns.get(id);assert(context,'Original tool record needs its exact original turn context');assert(context.ordinal<row.ordinal&&Date.parse(context.timestamp)<=Date.parse(row.timestamp));return id;}
+ function pair(value){
+  exact(value,['call','output']);const call=record(value.call,'response_item'),output=record(value.output,'response_item');assert.equal(call.payload.type,'custom_tool_call');assert.equal(call.payload.name,'exec');assert.equal(call.payload.status,'completed');assert.equal(output.payload.type,'custom_tool_call_output');assert.equal(call.payload.call_id,output.payload.call_id);assert.equal(turn(call),turn(output));assert(call.ordinal<output.ordinal&&Date.parse(call.timestamp)<=Date.parse(output.timestamp));
+  assert.equal(typeof call.payload.input,'string');assert(Array.isArray(output.payload.output));return{call,output};
+ }
+ function parsedOutput(row){const values=[];for(const block of row.payload.output){assert.equal(block.type,'input_text');assert.equal(typeof block.text,'string');if(block.text.startsWith('{'))values.push(JSON.parse(block.text));else assert(block.text.startsWith('Script completed\n'),'Failed or unresolved tool execution is not a completed Host action');}return values;}
+ function argumentsFor(call,method){const text=call.payload.input.trim(),prefix='text(await tools.'+method+'(';assert(text.startsWith(prefix)&&text.endsWith('));'),'Use one original tool invocation per provenance record');const args=JSON.parse(text.slice(prefix.length,-3));return args;}
+ function execution(value,command,cwd){
+  exact(value,['call','output','polls']);assert(Array.isArray(value.polls)&&value.polls.length<=32);const first=pair({call:value.call,output:value.output}),args=argumentsFor(first.call,'exec_command');
+  exact(args,['cmd','workdir','login','yield_time_ms','max_output_tokens']);assert.equal(args.cmd,command);assert.equal(args.workdir,cwd);assert.equal(args.login,false);assert(Number.isInteger(args.yield_time_ms)&&args.yield_time_ms>=250&&args.yield_time_ms<=30000);assert(Number.isInteger(args.max_output_tokens)&&args.max_output_tokens>=2000&&args.max_output_tokens<=16000);
+  const chunks=[];let observed=parsedOutput(first.output);assert.equal(observed.length,1);let result=observed[0],last=first.output;assert.equal(typeof result.output,'string');chunks.push(result.output);const sessionId=result.session_id;
+  if(sessionId!==undefined)assert(Number.isSafeInteger(sessionId));
+  for(const pin of value.polls){assert(result.exit_code===undefined&&result.session_id===sessionId,'Do not replay or poll a completed Host command');const next=pair(pin),poll=argumentsFor(next.call,'write_stdin');exact(poll,['session_id','chars','yield_time_ms','max_output_tokens']);assert.equal(poll.session_id,sessionId);assert.equal(poll.chars,'');assert(Number.isInteger(poll.yield_time_ms)&&poll.yield_time_ms>=1&&poll.yield_time_ms<=60000);assert(Number.isInteger(poll.max_output_tokens)&&poll.max_output_tokens>=2000&&poll.max_output_tokens<=16000);assert(next.call.ordinal>last.ordinal);observed=parsedOutput(next.output);assert.equal(observed.length,1);result=observed[0];assert.equal(typeof result.output,'string');chunks.push(result.output);last=next.output;}
+  assert.equal(result.exit_code,0,'Only the original completed command establishes successful execution');assert.equal(result.session_id,undefined);const stdout=chunks.join('');assert(Buffer.byteLength(stdout)<=1048576);return{start:first.call.ordinal,end:last.ordinal,startedAt:first.call.timestamp,completedAt:last.timestamp,stdout,turnId:turn(first.call),callId:first.call.payload.call_id};
+ }
+ function phase(name){const cmd=quote(nodeExecutable)+' '+quote(selected.selection.driverRef)+' '+name,r=execution(proof[name],cmd,selected.selection.preparationRoot),parsed=parseCodingHostStdout(r.stdout,name),output=parsed.value;exact(output,['phase','stageRequestId','handoffDigest',...(name==='inspect'?['taskDigest']:['claimDigest']),...(['propose','submit'].includes(name)?['commit','change']:[]),...(name==='propose'?['artifacts']:[]),...(name==='submit'?['reportDigest']:[])]);assert.equal(output.phase,name);assert.equal(output.stageRequestId,handoff.stageRequestId);assert.equal(output.handoffDigest,handoff.digest);run.artifact('coding-host-stdout-interpretation.json',{phase:name,callId:r.callId,...parsed.interpretation});return{...r,value:output};}
+ try{
+  const meta=Buffer.alloc(selected.metaBytes);assert.equal(fs.readSync(fd,meta,0,meta.length,0),meta.length);assert.equal(sha(meta),selected.metaSha256);
+  assert(Array.isArray(proof.turnContexts)&&proof.turnContexts.length>0&&proof.turnContexts.length<=16);for(const pin of proof.turnContexts){const r=record(pin,'turn_context',true),p=r.payload;assert.equal(typeof p.turn_id,'string');assert.equal(typeof p.model,'string');assert(p.model.length>0);if(turns.has(p.turn_id))assert.equal(turns.get(p.turn_id).model,p.model);else turns.set(p.turn_id,{model:p.model,provider:selected.metadata.provider,timestamp:r.timestamp,ordinal:r.ordinal});}
+  const inspected=phase('inspect'),claimed=phase('claim');assert(inspected.end<claimed.start);assert.equal(inspected.value.taskDigest,valueDigest(handoff.preparation));assert.equal(claimed.value.claimDigest,claim.digest);
+  assert(Date.parse(claimed.startedAt)<=Date.parse(claim.claimedAt)&&Date.parse(claim.claimedAt)<=Date.parse(claimed.completedAt),'Native claim must have occurred inside the original Host command');
+  assert(Array.isArray(proof.edits)&&proof.edits.length>0&&proof.edits.length<=32);const changed=new Set(),allowed=new Set(reported.result.artifacts.map(a=>path.join(handoff.workspaceRoot,a.path)));let lastEdit=claimed.end;
+  for(const evidence of proof.edits){const p=pair(evidence);assert(p.call.ordinal>lastEdit);const text=p.call.payload.input.trim(),prefix='text(await tools.apply_patch(';assert(text.startsWith(prefix)&&text.endsWith('));'));const patch=JSON.parse(text.slice(prefix.length,-3));assert.equal(typeof patch,'string');assert(patch.startsWith('*** Begin Patch\n')&&patch.trimEnd().endsWith('*** End Patch'));const paths=[...patch.matchAll(/^\*\*\* (?:Add|Update) File: (.+)$/gm)].map(m=>m[1]);assert(paths.length>0);assert(!/^\*\*\* (?:Delete File|Move to):/m.test(patch));for(const file of paths){assert(allowed.has(file));assert(file.startsWith(handoff.workspaceRoot+path.sep));changed.add(file);}assert.deepEqual(parsedOutput(p.output),[{}]);lastEdit=p.output.ordinal;}
+  for(const name of ['runtime-chain-probe/summary.sh','runtime-chain-probe/summary.test.sh'])assert(changed.has(path.join(handoff.workspaceRoot,name)),'Actual Host edits to both the implementation and its checks are required');
+  const testCommand='/bin/bash '+quote(path.join(handoff.workspaceRoot,'runtime-chain-probe/summary.test.sh'))+' '+quote(path.join(handoff.workspaceRoot,'runtime-chain-probe/summary.sh')),validated=execution(proof.validation,testCommand,handoff.workspaceRoot);assert(validated.start>lastEdit);assert(validated.stdout.includes('checks=7 passed=7 failed=0'));
+  const proposed=phase('propose'),submitted=phase('submit');assert(proposed.start>validated.end);assert(submitted.start>proposed.end);for(const r of [proposed,submitted]){assert.equal(r.value.claimDigest,claim.digest);assert.equal(r.value.commit,reported.result.commit);assert.deepEqual(r.value.change,reported.result.change);}assert.deepEqual(proposed.value.artifacts,reported.result.artifacts);assert.equal(submitted.value.reportDigest,reported.digest);
+  assert(Date.parse(submitted.startedAt)<=Date.parse(reported.receivedAt)&&Date.parse(reported.receivedAt)<=Date.parse(submitted.completedAt),'Native report must have occurred inside the original Host command');
+  await run.assertNoCredentialExposure([{name:'selected-original-coding-host-tool-records',text:records.filter(r=>r.row.type==='response_item').map(r=>r.raw.toString()).join('')}],{logs:false});
+  for(const item of records){assert(Date.parse(item.row.timestamp)<=Date.parse(handoff.deadlineAt)+60000);const raw=Buffer.alloc(item.pin.bytes);assert.equal(fs.readSync(fd,raw,0,raw.length,item.pin.offset),raw.length);assert.equal(sha(raw),item.pin.sha256);if(item.row.type==='turn_context')run.artifact('coding-host-turn-context.json',{source: selected.selection.rolloutRef,pin:item.pin,turnId:item.row.payload.turn_id,model:item.row.payload.model,provider:selected.metadata.provider,recording:'Original turn metadata projection; instructions and reasoning omitted'});else run.artifact('coding-host-original-record.json',{source:selected.selection.rolloutRef,pin:item.pin,rawJsonl:item.raw.toString(),recording:'Original Codex tool call/output bytes; no reasoning or session instructions'});}
+  assert.equal(sha(privateBytes(ref)),sha(proofBytes));assert.equal(sha(privateBytes(selected.selectionRef)),selected.selectionSha256);pinned(selected.selection.driverRef,selected.selection.driverSha256,1048576);
+  const result={session:selected.metadata,source:selected.selection.rolloutRef,startOffset:selected.startOffset,proofSha256:sha(proofBytes),stageRequestId:handoff.stageRequestId,handoffDigest:handoff.digest,claimDigest:claim.digest,reportDigest:reported.digest,commit:reported.result.commit,change:reported.result.change,turns:[...turns].map(([turnId,value])=>({turnId,...value})),recordCount:records.length,originalToolChain:'VERIFIED_LOCAL_RECORD_BINDING',independentHostAttestation:false,cryptographicSignature:false};run.artifact('coding-host-original-proof-map.json',proof);run.artifact('coding-host-provenance.json',result);
+  return{summary:result,phaseRanges:{propose:{startedAt:proposed.startedAt,completedAt:proposed.completedAt,call:proof.propose.call,output:proof.propose.polls.at(-1)?.output??proof.propose.output,turnId:proposed.turnId},submit:{startedAt:submitted.startedAt,completedAt:submitted.completedAt,call:proof.submit.call,output:proof.submit.polls.at(-1)?.output??proof.submit.output,turnId:submitted.turnId}},revalidate(){
+   assert.equal(fs.realpathSync(selected.selection.rolloutRef),selected.selection.rolloutRef);const st=fs.lstatSync(selected.selection.rolloutRef);assert(st.isFile()&&!st.isSymbolicLink()&&st.nlink===1&&st.uid===process.getuid()&&(st.mode&0o022)===0);assert.equal(st.ino,selected.inode);assert.equal(st.dev,selected.device);
+   assert.equal(sha(privateBytes(ref)),sha(proofBytes));assert.equal(sha(privateBytes(selected.selectionRef)),selected.selectionSha256);pinned(selected.selection.driverRef,selected.selection.driverSha256,1048576);
+   const source=fs.openSync(selected.selection.rolloutRef,'r');try{const header=Buffer.alloc(selected.metaBytes);assert.equal(fs.readSync(source,header,0,header.length,0),header.length);assert.equal(sha(header),selected.metaSha256);for(const item of records){const raw=Buffer.alloc(item.pin.bytes);assert.equal(fs.readSync(source,raw,0,raw.length,item.pin.offset),raw.length);assert.equal(sha(raw),item.pin.sha256);}}finally{fs.closeSync(source);}
+   return{recordCount:records.length,sourceSelectionSha256:selected.selectionSha256,proofSha256:sha(proofBytes),driverSha256:selected.selection.driverSha256,unchanged:true};
+  }};
+ }finally{fs.closeSync(fd);}
+}
+
+// Included only in the private proposed E13 collector. All Runtime operations
+// below are reads. No provider calls, Host starts, report or authority writers.
+async function unavailableTaskMeasurement(run,driver,c,plan){
+ exactKeys(plan,['instanceId','stageRequestId','reportDigest','hostAvailabilityEvidence','codingHostEvidence']);slug(plan.instanceId);
+ exactKeys(plan.codingHostEvidence,['ref','sha256']);assert(/^[a-f0-9]{64}$/.test(plan.codingHostEvidence.sha256));assert(/^sha256:[a-f0-9]{64}$/.test(plan.reportDigest));
+ const pins=[];
+ function pinnedJson(pin,max=8388608){exactKeys(pin,['ref','sha256']);assert(/^[a-f0-9]{64}$/.test(pin.sha256));const raw=privateBytes(pin.ref,max);assert.equal(sha(raw),pin.sha256);pins.push({ref:pin.ref,sha256:pin.sha256});return JSON.parse(raw);}
+ function sourceJson(source,max=8388608){exactKeys(source,['reference','digest']);assert(/^sha256:[a-f0-9]{64}$/.test(source.digest));return pinnedJson({ref:source.reference,sha256:source.digest.slice(7)},max);}
+ const before=await driver.original(plan.stageRequestId),initial=before.instance;
+ assert.equal(initial.id,plan.instanceId);assert.equal(before.request.stageId,'implementation');
+ const eventsBefore=await driver.events(),statusBefore=await run.read('runtime.status');
+ const handoffRead=await run.read('lifecycle.agent.handoff.read',{stageRequestId:plan.stageRequestId}),handoff=driver.intact(handoffRead.handoff),claim=driver.intact(handoffRead.claim);
+ assert.equal(handoffRead.hostSessionAttested,false);assert.equal(handoffRead.softwareReleaseAuthorized,false);assert.equal(handoff.instanceId,initial.id);assert.equal(handoff.preparationRef,initial.pins.targetRef);assert.equal(handoff.stageRequestId,plan.stageRequestId);assert.equal(claim.handoffDigest,handoff.digest);assert.equal(claim.principalId,before.request.initiatedBy.id);assert.equal(claim.principalRevision,before.request.initiatedBy.revision);
+ assert.equal(handoffRead.latestReport?.digest,plan.reportDigest,'Select the exact original terminal Host report, not an arbitrary null report');
+ const reports=[];let digest=plan.reportDigest;
+ for(let n=0;digest!==null;n++){
+  assert(n<16,'Keep the actual report chain within this fixed technical profile');
+  const read=await run.read('lifecycle.agent.report.read',{stageRequestId:plan.stageRequestId,reportDigest:digest}),report=driver.intact(read.report);
+  assert.equal(report.digest,digest);assert.equal(report.claimDigest,claim.digest);assert.equal(report.stageRequestId,plan.stageRequestId);assert.equal(report.independentlyVerified,false);assert.equal(read.independentlyVerified,false);assert.equal(read.authorityGranted,false);assert.equal(read.measurementSource,'host-reported');assert(report.measurement,'Omission is not proof of unavailability');
+  assert.equal(report.state,n===0?'SUBMITTED':'WORKING');reports.push(report);digest=report.previousReportDigest;
+ }
+ const reported=reports[0];assert.deepEqual(handoffRead.latestReport,reported);
+ const finalSource=pinnedJson(plan.hostAvailabilityEvidence);
+ assert.equal(reported.measurement.source.reference,plan.hostAvailabilityEvidence.ref);assert.equal(reported.measurement.source.digest,'sha256:'+plan.hostAvailabilityEvidence.sha256);
+ const selectionBytes=privateBytes(finalSource.sourceSelection.reference,1048576);assert.equal('sha256:'+sha(selectionBytes),finalSource.sourceSelection.digest);pins.push({ref:finalSource.sourceSelection.reference,sha256:sha(selectionBytes)});
+ const selected=JSON.parse(selectionBytes),root=selected.selection.preparationRoot;
+ assert.equal(selected.selection.driverRef,path.join(root,'current-codex.mjs'));assert.equal(handoff.workspaceRoot,path.join(root,'coding-workspace'));assert.equal(fs.realpathSync(root),root);assert.equal(selected.metadata.hostVersion,claim.host.version);assert.equal(selected.metadata.sessionId,claim.host.sessionId);
+ const sourceReceipt=pinnedJson({ref:selected.selectionRef,sha256:selected.selectionSha256},1048576);assert.deepEqual(sourceReceipt,selected.selection);
+ const preparationPlanBytes=privateBytes(path.join(root,'PREPARATION-PLAN.json')),preparationPlan=JSON.parse(preparationPlanBytes);pins.push({ref:path.join(root,'PREPARATION-PLAN.json'),sha256:sha(preparationPlanBytes)});
+ assert.equal(preparationPlan.candidate.manifestDigest,run.candidateDigest.slice(7));assert.equal(preparationPlan.workspaceId,run.selection.workspaceId);assert.equal(preparationPlan.projectId,run.selection.projectId);assert.equal(preparationPlan.testRelease.version,handoff.preparation.target.version);
+ const driverRecipe=preparationPlan.recipes.find(v=>v.ref===selected.selection.driverRef),helperRecipe=preparationPlan.recipes.find(v=>v.ref===path.join(root,'measurement-helper.mjs'));
+ assert(driverRecipe&&helperRecipe);assert.equal(driverRecipe.sha256,selected.selection.driverSha256);for(const recipe of [driverRecipe,helperRecipe]){pinnedJsonBytes(recipe);}
+ function pinnedJsonBytes(pin){const raw=privateBytes(pin.ref,1048576);assert.equal(sha(raw),pin.sha256);pins.push(pin);return raw;}
+ const specification=JSON.parse(privateBytes(path.join(run.selection.installedRoot,'service-specification.json'),1048576));assert.equal(specification.root,run.selection.installedRoot);
+ const valueDigest=value=>'sha256:'+sha(canonical(value));
+ const coding=await proveMeasurementCodingHost(run,selected,handoff,reported,claim,specification.nodeExecutable,valueDigest,plan.codingHostEvidence);pins.push(plan.codingHostEvidence);
+ const originalReadbacks=[],observations=[],sourceChecks=[],phaseCounters=new Map(),sourceReferences=new Set();
+ for(const report of [...reports].reverse()){
+  const source=sourceJson(report.measurement.source);
+  exact(source,['schema','phase','index','candidateDigest','serviceId','workspaceId','projectId','instanceId','instancePinsDigest','targetRef','targetVersion','stageRequestId','handoffDigest','claimDigest','host','sourceSelection','scope','coverage','availability','nativeAttribution','original','hostSessionAttested','independentlyVerified','summary']);
+  assert.equal(source.schema,'runtime-real-host-measurement-availability/v1');assert.equal(source.candidateDigest,run.candidateDigest);assert.equal(source.serviceId,run.candidate.serviceId);assert.equal(source.workspaceId,run.selection.workspaceId);assert.equal(source.projectId,run.selection.projectId);assert.equal(source.instanceId,initial.id);assert.equal(source.instancePinsDigest,initial.pinsDigest);assert.equal(source.targetRef,initial.pins.targetRef);assert.equal(source.targetVersion,handoff.preparation.target.version);assert.equal(source.stageRequestId,plan.stageRequestId);assert.equal(source.handoffDigest,handoff.digest);assert.equal(source.claimDigest,claim.digest);
+  assert.deepEqual(source.host,{hostId:claim.host.hostId,version:claim.host.version,sessionId:claim.host.sessionId});assert.equal(source.hostSessionAttested,false);assert.equal(source.independentlyVerified,false);assert.equal(source.scope,'SHARED_HOST_SOURCE_OBSERVATION');
+  assert.deepEqual(source.coverage,{taskIndependentAttribution:false,completeTaskTotal:false,completeStageTotal:false,completeTurnTotal:false,completeVersionTotal:false,includesFutureEvents:false});assert.deepEqual(source.availability,{provider:'KNOWN',model:'KNOWN',taskTokens:'NO_INDEPENDENT_TASK_ATTRIBUTION_IN_SELECTED_SOURCE',cost:'NOT_PROVIDED_IN_SELECTED_SOURCE'});assert.equal(source.summary,MEASUREMENT_SUMMARY);assert(report.summary.includes(MEASUREMENT_SUMMARY));
+  assert.equal(source.phase,report.state==='SUBMITTED'?'submit':'propose');assert(Number.isSafeInteger(source.index)&&source.index>=1&&source.index<=16);const phaseRoot=path.join(root,'current-codex-'+source.phase),stem='MEASUREMENT-'+String(source.index).padStart(4,'0');assert.equal(report.measurement.source.reference,path.join(phaseRoot,stem+'.json'));
+  assert.equal(source.index,(phaseCounters.get(source.phase)??0)+1);phaseCounters.set(source.phase,source.index);assert(!sourceReferences.has(report.measurement.source.reference),'Every original report has a separate immutable measurement observation');sourceReferences.add(report.measurement.source.reference);
+  assert.deepEqual(source.sourceSelection,finalSource.sourceSelection);assert.deepEqual(source.original.range.contextPin,preparationPlan.originalHost.measurementContextPin);
+  const phase=coding.phaseRanges[source.phase];assert(phase);assert(Date.parse(source.original.range.observedAt)>=Date.parse(phase.startedAt)&&Date.parse(source.original.range.observedAt)<=Date.parse(report.receivedAt));assert(source.original.range.endOffset>=phase.call.offset+phase.call.bytes&&source.original.range.endOffset<=phase.output.offset,'The frozen source cutoff must predate this completed original Host phase');
+  const original=inspectHostSource(selected,source.original.range.endOffset,source.original.range.contextPin,{command:quote(specification.nodeExecutable)+' '+quote(selected.selection.driverRef)+' '+source.phase,workdir:root,driverRef:selected.selection.driverRef});
+  for(const key of ['source','invocation','model','contexts','tokenEvents','cost','threadCountersKnown','independentTaskCountersProvided','containsReasoningOrInstructions'])assert.deepEqual(source.original[key],original[key],key);
+  assert.equal(source.original.range.startOffset,selected.startOffset);assert.equal(source.original.range.sha256,original.range.sha256);assert(Number.isSafeInteger(source.original.range.sourceSizeAtCapture)&&source.original.range.sourceSizeAtCapture>=source.original.range.endOffset&&source.original.range.sourceSizeAtCapture<=fs.statSync(selected.selection.rolloutRef).size);assert(source.original.range.actualReadBytes>0&&source.original.range.actualReadBytes<=8388608);assert.equal(source.original.range.maximumReadBytes,8388608);
+  assert.deepEqual(original.invocation.rawPin,phase.call);assert.equal(original.invocation.turnId,phase.turnId);for(const event of original.tokenEvents)assert(Date.parse(event.timestamp)<=Date.parse(report.receivedAt));
+  sourceChecks.push({endOffset:source.original.range.endOffset,contextPin:source.original.range.contextPin,invocation:{command:quote(specification.nodeExecutable)+' '+quote(selected.selection.driverRef)+' '+source.phase,workdir:root,driverRef:selected.selection.driverRef},original});
+  assert.deepEqual(report.measurement,{provider:original.model.provider,model:original.model.model,inputTokens:null,outputTokens:null,totalTokens:null,cost:null,source:report.measurement.source});
+  // Re-interpret the captured native responses using the same independently
+  // checked real API shapes, then match them to original native request/response
+  // files immediately preceding this exact authenticated report receipt.
+  let consumed=0;const past=await inspectTaskAttribution({request:async(operation,input)=>{const r=source.nativeAttribution.reads[consumed++];assert(r);assert.equal(r.operation,operation);assert.deepEqual(r.input,input??{});assert.equal(r.resultDigest,valueDigest(r.result));return{result:r.result};},serviceId:run.candidate.serviceId,workspaceId:run.selection.workspaceId,projectId:run.selection.projectId,handoff});assert.equal(consumed,source.nativeAttribution.reads.length);assert.deepEqual(past,source.nativeAttribution);
+  const names=fs.readdirSync(phaseRoot).filter(v=>/^\d+-native-request\.json$/.test(v)).sort((a,b)=>Number(a.split('-')[0])-Number(b.split('-')[0]));assert(names.length<=512);
+  const native=[];for(const name of names){const ref=path.join(phaseRoot,name),raw=privateBytes(ref,1048576),request=JSON.parse(raw);native.push({ref,sha256:sha(raw),request,responseRef:ref.replace(/-request\.json$/,'-response.json')});}
+  const matches=native.map((r,i)=>({r,i})).filter(({r})=>r.request.operation==='lifecycle.agent.report'&&r.request.input?.measurement?.source?.digest===report.measurement.source.digest);assert.equal(matches.length,1);const {r:write,i:writeIndex}=matches[0];assert.equal(write.request.projectId,run.selection.projectId);assert.deepEqual(write.request.input,{stageRequestId:plan.stageRequestId,claimDigest:claim.digest,previousReportDigest:report.previousReportDigest,state:report.state,summary:report.summary,result:report.result,measurement:report.measurement});assert.equal(native[writeIndex-1]?.request.operation,'runtime.status');
+  function nativeResponse(item){const raw=privateBytes(item.responseRef,1048576),response=JSON.parse(raw);assert.equal(response.status,200);assert.equal(sha(response.rawBody),response.rawBodySha256);const body=JSON.parse(response.rawBody);assert(!body.error&&body.result!==undefined);pins.push({ref:item.ref,sha256:item.sha256},{ref:item.responseRef,sha256:sha(raw)});originalReadbacks.push({request:item.request,response});return body.result;}
+  const reads=native.slice(writeIndex-1-consumed,writeIndex-1);assert.equal(reads.length,consumed);
+  for(let i=0;i<reads.length;i++){const expected=source.nativeAttribution.reads[i];assert.equal(reads[i].request.operation,expected.operation);assert.equal(reads[i].request.projectId,run.selection.projectId);assert.deepEqual(reads[i].request.input,expected.input);assert.deepEqual(nativeResponse(reads[i]),expected.result);}
+  const recordedReceipt=nativeResponse(write),actualReceipt=await run.read('runtime.receipt.read',{requestId:write.request.requestId});assert.deepEqual(actualReceipt,recordedReceipt);assert.equal(actualReceipt.operation,'lifecycle.agent.report');assert.equal(actualReceipt.result.reportDigest,report.digest);assert.equal(actualReceipt.requestDigest,sha(canonical({operation:write.request.operation,projectId:run.selection.projectId,input:write.request.input})));
+  const indexRef=path.join(phaseRoot,'MEASUREMENT-INDEX-'+String(source.index).padStart(4,'0')+'.json'),indexBytes=privateBytes(indexRef,1048576),index=JSON.parse(indexBytes);pins.push({ref:indexRef,sha256:sha(indexBytes)});assert.equal(index.schema,'runtime-e01-measurement-index/v1');assert.equal(index.phase,source.phase);assert.equal(index.count,source.index);assert.deepEqual(index.entries,[...observations.filter(v=>v.phase===source.phase).map(v=>({index:v.index,reference:v.source.reference,digest:v.source.digest})),{index:source.index,reference:report.measurement.source.reference,digest:report.measurement.source.digest}]);
+  run.artifact('measurement-original-availability.json',{reportDigest:report.digest,sourceReference:report.measurement.source,original:source,independentRawSourceRead:true,rawInstructionsOrReasoningRetained:false});
+  observations.push({reportDigest:report.digest,phase:source.phase,index:source.index,source:report.measurement.source,sourceCutoff:original.range.endOffset,rawTokenEvents:original.tokenEvents.length,model:original.model.model,provider:original.model.provider,taskTokens:null,cost:null,scope:source.scope,sharedCountersPreserved:true});
+ }
+ const current=await inspectTaskAttribution({request:async(operation,input)=>{const r=await run.request(operation,input);assert.equal(r.status,200,'Read failure cannot manufacture empty usage');return r.body;},serviceId:run.candidate.serviceId,workspaceId:run.selection.workspaceId,projectId:run.selection.projectId,handoff});
+ assert.equal(current.instancePinsDigest,initial.pinsDigest);assert.equal(current.targetVersion,handoff.preparation.target.version);
+ run.artifact('measurement-original-native-readbacks.json',{originalReadbacks,currentNativeReadbacks:current.reads,taskScope:measurementTaskScope(handoff,initial),emptyQueriesAloneNotProof:true});
+ for(const pin of pins)assert.equal(sha(privateBytes(pin.ref,8388608)),pin.sha256);coding.revalidate();
+ // Re-read the original complete windows at exactly the already verified
+ // cutoffs, including token rows outside the coding tool proof record set.
+ for(const check of sourceChecks){const final=inspectHostSource(selected,check.endOffset,check.contextPin,check.invocation);for(const key of ['source','invocation','model','contexts','tokenEvents','cost','threadCountersKnown','independentTaskCountersProvided','containsReasoningOrInstructions'])assert.deepEqual(final[key],check.original[key]);assert.equal(final.range.sha256,check.original.range.sha256);assert.equal(final.range.startOffset,check.original.range.startOffset);assert.equal(final.range.endOffset,check.original.range.endOffset);}
+ assert.deepEqual(await driver.original(plan.stageRequestId),before);assert.deepEqual(await run.read('lifecycle.agent.handoff.read',{stageRequestId:plan.stageRequestId}),handoffRead);assert.deepEqual(await driver.events(),eventsBefore);assert.equal((await run.read('runtime.status')).revision,statusBefore.revision);
+ return{originalCase:c.caseInstanceId,originalStageRequestId:plan.stageRequestId,originalReportDigest:plan.reportDigest,targetVersion:handoff.preparation.target.version,realHostSourceBound:true,sourceReports:observations,knownThreadCountersPreserved:true,taskCountsUnattributableWithinObservedScope:true,actualCostNotProvidedInSelectedSource:true,modelKnown:true,unknownNotZero:true,hostSessionAttested:false,independentlyVerified:false,originalInstanceUnchanged:true,newRuntimeWrites:0,newStageDispatches:0,newModelCalls:0,newCiRuns:0,e01JourneyCredit:false};
+}
+function measurementTaskScope(handoff,instance){return{instanceId:instance.id,pinsDigest:instance.pinsDigest,targetRef:instance.pins.targetRef,targetVersion:handoff.preparation.target.version,stageRequestId:handoff.stageRequestId,sourceScope:'SHARED_HOST_SOURCE_OBSERVATION'};}
+
 test('E13 installed interruption and truthful unavailable measurement branches',{timeout:240000},async t=>{
  const captured=await openScenario('E13'),run={...captured};
  // A bounded request already in flight retains its original response through
@@ -301,6 +574,7 @@ test('E13 installed interruption and truthful unavailable measurement branches',
    if(c.caseInstanceId==='E13.CV04')return activationAtomicity(run,driver,c,plan);
    if(['E13.variant.07','E13.MC04'].includes(c.caseInstanceId))return definitionConflict(run,driver,c,plan);
    if(['E13.variant.01','E13.variant.02'].includes(c.caseInstanceId)){assert(!used.has(plan.instanceId),'Interruption cases require independent original instances');used.add(plan.instanceId);return interruption(run,driver,c,plan);}
+   if(c.caseInstanceId==='E13.variant.05')return unavailableTaskMeasurement(run,driver,c,plan);
    if(c.caseInstanceId==='E13.variant.06')return unsupportedLimit(run,driver,c,plan);
    throw Error('UNIMPLEMENTED_ORIGINAL_CASE: '+c.caseInstanceId);
   });

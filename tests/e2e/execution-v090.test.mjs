@@ -444,10 +444,10 @@ test('stage advance cannot bypass revocation or substitute another execution pri
   }finally{await f.server.close();f.cleanup();}
 });
 
-test('an observer acquiring the worker during async permission checks cannot silently consume an acknowledged advance',async()=>{
+test('an exact continuation reserves its worker during async permission checks without observer starvation or duplicate advance',async()=>{
   const f=fixture(),{state,adapter,observe}=stageAdapter(f),originalBindings=f.bindings.provider;
-  let pause=false,entered,releasePermit,observed,releaseInspection,advances=0;
-  const inPermit=new Promise(r=>entered=r),permitGate=new Promise(r=>releasePermit=r),inInspection=new Promise(r=>observed=r),inspectionGate=new Promise(r=>releaseInspection=r);
+  let pause=false,entered,releasePermit,advances=0;
+  const inPermit=new Promise(r=>entered=r),permitGate=new Promise(r=>releasePermit=r);
   f.bindings.provider=async(...args)=>{if(pause){entered();await permitGate;}return originalBindings(...args);};
   adapter.advance=async(r,i,p,permit)=>{await permit();advances++;const o=observe(r,i,'complete');o.handle=p.handle;return o;};
   state.mode='running';state.inspectMode='running';await f.open();
@@ -456,16 +456,127 @@ test('an observer acquiring the worker during async permission checks cannot sil
     const started=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=started.result.result.stageRequestId;
     await until(()=>stageState(f,id),v=>v.result.progress.phase==='CI_RUNNING');
     await until(()=>request(f,'runtime.status'),v=>v.result.observationWorker.inFlight===0);
-    const inspect=adapter.inspect;adapter.inspect=async(...args)=>{observed();await inspectionGate;return inspect(...args);};pause=true;
-    const advancing=execWrite(f,'lifecycle.stage.advance',{stageRequestId:id});
+    const inspections=state.inspections,original=(await stageState(f,id)).result.request;pause=true;
+    const advancing=execWrite(f,'lifecycle.stage.advance',{stageRequestId:id},'executor',{requestId:'reserved-original-advance'});
     await Promise.race([inPermit,new Promise((_,fail)=>setTimeout(()=>fail(Error('permit did not begin')),5000))]);
-    await Promise.race([inInspection,new Promise((_,fail)=>setTimeout(()=>fail(Error('observer did not acquire worker')),5000))]);
-    releasePermit();const busy=await advancing;assert.equal(busy.status,429,JSON.stringify(busy));assert.equal(busy.error.code,'EXECUTOR_BUSY');assert.equal(advances,0);
-    pause=false;adapter.inspect=inspect;releaseInspection();await until(()=>request(f,'runtime.status'),v=>v.result.observationWorker.inFlight===0);
-    const continued=await execWrite(f,'lifecycle.stage.advance',{stageRequestId:id});assert.equal(continued.status,200,JSON.stringify(continued));
+    assert.equal((await request(f,'runtime.status')).result.observationWorker.inFlight,1);
+    const busy=await execWrite(f,'lifecycle.stage.advance',{stageRequestId:id});assert.equal(busy.status,429);assert.equal(busy.error.code,'EXECUTOR_BUSY');
+    await new Promise(resolve=>setTimeout(resolve,3100));assert.equal(state.inspections,inspections,'Background observer cannot acquire the reserved original request');assert.equal(advances,0);
+    pause=false;releasePermit();const continued=await advancing;assert.equal(continued.status,200,JSON.stringify(continued));assert.equal(continued.result.result.deadlineAt,original.deadlineAt);
     await until(()=>stageState(f,id),v=>v.result.progress.phase==='COMPLETE');assert.equal(advances,1);assert.equal(state.dispatches,1);
     const instance=(await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance;assert.equal(instance.stages.scope.attempts,1);assert.equal(instance.requestIds.length,1);
-  }finally{pause=false;releasePermit();releaseInspection();await f.server.close();f.cleanup();}
+  }finally{pause=false;releasePermit();await f.server.close();f.cleanup();}
+});
+
+for(const fault of ['binding','revocation','cas','timeout'])test('continuation reservation releases after '+fault+' without a receipt or late adapter action',async()=>{
+  const f=fixture(),{state,adapter,observe}=stageAdapter(f),bindings=f.bindings.provider;let pause=false,entered,release,advances=0;
+  const inPermit=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
+  f.bindings.provider=async(...args)=>{if(pause){entered();await gate;}return bindings(...args);};
+  adapter.advance=async(r,i,p,permit)=>{await permit();advances++;const o=observe(r,i,'complete');o.handle=p.handle;return o;};
+  state.mode='running';state.inspectMode='running';await f.open();
+  try{
+    await activate(f);const grantRef=await grant(f);await create(f,grantRef);
+    const start=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=start.result.result.stageRequestId;
+    await until(()=>stageState(f,id),v=>v.result.progress.phase==='CI_RUNNING');await until(()=>request(f,'runtime.status'),v=>v.result.observationWorker.inFlight===0);
+    const original=(await stageState(f,id)).result.request,requestId='reserved-failure-'+fault;pause=true;
+    const pending=execWrite(f,'lifecycle.stage.advance',{stageRequestId:id},'executor',{requestId});await inPermit;
+    if(fault==='binding')f.bindings.state.mode='unknown';
+    if(fault==='revocation')assert.equal((await execWrite(f,'lifecycle.authority.revoke',{authorityRef:grantRef.ref,reason:'Synthetic in-flight withdrawal'},'decider')).status,200);
+    if(fault==='cas')assert.equal((await execWrite(f,'lifecycle.draft.save',{yaml:yaml(f.data)+'\n# concurrent draft\n'},'owner')).status,200);
+    if(fault!=='timeout'){pause=false;release();}
+    const result=await pending;assert.equal(result.status,fault==='revocation'?403:409,JSON.stringify(result));
+    assert.equal(result.error.code,{binding:'EXECUTION_BINDING_CHANGED',revocation:'AUTHORITY_REVOKED',cas:'REVISION_CONFLICT',timeout:'EXECUTION_BINDING_CHANGED'}[fault]);
+    pause=false;release();f.bindings.state.mode='valid';await new Promise(resolve=>setTimeout(resolve,25));
+    assert.equal(advances,0);assert.equal(state.dispatches,1);assert.equal((await request(f,'runtime.receipt.read',{requestId},'executor')).status,404);assert.deepEqual((await stageState(f,id)).result.request,original);
+    await until(()=>request(f,'runtime.status'),v=>v.result.observationWorker.inFlight===0);
+    if(fault!=='revocation'){const recovered=await execWrite(f,'lifecycle.stage.advance',{stageRequestId:id},'executor',{requestId});assert.equal(recovered.status,200,JSON.stringify(recovered));await until(()=>stageState(f,id),v=>v.result.progress.phase==='COMPLETE');assert.equal(advances,1);}
+  }finally{pause=false;release();await f.server.close();f.cleanup();}
+});
+
+test('closing the service aborts an uncommitted continuation reservation and ignores its late permission result',async()=>{
+  const f=fixture(),{state,adapter,observe}=stageAdapter(f),bindings=f.bindings.provider;let pause=false,entered,release,advances=0;
+  const inPermit=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
+  f.bindings.provider=async(...args)=>{if(pause){entered();await gate;}return bindings(...args);};
+  adapter.advance=async(r,i,p,permit)=>{await permit();advances++;const o=observe(r,i,'complete');o.handle=p.handle;return o;};state.mode='running';state.inspectMode='running';await f.open();
+  try{
+    await activate(f);await create(f,await grant(f));const started=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=started.result.result.stageRequestId;
+    await until(()=>stageState(f,id),v=>v.result.progress.phase==='CI_RUNNING');await until(()=>request(f,'runtime.status'),v=>v.result.observationWorker.inFlight===0);const original=(await stageState(f,id)).result.request;
+    pause=true;const pending=execWrite(f,'lifecycle.stage.advance',{stageRequestId:id},'executor',{requestId:'closed-reservation'}).catch(()=>null);await inPermit;
+    await f.server.close();await pending;pause=false;release();await new Promise(resolve=>setTimeout(resolve,25));await f.open();
+    assert.equal((await request(f,'runtime.receipt.read',{requestId:'closed-reservation'},'executor')).status,404);assert.deepEqual((await stageState(f,id)).result.request,original);assert.equal(advances,0);assert.equal(state.dispatches,1);
+  }finally{pause=false;release();await f.server.close();f.cleanup();}
+});
+
+test('the original stage deadline releases a reservation before a late binding result can commit',async()=>{
+  const f=fixture(),{state,adapter,observe}=stageAdapter(f),bindings=f.bindings.provider;let pause=false,entered,release,advances=0;
+  const inPermit=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
+  f.bindings.provider=async(...args)=>{if(pause){entered();await gate;}return bindings(...args);};
+  adapter.advance=async(r,i,p,permit)=>{await permit();advances++;const o=observe(r,i,'complete');o.handle=p.handle;return o;};state.mode='running';state.inspectMode='running';
+  for(const configuration of Object.values(f.data.config))if(configuration.budget)configuration.budget.timeoutSeconds=2;
+  await f.open();
+  try{
+    await activate(f);await create(f,await grant(f));const start=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=start.result.result.stageRequestId;
+    await until(()=>stageState(f,id),v=>v.result.progress.phase==='CI_RUNNING');await until(()=>request(f,'runtime.status'),v=>v.result.observationWorker.inFlight===0);const original=(await stageState(f,id)).result.request;
+    pause=true;const pending=execWrite(f,'lifecycle.stage.advance',{stageRequestId:id},'executor',{requestId:'deadline-reservation'});await inPermit;
+    const result=await pending;assert.equal(result.status,409);assert.equal(result.error.code,'OBSERVATION_INTERRUPTED');assert(Date.now()>=Date.parse(original.deadlineAt));
+    pause=false;release();await new Promise(resolve=>setTimeout(resolve,25));
+    assert.equal((await request(f,'runtime.receipt.read',{requestId:'deadline-reservation'},'executor')).status,404);assert.deepEqual((await stageState(f,id)).result.request,original);assert.equal(advances,0);assert.equal(state.dispatches,1);
+  }finally{pause=false;release();await f.server.close();f.cleanup();}
+});
+
+test('continuation rechecks its original deadline inside the commit callback before writing a receipt',async()=>{
+  const {f,state,adapter,observe}=await executingFixture(),originalMutate=RuntimeStore.prototype.mutate;let advances=0,commitChecks=0;
+  state.mode='running';state.inspectMode='running';adapter.advance=async(r,i,p,permit)=>{await permit();advances++;const o=observe(r,i,'complete');o.handle=p.handle;return o;};
+  try{
+    const started=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=started.result.result.stageRequestId;
+    await until(()=>stageState(f,id),v=>v.result.progress.phase==='CI_RUNNING');await until(()=>request(f,'runtime.status'),v=>v.result.observationWorker.inFlight===0);
+    const original=(await stageState(f,id)).result.request,deadline=Date.parse(original.deadlineAt),requestId='commit-deadline-reservation';
+    RuntimeStore.prototype.mutate=function(principal,mutation,operation,reauthorize){
+      if(mutation.requestId!==requestId)return originalMutate.call(this,principal,mutation,operation,reauthorize);
+      return originalMutate.call(this,principal,mutation,()=>{const now=Date.now;Date.now=()=>deadline;commitChecks++;try{return operation();}finally{Date.now=now;}},reauthorize);
+    };
+    const denied=await execWrite(f,'lifecycle.stage.advance',{stageRequestId:id},'executor',{requestId});
+    assert.equal(denied.status,409,JSON.stringify(denied));assert.equal(denied.error.code,'EXECUTION_DEADLINE');assert.equal(commitChecks,1);
+    assert.equal((await request(f,'runtime.receipt.read',{requestId},'executor')).status,404);assert.deepEqual((await stageState(f,id)).result.request,original);assert.equal(advances,0);assert.equal(state.dispatches,1);
+    assert.equal((await request(f,'runtime.status')).result.observationWorker.inFlight,0);
+  }finally{RuntimeStore.prototype.mutate=originalMutate;await f.server.close();f.cleanup();}
+});
+
+test('continuation cannot cancel or replace an already active original observer',async()=>{
+  const {f,state,adapter,observe}=await executingFixture();let entered,release,observingSignal,advances=0;
+  const inspecting=new Promise(r=>entered=r),gate=new Promise(r=>release=r),originalInspect=adapter.inspect;
+  state.mode='running';state.inspectMode='running';adapter.advance=async(r,i,p,permit)=>{await permit();advances++;const o=observe(r,i,'complete');o.handle=p.handle;return o;};
+  try{
+    const started=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=started.result.result.stageRequestId;
+    await until(()=>stageState(f,id),v=>v.result.progress.phase==='CI_RUNNING');
+    adapter.inspect=async(...args)=>{observingSignal=args[4];entered();await gate;return originalInspect(...args);};
+    await Promise.race([inspecting,new Promise((_,fail)=>setTimeout(()=>fail(Error('original observer did not begin')),5000))]);
+    const original=(await stageState(f,id)).result.request,denied=await execWrite(f,'lifecycle.stage.advance',{stageRequestId:id},'executor',{requestId:'active-observer-denial'});
+    assert.equal(denied.status,429);assert.equal(denied.error.code,'EXECUTOR_BUSY');assert.equal(observingSignal.aborted,false);assert.equal(advances,0);assert.equal((await request(f,'runtime.receipt.read',{requestId:'active-observer-denial'},'executor')).status,404);
+    release();await until(()=>request(f,'runtime.status'),v=>v.result.observationWorker.inFlight===0);assert.deepEqual((await stageState(f,id)).result.request,original);
+    assert.equal((await execWrite(f,'lifecycle.stage.advance',{stageRequestId:id})).status,200);await until(()=>stageState(f,id),v=>v.result.progress.phase==='COMPLETE');assert.equal(advances,1);assert.equal(state.dispatches,1);
+  }finally{release();await f.server.close();f.cleanup();}
+});
+
+test('four pending continuation reservations preserve capacity and reject an earlier fifth admission before commit',async()=>{
+  const f=fixture(),{state,adapter,observe}=stageAdapter(f),bindings=f.bindings.provider;let pause=false,entered=0,release,prepared,releasePrepare,advances=0;
+  const permits=new Promise(r=>release=r),inPrepare=new Promise(r=>prepared=r),prepareGate=new Promise(r=>releasePrepare=r);
+  f.bindings.provider=async(...args)=>{if(pause){entered++;await permits;}return bindings(...args);};
+  const originalPrepare=adapter.prepare;adapter.prepare=async(i,...args)=>{if(i.id==='five'){prepared();await prepareGate;}return originalPrepare(i,...args);};
+  adapter.advance=async(r,i,p,permit)=>{await permit();advances++;const o=observe(r,i,'complete');o.handle=p.handle;return o;};state.mode='running';state.inspectMode='running';await f.open();
+  const waiting=[];
+  try{
+    await activate(f);for(const name of ['one','two','three','four','five'])assert.equal((await create(f,await grant(f,'execution',executionSubject(f,name)),name)).status,200);
+    const ids=[];for(const name of ['one','two','three','four']){const start=await execWrite(f,'lifecycle.stage.request',{instanceId:name,stageId:'scope'});assert.equal(start.status,200,JSON.stringify(start));ids.push(start.result.result.stageRequestId);await until(()=>stageState(f,ids.at(-1)),v=>v.result.progress.phase==='CI_RUNNING');}
+    await until(()=>request(f,'runtime.status'),v=>v.result.observationWorker.inFlight===0);
+    const fifth=execWrite(f,'lifecycle.stage.request',{instanceId:'five',stageId:'scope'},'executor',{requestId:'fifth-capacity-admission'});waiting.push(fifth);await inPrepare;pause=true;
+    for(const id of ids)waiting.push(execWrite(f,'lifecycle.stage.advance',{stageRequestId:id}));
+    await until(async()=>entered,v=>v===4);assert.equal((await request(f,'runtime.status')).result.observationWorker.inFlight,4);
+    releasePrepare();const denied=await fifth;assert.equal(denied.status,429,JSON.stringify(denied));assert.equal(denied.error.code,'EXECUTOR_BUSY');assert.equal((await request(f,'runtime.receipt.read',{requestId:'fifth-capacity-admission'},'executor')).status,404);
+    const unchanged=(await request(f,'lifecycle.instance.inspect',{instanceId:'five'})).result.instance;assert.equal(unchanged.stages.scope.attempts,0);assert.equal(unchanged.requestIds.length,0);
+    pause=false;release();const results=await Promise.all(waiting.slice(1));assert.equal(results.filter(v=>v.status===200).length,1);for(const r of results.filter(v=>v.status!==200))assert.equal(r.error.code,'REVISION_CONFLICT');
+    await until(()=>request(f,'runtime.status'),v=>v.result.observationWorker.inFlight===0);assert.equal(advances,1);assert.equal(state.dispatches,4);
+  }finally{pause=false;release();releasePrepare();await Promise.allSettled(waiting);await f.server.close();f.cleanup();}
 });
 
 test('stage request is durable before adapter side effects; exact replay never redispatches and client PASS is rejected',async()=>{

@@ -144,7 +144,74 @@ async function phaseMapping(run,browser,c){
  run.artifact('phase-traceability.json',mapping);return{phase:'PRE_RELEASE',actualCandidateMonitorAndPermissionEvidence:monitor,...mapping};
 }
 
-test('E12 exact installed browser and HTTP permission/security boundaries',async()=>{
+async function permissionFixture(run,c){
+ const f=run.permissionFixture;assert(f&&f.caseIds.includes(c.caseInstanceId));for(const role of ['monitor','editor','activator'])identity(run,role);
+ const original=(await run.read('lifecycle.instance.inspect',{instanceId:f.instanceId})).instance;assert.equal(original.id,f.instanceId);assert.equal(original.pins.projectId,run.selection.projectId);assert(Object.values(original.stages).every(s=>s.status==='PENDING'&&s.attempts===0&&s.requestId===null));
+ const originalSource=await run.source(original.pins.definitionRevisionId);return{fixture:f,original,originalSource};
+}
+async function intactPermissionHistory(run,initial){
+ assert.deepEqual((await run.read('lifecycle.instance.inspect',{instanceId:initial.fixture.instanceId})).instance,initial.original);assert.equal(await run.source(initial.original.pins.definitionRevisionId),initial.originalSource);
+}
+async function permissionEvents(run){let cursor,rows=[];for(let i=0;i<80;i++){const r=await run.read('runtime.events.read',cursor?{cursor}:{});assert(Array.isArray(r.events)&&r.events.length<=50);if(!r.events.length)return rows;rows.push(...r.events);assert.notEqual(r.cursor,cursor);cursor=r.cursor;}throw Error('Permission fixture event bound exceeded');}
+function actualPreview(ui,source){const row=ui.network.filter(v=>v.request?.operation==='lifecycle.definition.validate'&&v.request.input?.yaml===source&&v.status===200&&v.transportOutcome==='RESPONSE_RETAINED').at(-1);assert(row);const body=JSON.parse(row.rawBody);assert.equal(body.result.ready,true);assert(/^sha256:[a-f0-9]{64}$/.test(body.result.validationDigest));return{digest:body.result.validationDigest,responseRequestId:body.requestId};}
+async function previewPermissionSource(ui,source){await expect(ui.source).toBeEditable();await ui.source.fill(source);await ui.preview();return actualPreview(ui,source);}
+async function deniedUiActivation(ui,run,source,preview,{holdBeforeSubmit=false,stepId}){
+ const start=ui.network.length;let captured=null,release=null,arrived=null,released=false,routeFailure=null;
+ const ready=new Promise(resolve=>{arrived=resolve;}),gate=new Promise(resolve=>{release=resolve;});
+ const handler=async route=>{const request=route.request();let envelope;try{envelope=request.postDataJSON();}catch{}if(envelope?.operation!=='lifecycle.definition.save-and-activate')return route.continue();if(captured){routeFailure='Unexpected duplicate UI activation request';return route.abort('failed');}
+  try{assert.equal(envelope.projectId,run.selection.projectId);assert.equal(envelope.input.yaml,source);assert.equal(envelope.input.validationDigest,preview.digest);assert.equal(typeof envelope.requestId,'string');captured={envelope,at:new Date().toISOString(),interception:'ACTUAL_UI_REQUEST_BEFORE_TRANSPORT_NO_PAYLOAD_CHANGE'};arrived();const forward=await gate;if(!forward)return route.abort('failed');await route.continue();}catch{routeFailure='Exact held activation forwarding failed';try{await route.abort('failed');}catch{}}
+ };
+ try{
+  if(holdBeforeSubmit)await ui.page.route('**/api/v1/dashboard/request',handler);
+  if(!holdBeforeSubmit)run.permissionFault(stepId);
+  const click=ui.page.getByRole('button',{name:'保存并启用',exact:true}).click({timeout:10000});
+  if(holdBeforeSubmit){let timer;try{await Promise.race([ready,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Actual submit interception timed out')),10000);})]);}finally{clearTimeout(timer);}run.artifact('permission-submit-boundary.json',captured);run.permissionFault(stepId);released=true;release(true);}
+  await click;await expect.poll(()=>ui.network.slice(start).filter(v=>v.request?.operation==='lifecycle.definition.save-and-activate'&&v.transportOutcome==='RESPONSE_RETAINED').length,{timeout:10000}).toBeGreaterThan(0);assert.equal(routeFailure,null);
+  const row=ui.network.slice(start).find(v=>v.request?.operation==='lifecycle.definition.save-and-activate'&&v.transportOutcome==='RESPONSE_RETAINED');assert.equal(row.request.input.validationDigest,preview.digest);assert.equal(row.request.input.yaml,source);const result=denied({status:row.status,body:JSON.parse(row.rawBody)},['BROWSER_SESSION_REVOKED','UNAUTHENTICATED']);assert.equal(result.status,401);return{...result,actualUiRequest:row.request,heldBeforeTransport:holdBeforeSubmit,previewResponseRequestId:preview.responseRequestId};
+ }finally{if(!released){released=true;release(false);}if(holdBeforeSubmit)await ui.page.unroute('**/api/v1/dashboard/request',handler);}
+}
+async function restorePreview(run,ui,c,initial,source,preview,restoreId){
+ run.permissionFault(restoreId);const old=await ui.sessionRequest('runtime.status');assert.equal(old.status,401);denied(old,['UNAUTHENTICATED','BROWSER_SESSION_REVOKED']);await ui.login('/lifecycle');
+ const before=await run.read('lifecycle.definition.inspect'),requestId=run.requestId(c.caseInstanceId,restoreId+'-old-preview'),stale=await ui.sessionRequest('lifecycle.definition.save-and-activate',{yaml:source,validationDigest:preview.digest},{requestId,expectedRevision:before.revision});assert.equal(stale.status,200);assert.equal(stale.body.result.result.status,'BLOCKED');assert(stale.body.result.result.issues.some(i=>i.code==='VALIDATION_STALE'));assert.deepEqual((await run.read('lifecycle.definition.inspect')).active,before.active);
+ // The real BLOCKED request retains its draft and advances revision. Reconnect
+ // this same Dashboard page before obtaining and consuming a genuinely new preview.
+ await ui.login('/lifecycle');const fresh=await previewPermissionSource(ui,source);assert.notEqual(fresh.digest,preview.digest);const activated=await activateCurrent(ui,run,source);await intactPermissionHistory(run,initial);return{oldSessionRejected:true,oldPreviewRequestId:requestId,oldPreviewBlocked:true,freshPreview:fresh,activated};
+}
+async function afterActivationRevocation(run,browser,c,initial,ids){
+ const ui=await openBrowser(run,browser,{principalAlias:'activator',route:'/lifecycle',monitorEvidence:true});
+ try{
+  const selected=await selectedActive(run),source=selected.source+'\n# exact post-active revocation '+run.selection.runId+'\n',preview=await previewPermissionSource(ui,source),activation=await activateCurrent(ui,run,source),before=await run.read('lifecycle.definition.inspect');
+  await ui.login('/monitor');const start=ui.sseFrames.length;await expect.poll(()=>ui.sseFrames.filter(f=>['snapshot','heartbeat'].includes(f.eventName)).length,{timeout:10000}).toBeGreaterThan(0);const connected=ui.sseFrames.find(f=>['snapshot','heartbeat'].includes(f.eventName));assert(connected);const fault=run.permissionFault(ids.expire);
+  const native=await run.principalRequest('activator','runtime.status');assert.equal(native.status,401);denied(native,['UNAUTHENTICATED']);
+  await expect.poll(()=>ui.sseFrames.slice(start).filter(f=>f.eventName==='error'&&f.requestId===connected.requestId).length,{timeout:10000}).toBeGreaterThan(0);const errorIndex=ui.sseFrames.findIndex((f,i)=>i>=start&&f.eventName==='error'&&f.requestId===connected.requestId),frame=ui.sseFrames[errorIndex];assert.equal(JSON.parse(frame.data).code,'UNAUTHENTICATED');
+  await expect(ui.page.getByLabel('一次性连接码')).toBeVisible();const session=await ui.sessionRequest('runtime.status');assert.equal(session.status,401);denied(session,['UNAUTHENTICATED','BROWSER_SESSION_REVOKED']);
+  let stream;try{const response=await ui.context.request.get(run.serviceOrigin+'/api/v1/dashboard/events',{timeout:10000,maxRedirects:0});const raw=await response.text();assert(Buffer.byteLength(raw)<=8192);stream={status:response.status(),body:JSON.parse(raw),rawBody:raw};}catch{throw Error('Revoked stream read failed before a bounded safe response');}assert.equal(stream.status,401);denied(stream,['UNAUTHENTICATED','BROWSER_SESSION_REVOKED']);run.artifact('permission-revoked-stream.json',{path:'/api/v1/dashboard/events',...stream,originalFrame:frame,authenticationFieldsOmitted:true});
+  assert(!ui.sseFrames.slice(errorIndex+1).some(f=>f.requestId===connected.requestId&&['snapshot','events','heartbeat','reset'].includes(f.eventName)));await noChanges(run,before);await intactPermissionHistory(run,initial);
+  const recovery=await restorePreview(run,ui,c,initial,source,preview,ids.restore);await noCredentialExposure(run,ui,[{name:'revoked stream',text:JSON.stringify(stream)}]);await ui.flush();return{activation,fault,nativeRevoked:native.body.error.code,browserRevoked:session.body.error.code,originalSseError:frame,newSseRejected:true,recovery};
+ }finally{run.restorePermissionFault();await ui.close();}
+}
+async function permissionTiming(run,browser,c){
+ const initial=await permissionFixture(run,c),events=await permissionEvents(run),roleMonitor=await monitorCase(run,browser,c);let editor;
+ try{editor=await openBrowser(run,browser,{principalAlias:'editor',route:'/lifecycle'});const old=await selectedActive(run),source=old.source+'\n# editor retained draft\n';await editor.source.fill(source);await editor.save();await editor.preview();await expect(editor.page.getByRole('button',{name:'保存并启用',exact:true})).toBeDisabled();const preview=actualPreview(editor,source),view=await run.read('lifecycle.definition.inspect'),denial=await editor.sessionRequest('lifecycle.definition.save-and-activate',{yaml:source,validationDigest:preview.digest},{requestId:run.requestId(c.caseInstanceId,'editor-denied'),expectedRevision:view.revision});assert.equal(denial.status,403);denied(denial,['FORBIDDEN']);await noChanges(run,view);}finally{await editor?.close();}
+ const timings=[];
+ for(const name of ['after-preview','before-submit']){
+  const ui=await openBrowser(run,browser,{principalAlias:'activator',route:'/lifecycle',monitorEvidence:true});
+  try{const selected=await selectedActive(run),source=selected.source+'\n# '+name+' '+run.selection.runId+'\n',preview=await previewPermissionSource(ui,source),before=await run.read('lifecycle.definition.inspect');const rejected=await deniedUiActivation(ui,run,source,preview,{holdBeforeSubmit:name==='before-submit',stepId:name+'-revoke'});
+   const native=await run.principalRequest('activator','lifecycle.definition.save-and-activate',{yaml:source,validationDigest:preview.digest},{requestId:run.requestId(c.caseInstanceId,name+'-native-denied'),expectedRevision:before.revision});assert.equal(native.status,403);denied(native,['FORBIDDEN']);assert.equal((await run.principalRequest('activator','lifecycle.instance.inspect',{instanceId:initial.original.id})).status,200);await noChanges(run,before);await intactPermissionHistory(run,initial);const recovery=await restorePreview(run,ui,c,initial,source,preview,name+'-restore');await ui.flush();timings.push({boundary:name,rejected,nativeDenied:true,recovery});
+  }finally{run.restorePermissionFault();await ui.close();}
+ }
+ const post=await afterActivationRevocation(run,browser,c,initial,{expire:'after-active-expire',restore:'after-active-restore'});const after=await permissionEvents(run);assert.deepEqual(after.slice(0,events.length),events);const added=after.slice(events.length);assert(added.every(e=>['definition-draft-saved','definition-activation-blocked','definition-activated'].includes(e.type)));
+ return{actualInstalledCandidate:true,actualThreeRoles:true,monitor:roleMonitor,timings,postActivation:post,oldInstanceAndPinsUnchanged:true,authFaultInjection:true,productMembershipManagement:false,newInstanceOrStageDispatches:0,newModelCalls:0,newCiRuns:0};
+}
+async function permissionJourney(run,browser,c){
+ const initial=await permissionFixture(run,c),events=await permissionEvents(run),monitor=await monitorCase(run,browser,c),repairs=await samePageRepairs(run,browser,c),ui=await openBrowser(run,browser,{principalAlias:'monitor',route:'/monitor',monitorEvidence:true});let protocol;
+ try{protocol=await protocolProbes(run,ui);await noCredentialExposure(run,ui);await ui.flush();}finally{await ui.close();}
+ const revoked=await afterActivationRevocation(run,browser,c,initial,{expire:'journey-expire',restore:'journey-restore'});const after=await permissionEvents(run);assert.deepEqual(after.slice(0,events.length),events);assert(after.slice(events.length).every(e=>['definition-draft-saved','definition-activation-blocked','definition-activated'].includes(e.type)));await intactPermissionHistory(run,initial);
+ return{actualInstalledCandidate:true,monitor,repairs,protocol,revoked,originalInstancePreserved:true,newExecutionDispatched:false,cv02Separate:true,postReleaseAcceptance:false};
+}
+
+
+test('E12 exact installed browser and HTTP permission/security boundaries',{timeout:240000},async()=>{
  const run=await openScenario('E12');let browser;
  try{
   browser=await chromium.launch({headless:true});
@@ -152,16 +219,8 @@ test('E12 exact installed browser and HTTP permission/security boundaries',async
    if(['E12.variant.02','E12.MC06'].includes(c.caseInstanceId))return monitorCase(run,browser,c);
    if(['E12.variant.01','E12.MC03'].includes(c.caseInstanceId))return samePageRepairs(run,browser,c);
    if(c.caseInstanceId==='E12.CV08')return phaseMapping(run,browser,c);
-   if(c.caseInstanceId==='E12.CV02'){
-    run.artifact('required-revocation-timing.json',{contract:c.parameters.variantContract,missing:'Actual permission/dependency revocation at all three exact temporal boundaries and same-entry fresh validation recovery',syntheticRoleChangesNotSubstituted:true});
-    assert.fail('UNIMPLEMENTED_REQUIRED_VARIANT: exact current-principal/dependency revocation timing remains independently required');
-   }
-   if(c.caseInstanceId==='E12.journey'){
-    identity(run,'monitor');const ui=await openBrowser(run,browser,{principalAlias:'monitor',route:'/monitor',monitorEvidence:true});
-    try{const findings=await protocolProbes(run,ui);const leakCheck=await noCredentialExposure(run,ui);run.artifact('partial-security-journey.json',{findings,credentialExposure:leakCheck,unexecuted:['actual revoked credential read','actual revoked stream read'],complete:false});}
-    finally{await ui.close();}
-    assert.fail('UNIMPLEMENTED_REQUIRED_VARIANT: original E12 journey also requires actual revocation and post-revocation stream evidence');
-   }
+   if(c.caseInstanceId==='E12.CV02')return permissionTiming(run,browser,c);
+   if(c.caseInstanceId==='E12.journey')return permissionJourney(run,browser,c);
    assert.fail('Unknown fixed E12 case '+c.caseInstanceId);
   });
  }finally{await browser?.close();run.finish();}

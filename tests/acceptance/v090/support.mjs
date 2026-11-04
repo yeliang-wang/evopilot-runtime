@@ -28,11 +28,38 @@ const bounded=async(response,limit=262144)=>{
  return Buffer.concat(parts).toString('utf8');
 };
 
+// Scoped acceptance-only fault driver; not a product credential-management API.
+function permissionFaultPlan(selection,scenario,current,named,caseIds){
+ if(!selection.permissionRevocation)return null;
+ assert.equal(scenario,'E12');keys(selection.permissionRevocation,['ref','sha256']);
+ assert.equal(sha(readRegular(selection.permissionRevocation.ref,1048576,true)),selection.permissionRevocation.sha256);
+ const f=json(selection.permissionRevocation.ref);keys(f,['schema','candidateDigest','serviceId','workspaceId','projectId','installedRoot','authRef','principalAlias','instanceId','caseIds','initialAuth','steps']);
+ assert.equal(f.schema,'runtime-v090-permission-revocation-fixture/v1');assert.equal(f.candidateDigest,'sha256:'+selection.expectedManifestDigest);assert.equal(f.serviceId,current.serviceId);assert.equal(f.workspaceId,selection.workspaceId);assert.equal(f.projectId,selection.projectId);assert.equal(f.installedRoot,selection.installedRoot);assert.equal(f.authRef,path.join(selection.installedRoot,'data/auth.json'));assert.equal(f.principalAlias,'activator');assert(/^[a-z0-9][a-z0-9-]{0,63}$/.test(f.instanceId));assert.deepEqual(f.caseIds,caseIds.filter(id=>['E12.CV02','E12.journey'].includes(id)));assert(f.caseIds.length>0&&f.caseIds.length<=2);
+ keys(f.initialAuth,['ref','sha256']);assert.notEqual(f.initialAuth.ref,f.authRef);assert.equal(sha(readRegular(f.initialAuth.ref,131072,true)),f.initialAuth.sha256);assert.equal(sha(readRegular(f.authRef,131072,true)),f.initialAuth.sha256);
+ const baseline=json(f.initialAuth.ref),chosen=named.get(f.principalAlias);assert(chosen);assert.notEqual(chosen.connection.principalId,named.get('default').connection.principalId);
+ keys(baseline,['schema','workspaceId','principals']);assert.equal(baseline.schema,'runtime-auth/v1');assert.equal(baseline.workspaceId,f.workspaceId);assert(Array.isArray(baseline.principals));const target=baseline.principals.find(p=>p.id===chosen.connection.principalId);assert(target);assert.deepEqual([...target.permissions].sort(),['definition.activate','draft.write','read']);assert(Date.parse(target.expiresAt)>Date.now());
+ const expected=f.caseIds.flatMap(caseId=>(caseId==='E12.CV02'?[['after-preview-revoke','revoke-activation'],['after-preview-restore','restore'],['before-submit-revoke','revoke-activation'],['before-submit-restore','restore'],['after-active-expire','expire'],['after-active-restore','restore']]:[['journey-expire','expire'],['journey-restore','restore']]).map(([id,action])=>({caseId,id,action})));assert.deepEqual(f.steps.map(({caseId,id,action})=>({caseId,id,action})),expected);
+ const states=[baseline];let before=f.initialAuth.sha256;
+ for(const step of f.steps){
+  keys(step,['caseId','id','action','beforeSha256','afterRef','afterSha256']);assert.equal(step.beforeSha256,before);assert(['revoke-activation','expire','restore'].includes(step.action));assert.notEqual(step.afterRef,f.authRef);const raw=readRegular(step.afterRef,131072,true);assert.equal(sha(raw),step.afterSha256);const after=JSON.parse(raw),previous=states.at(-1);keys(after,['schema','workspaceId','principals']);assert.equal(after.schema,baseline.schema);assert.equal(after.workspaceId,baseline.workspaceId);assert.equal(after.principals.length,baseline.principals.length);
+  for(let i=0;i<after.principals.length;i++){
+   const p=previous.principals[i],n=after.principals[i];assert.equal(n.id,p.id);
+   if(p.id!==target.id){assert(isDeepStrictEqual(n,p),'A fault cannot modify another principal');continue;}
+   keys(n,['id','projects','permissions','revision','expiresAt','tokenDigest']);assert.equal(n.revision,p.revision+1);assert(Number.isSafeInteger(n.revision));for(const key of ['id','projects','tokenDigest'])assert(isDeepStrictEqual(n[key],target[key]),'Target identity, scope and token must remain unchanged');
+   if(step.action==='revoke-activation'){assert.deepEqual(n.permissions,target.permissions.filter(x=>x!=='definition.activate'));assert.equal(n.expiresAt,target.expiresAt);}
+   if(step.action==='expire'){assert.deepEqual(n.permissions,target.permissions);assert.equal(n.expiresAt,'2000-01-01T00:00:00.000Z');}
+   if(step.action==='restore'){assert.deepEqual(n.permissions,target.permissions);assert.equal(n.expiresAt,target.expiresAt);}
+  }
+  states.push(after);before=step.afterSha256;
+ }
+ assert.equal(f.steps.at(-1).action,'restore');return{fixture:f,baseline,targetId:target.id,states,index:0};
+}
+
 export async function openScenario(scenario){
  const selectionRef=process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;
  assert(selectionRef,'Set EVOPILOT_V090_ACCEPTANCE_SELECTION to a protected, explicit isolated candidate selection');
  const selection=JSON.parse(readRegular(selectionRef,131072,true));
- keys(selection,['schema','installedRoot','expectedManifestDigest','connectionRef','workspaceId','projectId','runId','outputRoot','qualification'],['caseIds','codexHost','packageCompatibility','expertConfiguration','lifecycleExecution','browserConfiguration','extensionConfiguration','revisionEvolution','principals','monitorConfiguration','maintenance','legacyCompatibility','serviceUpgrade','performanceConfiguration','ciAuthority','interruptionFixture','multiClient','releaseQualification']);
+ keys(selection,['schema','installedRoot','expectedManifestDigest','connectionRef','workspaceId','projectId','runId','outputRoot','qualification'],['caseIds','codexHost','packageCompatibility','expertConfiguration','lifecycleExecution','browserConfiguration','extensionConfiguration','revisionEvolution','principals','monitorConfiguration','maintenance','legacyCompatibility','serviceUpgrade','performanceConfiguration','ciAuthority','interruptionFixture','multiClient','releaseQualification','permissionRevocation']);
  if(selection.releaseQualification){assert.equal(scenario,'E20');keys(selection.releaseQualification,['ref','sha256']);assert(/^[a-f0-9]{64}$/.test(selection.releaseQualification.sha256));assert.equal(sha(readRegular(selection.releaseQualification.ref,1048576,true)),selection.releaseQualification.sha256);}
  if(selection.multiClient){assert.equal(scenario,'E11');keys(selection.multiClient,['ref','sha256']);assert(/^[a-f0-9]{64}$/.test(selection.multiClient.sha256));assert.equal(sha(readRegular(selection.multiClient.ref,1048576,true)),selection.multiClient.sha256);}
  if(selection.interruptionFixture){assert.equal(scenario,'E13');keys(selection.interruptionFixture,['ref','sha256']);assert(/^[a-f0-9]{64}$/.test(selection.interruptionFixture.sha256));assert.equal(sha(readRegular(selection.interruptionFixture.ref,1048576,true)),selection.interruptionFixture.sha256);}
@@ -79,8 +106,8 @@ export async function openScenario(scenario){
  const permissions=rolePermissions[plan.role];assert(permissions);
  named.set('default',{connection,connectionRef:selection.connectionRef,expectedPermissions:permissions});
  if(selection.principals){
-  assert(['E07','E11','E12','E19'].includes(scenario));assert(selection.principals&&typeof selection.principals==='object'&&!Array.isArray(selection.principals));assert(Object.keys(selection.principals).length>0&&Object.keys(selection.principals).length<=8);
-  if(scenario==='E11')assert.deepEqual(Object.keys(selection.principals),['beta'],'E11 selects only the exact second project principal');
+  assert(['E04','E07','E11','E12','E19'].includes(scenario));assert(selection.principals&&typeof selection.principals==='object'&&!Array.isArray(selection.principals));assert(Object.keys(selection.principals).length>0&&Object.keys(selection.principals).length<=8);
+  if(['E04','E11'].includes(scenario))assert.deepEqual(Object.keys(selection.principals),['beta'],'E04/E11 select only the exact second project principal');
   for(const [alias,item]of Object.entries(selection.principals)){
    assert(/^[a-z][a-z0-9-]{0,31}$/.test(alias)&&alias!=='default');keys(item,['connectionRef','connectionSha256','principalId','projectId','expectedPermissions']);assert(/^[a-f0-9]{64}$/.test(item.connectionSha256));assert.equal(sha(readRegular(item.connectionRef,131072,true)),item.connectionSha256);
    const conn=readHostConnection(item.connectionRef);for(const key of ['origin','serviceId','workspaceId','version'])assert.equal(conn[key],connection[key],'Named principal must use this exact installed service');assert.equal(conn.principalId,item.principalId);assert.equal(conn.projectId,item.projectId);
@@ -90,6 +117,8 @@ export async function openScenario(scenario){
  }
  const selectedPrincipal=alias=>{const value=named.get(alias??'default');assert(value,'Select an explicit named principal');return value;};
  const principal=(alias='default')=>{const p=selectedPrincipal(alias);return{alias,principalId:p.connection.principalId,projectId:p.connection.projectId,expectedPermissions:[...p.expectedPermissions]};};
+ const permissionSelection=permissionFaultPlan(selection,scenario,current,named,cases.map(c=>c.caseInstanceId));
+ if(permissionSelection)assert.equal(plan.codex,null,'Credential fault qualification cannot use a Host-registered or daily installation');
  if(selection.lifecycleExecution){
   keys(selection.lifecycleExecution,['preparationRef','preparationSha256','ownerFixtureRef','ownerFixtureSha256','exchangeRoot','timeoutSeconds']);
   assert.equal(plan.role,'operator','Execution requires an explicitly provisioned local operator role; do not edit installed credentials');
@@ -103,7 +132,7 @@ export async function openScenario(scenario){
  // or Workspace. Different scenario installations must share this identity.
  const candidateDigest='sha256:'+selection.expectedManifestDigest;
  const collectorPins=Object.fromEntries(['support.mjs',scenario.toLowerCase()+'.test.mjs',...(['E01','E04','E05','E06','E07','E12','E13','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(scenario==='E13'?['execution.mjs']:[])].map(name=>[name,sha(fs.readFileSync(new URL(name,import.meta.url)))]));
- write('selection.json',{scenario,qualification:selection.qualification,candidate,candidateDigest,collectorPins,matrixDigest:sha(matrixBytes),selectedCaseIds:selectedIds,scenarioDenominator:all.length,fullDenominator:matrix.count,sourceQualification:'SEPARATE_E20_OBLIGATION',...(selection.principals?{principalConnections:selection.principals}:{}),...(selection.maintenance?{maintenance:selection.maintenance}:{}),...(selection.legacyCompatibility?{legacyCompatibility:selection.legacyCompatibility}:{}),...(selection.serviceUpgrade?{serviceUpgrade:selection.serviceUpgrade}:{}),...(selection.performanceConfiguration?{performanceConfiguration:selection.performanceConfiguration}:{}),...(selection.ciAuthority?{ciAuthority:selection.ciAuthority}:{}),...(selection.interruptionFixture?{interruptionFixture:selection.interruptionFixture}:{}),...(selection.multiClient?{multiClient:selection.multiClient}:{}),...(selection.releaseQualification?{releaseQualification:selection.releaseQualification}:{})});
+ write('selection.json',{scenario,qualification:selection.qualification,candidate,candidateDigest,collectorPins,matrixDigest:sha(matrixBytes),selectedCaseIds:selectedIds,scenarioDenominator:all.length,fullDenominator:matrix.count,sourceQualification:'SEPARATE_E20_OBLIGATION',...(selection.principals?{principalConnections:selection.principals}:{}),...(selection.maintenance?{maintenance:selection.maintenance}:{}),...(selection.legacyCompatibility?{legacyCompatibility:selection.legacyCompatibility}:{}),...(selection.serviceUpgrade?{serviceUpgrade:selection.serviceUpgrade}:{}),...(selection.performanceConfiguration?{performanceConfiguration:selection.performanceConfiguration}:{}),...(selection.ciAuthority?{ciAuthority:selection.ciAuthority}:{}),...(selection.interruptionFixture?{interruptionFixture:selection.interruptionFixture}:{}),...(selection.multiClient?{multiClient:selection.multiClient}:{}),...(selection.releaseQualification?{releaseQualification:selection.releaseQualification}:{}),...(selection.permissionRevocation?{permissionRevocation:selection.permissionRevocation}:{})});
  let sequence=0,currentCase=null,uncertain=false,hostSequence=0;
  const evidence=[],results=[];
  async function request(operation,input={},meta={}){return principalRequest('default',operation,input,meta);}
@@ -177,6 +206,31 @@ export async function openScenario(scenario){
   const ref=String(++sequence).padStart(5,'0')+'-'+name;write(ref,{caseInstanceId:currentCase,...value});
   const item={caseInstanceId:currentCase,artifact:ref,fileDigest:sha(fs.readFileSync(path.join(selection.outputRoot,ref)))};evidence.push(item);return item;
  }
+ function permissionFault(stepId){
+  assert(permissionSelection,'This campaign has no credential fault authority');const state=permissionSelection,f=state.fixture,step=f.steps[state.index];assert(step&&step.id===stepId);assert.equal(currentCase,step.caseId);assert.equal(sha(readRegular(selection.permissionRevocation.ref,1048576,true)),selection.permissionRevocation.sha256);
+  const before=readRegular(f.authRef,131072,true);assert.equal(sha(before),step.beforeSha256);assert(isDeepStrictEqual(JSON.parse(before),state.states[state.index]),'Auth before-state differs');const after=readRegular(step.afterRef,131072,true);assert.equal(sha(after),step.afterSha256);assert(isDeepStrictEqual(JSON.parse(after),state.states[state.index+1]),'Prepared auth state differs');
+  const projection=v=>{const p=v.principals.find(x=>x.id===state.targetId);return{id:p.id,projects:p.projects,permissions:p.permissions,revision:p.revision,expiresAt:p.expiresAt};};
+  const intent={stepId,action:step.action,authRef:f.authRef,beforeSha256:step.beforeSha256,afterSha256:step.afterSha256,before:projection(state.states[state.index]),after:projection(state.states[state.index+1]),at:new Date().toISOString(),faultInjection:true,productMembershipApi:false,tokenChanged:false,otherPrincipalsChanged:false};artifact('permission-fault-intent.json',intent);
+  const temporary=f.authRef+'.e12-'+selection.runId+'-'+stepId+'.tmp';let fd,created=false;
+  try{
+   fd=fs.openSync(temporary,fs.constants.O_CREAT|fs.constants.O_EXCL|fs.constants.O_WRONLY|fs.constants.O_NOFOLLOW,0o600);created=true;fs.writeFileSync(fd,after);fs.fsyncSync(fd);fs.closeSync(fd);fd=undefined;
+   assert.equal(sha(readRegular(f.authRef,131072,true)),step.beforeSha256,'Unexpected auth drift must stop this exact fault, never overwrite it');fs.renameSync(temporary,f.authRef);created=false;
+   const observed=readRegular(f.authRef,131072,true);assert.equal(sha(observed),step.afterSha256);assert(isDeepStrictEqual(JSON.parse(observed),state.states[state.index+1]),'Auth write readback differs');state.index++;
+   const result={...intent,appliedAt:new Date().toISOString(),observedSha256:sha(observed),transition:state.index};artifact('permission-fault-result.json',result);return result;
+  }finally{if(fd!==undefined)fs.closeSync(fd);if(created&&fs.existsSync(temporary))fs.unlinkSync(temporary);}
+ }
+ function restorePermissionFault(){
+  if(!permissionSelection)return null;const f=permissionSelection.fixture,i=permissionSelection.index;if(!i||f.steps[i-1].action==='restore')return null;
+  const next=f.steps[i];assert(next?.action==='restore','Only the exact reviewed restoration may clean up this fault');return permissionFault(next.id);
+ }
+ function verifyPermissionFaultSelection(after){
+  if(!permissionSelection){assert.equal(after.selectionDigest,current.selectionDigest);return;}
+  const state=permissionSelection,f=state.fixture;assert.equal(sha(readRegular(selection.permissionRevocation.ref,1048576,true)),selection.permissionRevocation.sha256);assert.equal(sha(readRegular(f.initialAuth.ref,131072,true)),f.initialAuth.sha256);for(const s of f.steps)assert.equal(sha(readRegular(s.afterRef,131072,true)),s.afterSha256);
+  const expected=state.index?f.steps[state.index-1].afterSha256:f.initialAuth.sha256;assert.equal(sha(readRegular(f.authRef,131072,true)),expected);assert(isDeepStrictEqual(JSON.parse(readRegular(f.authRef,131072,true)),state.states[state.index]),'Final auth state differs');
+  assert(state.index===0||f.steps[state.index-1].action==='restore','Leave no known revoked fixture principal after cleanup');
+  const{selectionDigest:aDigest,configurationPins:aPins,...a}=after,{selectionDigest:bDigest,configurationPins:bPins,...b}=current;assert.deepEqual(a,b);assert.deepEqual(Object.keys(aPins).sort(),Object.keys(bPins).sort());for(const ref of Object.keys(bPins))assert.equal(aPins[ref],ref===f.authRef?expected:bPins[ref]);
+ }
+
  function imageArtifact(bytes){
   assert(Buffer.isBuffer(bytes)&&bytes.length<=16777216);assert.equal(bytes.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
   const ref=String(++sequence).padStart(5,'0')+'-browser.png';fs.writeFileSync(path.join(selection.outputRoot,ref),bytes,{mode:0o600,flag:'wx'});
@@ -329,17 +383,17 @@ export async function openScenario(scenario){
  async function read(operation,input={}){const r=await request(operation,input);assert.equal(r.status,200,JSON.stringify(r.body));return r.body.result;}
  async function source(revisionId){let offset=0;const chunks=[];for(;;){const page=await read('lifecycle.definition.source.read',{revisionId,offset});assert.equal(page.revisionId,revisionId);chunks.push(Buffer.from(page.data,'base64'));if(page.nextOffset===null)return Buffer.concat(chunks).toString('utf8');assert(page.nextOffset>offset);offset=page.nextOffset;}}
  const status=await read('runtime.status');assert.equal(status.serviceId,connection.serviceId);assert.equal(status.workspaceId,selection.workspaceId);assert.equal(status.version,manifest.version);
- return{selection,candidate,candidateDigest,cases,all,request,principalRequest,principal,assertNoCredentialExposure,read,source,protocol,artifact,imageArtifact,traceArtifact,browserCode,openExpert,configurationEntry,serviceOrigin:connection.origin,
+ return{selection,candidate,candidateDigest,cases,all,request,principalRequest,principal,permissionFault,restorePermissionFault,permissionFixture:permissionSelection?.fixture??null,assertNoCredentialExposure,read,source,protocol,artifact,imageArtifact,traceArtifact,browserCode,openExpert,configurationEntry,serviceOrigin:connection.origin,
   requestId:(caseId,suffix)=>scenario.toLowerCase()+'-'+sha(selection.runId+'|'+caseId+'|'+suffix).slice(0,48),
   async collect(c,fn){currentCase=c.caseInstanceId;const first=evidence.length;
-   try{const assertions=await fn();results.push({caseInstanceId:c.caseInstanceId,status:'PASS',candidateDigest,qualification:selection.qualification,assertions,evidence:evidence.slice(first)});}
+   try{const assertions=await fn();if(permissionSelection&&permissionSelection.fixture.caseIds.includes(c.caseInstanceId))assert.equal(permissionSelection.index,permissionSelection.fixture.steps.findLastIndex(s=>s.caseId===c.caseInstanceId)+1,'A complete case needs every exact revocation/restoration step');results.push({caseInstanceId:c.caseInstanceId,status:'PASS',candidateDigest,qualification:selection.qualification,assertions,evidence:evidence.slice(first)});}
    catch(error){results.push({caseInstanceId:c.caseInstanceId,status:'FAILED',candidateDigest,qualification:selection.qualification,error:{name:error.name,message:error.message,code:error.code??null},evidence:evidence.slice(first)});throw error;}
    finally{write(c.caseInstanceId+'.json',results.at(-1));currentCase=null;}
   },
   finish(){
    // Revalidate selected installed bytes after the run. This never certifies CI,
    // actual Codex/browser journeys or another unexecuted acceptance instance.
-   const after=inspectInstalledServiceSelection(selection.installedRoot);assert.equal(after.selectionDigest,current.selectionDigest);
+   const after=inspectInstalledServiceSelection(selection.installedRoot);verifyPermissionFaultSelection(after);
    for(const [name,pin] of Object.entries(collectorPins))assert.equal(sha(fs.readFileSync(new URL(name,import.meta.url))),pin,'Collector changed during execution');
    for(const item of Object.values(selection.principals??{}))assert.equal(sha(readRegular(item.connectionRef,131072,true)),item.connectionSha256,'Named principal connection changed during execution');
    for(const item of Object.values(selection.maintenance?.casePlans??{}))assert.equal(sha(readRegular(item.planRef,131072,true)),item.planSha256,'Reviewed maintenance plan changed during execution');

@@ -67,6 +67,10 @@ async function bounded<T>(operation:(signal:AbortSignal)=>Promise<T>,parent:Abor
 
 export function createExecutionService(store:RuntimeStore,deps:ExecutionDependencies){
   const active=new Map<string,{controller:AbortController;promise:Promise<void>}>();
+  // A continuation must retain its worker slot while its read-only permission
+  // checks await owners/providers. No receipt or adapter action exists yet.
+  const advancing=new Map<string,{controller:AbortController;done:Promise<void>}>();
+  const occupied=()=>active.size+advancing.size;
   const nextObservation=new Map<string,number>();
   let workerError:{projectId:string;requestId:string;code:string}|null=null;
   let scanError:string|null=null;
@@ -109,10 +113,12 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     const release=stageId==='publication'?deps.releaseAuthority?.(saved,actor):undefined;
     return{authority,checked,release,context:{authority,bindingsCurrent:checked.ready,releaseAuthority:release}};
   }
-  async function permit(r:StageRequest):Promise<Principal>{
+  async function permit(r:StageRequest,signal?:AbortSignal):Promise<Principal>{
+    signal?.throwIfAborted();
     if(closed)reject('STOPPING','Service is stopping',503);
     if(Date.parse(r.deadlineAt)<=Date.now())reject('EXECUTION_DEADLINE','This original request exhausted its dispatch time budget',409);
-    const saved=fixedInstance(r),actor=actorFor(r),current=await admission(saved,r.stageId,actor);
+    const saved=fixedInstance(r),actor=actorFor(r),current=await admission(saved,r.stageId,actor,signal);
+    signal?.throwIfAborted();
     if(!current.checked.ready||current.checked.stamp!==r.bindingStamp||valueDigest(current.authority)!==saved.pins.authorityDigest||current.authority.evidenceRef!==r.authorityRef||(current.release?.decisionRef??null)!==r.releaseAuthorityRef)reject('EXECUTION_BINDING_CHANGED','Current execution pins or authority differ from the retained request',409);
     const fresh=actorFor(r);deps.verifyAuthority?.(current.authority,saved.definition,fresh);deps.verifyProjectReviewState?.(saved,fresh);
     if(closed||Date.parse(r.deadlineAt)<=Date.now())reject('EXECUTION_DEADLINE','This original request cannot dispatch now',409);return fresh;
@@ -144,7 +150,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     recordObservation(r,observation,code);
   }
   function start(r:StageRequest,mode:'dispatch'|'inspect'|'advance'):void{
-    const id=key(r.projectId,r.id);if(closed||active.has(id)||progress(r).terminal)return;
+    const id=key(r.projectId,r.id);if(closed||active.has(id)||advancing.has(id)||occupied()>=4||progress(r).terminal)return;
     if(!deps.adapter){unknown(r,'EXECUTOR_UNAVAILABLE');return;}
     const controller=new AbortController();
     const promise=Promise.resolve().then(async()=>{
@@ -173,7 +179,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     if(closed)return;
     try{
       const page=store.pendingStageRequests(cursor);scanError=null;let consumed=0;
-      for(const item of page.rows){if(active.size>=4)break;cursor=item;consumed++;const id=key(item.projectId,item.id);if((nextObservation.get(id)??0)>Date.now())continue;try{const r=request(item.projectId,item.id);start(r,'inspect');}catch(e){workerError={projectId:item.projectId,requestId:item.id,code:e instanceof ServiceError?e.code:'OBSERVATION_UNAVAILABLE'};}}
+      for(const item of page.rows){if(occupied()>=4)break;cursor=item;consumed++;const id=key(item.projectId,item.id);if(advancing.has(id)||(nextObservation.get(id)??0)>Date.now())continue;try{const r=request(item.projectId,item.id);start(r,'inspect');}catch(e){workerError={projectId:item.projectId,requestId:item.id,code:e instanceof ServiceError?e.code:'OBSERVATION_UNAVAILABLE'};}}
       if(consumed===page.rows.length&&!page.next)cursor=undefined;
     }catch(e){scanError=e instanceof ServiceError?e.code:'OBSERVATION_INDEX_UNAVAILABLE';}
   }
@@ -205,22 +211,36 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
   async function write(actor:Principal,projectId:string,operation:string,input:Record<string,unknown>,requestId:string,expectedRevision:number,reauthorize:()=>Principal):Promise<Receipt>{
     if(closed)reject('STOPPING','Service is stopping',503);
     if(!EXECUTION_WRITES.includes(operation as typeof EXECUTION_WRITES[number]))reject('UNKNOWN_OPERATION','Unsupported execution operation',404);
-    const reconciling=operation==='lifecycle.stage.reconcile',advancing=operation==='lifecycle.stage.advance',permission=reconciling?'read':'execution.request';authorize(actor,projectId,permission);
-    exact(input,reconciling||advancing?['stageRequestId']:['instanceId','stageId']);
+    const reconciling=operation==='lifecycle.stage.reconcile',continuing=operation==='lifecycle.stage.advance',permission=reconciling?'read':'execution.request';authorize(actor,projectId,permission);
+    exact(input,reconciling||continuing?['stageRequestId']:['instanceId','stageId']);
     const mutation={projectId,operation,requestId,expectedRevision,input,permission} as const;
     if(store.findReceipt(actor,projectId,requestId))return store.mutate(actor,mutation,()=>{throw new Error('Unreachable replay callback');},reauthorize);
-    if(advancing){
+    if(continuing){
       const r=request(projectId,string(input.stageRequestId)),p=progress(r);
       if(actor.id!==r.initiatedBy.id||actor.revision!==r.initiatedBy.revision)reject('AUTHORITY_CHANGED','Only the original current execution principal may continue this request',403);
       if(!deps.adapter?.advance)reject('STAGE_ADVANCE_UNAVAILABLE','This adapter has no explicitly requested continuation',409);
-      if(active.has(key(projectId,r.id))||active.size>=4)reject('EXECUTOR_BUSY','Wait for the retained original observation; do not create a replacement stage',429);
-      if(!p.terminal)await permit(r);
-      // Permit verification performs asynchronous owner/provider reads. The
-      // observer can acquire this request in that interval. Never acknowledge
-      // an advance which start() would then silently discard as already active.
-      if(active.has(key(projectId,r.id))||active.size>=4)reject('EXECUTOR_BUSY','Original observation acquired the worker during permission verification; inspect and retry the same stage',429);
-      const result=store.mutate(actor,mutation,()=>({value:{stageRequestId:r.id,status:p.terminal?'TERMINAL':'ADVANCE_REQUESTED',newAttempt:false,deadlineAt:r.deadlineAt},event:{type:'stage-advance-requested',data:{instanceId:r.instanceId,stageId:r.stageId,stageRequestId:r.id,newAttempt:false}}}),reauthorize);
-      if(!p.terminal)start(r,'advance');return result;
+      const id=key(projectId,r.id);
+      if(active.has(id)||advancing.has(id)||occupied()>=4)reject('EXECUTOR_BUSY','Wait for the retained original observation; do not create a replacement stage',429);
+      let finished:()=>void=()=>{};
+      const reservation={controller:new AbortController(),done:new Promise<void>(resolve=>{finished=resolve;})};
+      advancing.set(id,reservation);
+      try{
+        if(!p.terminal){
+          const remaining=Date.parse(r.deadlineAt)-Date.now();
+          if(remaining<=0)reject('EXECUTION_DEADLINE','This original request exhausted its dispatch time budget',409);
+          await bounded(signal=>permit(r,signal),reservation.controller.signal,Math.min(18000,remaining));
+        }
+        if(closed||reservation.controller.signal.aborted)reject('STOPPING','Service is stopping',503);
+        if(advancing.get(id)!==reservation||active.has(id))reject('EXECUTOR_BUSY','Original continuation reservation changed',429);
+        const result=store.mutate(actor,mutation,()=>{
+          if(closed||reservation.controller.signal.aborted)reject('STOPPING','Service is stopping',503);
+          if(!p.terminal&&Date.parse(r.deadlineAt)<=Date.now())reject('EXECUTION_DEADLINE','Original continuation expired before request commit',409);
+          return{value:{stageRequestId:r.id,status:p.terminal?'TERMINAL':'ADVANCE_REQUESTED',newAttempt:false,deadlineAt:r.deadlineAt},event:{type:'stage-advance-requested',data:{instanceId:r.instanceId,stageId:r.stageId,stageRequestId:r.id,newAttempt:false}}};
+        },reauthorize);
+        // Synchronous handoff: no observer or second request can acquire the
+        // slot between the durable original receipt and start().
+        advancing.delete(id);if(!p.terminal)start(r,'advance');return result;
+      }finally{if(advancing.get(id)===reservation)advancing.delete(id);finished();}
     }
     if(reconciling){
       const r=request(projectId,string(input.stageRequestId)),p=progress(r);
@@ -228,7 +248,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
       start(r,'inspect');return result;
     }
     if(!deps.adapter)reject('EXECUTOR_UNAVAILABLE','No fixed stage adapter is configured',409);
-    if(active.size>=4)reject('EXECUTOR_BUSY','The bounded service worker is busy',429);
+    if(occupied()>=4)reject('EXECUTOR_BUSY','The bounded service worker is busy',429);
     const saved=instance(projectId,slug(input.instanceId)),stageId=string(input.stageId),node=saved.definition.nodes.find(n=>n.id===stageId);
     if(!node)reject('UNKNOWN_STAGE','Stage does not belong to this immutable instance');
     if(stageId==='publication')authorize(actor,projectId,'release.request');
@@ -258,6 +278,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     const r=copy({...content,digest:valueDigest(content)});
     const result=store.mutate(actor,mutation,()=>{
       if(closed)reject('STOPPING','Service is stopping',503);
+      if(occupied()>=4)reject('EXECUTOR_BUSY','The bounded service worker is busy',429);
       const fresh=reauthorize();authorize(fresh,projectId,'execution.request');if(stageId==='publication')authorize(fresh,projectId,'release.request');
       deps.verifyAuthority?.(current.authority,saved.definition,fresh);deps.verifyProjectReviewState?.(saved,fresh);
       if(!current.checked.expiresAt||Date.parse(current.checked.expiresAt)<=Date.now()||Date.parse(r.deadlineAt)<=Date.now())reject('EXECUTION_DEADLINE','Execution admission expired before request commit',409);
@@ -273,5 +294,5 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     authorize(actor,projectId,'execution.request');const r=request(projectId,id);
     if(actor.id!==r.initiatedBy.id||actor.revision!==r.initiatedBy.revision)reject('AUTHORITY_CHANGED','Only the original current principal may claim this task',403);
     if(progress(r).terminal)reject('STAGE_TERMINAL','Original stage has already ended',409);return permit(r);
-  },health(projectId:string){const error=scanError??(workerError?.projectId===projectId?workerError.code:null);return{state:error?'DEGRADED':closed?'STOPPED':'READY',error,inFlight:[...active.keys()].filter(k=>k.startsWith(projectId+'\0')).length,automaticRedispatch:false};},async close(){if(closed)return;closed=true;clearInterval(timer);for(const job of active.values())job.controller.abort();await Promise.allSettled([...active.values()].map(job=>job.promise));}};
+  },health(projectId:string){const error=scanError??(workerError?.projectId===projectId?workerError.code:null);return{state:error?'DEGRADED':closed?'STOPPED':'READY',error,inFlight:[...active.keys(),...advancing.keys()].filter(k=>k.startsWith(projectId+'\0')).length,automaticRedispatch:false};},async close(){if(closed)return;closed=true;clearInterval(timer);for(const job of active.values())job.controller.abort();for(const reservation of advancing.values())reservation.controller.abort();await Promise.allSettled([...active.values()].map(job=>job.promise).concat([...advancing.values()].map(reservation=>reservation.done)));}};
 }

@@ -123,7 +123,7 @@ for(const failure of ['lost','malformed','incomplete'])test(failure+' write resp
  }finally{await new Promise(resolve=>proxy?proxy.close(resolve):resolve());await f.cleanup();}
 });
 
-test('only stage.request can receive a response beyond fifteen seconds; other writes and caller cancellation remain bounded without retry',async()=>{
+test('stage admission and continuation can receive a response beyond fifteen seconds; other writes and caller cancellation remain bounded without retry',async()=>{
  const f=await fixture();let proxy;const timers=new Set(),originals=[],cancellation=new AbortController();
  try{
   proxy=createServer(async(req,res)=>{
@@ -132,9 +132,9 @@ test('only stage.request can receive a response beyond fifteen seconds; other wr
    let text='';for await(const chunk of req)text+=chunk;const body=JSON.parse(text);originals.push(body);if(body.requestId==='cancelled-stage')cancellation.abort();
    const timer=setTimeout(()=>{timers.delete(timer);if(!res.destroyed)res.end(JSON.stringify({requestId:body.requestId,result:{syntheticTransportOnly:true,originalRequestId:body.requestId}}));},16000);timers.add(timer);
   });proxy.listen(0,'127.0.0.1');await once(proxy,'listening');f.put(f.connectionRef,{...f.connection,origin:'http://127.0.0.1:'+proxy.address().port});const client=createRuntimeHttpClient(f.connectionRef);
-  const stage=envelope('lifecycle.stage.request',{instanceId:'one',stageId:'scope'},{requestId:'slow-stage',expectedRevision:0}),draft=envelope('lifecycle.draft.save',{yaml:yaml(lifecycle())},{requestId:'slow-draft',expectedRevision:0}),cancelled={...stage,requestId:'cancelled-stage'};
-  const completed=client.request(stage),limited=assert.rejects(()=>client.request(draft),{code:'REQUEST_OUTCOME_UNKNOWN'}),cancel=assert.rejects(()=>client.request(cancelled,cancellation.signal),{code:'REQUEST_OUTCOME_UNKNOWN'});
-  const result=await completed;await Promise.all([limited,cancel]);assert.equal(result.requestId,stage.requestId);assert.equal(result.result.originalRequestId,stage.requestId);
-  assert.equal(originals.length,3);for(const expected of [stage,draft,cancelled])assert.deepEqual(originals.filter(v=>v.requestId===expected.requestId),[expected]);
+  const stage=envelope('lifecycle.stage.request',{instanceId:'one',stageId:'scope'},{requestId:'slow-stage',expectedRevision:0}),advance=envelope('lifecycle.stage.advance',{stageRequestId:'original-stage'},{requestId:'slow-advance',expectedRevision:0}),draft=envelope('lifecycle.draft.save',{yaml:yaml(lifecycle())},{requestId:'slow-draft',expectedRevision:0}),cancelled={...stage,requestId:'cancelled-stage'};
+  const completed=client.request(stage),continued=client.request(advance),limited=assert.rejects(()=>client.request(draft),{code:'REQUEST_OUTCOME_UNKNOWN'}),cancel=assert.rejects(()=>client.request(cancelled,cancellation.signal),{code:'REQUEST_OUTCOME_UNKNOWN'});
+  const [result,next]=await Promise.all([completed,continued]);await Promise.all([limited,cancel]);assert.equal(result.requestId,stage.requestId);assert.equal(result.result.originalRequestId,stage.requestId);assert.equal(next.requestId,advance.requestId);assert.equal(next.result.originalRequestId,advance.requestId);
+  assert.equal(originals.length,4);for(const expected of [stage,advance,draft,cancelled])assert.deepEqual(originals.filter(v=>v.requestId===expected.requestId),[expected]);
  }finally{for(const timer of timers)clearTimeout(timer);proxy?.closeAllConnections();await new Promise(resolve=>proxy?proxy.close(resolve):resolve());await f.cleanup();}
 });

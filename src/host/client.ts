@@ -37,11 +37,11 @@ export function createRuntimeHttpClient(connectionRef:string):RuntimeHttpClient{
   }
   return{connection:Object.freeze(connection),status,async request(value,externalSignal){
     const {envelope,write}=validateEnvelope(connection,value);
-    // Stage admission/preparation can include several fresh provider reads.
+    // Stage admission and original continuation can include fresh provider reads.
     // Its bounded 18s server window plus the separate 10s identity check fit
     // inside this transport allowance. This neither renews execution authority
     // nor changes other operations, and caller cancellation remains shorter.
-    const timeout=AbortSignal.timeout(envelope.operation==='lifecycle.stage.request'?30000:15000),signal=externalSignal?AbortSignal.any([externalSignal,timeout]):timeout;
+    const timeout=AbortSignal.timeout(envelope.operation==='lifecycle.stage.request'||envelope.operation==='lifecycle.stage.advance'?30000:15000),signal=externalSignal?AbortSignal.any([externalSignal,timeout]):timeout;
     await status(signal);signal.throwIfAborted();const authorization=headers(),body=canonical(envelope);let response:Response,result:Record<string,unknown>;
     try{
       response=await fetch(connection.origin+'/api/v1/request',{method:'POST',headers:{...authorization,'content-type':'application/json'},body,signal,redirect:'error'});result=await boundedJson(response,signal);
