@@ -30,6 +30,21 @@ function pinned(ref,digest,max=262144){
 }
 function exact(value,keys){assert(value&&typeof value==='object'&&!Array.isArray(value));assert.deepEqual(Object.keys(value).sort(),[...keys].sort());}
 function privateBytes(ref,max=1048576){assert.equal(fs.realpathSync(ref),ref);const s=fs.lstatSync(ref);assert(s.isFile()&&!s.isSymbolicLink()&&s.nlink===1&&s.uid===process.getuid()&&(s.mode&0o077)===0&&s.size<=max);return fs.readFileSync(ref);}
+function parseCodingHostStdout(stdout,phase){
+ assert.equal(typeof stdout,'string');assert(Buffer.byteLength(stdout)>0&&Buffer.byteLength(stdout)<=1048576);assert(['inspect','claim','propose','submit'].includes(phase));
+ // Preserve stdout verbatim in the original Host evidence. This is a separate
+ // interpretation of exactly one Node 24.14 SQLite notice, not a log filter.
+ const pattern=/\(node:([1-9][0-9]{0,9})\) ExperimentalWarning: SQLite is an experimental feature and might change at any time\n\(Use `node --trace-warnings \.\.\.` to show where the warning was created\)\n/g;
+ const matches=[...stdout.matchAll(pattern)];assert(matches.length<=1,'Multiple notices are not the selected single-import output');let json=stdout,notice=null;
+ if(matches.length){
+  assert.equal(phase,'propose','Only the pinned propose phase imports the SQLite-backed configuration module');const m=matches[0],pid=Number(m[1]);assert(Number.isSafeInteger(pid)&&pid<=2147483647);
+  const before=m.index===0,after=m.index+m[0].length===stdout.length;assert(before||after,'The notice must be a separate prefix or suffix, never inside the JSON value');if(after&&!before)assert.equal(stdout[m.index-1],'\n');json=stdout.slice(0,m.index)+stdout.slice(m.index+m[0].length);
+  notice={kind:'NODE_SQLITE_EXPERIMENTAL_WARNING',nodeVersion:'v24.14.0',pid,position:before?'before-json':'after-json',bytes:Buffer.byteLength(m[0]),sha256:sha(m[0])};
+ }
+ assert(/^\{[^\r\n]*\}\n?$/.test(json),'Exactly one original JSON line and no other output is required');const value=JSON.parse(json);assert(value&&typeof value==='object'&&!Array.isArray(value));
+ return{value,interpretation:{rawStdoutBytes:Buffer.byteLength(stdout),rawStdoutSha256:sha(stdout),jsonBytes:Buffer.byteLength(json),jsonSha256:sha(json),notice,originalToolOutputRetained:true,unknownOutputIgnored:false}};
+}
+
 const quote=value=>"'"+value.replaceAll("'","'\\''")+"'";
 
 // A local Codex rollout is an original observation source, not a signature or
@@ -78,7 +93,7 @@ async function proveCodingHost(run,selected,handoff,reported,claim,nodeExecutabl
   for(const pin of value.polls){assert(result.exit_code===undefined&&result.session_id===sessionId,'Do not replay or poll a completed Host command');const next=pair(pin),poll=argumentsFor(next.call,'write_stdin');exact(poll,['session_id','chars','yield_time_ms','max_output_tokens']);assert.equal(poll.session_id,sessionId);assert.equal(poll.chars,'');assert(Number.isInteger(poll.yield_time_ms)&&poll.yield_time_ms>=1&&poll.yield_time_ms<=60000);assert(Number.isInteger(poll.max_output_tokens)&&poll.max_output_tokens>=2000&&poll.max_output_tokens<=16000);assert(next.call.ordinal>last.ordinal);observed=parsedOutput(next.output);assert.equal(observed.length,1);result=observed[0];assert.equal(typeof result.output,'string');chunks.push(result.output);last=next.output;}
   assert.equal(result.exit_code,0,'Only the original completed command establishes successful execution');assert.equal(result.session_id,undefined);const stdout=chunks.join('');assert(Buffer.byteLength(stdout)<=1048576);return{start:first.call.ordinal,end:last.ordinal,startedAt:first.call.timestamp,completedAt:last.timestamp,stdout,turnId:turn(first.call),callId:first.call.payload.call_id};
  }
- function phase(name){const cmd=quote(nodeExecutable)+' '+quote(selected.selection.driverRef)+' '+name,r=execution(proof[name],cmd,selected.selection.preparationRoot),output=JSON.parse(r.stdout);exact(output,['phase','stageRequestId','handoffDigest',...(name==='inspect'?['taskDigest']:['claimDigest']),...(['propose','submit'].includes(name)?['commit','change']:[]),...(name==='propose'?['artifacts']:[]),...(name==='submit'?['reportDigest']:[])]);assert.equal(output.phase,name);assert.equal(output.stageRequestId,handoff.stageRequestId);assert.equal(output.handoffDigest,handoff.digest);return{...r,value:output};}
+ function phase(name){const cmd=quote(nodeExecutable)+' '+quote(selected.selection.driverRef)+' '+name,r=execution(proof[name],cmd,selected.selection.preparationRoot),parsed=parseCodingHostStdout(r.stdout,name),output=parsed.value;exact(output,['phase','stageRequestId','handoffDigest',...(name==='inspect'?['taskDigest']:['claimDigest']),...(['propose','submit'].includes(name)?['commit','change']:[]),...(name==='propose'?['artifacts']:[]),...(name==='submit'?['reportDigest']:[])]);assert.equal(output.phase,name);assert.equal(output.stageRequestId,handoff.stageRequestId);assert.equal(output.handoffDigest,handoff.digest);run.artifact('coding-host-stdout-interpretation.json',{phase:name,callId:r.callId,...parsed.interpretation});return{...r,value:output};}
  try{
   const meta=Buffer.alloc(selected.metaBytes);assert.equal(fs.readSync(fd,meta,0,meta.length,0),meta.length);assert.equal(sha(meta),selected.metaSha256);
   assert(Array.isArray(proof.turnContexts)&&proof.turnContexts.length>0&&proof.turnContexts.length<=16);for(const pin of proof.turnContexts){const r=record(pin,'turn_context',true),p=r.payload;assert.equal(typeof p.turn_id,'string');assert.equal(typeof p.model,'string');assert(p.model.length>0);if(turns.has(p.turn_id))assert.equal(turns.get(p.turn_id).model,p.model);else turns.set(p.turn_id,{model:p.model,provider:selected.metadata.provider,timestamp:r.timestamp,ordinal:r.ordinal});}
@@ -111,7 +126,8 @@ test('E01 actual installed GitHub lifecycle with external Codex and native owner
  assert(Number.isInteger(cfg.timeoutSeconds)&&cfg.timeoutSeconds>=300&&cfg.timeoutSeconds<=3600);
  const preparationBytes=pinned(cfg.preparationRef,cfg.preparationSha256),ownerFixtureBytes=pinned(cfg.ownerFixtureRef,cfg.ownerFixtureSha256),preparation=JSON.parse(preparationBytes),fixture=JSON.parse(ownerFixtureBytes);
  assert.equal(preparation.source.provider,'github');assert.equal(preparation.source.repositoryId,'1443052780');assert.equal(fixture.syntheticAssets,true);assert.equal(fixture.syntheticDecisions,true);assert.equal(fixture.workspaceId,run.selection.workspaceId);assert.equal(fixture.scope.projectId,run.selection.projectId);
- const scope={visibility:'private',projectId:run.selection.projectId};let serial=0;
+ const scope={visibility:'private',projectId:run.selection.projectId};let serial=0,executionDeadline=null,executionInstanceId=null;
+ const assertWriteDeadline=(stageDeadline=null)=>{if(executionDeadline!==null){assert(Number.isFinite(executionDeadline));if(stageDeadline!==null)assert(Number.isFinite(stageDeadline));assert(Date.now()<Math.min(executionDeadline,stageDeadline??executionDeadline),'Original native execution deadline elapsed; no new business write or retry permitted');}};
  const save=(name,value)=>fs.writeFileSync(path.join(root,name),JSON.stringify(value,null,2)+'\n',{mode:0o600,flag:'wx'});
  const syntheticDecision=subject=>{
   // Explicit test attestation, never an actual user's domain/release approval.
@@ -122,7 +138,9 @@ test('E01 actual installed GitHub lifecycle with external Codex and native owner
  const mutate=async(operation,input,label)=>{
   const requestId=run.requestId('E01.journey',label);
   for(let attempt=0;attempt<20;attempt++){
-   const status=await run.read('runtime.status'),r=await run.request(operation,input,{requestId,expectedRevision:status.revision});
+   assertWriteDeadline();let stageDeadline=null;
+   if(input.stageRequestId){const original=await run.read('lifecycle.stage.request.inspect',{stageRequestId:input.stageRequestId});assert.equal(original.request.instanceId,executionInstanceId);stageDeadline=Date.parse(original.request.deadlineAt);assert(Number.isFinite(stageDeadline));}
+   const status=await run.read('runtime.status');assertWriteDeadline(stageDeadline);const r=await run.request(operation,input,{requestId,expectedRevision:status.revision});
    if(r.status===200)return r.body.result;
    // These two definite pre-effect rejections do not dispatch a stage. Keep
    // the same request key/input, inspect its original stage, and refresh CAS.
@@ -201,9 +219,12 @@ test('E01 actual installed GitHub lifecycle with external Codex and native owner
    assert.deepEqual((await run.configurationEntry('cli','lifecycle.definition.inspect')).result,active);
    const prepared=await mutate('lifecycle.preparation.save',{...preparation,definitionRevisionId:active.active.id},'prepare');assert.equal(prepared.result.executionAuthorized,false);
    const instanceId=run.selection.runId,subject={instanceId,definitionRevisionId:active.active.id,goalRef:preparation.goalRef,targetRef:prepared.result.preparationRef,loopRef:preparation.loopRef,budget:preview.compilation.effective.semantic.config.plan.budget,expiresAt:new Date(Date.now()+cfg.timeoutSeconds*1000).toISOString()};
+   executionInstanceId=instanceId;executionDeadline=Date.parse(subject.expiresAt);assertWriteDeadline();
    const auth=await run.read('lifecycle.authority.preview',{kind:'execution',subject}),evidenceRef=syntheticDecision({owner:'runtime',operation:'lifecycle.authority.execution',workspaceId:run.selection.workspaceId,scope,reviewDigest:auth.reviewDigest,decision:'APPROVE'});
    const decision=await mutate('lifecycle.authority.record',{kind:'execution',subject,reviewDigest:auth.reviewDigest,decision:'APPROVE',evidenceRef},'execution-decision');
    await mutate('lifecycle.instance.create',{instanceId,definitionRevisionId:active.active.id,authorityRef:decision.result.authorityRef},'instance');
+   const originalInstance=(await run.read('lifecycle.instance.inspect',{instanceId})).instance,originalAuthority=await run.read('lifecycle.authority.inspect',{authorityRef:decision.result.authorityRef});assert.equal(originalInstance.id,instanceId);assert.equal(originalAuthority.usable,true);assert.equal(originalAuthority.decision.subject.instanceId,instanceId);assert.deepEqual(originalInstance.pins.budget,subject.budget);assert.deepEqual(originalAuthority.decision.subject.budget,subject.budget);assert.equal(originalInstance.pins.authorityExpiresAt,originalAuthority.decision.subject.expiresAt);
+   executionDeadline=Math.min(executionDeadline,Date.parse(originalInstance.createdAt)+originalInstance.pins.budget.timeoutSeconds*1000,Date.parse(originalInstance.pins.authorityExpiresAt));assertWriteDeadline();run.artifact('original-native-execution-deadline.json',{instanceId,authorityRef:decision.result.authorityRef,createdAt:originalInstance.createdAt,budget:originalInstance.pins.budget,authorityExpiresAt:originalInstance.pins.authorityExpiresAt,deadlineAt:new Date(executionDeadline).toISOString(),extended:false});
    // Representative native predecessor denials do not stand in for the still
    // unimplemented full failed/unknown/permission/budget matrix.
    for(const stageId of stages.slice(1)){const denied=await run.read('lifecycle.stage.admission',{instanceId,stageId});assert.equal(denied.allowed,false);assert(denied.reasons.some(r=>r.startsWith('PREDECESSOR_NOT_PASSED:')));}
@@ -265,7 +286,7 @@ test('E01 actual installed GitHub lifecycle with external Codex and native owner
     const material=async({reference,scope:requestedScope})=>{const a=await import(pathToFileURL(path.join(fixture.packageRoots[reference.product],'dist/service.js')).href),svc=a[reference.product==='ontology'?'createOntologyService':'createHarnessService']({workspaceRoot:fixture.workspaceRoot,workspaceId:fixture.workspaceId});svc.initialize();try{const r=await svc.native({operation:'native.package.readback',scope:requestedScope,input:{id:reference.id,version:reference.version}});return{reference:r.reference,scope:requestedScope,workspaceId:fixture.workspaceId,published:true,package:r.package};}finally{svc.close();}};
     const native=api[owner==='ontology'?'createOntologyService':'createHarnessService']({workspaceRoot:fixture.workspaceRoot,workspaceId:fixture.workspaceId},{readFeedback:async()=>feedback.event,resolveFeedbackMaterial:material});native.initialize();
     try{
-     const write=async(operation,input,label)=>{const request={operation,scope,input,requestId:run.requestId(c.caseInstanceId,label),expectedRevision:(await native.feedback({operation:'feedback.inspect',scope,input:{}})).revision},response=await native.feedback(request);run.artifact('owner-feedback-original.json',{owner,request,response});return response;};
+     const write=async(operation,input,label)=>{assertWriteDeadline(Date.parse(closureRequest.deadlineAt));const request={operation,scope,input,requestId:run.requestId(c.caseInstanceId,label),expectedRevision:(await native.feedback({operation:'feedback.inspect',scope,input:{}})).revision};assertWriteDeadline(Date.parse(closureRequest.deadlineAt));const response=await native.feedback(request);run.artifact('owner-feedback-original.json',{owner,request,response});return response;};
      const review=await write('feedback.propose',{id:feedback.event.id,proposal:{mode:'REUSE',reference:fixture.references[owner],rationale:'Synthetic fixture disposition only; actual Runtime/GitHub evidence, no business domain decision',changes:[]}},owner+'-review');
      const humanEvidenceRef=syntheticDecision({owner,operation:'feedback.decide',workspaceId:fixture.workspaceId,scope,reviewDigest:review.result.reviewDigest,decision:'APPROVE'});
      await write('feedback.decide',{id:feedback.event.id,reviewDigest:review.result.reviewDigest,decision:'APPROVE',humanEvidenceRef},owner+'-decide');
