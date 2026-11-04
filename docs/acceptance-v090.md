@@ -285,3 +285,47 @@ E04／E05／E06 的采集器分别验证 Base 约束、版本与实例隔离、�
 校验、真实启用、阶段执行分别记录，不能互相替代。浏览器重启仅操作明确选择的隔离
 安装，保留当前安装标识与原回执；涉及真实运行、权限撤销和事务故障的未实现变体
 继续列为未完成，不用已通过的页面或字段测试替代。
+
+## Monitor identities and original event evidence
+
+E07/E12 can select up to eight named `principals`, each with exact
+`connectionRef`, `connectionSha256`, `principalId`, `projectId` and
+`expectedPermissions`. Protected connection files must point to the same selected
+installed service, workspace, version and origin. Projects are explicit; aliases
+never grant permissions. The default installed connection remains unchanged.
+The browser session must return the selected identity and its declared browser
+permissions. Identity setup is an operator-owned isolated test precondition,
+not a collector mutation or a member-management product feature.
+
+The shared helper retains original monitor JSON and Chromium CDP EventSource
+frames separately from definition requests. It never waits for an endless SSE
+response body or copies authentication headers. Before navigation, restart or
+closing, outstanding finite response bodies are drained within a fixed timeout.
+When the browser confirms `ERR_ABORTED` for a known Dashboard read without a
+mutation request ID, the record retains the request, HTTP status and actual
+terminal failure as `ABORTED_READ`; it has no successful response body. Writes
+and the exact final validation used by the UI still require complete original
+responses. Other missing bodies fail. Session HTTP failures discard underlying
+exception messages and causes that may contain Cookie or CSRF headers.
+
+E07 implements actual empty-project monitoring, original UNKNOWN inspection when
+an instance is explicitly selected, and monitor identity/page denial checks.
+The UNKNOWN case requires `monitorConfiguration.instanceId`; it cannot create
+an UNKNOWN state directly. The expired replay-window case separately requires
+`monitorConfiguration.allowReplayWindowExercise: true`: it retains a real signed
+cursor, performs exactly 1001 native draft saves, restores the prior
+draft, then reconnects with the original cursor and checks the server's actual
+reset and current snapshot. It neither edits the database nor synthesizes an
+SSE response. This branch needs the candidate's 1000-event replay profile.
+
+The complete E07 journey and CV02 still require their original multi-project,
+interruption/revocation/recovery conditions and are not credited from read-only
+checks. MC06/CV08 candidate checks leave E22/P04 post-release obligations separate.
+E07/E12 also pin `browser.mjs`; credential exposure checks compare selected
+secrets internally against provided DOM/URL/traffic surfaces and the two exact
+installed ordinary logs, returning only surface sizes and digests.
+
+E07/E12 的命名连接仅选择现有受保护身份，不增加权限。监控 JSON、真实浏览器 SSE
+帧、主动取消的过时只读请求分别留证；取消不计为成功响应。写入和页面使用的最终校验
+仍必须保留完整原始响应。UNKNOWN 必须来自真实实例；游标窗口测试通过原生草稿事件
+越过窗口后核对真实 reset，不直接写库或伪造事件。撤权与发布后安装验收继续独立要求。

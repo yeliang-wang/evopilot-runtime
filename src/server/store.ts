@@ -9,6 +9,13 @@ export interface Mutation { projectId: string; operation: string; requestId: str
 export interface StoredObject { kind: string; id: string; value: unknown; }
 export interface MutationResult { value: unknown; objects?: StoredObject[]; event: { type: string; data: unknown }; }
 export interface Receipt { projectId: string; requestId: string; operation: string; principalId: string; revision: number; requestDigest: string; result: unknown; at: string; }
+// A live Dashboard replay bound, not audit retention or an expiry on the generic
+// event reader. Usage and other durable consumers must still read all history.
+export const DASHBOARD_REPLAY_EVENT_LIMIT=1000;
+export interface DashboardEventPage {
+  projectId:string;events:unknown[];cursor:string;watermark:{sequence:number;revision:number};
+  gap:null|{code:'CURSOR_EXPIRED';afterSequence:number;afterRevision:number;resumeSequence:number;resumeRevision:number;windowEvents:number};
+}
 
 // Only fixed adapters can produce these original evidence records. No public
 // mutation accepts an object kind or arbitrary evidence payload.
@@ -192,6 +199,24 @@ export class RuntimeStore {
     }
     const body = Buffer.from(canonical({projectId,after,serviceId:this.serviceId})).toString('base64url');
     return { events, cursor: body + '.' + createHmac('sha256',this.cursorKey).update(body).digest('base64url') };
+  }
+  dashboardEvents(principal:Principal,projectId:string,cursor?:string):DashboardEventPage {
+    this.guard();authorize(principal,projectId,'read');
+    if(cursor!==undefined&&(typeof cursor!=='string'||cursor.length===0))reject('INVALID_CURSOR','Dashboard cursor must be a nonempty authenticated reference');
+    // Validate scope/signature before exposing a watermark or treating a cursor
+    // as recoverable. The existing bounded reader retains its exact semantics.
+    const page=cursor===undefined?null:this.events(principal,projectId,cursor);
+    const tip=this.db.prepare('SELECT seq,revision FROM events WHERE project_id=? ORDER BY seq DESC LIMIT 1').get(projectId);
+    const watermark={sequence:tip?Number(tip.seq):0,revision:tip?Number(tip.revision):0};
+    const body=Buffer.from(canonical({projectId,after:watermark.sequence,serviceId:this.serviceId})).toString('base64url');
+    const tipCursor=body+'.'+createHmac('sha256',this.cursorKey).update(body).digest('base64url');
+    if(!page)return{projectId,events:[],cursor:tipCursor,watermark,gap:null};
+    const afterSequence=Number(record(JSON.parse(Buffer.from(cursor!.split('.')[0],'base64url').toString('utf8')) as unknown).after);
+    const after=afterSequence===0?null:this.db.prepare('SELECT revision FROM events WHERE project_id=? AND seq=?').get(projectId,afterSequence);
+    if(afterSequence!==0&&!after)reject('INVALID_CURSOR','Cursor does not identify an original event in this project');
+    const afterRevision=after?Number(after.revision):0;
+    if(watermark.revision-afterRevision>DASHBOARD_REPLAY_EVENT_LIMIT)return{projectId,events:[],cursor:tipCursor,watermark,gap:{code:'CURSOR_EXPIRED',afterSequence,afterRevision,resumeSequence:watermark.sequence,resumeRevision:watermark.revision,windowEvents:DASHBOARD_REPLAY_EVENT_LIMIT}};
+    return{projectId,...page,watermark,gap:null};
   }
   close(): void {
     if (this.closed) return;

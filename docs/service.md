@@ -7,6 +7,11 @@ Its project revision, definition and instance envelopes differ from native owner
 revisions; do not exchange them or infer that the independent service needs a
 parent daemon.
 
+Only the independent Dashboard SSE endpoint uses a 1,000-event per-project replay
+window and explicit gap-to-snapshot recovery. Generic event history, internal
+usage recovery and immutable audit are unchanged; see the
+[Dashboard replay contract](runtime-v090.md#use-the-two-dashboard-pages).
+
 Runtime coordinates exact project candidates, collection recipes, decisions, claims, receipts and completion. Ontology owns RDF/SHACL meaning and Harness owns Rego policy evaluation. The corrected `specifications/v1` flow uses the current shared native contract revision **1.1.0**, its content digest and each owner's exact standard/lock digests. A directory named `v1` is not sufficient identity.
 
 For the independent v0.9 service, installed process control belongs to the local

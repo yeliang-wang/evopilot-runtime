@@ -139,6 +139,19 @@ editor, configuration activation, business execution or release controls.
 Editing a definition does not rewrite an in-flight instance. New instances bind
 the explicitly selected active revision and separate execution authority.
 
+The Dashboard event stream replays at most the latest 1,000 events **per project**;
+this is a count window, not a time limit or audit-retention policy. A new stream
+starts at the current project tip and the page independently reads its current
+snapshot. A valid older cursor outside the window receives an explicit `reset`
+with `gap.code: CURSOR_EXPIRED`, the old position, current watermark and new tip
+cursor. The page keeps its last checked state until a same-project snapshot covers
+that watermark, then retains a notice identifying the revisions not replayed
+individually. Authentication failures are rejected rather than treated as gaps.
+Every replay page remains bounded to 50 events and the existing payload limit.
+Immutable events, receipts and audit are not deleted. `runtime.events.read`, the
+Agent event stream and internal usage recovery retain their complete paginated
+history. This Dashboard window does not change MCP transport behavior.
+
 ## Execute, observe and recover
 
 Codex requests a governed stage using the exact instance and authority. Runtime

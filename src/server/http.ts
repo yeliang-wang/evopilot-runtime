@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { canonical, canonicalReadback, exact, record, reject, ServiceError, slug, string } from './errors.js';
 import { authenticate, authorize, assertCredentials, currentPrincipal } from './security.js';
-import { RuntimeStore } from './store.js';
+import { RuntimeStore,type DashboardEventPage } from './store.js';
 import { handleMcp, HTTP_PROTOCOLS, READ_OPERATIONS, WRITE_OPERATIONS } from './mcp.js';
 import { createDefinitionService, DEFINITION_READS } from '../lifecycle/service.js';
 import type { DefinitionBindingProvider } from '../lifecycle/bindings.js';
@@ -119,20 +119,32 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
   function stream(req: IncomingMessage, res: ServerResponse, projectId: string, initial?: string,reauthenticate=()=>principal(req),monitor=false) {
     if (streams.size >= 32) reject('STREAM_LIMIT','Too many event streams',429);
     let cursor = initial, stopped = false, timer: ReturnType<typeof setInterval> | undefined;
-    const first = store.events(reauthenticate(), projectId, cursor); cursor = first.cursor;
+    const readPage=()=>monitor?store.dashboardEvents(reauthenticate(),projectId,cursor):store.events(reauthenticate(),projectId,cursor);
+    let first:ReturnType<RuntimeStore['events']>|DashboardEventPage|null=null,invalidCursor=false;
+    try{first=readPage();cursor=first.cursor;}
+    catch(error){
+      // EventSource cannot inspect a non-2xx response body. Only after current
+      // Dashboard authentication succeeded, surface this rejected cursor as an
+      // explicit error frame so the client can reconnect at the current tip.
+      // Scope/credential failures and the generic Agent stream keep HTTP errors.
+      if(!monitor||!(error instanceof ServiceError)||error.code!=='INVALID_CURSOR')throw error;
+      invalidCursor=true;
+    }
     res.writeHead(200,{ 'content-type':'text/event-stream','cache-control':'no-store','connection':'keep-alive','x-accel-buffering':'no' });
     streams.add(res);
     const stop = () => { if(stopped)return;stopped=true;if(timer)clearInterval(timer);streams.delete(res);res.end(); };
     const send = (event: string, data: unknown) => {
       if (res.writableLength > 262144) { stop(); return; }
-      const output=monitor&&['snapshot','events','heartbeat'].includes(event)?monitorEvents(data as ReturnType<RuntimeStore['events']>):data;
+      const output=monitor&&['snapshot','events','heartbeat','reset'].includes(event)?monitorEvents(data as DashboardEventPage):data;
       res.write('event: '+event+'\ndata: '+JSON.stringify(output)+'\n\n');
     };
-    send('snapshot',first);
+    if(invalidCursor){send('error',{code:'INVALID_CURSOR'});stop();return;}
+    if(!first){stop();return;}
+    send(monitor&&'gap' in first&&first.gap?'reset':'snapshot',first);
     timer = setInterval(() => {
       try {
-        const next = store.events(reauthenticate(),projectId,cursor); cursor=next.cursor;
-        send(next.events.length ? 'events' : 'heartbeat',next);
+        const next=readPage();cursor=next.cursor;
+        send(monitor&&'gap' in next&&next.gap?'reset':next.events.length?'events':'heartbeat',next);
       } catch (e) { send('error',{ code: e instanceof ServiceError ? e.code : 'SERVICE_UNAVAILABLE' }); stop(); }
     },1000);
     timer.unref(); req.once('close',stop); res.once('close',stop);

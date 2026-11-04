@@ -1,6 +1,6 @@
 import {exact,record,reject,string} from './errors.js';
 import {authorize,type Principal} from './security.js';
-import type {RuntimeStore} from './store.js';
+import type {RuntimeStore,DashboardEventPage} from './store.js';
 import {inspectInstance,type LifecycleInstance} from '../lifecycle/instance.js';
 
 // Browser access is a deliberately smaller surface than the Agent HTTP API.
@@ -32,7 +32,7 @@ export function monitorSnapshot(store:RuntimeStore,actor:Principal,projectId:str
   if(projected.length&&!instances.length)reject('MONITOR_LIMIT','One instance exceeds the supported monitor page',413);
   return{projectId,revision,instances,nextAfter:instances.length<projected.length?instances.at(-1)!.id:page.nextAfter,observedAt:new Date().toISOString(),readOnly:true};
 }
-export function monitorEvents(value:ReturnType<RuntimeStore['events']>){
+export function monitorEvents(value:DashboardEventPage){
   // Keep the authenticated cursor/gap semantics, redact every event data body.
-  return{cursor:value.cursor,events:value.events.map(value=>{const event=record(value);return{seq:event.seq,revision:event.revision,type:event.type,at:event.at};})};
+  return{projectId:value.projectId,cursor:value.cursor,watermark:value.watermark,gap:value.gap,events:value.events.map(value=>{const event=record(value);return{seq:event.seq,revision:event.revision,type:event.type,at:event.at};})};
 }

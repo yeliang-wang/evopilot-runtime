@@ -32,8 +32,9 @@ export async function openScenario(scenario){
  const selectionRef=process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;
  assert(selectionRef,'Set EVOPILOT_V090_ACCEPTANCE_SELECTION to a protected, explicit isolated candidate selection');
  const selection=JSON.parse(readRegular(selectionRef,131072,true));
- keys(selection,['schema','installedRoot','expectedManifestDigest','connectionRef','workspaceId','projectId','runId','outputRoot','qualification'],['caseIds','codexHost','packageCompatibility','expertConfiguration','lifecycleExecution','browserConfiguration','extensionConfiguration','revisionEvolution']);
- if(selection.browserConfiguration){assert(['E04','E06'].includes(scenario));keys(selection.browserConfiguration,['allowServiceRestart']);assert.equal(typeof selection.browserConfiguration.allowServiceRestart,'boolean');}
+ keys(selection,['schema','installedRoot','expectedManifestDigest','connectionRef','workspaceId','projectId','runId','outputRoot','qualification'],['caseIds','codexHost','packageCompatibility','expertConfiguration','lifecycleExecution','browserConfiguration','extensionConfiguration','revisionEvolution','principals','monitorConfiguration']);
+ if(selection.browserConfiguration){assert(['E04','E06','E07','E12'].includes(scenario));keys(selection.browserConfiguration,['allowServiceRestart']);assert.equal(typeof selection.browserConfiguration.allowServiceRestart,'boolean');}
+ if(selection.monitorConfiguration){assert.equal(scenario,'E07');keys(selection.monitorConfiguration,[],['instanceId','allowReplayWindowExercise']);if(selection.monitorConfiguration.instanceId!==undefined)assert(/^[a-z0-9][a-z0-9-]{0,63}$/.test(selection.monitorConfiguration.instanceId));if(selection.monitorConfiguration.allowReplayWindowExercise!==undefined)assert.equal(selection.monitorConfiguration.allowReplayWindowExercise,true);}
  if(selection.extensionConfiguration){assert.equal(scenario,'E04');keys(selection.extensionConfiguration,['yamlRef','yamlSha256']);assert.equal(typeof selection.extensionConfiguration.yamlRef,'string');assert(/^[a-f0-9]{64}$/.test(selection.extensionConfiguration.yamlSha256));}
  if(selection.revisionEvolution){assert.equal(scenario,'E05');keys(selection.revisionEvolution,['instanceId','allowSyntheticDecisions']);assert.equal(typeof selection.revisionEvolution.instanceId,'string');assert.equal(selection.revisionEvolution.allowSyntheticDecisions,true);}
  if(selection.packageCompatibility)assert.equal(scenario,'E08','Package compatibility inputs are scoped to E08');
@@ -57,6 +58,20 @@ export async function openScenario(scenario){
  assert.equal(selection.connectionRef,path.join(selection.installedRoot,'connection.json'));
  assert.equal(connection.workspaceId,selection.workspaceId);assert.equal(connection.projectId,selection.projectId);
  assert.equal(connection.serviceId,current.serviceId);assert.equal(connection.version,manifest.version);
+ const named=new Map(),rolePermissions={reader:['read'],editor:['read','draft.write'],activator:['read','draft.write','definition.activate'],operator:['read','draft.write','definition.activate','execution.request','decision.record','release.request']};
+ const permissions=rolePermissions[plan.role];assert(permissions);
+ named.set('default',{connection,connectionRef:selection.connectionRef,expectedPermissions:permissions});
+ if(selection.principals){
+  assert(['E07','E12'].includes(scenario));assert(selection.principals&&typeof selection.principals==='object'&&!Array.isArray(selection.principals));assert(Object.keys(selection.principals).length>0&&Object.keys(selection.principals).length<=8);
+  for(const [alias,item]of Object.entries(selection.principals)){
+   assert(/^[a-z][a-z0-9-]{0,31}$/.test(alias)&&alias!=='default');keys(item,['connectionRef','connectionSha256','principalId','projectId','expectedPermissions']);assert(/^[a-f0-9]{64}$/.test(item.connectionSha256));assert.equal(sha(readRegular(item.connectionRef,131072,true)),item.connectionSha256);
+   const conn=readHostConnection(item.connectionRef);for(const key of ['origin','serviceId','workspaceId','version'])assert.equal(conn[key],connection[key],'Named principal must use this exact installed service');assert.equal(conn.principalId,item.principalId);assert.equal(conn.projectId,item.projectId);
+   assert(Array.isArray(item.expectedPermissions)&&item.expectedPermissions.length>0&&new Set(item.expectedPermissions).size===item.expectedPermissions.length&&item.expectedPermissions.every(p=>rolePermissions.operator.includes(p)));
+   named.set(alias,{connection:conn,connectionRef:item.connectionRef,expectedPermissions:item.expectedPermissions});
+  }
+ }
+ const selectedPrincipal=alias=>{const value=named.get(alias??'default');assert(value,'Select an explicit named principal');return value;};
+ const principal=(alias='default')=>{const p=selectedPrincipal(alias);return{alias,principalId:p.connection.principalId,projectId:p.connection.projectId,expectedPermissions:[...p.expectedPermissions]};};
  if(selection.lifecycleExecution){
   keys(selection.lifecycleExecution,['preparationRef','preparationSha256','ownerFixtureRef','ownerFixtureSha256','exchangeRoot','timeoutSeconds']);
   assert.equal(plan.role,'operator','Execution requires an explicitly provisioned local operator role; do not edit installed credentials');
@@ -69,16 +84,18 @@ export async function openScenario(scenario){
  // Candidate identity is the immutable package, not a particular test service
  // or Workspace. Different scenario installations must share this identity.
  const candidateDigest='sha256:'+selection.expectedManifestDigest;
- const collectorPins=Object.fromEntries(['support.mjs',scenario.toLowerCase()+'.test.mjs',...(['E04','E06'].includes(scenario)?['browser.mjs']:[])].map(name=>[name,sha(fs.readFileSync(new URL(name,import.meta.url)))]));
- write('selection.json',{scenario,qualification:selection.qualification,candidate,candidateDigest,collectorPins,matrixDigest:sha(matrixBytes),selectedCaseIds:selectedIds,scenarioDenominator:all.length,fullDenominator:matrix.count,sourceQualification:'SEPARATE_E20_OBLIGATION'});
+ const collectorPins=Object.fromEntries(['support.mjs',scenario.toLowerCase()+'.test.mjs',...(['E04','E06','E07','E12'].includes(scenario)?['browser.mjs']:[])].map(name=>[name,sha(fs.readFileSync(new URL(name,import.meta.url)))]));
+ write('selection.json',{scenario,qualification:selection.qualification,candidate,candidateDigest,collectorPins,matrixDigest:sha(matrixBytes),selectedCaseIds:selectedIds,scenarioDenominator:all.length,fullDenominator:matrix.count,sourceQualification:'SEPARATE_E20_OBLIGATION',...(selection.principals?{principalConnections:selection.principals}:{})});
  let sequence=0,currentCase=null,uncertain=false,hostSequence=0;
  const evidence=[],results=[];
- async function request(operation,input={},meta={}){
+ async function request(operation,input={},meta={}){return principalRequest('default',operation,input,meta);}
+ async function principalRequest(alias,operation,input={},meta={}){
+  const chosen=selectedPrincipal(alias).connection;
   assert(!uncertain,'Inspect the original uncertain request before making another mutation');
-  const envelope={operation,projectId:selection.projectId,input,...meta},id=String(++sequence).padStart(5,'0'),ref=id+'-request.json';
-  write(ref,{caseInstanceId:currentCase,envelope,principalId:connection.principalId});
+  const envelope={operation,projectId:chosen.projectId,input,...meta},id=String(++sequence).padStart(5,'0'),ref=id+'-request.json';
+  write(ref,{caseInstanceId:currentCase,envelope,principalId:chosen.principalId});
   let response,raw;
-  try{response=await fetch(connection.origin+'/api/v1/request',{method:'POST',headers:{...hostHeaders(connection),'content-type':'application/json'},body:JSON.stringify(envelope),signal:AbortSignal.timeout(30000),redirect:'error'});raw=await bounded(response,scenario==='E02'?1048576:262144);}
+  try{response=await fetch(chosen.origin+'/api/v1/request',{method:'POST',headers:{...hostHeaders(chosen),'content-type':'application/json'},body:JSON.stringify(envelope),signal:AbortSignal.timeout(30000),redirect:'error'});raw=await bounded(response,scenario==='E02'?1048576:262144);}
   catch(error){uncertain=!!meta.requestId;write(id+'-transport-failure.json',{caseInstanceId:currentCase,operation,requestId:meta.requestId??null,outcome:uncertain?'UNKNOWN':'READ_FAILED',automaticRetry:false});throw error;}
   const body=JSON.parse(raw),responseRef=id+'-response.json';write(responseRef,{caseInstanceId:currentCase,status:response.status,rawBody:raw,body});evidence.push({caseInstanceId:currentCase,request:ref,requestDigest:sha(fs.readFileSync(path.join(selection.outputRoot,ref))),response:responseRef,responseDigest:sha(raw),fileDigest:sha(fs.readFileSync(path.join(selection.outputRoot,responseRef)))});
   return{status:response.status,body};
@@ -152,12 +169,13 @@ export async function openScenario(scenario){
   const ref=String(++sequence).padStart(5,'0')+'-browser-trace.zip';fs.writeFileSync(path.join(selection.outputRoot,ref),bytes,{mode:0o600,flag:'wx'});
   const item={caseInstanceId:currentCase,artifact:ref,fileDigest:sha(bytes),mimeType:'application/zip'};evidence.push(item);return item;
  }
- async function browserCode(){
-  assert(['E02','E03','E04','E06','E10'].includes(scenario));
-  const args=[path.join(selection.installedRoot,'package/dist/server/cli.js'),'browser-code','--connection-ref',selection.connectionRef];
+ async function browserCode(alias='default'){
+  assert(['E02','E03','E04','E06','E07','E10','E12'].includes(scenario));
+  const chosen=selectedPrincipal(alias);
+  const args=[path.join(selection.installedRoot,'package/dist/server/cli.js'),'browser-code','--connection-ref',chosen.connectionRef];
   const result=await new Promise(resolve=>execFile(plan.nodeExecutable,args,{timeout:20000,maxBuffer:16384,encoding:'utf8'},(error,stdout,stderr)=>resolve({exitCode:error?error.code:0,signal:error?.signal??null,stdout,stderr})));
   assert.equal(result.exitCode,0,'Installed browser-code command failed');assert.equal(result.signal,null);
-  const code=JSON.parse(result.stdout);assert.equal(code.projectId,selection.projectId);assert.equal(code.url,connection.origin+'/monitor');assert.equal(code.oneUse,true);assert.equal(code.executionAuthorized,false);assert(/^[A-Za-z0-9_-]{43}$/.test(code.code));
+  const code=JSON.parse(result.stdout);assert.equal(code.projectId,chosen.connection.projectId);assert.equal(code.url,connection.origin+'/monitor');assert.equal(code.oneUse,true);assert.equal(code.executionAuthorized,false);assert(/^[A-Za-z0-9_-]{43}$/.test(code.code));
   artifact('browser-code-metadata.json',{installedCommand:true,projectId:code.projectId,url:code.url,expiresAt:code.expiresAt,oneUse:true,executionAuthorized:false,codeOmitted:true});
   return code.code;
  }
@@ -278,10 +296,17 @@ export async function openScenario(scenario){
    },close,
   };
  }
+ async function assertNoCredentialExposure(surfaces,{logs=true}={}){
+  assert(Array.isArray(surfaces)&&surfaces.length<=32);const secrets=[...named.values()].map(p=>hostHeaders(p.connection).Authorization.slice(7)),checked=[];
+  const inspect=(name,text)=>{assert.equal(typeof name,'string');assert.equal(typeof text,'string');assert(Buffer.byteLength(text)<=16777216,'Exposure check exceeds bounded surface');for(const secret of secrets)assert(!text.includes(secret),'A selected credential leaked into '+name);checked.push({name,bytes:Buffer.byteLength(text),sha256:sha(text)});};
+  for(const surface of surfaces){keys(surface,['name','text']);inspect(surface.name,surface.text);}
+  if(logs)for(const name of ['service.stdout.log','service.stderr.log'])inspect(name,readRegular(path.join(selection.installedRoot,name),16777216,true).toString());
+  const result={checked,selectedCredentials:named.size,rawValuesReturned:false,leaks:0};artifact('credential-exposure-check.json',result);return result;
+ }
  async function read(operation,input={}){const r=await request(operation,input);assert.equal(r.status,200,JSON.stringify(r.body));return r.body.result;}
  async function source(revisionId){let offset=0;const chunks=[];for(;;){const page=await read('lifecycle.definition.source.read',{revisionId,offset});assert.equal(page.revisionId,revisionId);chunks.push(Buffer.from(page.data,'base64'));if(page.nextOffset===null)return Buffer.concat(chunks).toString('utf8');assert(page.nextOffset>offset);offset=page.nextOffset;}}
  const status=await read('runtime.status');assert.equal(status.serviceId,connection.serviceId);assert.equal(status.workspaceId,selection.workspaceId);assert.equal(status.version,manifest.version);
- return{selection,candidate,candidateDigest,cases,all,request,read,source,protocol,artifact,imageArtifact,traceArtifact,browserCode,openExpert,configurationEntry,serviceOrigin:connection.origin,
+ return{selection,candidate,candidateDigest,cases,all,request,principalRequest,principal,assertNoCredentialExposure,read,source,protocol,artifact,imageArtifact,traceArtifact,browserCode,openExpert,configurationEntry,serviceOrigin:connection.origin,
   requestId:(caseId,suffix)=>scenario.toLowerCase()+'-'+sha(selection.runId+'|'+caseId+'|'+suffix).slice(0,48),
   async collect(c,fn){currentCase=c.caseInstanceId;const first=evidence.length;
    try{const assertions=await fn();results.push({caseInstanceId:c.caseInstanceId,status:'PASS',candidateDigest,qualification:selection.qualification,assertions,evidence:evidence.slice(first)});}
@@ -293,6 +318,7 @@ export async function openScenario(scenario){
    // actual Codex/browser journeys or another unexecuted acceptance instance.
    const after=inspectInstalledServiceSelection(selection.installedRoot);assert.equal(after.selectionDigest,current.selectionDigest);
    for(const [name,pin] of Object.entries(collectorPins))assert.equal(sha(fs.readFileSync(new URL(name,import.meta.url))),pin,'Collector changed during execution');
+   for(const item of Object.values(selection.principals??{}))assert.equal(sha(readRegular(item.connectionRef,131072,true)),item.connectionSha256,'Named principal connection changed during execution');
    const missing=all.filter(c=>!results.some(r=>r.caseInstanceId===c.caseInstanceId)).map(c=>c.caseInstanceId),passed=results.filter(r=>r.status==='PASS').length;
    const report={scenario,candidate,candidateDigest,selectionDigest:sha(fs.readFileSync(path.join(selection.outputRoot,'selection.json'))),qualification:selection.qualification,scenarioDenominator:all.length,fullDenominator:matrix.count,selected:cases.length,executed:results.length,passed,failed:results.length-passed,unexecutedCaseIds:missing,scenarioStatus:missing.length||passed!==all.length?'INCOMPLETE':'OBSERVED_PASS',productAcceptance:'NOT_EVALUATED',releaseAuthorized:false,dailyInstallationChanged:false,setupEvidence:evidence.filter(e=>e.caseInstanceId===null),results};
    write('REPORT.json',report);return report;

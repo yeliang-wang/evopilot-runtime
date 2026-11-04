@@ -80,6 +80,47 @@ test('interrupted monitor transport recovers by readback without changing stages
  await page.unroute('**/api/v1/dashboard/monitor*');await page.unroute('**/api/v1/dashboard/events*');await expect(page.getByLabel('生命周期实例',{exact:true})).toHaveValue(instance.id);await expect(page.locator('.connection.online')).toBeVisible();await expect(page.locator('tbody .status.PENDING')).toHaveCount(8);expect(f.controls.dispatches).toBe(0);
 });
 
+test('an expired actual replay cursor preserves stale state until snapshot recovery and retains its gap explanation',async({page},info)=>{
+ test.setTimeout(120000);await f.activate();const original=await f.createInstance();
+ const cdp=await page.context().newCDPSession(page),frames=[],actions=[],requests=[];let outcome='RUNNING';await cdp.send('Network.enable');
+ const action=(name,details={})=>actions.push({at:new Date().toISOString(),action:name,...details});
+ cdp.on('Network.eventSourceMessageReceived',frame=>{let data;try{data=JSON.parse(frame.data);}catch{data=frame.data;}frames.push({at:new Date().toISOString(),requestId:frame.requestId,event:frame.eventName,data});});
+ page.on('request',request=>{if(['/api/v1/dashboard/events','/api/v1/dashboard/monitor'].includes(new URL(request.url()).pathname))requests.push({at:new Date().toISOString(),url:request.url()});});
+ try{
+ await login(page,'/monitor','reader');await expect(page.getByLabel('生命周期实例',{exact:true})).toHaveValue(original.id);
+ await expect.poll(()=>frames.filter(frame=>frame.event==='snapshot').length).toBeGreaterThan(0);
+ const first=frames.find(frame=>frame.event==='snapshot').data;expect(first.events).toEqual([]);expect(first.gap).toBeNull();
+ action('original-snapshot',{watermark:first.watermark,cursor:first.cursor});
+ // Refuse new reads, then close the native response socket: neither synthetic
+ // EventSource frames nor front-end state replace the real transport failure.
+ await page.route('**/api/v1/dashboard/monitor*',route=>route.abort('connectionrefused'));
+ await page.route('**/api/v1/dashboard/events*',route=>route.abort('connectionrefused'));
+ const disconnected=f.disconnectEvents();action('destroy-native-event-responses',{count:disconnected});expect(disconnected).toBe(1);
+ await expect(page.locator('.connection.offline')).toBeVisible({timeout:15000});const frameCount=frames.length;
+ action('append-native-events-start',{count:1001});const revision=await f.appendEvents(1001);await f.createInstance('after-window');action('append-native-events-complete',{draftRevision:revision});
+ expect(frames).toHaveLength(frameCount);action('resume-event-transport');await page.unroute('**/api/v1/dashboard/events*');
+ await expect.poll(()=>frames.filter(frame=>frame.event==='reset').length,{timeout:15000}).toBeGreaterThan(0);
+ const reset=frames.find(frame=>frame.event==='reset').data;expect(reset.projectId).toBe('alpha');expect(reset.gap.code).toBe('CURSOR_EXPIRED');expect(reset.gap.afterRevision).toBe(first.watermark.revision);expect(reset.gap.resumeRevision-reset.gap.afterRevision).toBeGreaterThan(1000);expect(reset.events).toEqual([]);
+ await expect(page.getByTestId('monitor-recovery')).toContainText('正在核对当前快照');await expect(page.locator('.connection.offline')).toBeVisible();await expect(page.locator('#instance option')).toHaveCount(1);await expect(page.getByLabel('生命周期实例',{exact:true})).toHaveValue(original.id);await expect(page.locator('tbody .status.PENDING')).toHaveCount(8);
+ await page.screenshot({path:info.outputPath('replay-gap-pending.png'),fullPage:true});
+ action('resume-snapshot-transport');await page.unroute('**/api/v1/dashboard/monitor*');
+ await expect(page.getByTestId('monitor-recovery')).toContainText(/已通过修订 \d+ 的当前快照恢复/,{timeout:15000});await expect(page.locator('#instance option')).toHaveCount(2);await expect(page.locator('.connection.online')).toBeVisible();
+ const heartbeatCount=frames.filter(frame=>frame.event==='heartbeat').length;await expect.poll(()=>frames.filter(frame=>frame.event==='heartbeat').length).toBeGreaterThan(heartbeatCount);
+ await expect(page.getByTestId('monitor-recovery')).toContainText('未逐条重放，已通过修订');await expect(page.getByLabel('Project Lifecycle YAML')).toHaveCount(0);expect(f.controls.dispatches).toBe(0);
+ await page.screenshot({path:info.outputPath('replay-gap-recovered.png'),fullPage:true});outcome='PASSED';
+ }catch(error){outcome='FAILED';action('failure',{message:error instanceof Error?error.message:String(error)});throw error;}
+ finally{await info.attach('replay-gap-frames.json',{body:Buffer.from(JSON.stringify({outcome,frames},null,2)),contentType:'application/json'});await info.attach('replay-gap-actions.json',{body:Buffer.from(JSON.stringify({outcome,actions,requests},null,2)),contentType:'application/json'});await cdp.detach();}
+});
+
+test('a rejected initial browser cursor reconnects without confusing invalid input with an expired replay gap',async({page})=>{
+ await f.activate();const instance=await f.createInstance(),cdp=await page.context().newCDPSession(page),frames=[],attempts=[];await cdp.send('Network.enable');
+ cdp.on('Network.eventSourceMessageReceived',frame=>frames.push({event:frame.eventName,data:JSON.parse(frame.data)}));
+ await page.route('**/api/v1/dashboard/events*',async route=>{attempts.push(route.request().url());await route.continue(attempts.length===1?{url:f.url+'/api/v1/dashboard/events?cursor=invalid-reference'}:{});});
+ await login(page,'/monitor','reader');await expect.poll(()=>frames.filter(frame=>frame.event==='error'&&frame.data.code==='INVALID_CURSOR').length).toBe(1);
+ await expect.poll(()=>attempts.length,{timeout:10000}).toBeGreaterThan(1);expect(new URL(attempts[1]).searchParams.has('cursor')).toBe(false);
+ await expect(page.locator('.connection.online')).toBeVisible();await expect(page.getByLabel('生命周期实例',{exact:true})).toHaveValue(instance.id);await expect(page.getByTestId('monitor-recovery')).toHaveCount(0);expect(frames.some(frame=>frame.event==='reset')).toBe(false);expect(f.controls.dispatches).toBe(0);await cdp.detach();
+});
+
 test('monitor pagination exposes the remaining instances without requesting definition source',async({page})=>{
  await f.activate();for(let n=0;n<51;n++)await f.createInstance('instance-'+String(n).padStart(3,'0'));
  const operations=[];page.on('request',r=>{if(r.method()==='POST'&&r.url().endsWith('/request'))operations.push(r.postDataJSON().operation);});await login(page,'/monitor','reader');await expect(page.getByRole('button',{name:'加载更多实例'})).toBeVisible();await page.getByRole('button',{name:'加载更多实例'}).click();await expect(page.locator('#instance option')).toHaveCount(51);await page.getByLabel('生命周期实例',{exact:true}).selectOption('instance-050');await expect(page.locator('tbody .status.PENDING')).toHaveCount(8);await expect(page.getByRole('button',{name:'加载更多实例'})).toHaveCount(0);expect(operations).toEqual([]);

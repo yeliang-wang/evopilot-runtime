@@ -5,6 +5,7 @@ import {mkdtempSync,realpathSync,rmSync,readFileSync,writeFileSync} from 'node:f
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomBytes,randomUUID} from 'node:crypto';
+import {channel} from 'node:diagnostics_channel';
 import {initializeCredentials,tokenDigest} from '../../dist/server/security.js';
 import {startRuntimeServer} from '../../dist/server/http.js';
 import {valueDigest} from '../../dist/lifecycle/base.js';
@@ -22,6 +23,12 @@ export async function dashboardFixture({seed=true}={}){
  const adapter={async prepare(_i,stageId){return{adapterId:'synthetic-browser',adapterDigest,action:'base.'+stageId,bindingDigest:valueDigest('synthetic-browser-binding'),parameters:{synthetic:true}};},async dispatch(r,_i,permit){await permit();controls.dispatches++;return observe(r);},async inspect(r){return observe(r);}};
  let server;const open=async port=>server=await startRuntimeServer({stateRoot,workspaceId:'browser-fixture',port},bindings.provider,async ref=>authorities.get(ref)??null,undefined,adapter);
  await open();
+ // Fault injection touches only this fixture's actual HTTP responses. Browser
+ // offline emulation does not reliably close an already established SSE socket.
+ const eventResponses=new Set(),requests=channel('http.server.request.start');
+ const captureEvents=({request,response,socket})=>{if(socket.localPort===server.port&&request.url?.split('?')[0]==='/api/v1/dashboard/events'){eventResponses.add(response);response.once('close',()=>eventResponses.delete(response));}};
+ requests.subscribe(captureEvents);
+ function disconnectEvents(){const responses=[...eventResponses];for(const response of responses)response.destroy();return responses.length;}
  async function call(operation,input={},extra={},actor='owner',projectId='alpha'){
   const r=await fetch(server.url+'/api/v1/request',{method:'POST',headers:{authorization:'Bearer '+tokens[actor],'content-type':'application/json'},body:JSON.stringify({operation,projectId,input,...extra})}),body=await r.json();assert.equal(r.status,200,JSON.stringify(body));return body.result;
  }
@@ -39,6 +46,12 @@ export async function dashboardFixture({seed=true}={}){
  }
  async function code(actor='owner',projectId='alpha'){const r=await fetch(server.url+'/api/v1/dashboard-code',{method:'POST',headers:{authorization:'Bearer '+tokens[actor],'content-type':'application/json'},body:JSON.stringify({projectId})}),v=await r.json();assert.equal(r.status,200,JSON.stringify(v));return v.result.code;}
  function rotate(actor='owner'){const path=join(stateRoot,'auth.json'),auth=JSON.parse(readFileSync(path));auth.principals.find(p=>p.id===actor).revision++;writeFileSync(path,JSON.stringify(auth));}
+ async function appendEvents(count){
+  assert(Number.isSafeInteger(count)&&count>0&&count<=1100);let revision=(await call('runtime.status')).revision;
+  // Actual service mutations, not table edits or fabricated stream frames.
+  for(let n=0;n<count;n++){const result=await call('lifecycle.draft.save',{yaml:'# Synthetic browser replay exercise\nprojectId: alpha\n'},{requestId:randomUUID(),expectedRevision:revision});revision=result.revision;}
+  return revision;
+ }
  if(seed)await write('lifecycle.draft.save',{yaml:initialSource});
- return{root,bindings,controls,data,initialSource,call,write,source,activate,createInstance,code,rotate,get url(){return server.url;},async restart(){const port=server.port;await server.close();await open(port);},async close(){await server.close();rmSync(root,{recursive:true,force:true});}};
+ return{root,bindings,controls,data,initialSource,call,write,source,activate,createInstance,code,rotate,appendEvents,disconnectEvents,get url(){return server.url;},async restart(){const port=server.port;await server.close();await open(port);},async close(){requests.unsubscribe(captureEvents);await server.close();rmSync(root,{recursive:true,force:true});}};
 }
