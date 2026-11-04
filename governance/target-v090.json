@@ -321,7 +321,9 @@
         "src/installation/toolchain/preparation.ts",
         "tests/e2e/toolchain-host-v090.test.mjs",
         "src/installation/service-control.ts",
-        "tests/e2e/service-control-v090.test.mjs"
+        "tests/e2e/service-control-v090.test.mjs",
+        "src/installation/toolchain/registration.ts",
+        "tests/e2e/toolchain-registration-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",
