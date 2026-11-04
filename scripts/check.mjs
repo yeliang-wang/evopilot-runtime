@@ -186,7 +186,7 @@ export async function checkSource() {
     if (!path.endsWith('.mjs') && !path.endsWith('.ts') && !path.endsWith('.mts')) continue;
     const source = await readFile(path, 'utf8');
     if(!path.includes('/src/installation/'))assert.doesNotMatch(source,/from\s+['"][^'"]*installation\/[^'"]+['"]/,'Operator installation must not be reachable from Runtime service code');
-    const operatorHostReader=['installer.ts','host-selection.ts','workspace/configuration.ts','workspace/binding.ts','online/selection.ts','online/worker.ts','online/configuration.ts','online/application.ts'].some(file=>path.endsWith('/src/installation/'+file));
+    const operatorHostReader=['installer.ts','host-selection.ts','workspace/configuration.ts','workspace/binding.ts','online/selection.ts','online/worker.ts','online/configuration.ts','online/application.ts','online/operator.ts'].some(file=>path.endsWith('/src/installation/'+file));
     if(path.endsWith('/src/installation/online/selection.ts'))assert.doesNotMatch(source,/\b(?:openLegacyOwnerRoutes|createLegacyOwnerProviders|createProjectHostRoutes)\b/,'Worker selection may read current grants but must never invoke owner work');
     if(path.endsWith('/src/installation/online/worker.ts')){
       assert.match(source,/openLegacyOwnerRoutes\(h\.ownerConfigRef,createRuntimeHttpClient\(h\.connectionRef\),h\.ownerConfigDigest\)/,'Worker must use explicit per-project published owner Host bindings');
@@ -199,6 +199,7 @@ export async function checkSource() {
     }
     if(path.endsWith('/src/installation/host-selection.ts')||path.endsWith('/src/installation/online/configuration.ts')||path.endsWith('/src/installation/online/application.ts'))assert.doesNotMatch(source,/\b(?:openLegacyOwnerRoutes|createLegacyOwnerProviders|createProjectHostRoutes)\b/,'Local configuration selection and publication must not invoke owner business work');
     if(path.endsWith('/src/installation/toolchain/registration.ts'))assert.match(source,/inspectInstalledHostSelection\(selection,'TOOLCHAIN_BINDING_CHANGED'\)/,'Dependency binding must retain exact installed plugin and grant inspection');
+    if(path.endsWith('/src/installation/online/operator.ts'))assert.doesNotMatch(source,/\b(?:openLegacyOwnerRoutes|createLegacyOwnerProviders|createProjectHostRoutes|RuntimeStore|createComposition)\b/,'Online operator delegates existing guarded local configuration/worker operations only');
     if(!path.includes('/src/host/')&&!operatorHostReader)assert.doesNotMatch(source,/from\s+['"][^'"]*host\/(?:legacy-owner(?:s|-providers)\.js|online\.js|project\/[^'"]+)['"]/,'Historical owner/project Host delegation must not be reachable from Runtime HTTP consumers');
     if (path.endsWith('.mjs')) {
     const syntax = spawnSync(process.execPath, ['--check', path], { encoding: 'utf8' });
@@ -215,7 +216,10 @@ export async function checkSource() {
       if(path.endsWith('/src/adapters/artifacts.ts')&&specifier==='yauzl')continue;
       if (path.endsWith('/src/server/mcp.ts') && ['@modelcontextprotocol/sdk/server/index.js','@modelcontextprotocol/sdk/server/streamableHttp.js','@modelcontextprotocol/sdk/types.js'].includes(specifier)) continue;
       if (['/src/host/bridge.ts','/src/installation/workspace-host.ts'].some(file=>path.endsWith(file)) && ['@modelcontextprotocol/sdk/server/index.js','@modelcontextprotocol/sdk/server/stdio.js','@modelcontextprotocol/sdk/types.js'].includes(specifier)) continue;
-      if (['/src/host/legacy-tools.ts','/src/host/guide.ts','/src/host/workspace.ts','/src/installation/workspace/operator.ts','/src/installation/workspace/setup-operator.ts'].some(file=>path.endsWith(file)) && specifier==='@modelcontextprotocol/sdk/types.js') continue;
+      if (['/src/host/legacy-tools.ts','/src/host/guide.ts','/src/host/workspace.ts','/src/installation/workspace/operator.ts','/src/installation/workspace/setup-operator.ts','/src/installation/online/operator.ts'].some(file=>path.endsWith(file)) && specifier==='@modelcontextprotocol/sdk/types.js') {
+        if(path.endsWith('/src/installation/online/operator.ts'))assert.match(source,/import type \{Tool\} from '@modelcontextprotocol\/sdk\/types\.js'/,'Online operator imports SDK tool metadata types only');
+        continue;
+      }
       if (specifier === 'yaml' && (path.endsWith('/src/asset-sources.mjs') || PRODUCT === 'ontology' && path.includes('/src/compat/'))) continue;
       if (PRODUCT === 'ontology' && path.includes('/src/compat/') && specifier === 'ajv/dist/2020.js') continue;
       assert(specifier.startsWith('.'), 'Undeclared import: ' + specifier);

@@ -74,10 +74,17 @@ export async function prepareOnlineConfiguration(raw:OnlineConfigurationInput):P
     return{host:h,config};
   });
   if(projects.size!==required.size)reject('ONLINE_CONFIGURATION_SCOPE','Every configured project needs an explicit Host grant',403);
+  // An explicitly selected native expectedDigest can bind the original
+  // canonical v0.8 Workspace configuration during standalone onboarding.
+  // Merely finding a file, or an initial null expectation, cannot adopt it.
+  const canonicalRef=path.join(binding.workspaceRoot,'online/configuration.json');
+  if(!previousRegistration&&fs.existsSync(canonicalRef)){
+    const value=read(canonicalRef,readPrivateJson),registration={ref:canonicalRef,digest:digest(value)};
+    previous=readOnlineConfiguration(registration,binding.workspaceId);previousRegistration=registration;
+  }
   const previousValue=previous as OnlineConfiguration|null,previousPin=previousRegistration as OnlineRegistration|null;
   if((previousValue?.digest??null)!==input.expectedDigest)reject('REVISION_CONFLICT','The original expectedDigest differs from the current online configuration',409);
-  const configurationRef=previousPin?.ref??path.join(binding.workspaceRoot,'online/configuration.json');onlineOutputPath(configurationRef);
-  if(!previousPin&&fs.existsSync(configurationRef))reject('ONLINE_CONFIGURATION_UNBOUND','An existing configuration requires its exact current owner binding; it will not be adopted or overwritten',409);
+  const configurationRef=previousPin?.ref??canonicalRef;onlineOutputPath(configurationRef);
   for(const {config} of selected)await validatePublishedOnlineSettings(config.owners.harness.packageRoot,input.settings);
   // Secret bytes are never retained. Their hashes bind the exact configuration
   // review and are rechecked before a partial transition can finish.
@@ -93,7 +100,10 @@ export async function prepareOnlineConfiguration(raw:OnlineConfigurationInput):P
   const hostsAfter=selected.map(({host,config})=>{const next={...config,online:registration};return{connectionRef:host.connectionRef,ownerConfigRef:document('owner-host',next),ownerConfigDigest:digest(next)};});
   const primary=hostsAfter.find(h=>h.connectionRef===path.join(input.serviceRoot,'connection.json'))!;
   const after:LegacyPluginSelection={ownerConfigRef:primary.ownerConfigRef,ownerConfigDigest:primary.ownerConfigDigest};
-  if(operator){const next={...operator,ownerHost:{...after}};after.workspaceConfigRef=document('workspace-operator',next);after.workspaceConfigDigest=digest(next);}
+  if(operator){
+    const online=operator.online?{hosts:operator.online.hosts.map(h=>{const index=input.hosts.findIndex(old=>same(old,h));return index<0?h:hostsAfter[index];})}:undefined;
+    const next={...operator,ownerHost:{...after},...(online?{online}:{})};after.workspaceConfigRef=document('workspace-operator',next);after.workspaceConfigDigest=digest(next);
+  }
   const args=[path.join(spec.packageRoot,after.workspaceConfigRef?'dist/installation/workspace-host.js':'dist/host/bridge.js'),'--connection-ref',path.join(input.serviceRoot,'connection.json'),'--legacy-only','--owner-config-ref',after.ownerConfigRef!,'--owner-config-digest',after.ownerConfigDigest!];
   if(after.workspaceConfigRef)args.push('--operator-config-ref',after.workspaceConfigRef,'--operator-config-digest',after.workspaceConfigDigest!);
   add(path.join(input.serviceRoot,'plugin/.mcp.json'),{mcpServers:{evopilot_runtime:servers.evopilot_runtime,evopilot_runtime_legacy:{type:'stdio',command:spec.nodeExecutable,args}}},true);

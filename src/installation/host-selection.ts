@@ -50,7 +50,7 @@ export function inspectInstalledHostSelection(selection:InstalledServiceSelectio
     if(setup.ownerHost){before.ownerConfigRef=setup.ownerHost.ref;before.ownerConfigDigest=setup.ownerHost.digest;}
     if(setup.workspaceOperator){
       const ref=path.join(serviceRoot,'workspace-operator.json'),operator=read(ref,readWorkspaceOperatorConfiguration);
-      const grant={projectRoot:operator.selection.projectRoot,referenceFiles:operator.selection.referenceFiles,owners:operator.owners,calls:operator.calls,expiresAt:operator.expiresAt};
+      const grant={projectRoot:operator.selection.projectRoot,referenceFiles:operator.selection.referenceFiles,owners:operator.owners,calls:operator.calls,expiresAt:operator.expiresAt,...(operator.online?{online:operator.online}:{})};
       if(!same(grant,setup.workspaceOperator))changed();before.workspaceConfigRef=ref;before.workspaceConfigDigest=digest(operator);
     }
   }

@@ -74,7 +74,8 @@ export async function inspectOnlineWorker(s:OnlineWorkerSelection):Promise<Recor
   const matchesSelection=!o.owner||o.owner.selection.selectionDigest===s.selectionDigest;
   return{label:o.label,registered:o.registered,running:o.running,pid:o.pid,lastExitCode:o.lastExitCode,matchesSelection,configurationCurrent,configurationError,statusCurrent,ready:!!o.pid&&o.running&&matchesSelection&&configurationCurrent&&statusCurrent&&status?.pid===o.pid&&status.state==='READY'&&typeof status.heartbeatAt==='number'&&Date.now()-status.heartbeatAt<15000,status,authority:false};
 }
-export async function startOnlineWorker(s:OnlineWorkerSelection):Promise<Record<string,unknown>> {
+export async function startOnlineWorker(s:OnlineWorkerSelection,attemptId:string=randomUUID()):Promise<Record<string,unknown>> {
+  if(!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(attemptId))reject('ONLINE_WORKER_ARGUMENTS','Use the original local worker attempt identity');
   requireCurrentOnlineWorkerSelection(s);const b=s.installation.binding!;
   return withWorkspaceLease({workspaceRoot:b.workspaceRoot,workspaceId:b.workspaceId},'online-start-'+randomUUID(),async()=>{
     requireCurrentOnlineWorkerSelection(s);const before=await observed(s);
@@ -85,7 +86,8 @@ export async function startOnlineWorker(s:OnlineWorkerSelection):Promise<Record<
     const specification=readPrivateJson(path.join(s.installation.serviceRoot,'service-specification.json')) as UserServiceSpecification;
     canonicalPath(specification.nodeExecutable);const node=fs.lstatSync(specification.nodeExecutable);
     if(!node.isFile()||(node.mode&0o022)!==0||sha(fs.readFileSync(specification.nodeExecutable))!==specification.nodeSha256)reject('ONLINE_WORKER_EXECUTABLE','The installed Node interpreter changed');
-    const body={schema:'runtime-online-worker-owner/v1' as const,selection:structuredClone(s),nodeExecutable:specification.nodeExecutable,nodeSha256:specification.nodeSha256,entry:path.join(s.installation.serviceRoot,'package/dist/installation/online/worker.js'),nonce:randomUUID()};
+    if(fs.existsSync(path.join(root,'attempts',attemptId)))reject('ONLINE_WORKER_ATTEMPT_USED','Inspect the retained attempt instead of dispatching it again',409);
+    const body={schema:'runtime-online-worker-owner/v1' as const,selection:structuredClone(s),nodeExecutable:specification.nodeExecutable,nodeSha256:specification.nodeSha256,entry:path.join(s.installation.serviceRoot,'package/dist/installation/online/worker.js'),nonce:attemptId};
     const material=plist(body),withPlist={...body,plistDigest:sha(material)},owner={...withPlist,ownerDigest:digest(withPlist)},attempt=path.join(root,'attempts',owner.nonce);mkdir(attempt);
     save(path.join(attempt,'owner.json'),owner);fs.writeFileSync(path.join(attempt,'job.plist'),material,{mode:0o600,flag:'wx',flush:true});syncDirectory(attempt);
     // Retain every attempt before replacing only the current worker pointers.

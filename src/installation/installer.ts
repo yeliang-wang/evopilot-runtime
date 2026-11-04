@@ -217,7 +217,7 @@ function preparePlugin(plan:RuntimeInstallPlan,spec:UserServiceSpecification,ser
   }
   if(plan.workspaceOperator&&legacy){
     const grant=validateWorkspaceOperatorGrant(plan.workspaceOperator),binding=readLegacyBinding(spec.legacyRef!);
-    const config={schema:'runtime-workspace-operator/v1',selection:{...binding,projectRoot:grant.projectRoot,serviceRoot:plan.root,referenceFiles:grant.referenceFiles},specificationDigest:digest(spec),connectionRef,owners:grant.owners,ownerHost:{...legacy},calls:grant.calls,expiresAt:grant.expiresAt};
+    const config={schema:'runtime-workspace-operator/v1',selection:{...binding,projectRoot:grant.projectRoot,serviceRoot:plan.root,referenceFiles:grant.referenceFiles},specificationDigest:digest(spec),connectionRef,owners:grant.owners,ownerHost:{...legacy},calls:grant.calls,expiresAt:grant.expiresAt,...(grant.online?{online:grant.online}:{})};
     const ref=join(plan.root,'workspace-operator.json');exactFile(ref,canonical(config)+'\n');legacy.workspaceConfigRef=ref;legacy.workspaceConfigDigest=digest(config);
   }
   const material=runtimePluginMaterial(spec.packageRoot,connectionRef,plan.nodeExecutable,legacy);

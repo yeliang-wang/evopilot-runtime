@@ -17,6 +17,7 @@ import {createManagedWorkspaceBackup,verifyManagedWorkspaceBackup,restoreManaged
 import {relocateManagedWorkspace} from './relocation.js';
 import {inspectMaintenanceTree,maintenanceJSONDigest,MAINTENANCE_BUDGET} from './stream.js';
 import {inspectWorkspaceToolchain,startToolchainPreparation} from '../toolchain/preparation.js';
+import {openOnlineOperator} from '../online/operator.js';
 
 const prefix='evopilot_v01_',hash=(v:string)=>createHash('sha256').update(v).digest('hex');
 const roots=(c:WorkspaceOperatorConfiguration)=>[c.selection.projectRoot,c.selection.workspaceRoot,c.selection.serviceRoot];
@@ -32,7 +33,7 @@ function definitions(config:WorkspaceOperatorConfiguration):Tool[]{
   const schemas={workspace_inspect:object({}),workspace_capacity:object({}),workspace_backup:object({destinationRoot:value,requestId:id}),workspace_backup_inspect:object({backupRoot:value,requestId:id}),workspace_restore:object({backupRoot:value,requestId:id}),workspace_migrate:object({destinationProjectRoot:value,destinationStateRoot:value,destinationServiceRoot:value,requestId:id},['destinationProjectRoot','destinationStateRoot','requestId']),toolchain_inspect:object({}),toolchain_prepare:object({requestId:{type:'string',pattern:'^[a-z0-9][a-z0-9-]{0,63}$'}})};
   const descriptions={workspace_inspect:'Inspect the configured local installation and Workspace without starting a service or creating files. This is not a consistent preservation snapshot.',workspace_capacity:'Read bounded selected project, owner-state and service file counts/digests. A live inventory is not a consistent backup.',workspace_backup:'Stop the exact configured Runtime service and create a consistent three-root backup. The original request is retained; the compatibility session is deactivated. Does not restart or dispatch business work.',workspace_backup_inspect:'Verify the exact backup against its retained external anchor without starting services. Only backups of this selected Workspace are accepted.',workspace_restore:'Restore an anchored backup only into its missing/empty original roots. A rescue entry can operate while Runtime is offline. Retain original requests; never restart or redispatch.',workspace_migrate:'Stop the configured Runtime, retain a consistent backup, and relocate all three selected roots. For the original two-destination call, the service copy defaults to destinationStateRoot + .evopilot-runtime. Explicit destinationServiceRoot overrides that default. Preserve original history; attachment/start is separate.'};
   const allDescriptions={...descriptions,toolchain_inspect:'Passively verify the bundled lock and selected local dependency bytes; inspect the original preparation without downloads or service activation.',toolchain_prepare:'Stop the exact selected Runtime and prepare only bundled pinned dependencies. Returns a retained status before downloads finish and deactivates this session. Inspect progress; never replace a RUNNING/UNKNOWN request. Does not restart the service or dispatch business work.'};
-  return config.calls.map(call=>({name:prefix+call,description:allDescriptions[call],inputSchema:schemas[call],annotations:{readOnlyHint:['workspace_inspect','workspace_capacity','workspace_backup_inspect','toolchain_inspect'].includes(call),destructiveHint:['workspace_backup','workspace_restore','workspace_migrate','toolchain_prepare'].includes(call),idempotentHint:true,openWorldHint:call==='toolchain_prepare'}}));
+  return config.calls.filter(call=>call!=='online_configure'&&call!=='online_worker').map(call=>({name:prefix+call,description:allDescriptions[call],inputSchema:schemas[call],annotations:{readOnlyHint:['workspace_inspect','workspace_capacity','workspace_backup_inspect','toolchain_inspect'].includes(call),destructiveHint:['workspace_backup','workspace_restore','workspace_migrate','toolchain_prepare'].includes(call),idempotentHint:true,openWorldHint:call==='toolchain_prepare'}}));
 }
 /** Digest is pinned in the installed entry. Editing a file is not permission to
  * widen an already connected Host. The selection is rechecked after awaits. */
@@ -66,19 +67,21 @@ export function openWorkspaceOperator(ref:string,expectedDigest:string):Workspac
   const destination=(c:WorkspaceOperatorConfiguration,value:unknown)=>{
     const root=string(value,4096);maintenanceLocation(root,true);separateRoots([...roots(c),control,c.selection.workspaceRoot+'.evopilot-maintenance',root]);return root;
   };
-  const tools=definitions(selected);
+  const online=openOnlineOperator(selected,expectedDigest,fresh,specification),tools=[...definitions(selected),...online.definitions];
   return{definitions:tools,has:name=>tools.some(t=>t.name===name),requiresActiveSession(name,input){
+      if(online.has(name))return online.requiresActiveSession(name,input);
       if(![prefix+'workspace_backup',prefix+'workspace_migrate'].includes(name))return false;
       fresh();const args=record(input),requestId=slug(args.requestId),file=path.join(control,'requests',requestId+'.json');
       if(!present(file))return true;
       const prior=record(JSON.parse(readRegular(file,2097152,true).toString()));
       if(prior.schema!=='runtime-workspace-operator-request/v1'||prior.intentDigest!==maintenanceJSONDigest({configurationDigest:expectedDigest,name,args}))reject('MAINTENANCE_CONFLICT','Retained request differs');
       return false;
-    },deactivatesSession:name=>[prefix+'workspace_backup',prefix+'workspace_migrate',prefix+'workspace_restore',prefix+'toolchain_prepare'].includes(name),
+    },deactivatesSession:name=>online.deactivatesSession(name)||[prefix+'workspace_backup',prefix+'workspace_migrate',prefix+'workspace_restore',prefix+'toolchain_prepare'].includes(name),refreshesBinding:name=>online.refreshesBinding?.(name)??false,
     async call(name,input,signal){
       try{
         signal?.throwIfAborted();const c=fresh(),action=name.slice(prefix.length) as WorkspaceCall,args=record(input);
         if(!tools.some(t=>t.name===name))reject('WORKSPACE_OPERATOR_FORBIDDEN','This local operation was not selected',403);
+        if(online.has(name))return await online.call(name,args,signal);
         if(action==='toolchain_inspect'||action==='toolchain_prepare'){
           exact(args,action==='toolchain_prepare'?['requestId']:[]);validateSelection(c.selection);const spec=specification(c);
           const context={workspaceRoot:c.selection.workspaceRoot,workspaceId:c.selection.workspaceId,installationDigest:digest({specificationDigest:c.specificationDigest,configurationDigest:expectedDigest}),...(c.toolchainPreparationHistoryDigest?{historicalRecordsDigest:c.toolchainPreparationHistoryDigest}:{})};

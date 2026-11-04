@@ -645,16 +645,16 @@ remain under the Workspace's sibling `.evopilot-online-worker` directory.
 Stop the worker before Workspace maintenance; the maintenance guard recognizes
 the original worker label and refuses a still-loaded job.
 
-This local operator entry does not yet expose the online Host MCP setup
-workflow. That integration and relocated online references still require their
-own implementation and acceptance before compatibility is complete.
+The online Host entry described below uses these same local operator functions.
+Relocated online references still require their own implementation and
+acceptance before compatibility is complete.
 
 独立 worker 通过各项目已有的受保护连接调用已发布 Harness，并通过 HTTP 将发现送回
 已运行的 Runtime。选择和检查不启动监测；启动也不会选择策略、执行业务任务或批准
 修复。配置中的每个项目都必须有明确授权，Alertmanager 消息只能匹配一个已选范围。
 关闭启动命令或 Codex 对话不会关闭 worker。配置变化后停止采集，仍可用原选择文件
 停止属于本轮的进程；保留原尝试、故障和停止记录。工作区维护前必须先停止 worker。
-当前这里只提供本机安装器入口，Host MCP 设置及迁移引用尚未完成验收。
+下述 Host MCP 入口复用相同的本机操作；在线引用的迁移覆盖仍需完成。
 
 ## Apply online configuration
 
@@ -669,6 +669,10 @@ scope, expiry and credentials.
 `null` for the first configuration. It differs from the raw canonical object
 digest in an online registration. Use a new request ID for a new configuration;
 keep the original request and material when recovering an interrupted one.
+For a migrated Workspace's original `online/configuration.json` that has no
+standalone Host registration yet, explicitly supply its original native digest.
+The selector verifies its Workspace identity and content integrity before
+binding it; an initial `null` expectation cannot overwrite that existing file.
 
 ```sh
 umask 077
@@ -700,3 +704,42 @@ never selects a monitoring policy or proves that a service is healthy.
 回执，只更新在线配置及 Host/plugin 摘要，不增加权限或改写业务记录。中断后沿用原
 材料恢复，其他修改会被拒绝；已完成请求的重放只返回历史结果。配置完成不自动启动
 服务、监测或业务执行，后续显式启动并重连。
+
+## Online tools in the compatibility Host
+
+The installed operator must explicitly grant `online_configure` and/or
+`online_worker` in its `calls`, with `online.hosts` listing the existing
+per-project `connectionRef`, `ownerConfigRef` and `ownerConfigDigest` selections.
+Installing or loading the plugin does not add these calls to an older grant.
+The grant includes the primary Host and every project to configure. First-use
+setup preserves that same explicit selection and expiry.
+
+`evopilot_v01_online_configure` accepts the original `settings`,
+`expectedDigest` and `requestId` shape. A new request needs this chat's active
+session. It refuses a loaded worker before stopping Runtime, retains the exact
+configuration material, applies it through the same guarded installer operation,
+and deactivates the session. It neither selects monitoring nor restarts services.
+The result supplies the updated Host references. Restart the selected Runtime
+explicitly and reconnect the updated plugin before new service work.
+
+If the Host exits after stopping Runtime or during configuration publication,
+reconnect and submit the same request. Its retained material permits original
+recovery without activating an unavailable service. A changed request is
+rejected. The immediately updated successor Host can also read the same
+completed receipt; historical replay reports `currentEnvironmentVerified: false`
+and does not stop or restart the current service.
+
+`evopilot_v01_online_worker` accepts `operation` (`inspect`, `start`, `stop`,
+`uninstall`) and `requestId`. Inspection is passive; new control requests need
+an active session. Before a control call, the operator retains the exact worker
+selection and unique attempt identity. After an interrupted response, replay
+inspects that original attempt. A matching owned job can establish that startup
+occurred; verified disappearance of the original job/PID establishes stopping.
+Other outcomes stay `UNKNOWN` with `redispatched: false`. Worker operation
+verification does not certify monitoring health or approve a repair.
+
+在线工具只在安装器明确授权对应调用和各项目连接后出现。新配置及新启停请求要求
+当前会话激活；配置操作会先拒绝仍加载的 worker，再停止本轮 Runtime，并停用会话。
+中断后可从离线 Host 沿用原请求恢复，不需要为了恢复而创建新请求。worker 的控制
+请求保留准确尝试身份；回执丢失后只核对原进程，不自动重复启动或停止。未知结果保留
+为 `UNKNOWN`，监测观察始终不能代替领域审批或软件发布决定。

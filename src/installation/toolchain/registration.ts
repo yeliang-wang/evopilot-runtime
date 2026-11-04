@@ -70,7 +70,8 @@ export function renderInstalledToolchainRegistration(serviceRoot:string,toolchai
   }
   if(owner){const next={...owner,nativeToolchain:registration};after.ownerConfigRef=document('owner-host',next);after.ownerConfigDigest=digest(next);}
   if(operator){
-    const next={...operator,specificationDigest:digest(specification),ownerHost:{...after}};
+    const online=operator.online?{hosts:operator.online.hosts.map(h=>h.ownerConfigRef===before.ownerConfigRef&&h.ownerConfigDigest===before.ownerConfigDigest?{...h,ownerConfigRef:after.ownerConfigRef!,ownerConfigDigest:after.ownerConfigDigest!}:h)}:undefined;
+    const next={...operator,specificationDigest:digest(specification),ownerHost:{...after},...(online?{online}:{})};
     after.workspaceConfigRef=document('workspace-operator',next);after.workspaceConfigDigest=digest(next);
   }
   if(!owner&&!spec.legacyProviders&&spec.integrationsRef===null)reject('TOOLCHAIN_BINDING_UNUSED','Select an existing owner or service integration before registering validators',409);

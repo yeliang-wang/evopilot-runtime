@@ -6,11 +6,12 @@ import {exact,record,reject,slug,string} from '../server/errors.js';
 import {readPrivateJson} from '../server/security.js';
 import type {ManagedLegacyBinding} from '../compat/managed-store.js';
 
-export const WORKSPACE_CALLS=['workspace_inspect','workspace_capacity','workspace_backup','workspace_backup_inspect','workspace_restore','workspace_migrate','toolchain_inspect','toolchain_prepare'] as const;
+export const WORKSPACE_CALLS=['workspace_inspect','workspace_capacity','workspace_backup','workspace_backup_inspect','workspace_restore','workspace_migrate','toolchain_inspect','toolchain_prepare','online_configure','online_worker'] as const;
 export type WorkspaceCall=typeof WORKSPACE_CALLS[number];
+export interface WorkspaceOnlineGrant {hosts:{connectionRef:string;ownerConfigRef:string;ownerConfigDigest:string}[];}
 export interface WorkspaceOperatorGrant {
   projectRoot:string;referenceFiles:string[];owners:{ontology:string;harness:string};
-  calls:WorkspaceCall[];expiresAt:string;
+  calls:WorkspaceCall[];expiresAt:string;online?:WorkspaceOnlineGrant;
 }
 export interface WorkspaceOperatorConfiguration {
   schema:'runtime-workspace-operator/v1';
@@ -18,6 +19,7 @@ export interface WorkspaceOperatorConfiguration {
   specificationDigest:string;connectionRef:string;owners:WorkspaceOperatorGrant['owners'];
   ownerHost:{ownerConfigRef?:string;ownerConfigDigest?:string};calls:WorkspaceCall[];expiresAt:string;
   toolchainPreparationHistoryDigest?:string;
+  online?:WorkspaceOnlineGrant;
 }
 export interface WorkspaceOperatorRoutes {
   readonly definitions:Tool[];
@@ -36,13 +38,20 @@ function selectionFields(value:Record<string,unknown>):void {
   value.referenceFiles.forEach(absolute);
   const owners=record(value.owners);exact(owners,['ontology','harness']);absolute(owners.ontology);absolute(owners.harness);
   if(!Array.isArray(value.calls)||!value.calls.length||value.calls.length>WORKSPACE_CALLS.length||new Set(value.calls).size!==value.calls.length||value.calls.some(v=>!WORKSPACE_CALLS.includes(v as WorkspaceCall)))reject('WORKSPACE_OPERATOR_CONFIGURATION','Choose explicit supported workspace operations');
+  if(value.online!==undefined){
+    const online=record(value.online);exact(online,['hosts']);
+    if(!Array.isArray(online.hosts)||!online.hosts.length||online.hosts.length>64)reject('WORKSPACE_OPERATOR_CONFIGURATION','Provide explicit bounded per-project online Host bindings');
+    const connections=new Set<string>();
+    for(const value of online.hosts){const host=record(value);exact(host,['connectionRef','ownerConfigRef','ownerConfigDigest']);const connection=absolute(host.connectionRef);absolute(host.ownerConfigRef);hash(host.ownerConfigDigest);if(connections.has(connection))reject('WORKSPACE_OPERATOR_CONFIGURATION','Online Host connections must be unique');connections.add(connection);}
+  }
+  if(value.calls.some(v=>v==='online_configure'||v==='online_worker')&&value.online===undefined)reject('WORKSPACE_OPERATOR_CONFIGURATION','Online tools require an explicit per-project operator selection');
   if(!Number.isFinite(Date.parse(string(value.expiresAt))))reject('WORKSPACE_OPERATOR_CONFIGURATION','Expected an explicit operator expiry');
 }
 export function validateWorkspaceOperatorGrant(value:unknown):WorkspaceOperatorGrant {
-  const grant=record(value);exact(grant,['projectRoot','referenceFiles','owners','calls','expiresAt']);selectionFields(grant);return structuredClone(grant) as unknown as WorkspaceOperatorGrant;
+  const grant=record(value);exact(grant,['projectRoot','referenceFiles','owners','calls','expiresAt'],['online']);selectionFields(grant);return structuredClone(grant) as unknown as WorkspaceOperatorGrant;
 }
 export function readWorkspaceOperatorConfiguration(ref:string):WorkspaceOperatorConfiguration {
-  absolute(ref);const config=record(readPrivateJson(ref));exact(config,['schema','selection','specificationDigest','connectionRef','owners','ownerHost','calls','expiresAt'],['toolchainPreparationHistoryDigest']);
+  absolute(ref);const config=record(readPrivateJson(ref));exact(config,['schema','selection','specificationDigest','connectionRef','owners','ownerHost','calls','expiresAt'],['toolchainPreparationHistoryDigest','online']);
   if(config.toolchainPreparationHistoryDigest!==undefined)hash(config.toolchainPreparationHistoryDigest);
   if(config.schema!=='runtime-workspace-operator/v1')reject('WORKSPACE_OPERATOR_CONFIGURATION','Unsupported workspace operator schema');
   const selection=record(config.selection);exact(selection,['workspaceRoot','workspaceId','serviceRoot','serviceId','migrationDigest','projectRoot','referenceFiles']);

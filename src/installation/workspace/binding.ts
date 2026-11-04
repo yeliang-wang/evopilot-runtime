@@ -146,7 +146,7 @@ export async function bindPreparedWorkspace(input:WorkspaceBindingRequest,signal
         patch('legacy-adoption.json',bytes(adopted));patch('legacy-binding.json',bytes(adopted.binding));
         const specification={...originalSpec,legacyRef:path.join(request.serviceRoot,'legacy-binding.json')},legacy:LegacyPluginSelection=owner?{ownerConfigRef:request.ownerHost!.ref,ownerConfigDigest:request.ownerHost!.digest}:{};
         if(grant){
-          const config={schema:'runtime-workspace-operator/v1',selection:{...adopted.binding,projectRoot:grant.projectRoot,serviceRoot:request.serviceRoot,referenceFiles:grant.referenceFiles},specificationDigest:digest(specification),connectionRef:path.join(request.serviceRoot,'connection.json'),owners:grant.owners,ownerHost:{...legacy},calls:grant.calls,expiresAt:grant.expiresAt};
+          const config={schema:'runtime-workspace-operator/v1',selection:{...adopted.binding,projectRoot:grant.projectRoot,serviceRoot:request.serviceRoot,referenceFiles:grant.referenceFiles},specificationDigest:digest(specification),connectionRef:path.join(request.serviceRoot,'connection.json'),owners:grant.owners,ownerHost:{...legacy},calls:grant.calls,expiresAt:grant.expiresAt,...(grant.online?{online:grant.online}:{})};
           patch('workspace-operator.json',bytes(config));legacy.workspaceConfigRef=path.join(request.serviceRoot,'workspace-operator.json');legacy.workspaceConfigDigest=digest(config);
         }
         if(request.setupHost){legacy.setupConfigRef=request.setupHost.ref;legacy.setupConfigDigest=request.setupHost.digest;}

@@ -17,10 +17,11 @@
     "Original finding delivery uses authenticated independent Runtime HTTP, fixed original identity and review-required repair semantics.",
     "Runtime-owned local worker selection verifies an installed distribution and explicit existing per-project connections without creating permissions.",
     "Independent owned launchd worker uses scoped published Harness calls and the existing HTTP service, with immutable attempts, authenticated bounded loopback alerts, retained stop and original supervised recovery.",
-    "Explicit local configuration application retains original expectedDigest/requestId, verifies existing per-project grants and stopped services, journals original bytes and updates Host/plugin pins without changing permissions or starting work."
+    "Explicit local configuration application retains original expectedDigest/requestId, verifies existing per-project grants and stopped services, journals original bytes and updates Host/plugin pins without changing permissions or starting work.",
+    "Explicitly granted online_configure/online_worker Host tools retain active-session admission, offline original configuration recovery, exact original worker-attempt inspection and no automatic redispatch."
   ],
   "remaining": [
-    "Host MCP worker configuration and online-reference relocation coverage",
+    "Online-reference relocation and backup coverage",
     "Current installed candidate and complete fixed E2E"
   ]
 }
