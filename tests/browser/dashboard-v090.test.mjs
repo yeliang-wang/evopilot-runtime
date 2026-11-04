@@ -104,6 +104,23 @@ test('interrupted monitor transport recovers by readback without changing stages
  await page.unroute('**/api/v1/dashboard/monitor*');await page.unroute('**/api/v1/dashboard/events*');await expect(page.getByLabel('生命周期实例',{exact:true})).toHaveValue(instance.id);await expect(page.locator('.connection.online')).toBeVisible();await expect(page.locator('tbody .status.PENDING')).toHaveCount(8);expect(f.controls.dispatches).toBe(0);
 });
 
+test('actual offline monitor synchronizes its status, preserves the exact snapshot and recovers without writes',async({page})=>{
+ test.setTimeout(60000);await f.activate();const instance=await f.createInstance(),before=await f.call('lifecycle.definition.inspect'),responses=[],writes=[];
+ page.on('response',response=>{if(new URL(response.url()).pathname==='/api/v1/dashboard/monitor'&&response.status()===200)responses.push(response);});
+ page.on('request',request=>{if(new URL(request.url()).pathname==='/api/v1/dashboard/request'&&request.method()==='POST'&&request.postDataJSON()?.requestId)writes.push(request.postDataJSON());});
+ await login(page,'/monitor','reader');await expect(page.locator('.connection.online')).toBeVisible();await expect(page.getByLabel('生命周期实例',{exact:true})).toHaveValue(instance.id);
+ const strip=page.locator('.monitor-strip'),identity=()=>strip.evaluate(element=>({projectId:element.dataset.projectId,revision:element.dataset.snapshotRevision,observedAt:element.dataset.snapshotObservedAt}));
+ const verifyOriginalSnapshot=async()=>{const actual=await identity(),originals=await Promise.all(responses.map(response=>response.json()));expect(originals.some(({result})=>result.projectId===actual.projectId&&String(result.revision)===actual.revision&&result.observedAt===actual.observedAt)).toBe(true);expect(actual.projectId).toBe('alpha');expect(actual.revision).toBe(String(before.revision));return actual;};
+ await verifyOriginalSnapshot();const originalStages=await page.locator('tbody').innerText();
+ await page.context().setOffline(true);
+ try{
+  await expect(page.locator('.connection.offline')).toBeVisible({timeout:15000});await expect(strip).toContainText('实时连接中断');await expect(strip).not.toContainText('实时连接已建立');await expect(page.getByRole('alert')).toContainText('Runtime 服务暂时无法连接');
+  await expect(page.getByLabel('生命周期实例',{exact:true})).toHaveValue(instance.id);expect(await page.locator('tbody').innerText()).toBe(originalStages);await verifyOriginalSnapshot();await expect(source(page)).toHaveCount(0);
+ }finally{await page.context().setOffline(false);}
+ await expect(page.locator('.connection.online')).toBeVisible({timeout:15000});await expect(strip).toContainText('实时连接已建立');await expect(strip).not.toContainText('实时连接中断');await expect(page.getByRole('alert')).toHaveCount(0);
+ await verifyOriginalSnapshot();expect(await page.locator('tbody').innerText()).toBe(originalStages);expect((await f.call('lifecycle.definition.inspect')).revision).toBe(before.revision);expect(writes).toEqual([]);expect(f.controls.dispatches).toBe(0);
+});
+
 test('an expired actual replay cursor preserves stale state until snapshot recovery and retains its gap explanation',async({page},info)=>{
  test.setTimeout(120000);await f.activate();const original=await f.createInstance();
  const cdp=await page.context().newCDPSession(page),frames=[],actions=[],requests=[];let outcome='RUNNING';await cdp.send('Network.enable');

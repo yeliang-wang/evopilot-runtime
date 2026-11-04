@@ -6,12 +6,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {parseDocument} from 'yaml';
+import {chromium,expect} from '@playwright/test';
 import {openScenario,sha} from './support.mjs';
+import {collectInstalledBaseUpgrade} from './maintenance.mjs';
+import {openBrowser} from './browser.mjs';
 
 const missing={
  'E05.journey':'Requires actual changed-candidate rebuild/revalidation and rejection of old evidence, in addition to immutable definition pins.',
  'E05.variant.02':'Requires an actual RC-named candidate action with missing artifact evidence; predecessor-only rejection is insufficient.',
- 'E05.EX10':'Requires publisher-produced alternate Base distributions for added fields, removed slots, tightened thresholds, old schema and rollback; mutating the installed Base is forbidden.',
  'E05.EX11':'Requires actual added Harness obligations/evaluation and attempted removal after failure; draft-only checks do not prove this contract.',
  'E05.CV06':'Requires actual published-owner REUSE and DELIVER decisions, expiration/scope/known-defect variants and partial feedback recovery.',
 };
@@ -19,12 +21,14 @@ const missing={
 test('E05 installed revision isolation and actual candidate evidence',async()=>{
  const run=await openScenario('E05');let serial=0;
  try{
-  const cfg=run.selection.revisionEvolution;
-  assert(cfg&&Object.keys(cfg).sort().join(',')==='allowSyntheticDecisions,instanceId');
-  assert.equal(cfg.allowSyntheticDecisions,true,'Native synthetic test decisions must be explicitly selected, never inferred as human authority');
-  assert(/^[a-z0-9][a-z0-9-]{0,63}$/.test(cfg.instanceId));
-  const baseline=(await run.read('lifecycle.instance.inspect',{instanceId:cfg.instanceId})).instance;
-  assert.equal(baseline.pins.projectId,run.selection.projectId);
+  const cfg=run.selection.revisionEvolution;let baseline;
+  if(run.cases.some(c=>c.caseInstanceId!=='E05.EX10')){
+   assert(cfg&&Object.keys(cfg).sort().join(',')==='allowSyntheticDecisions,instanceId');
+   assert.equal(cfg.allowSyntheticDecisions,true,'Native synthetic test decisions must be explicitly selected, never inferred as human authority');
+   assert(/^[a-z0-9][a-z0-9-]{0,63}$/.test(cfg.instanceId));
+   baseline=(await run.read('lifecycle.instance.inspect',{instanceId:cfg.instanceId})).instance;
+   assert.equal(baseline.pins.projectId,run.selection.projectId);
+  }
   // A quiescent in-flight instance permits exact comparisons without racing an
   // authorized worker. Already closed instances cannot qualify MC05/EX09.
   const inFlight=()=>{
@@ -140,6 +144,7 @@ test('E05 installed revision isolation and actual candidate evidence',async()=>{
    return{addedAndRemovedDraftChecks:true,layoutAndCommentsPreserved:true,semanticAndPresentationDigestsSeparate:true,oneConcurrentWriterRejected:true,oldInstanceAndActiveUnchanged:true,newCheckNotActivated:true};
   }
   for(const c of run.cases)await run.collect(c,async()=>{
+   if(c.caseInstanceId==='E05.EX10')return collectInstalledBaseUpgrade(run,c,{chromium,expect,openBrowser});
    if(missing[c.caseInstanceId])assert.fail('UNIMPLEMENTED_FIXED_CASE: '+missing[c.caseInstanceId]);
    if(c.caseInstanceId==='E05.variant.01')return nonRc();
    if(c.caseInstanceId==='E05.variant.03')return latest(c);

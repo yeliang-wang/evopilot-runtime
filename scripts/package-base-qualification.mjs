@@ -51,7 +51,12 @@ try{
  change('package-lock.json',text=>{const value=JSON.parse(text);assert.equal(value.version,profile.sourceVersion);assert.equal(value.packages[''].version,profile.sourceVersion);value.version=profile.qualificationVersion;value.packages[''].version=profile.qualificationVersion;return JSON.stringify(value,null,2)+'\n';});
  change('plugins/codex/.codex-plugin/plugin.json',text=>{const value=JSON.parse(text);assert.equal(value.version,profile.sourceVersion);value.version=profile.qualificationVersion;return JSON.stringify(value,null,2)+'\n';});
  const qualification={schema:'runtime-base-qualification-build/v1',classification:profile.classification,officialRelease:false,sourceCommit:commit,sourceArchiveSha256:sha(archive),profileSha256:sha(profileBytes),qualificationVersion:profile.qualificationVersion,basePin:JSON.parse(fs.readFileSync(path.join(checkout,manifestPath))).bases[0],changedSource:changed,dailyInstallationAllowed:false,releaseAuthorized:false};
- write(path.join(checkout,'QUALIFICATION.json'),qualification);write(path.join(staging,'qualification-plan.json'),qualification);
+ write(path.join(checkout,'QUALIFICATION.json'),qualification);
+ // This byte-pinned metadata belongs to the private test package, with the
+ // same non-executable mode as its standalone inventory. The enclosing test
+ // tree and the separate operator preparation records remain private.
+ fs.chmodSync(path.join(checkout,'QUALIFICATION.json'),0o644);
+ write(path.join(staging,'qualification-plan.json'),qualification);
  command('npm',['ci','--offline','--ignore-scripts','--no-audit','--no-fund','--userconfig=/dev/null'],checkout,path.join(staging,'dependencies.json'));
  command(process.execPath,['scripts/build.mjs'],checkout,path.join(staging,'build.json'));
  const packResult=command('npm',['pack','--ignore-scripts','--json','--pack-destination',staging,'--userconfig=/dev/null'],checkout,path.join(staging,'pack.json')),records=JSON.parse(packResult.toString());assert.equal(records.length,1);

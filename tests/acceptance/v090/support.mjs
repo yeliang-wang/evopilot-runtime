@@ -32,7 +32,14 @@ export async function openScenario(scenario){
  const selectionRef=process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;
  assert(selectionRef,'Set EVOPILOT_V090_ACCEPTANCE_SELECTION to a protected, explicit isolated candidate selection');
  const selection=JSON.parse(readRegular(selectionRef,131072,true));
- keys(selection,['schema','installedRoot','expectedManifestDigest','connectionRef','workspaceId','projectId','runId','outputRoot','qualification'],['caseIds','codexHost','packageCompatibility','expertConfiguration','lifecycleExecution','browserConfiguration','extensionConfiguration','revisionEvolution','principals','monitorConfiguration','maintenance','legacyCompatibility']);
+ keys(selection,['schema','installedRoot','expectedManifestDigest','connectionRef','workspaceId','projectId','runId','outputRoot','qualification'],['caseIds','codexHost','packageCompatibility','expertConfiguration','lifecycleExecution','browserConfiguration','extensionConfiguration','revisionEvolution','principals','monitorConfiguration','maintenance','legacyCompatibility','serviceUpgrade','performanceConfiguration','ciAuthority']);
+ if(selection.ciAuthority){assert.equal(scenario,'E18');keys(selection.ciAuthority,['ref','sha256']);assert(/^[a-f0-9]{64}$/.test(selection.ciAuthority.sha256));assert.equal(sha(readRegular(selection.ciAuthority.ref,1048576,true)),selection.ciAuthority.sha256);}
+ if(selection.performanceConfiguration){assert.equal(scenario,'E19');keys(selection.performanceConfiguration,['allowSyntheticInventory','permissionLossTimeoutMs']);assert.equal(selection.performanceConfiguration.allowSyntheticInventory,true);assert.equal(selection.performanceConfiguration.permissionLossTimeoutMs,60000);}
+ if(selection.serviceUpgrade){
+  assert(['E05','E17'].includes(scenario));keys(selection.serviceUpgrade,['root','casePlans']);canonicalPath(path.dirname(selection.serviceUpgrade.root));assert(path.isAbsolute(selection.serviceUpgrade.root)&&path.resolve(selection.serviceUpgrade.root)===selection.serviceUpgrade.root);
+  const entries=Object.entries(selection.serviceUpgrade.casePlans);assert(entries.length===1,'One independently owned upgrade case per scenario campaign');
+  for(const [id,item]of entries){assert.equal(id,scenario+'.EX10');keys(item,['sourcePlanRef','sourcePlanSha256','destinationPlanRef','destinationPlanSha256','originalYamlRef','originalYamlSha256','correctedYamlRef','correctedYamlSha256','qualificationRef','qualificationSha256','instanceId','allowSyntheticDecisions']);assert.equal(item.allowSyntheticDecisions,true);assert(/^[a-z0-9][a-z0-9-]{0,63}$/.test(item.instanceId));for(const key of ['sourcePlan','destinationPlan','originalYaml','correctedYaml','qualification']){assert(/^[a-f0-9]{64}$/.test(item[key+'Sha256']));assert.equal(sha(readRegular(item[key+'Ref'],262144,true)),item[key+'Sha256']);}}
+ }
  if(selection.maintenance){
   assert.equal(scenario,'E14');keys(selection.maintenance,['root','casePlans']);assert.equal(typeof selection.maintenance.root,'string');
   assert(path.isAbsolute(selection.maintenance.root)&&path.resolve(selection.maintenance.root)===selection.maintenance.root);canonicalPath(path.dirname(selection.maintenance.root));
@@ -40,7 +47,7 @@ export async function openScenario(scenario){
   for(const [id,item]of entries){assert(/^E14\.(journey|variant\.0[1-4])$/.test(id));keys(item,['planRef','planSha256','codexHome']);assert(/^[a-f0-9]{64}$/.test(item.planSha256));assert.equal(sha(readRegular(item.planRef,131072,true)),item.planSha256);assert.equal(item.codexHome,path.join(selection.maintenance.root,id,'codex'));}
  }
  if(selection.legacyCompatibility){assert.equal(scenario,'E15');keys(selection.legacyCompatibility,['ref','sha256']);assert(/^[a-f0-9]{64}$/.test(selection.legacyCompatibility.sha256));assert.equal(sha(readRegular(selection.legacyCompatibility.ref,131072,true)),selection.legacyCompatibility.sha256);}
- if(selection.browserConfiguration){assert(['E04','E06','E07','E12'].includes(scenario));keys(selection.browserConfiguration,['allowServiceRestart']);assert.equal(typeof selection.browserConfiguration.allowServiceRestart,'boolean');}
+ if(selection.browserConfiguration){assert(['E04','E05','E06','E07','E12','E17','E19'].includes(scenario));keys(selection.browserConfiguration,['allowServiceRestart']);assert.equal(typeof selection.browserConfiguration.allowServiceRestart,'boolean');}
  if(selection.monitorConfiguration){assert.equal(scenario,'E07');keys(selection.monitorConfiguration,[],['instanceId','allowReplayWindowExercise']);if(selection.monitorConfiguration.instanceId!==undefined)assert(/^[a-z0-9][a-z0-9-]{0,63}$/.test(selection.monitorConfiguration.instanceId));if(selection.monitorConfiguration.allowReplayWindowExercise!==undefined)assert.equal(selection.monitorConfiguration.allowReplayWindowExercise,true);}
  if(selection.extensionConfiguration){assert.equal(scenario,'E04');keys(selection.extensionConfiguration,['yamlRef','yamlSha256']);assert.equal(typeof selection.extensionConfiguration.yamlRef,'string');assert(/^[a-f0-9]{64}$/.test(selection.extensionConfiguration.yamlSha256));}
  if(selection.revisionEvolution){assert.equal(scenario,'E05');keys(selection.revisionEvolution,['instanceId','allowSyntheticDecisions']);assert.equal(typeof selection.revisionEvolution.instanceId,'string');assert.equal(selection.revisionEvolution.allowSyntheticDecisions,true);}
@@ -69,7 +76,7 @@ export async function openScenario(scenario){
  const permissions=rolePermissions[plan.role];assert(permissions);
  named.set('default',{connection,connectionRef:selection.connectionRef,expectedPermissions:permissions});
  if(selection.principals){
-  assert(['E07','E12'].includes(scenario));assert(selection.principals&&typeof selection.principals==='object'&&!Array.isArray(selection.principals));assert(Object.keys(selection.principals).length>0&&Object.keys(selection.principals).length<=8);
+  assert(['E07','E12','E19'].includes(scenario));assert(selection.principals&&typeof selection.principals==='object'&&!Array.isArray(selection.principals));assert(Object.keys(selection.principals).length>0&&Object.keys(selection.principals).length<=8);
   for(const [alias,item]of Object.entries(selection.principals)){
    assert(/^[a-z][a-z0-9-]{0,31}$/.test(alias)&&alias!=='default');keys(item,['connectionRef','connectionSha256','principalId','projectId','expectedPermissions']);assert(/^[a-f0-9]{64}$/.test(item.connectionSha256));assert.equal(sha(readRegular(item.connectionRef,131072,true)),item.connectionSha256);
    const conn=readHostConnection(item.connectionRef);for(const key of ['origin','serviceId','workspaceId','version'])assert.equal(conn[key],connection[key],'Named principal must use this exact installed service');assert.equal(conn.principalId,item.principalId);assert.equal(conn.projectId,item.projectId);
@@ -91,8 +98,8 @@ export async function openScenario(scenario){
  // Candidate identity is the immutable package, not a particular test service
  // or Workspace. Different scenario installations must share this identity.
  const candidateDigest='sha256:'+selection.expectedManifestDigest;
- const collectorPins=Object.fromEntries(['support.mjs',scenario.toLowerCase()+'.test.mjs',...(['E04','E06','E07','E12'].includes(scenario)?['browser.mjs']:[]),...(['E14','E15'].includes(scenario)?['maintenance.mjs']:[])].map(name=>[name,sha(fs.readFileSync(new URL(name,import.meta.url)))]));
- write('selection.json',{scenario,qualification:selection.qualification,candidate,candidateDigest,collectorPins,matrixDigest:sha(matrixBytes),selectedCaseIds:selectedIds,scenarioDenominator:all.length,fullDenominator:matrix.count,sourceQualification:'SEPARATE_E20_OBLIGATION',...(selection.principals?{principalConnections:selection.principals}:{}),...(selection.maintenance?{maintenance:selection.maintenance}:{}),...(selection.legacyCompatibility?{legacyCompatibility:selection.legacyCompatibility}:{})});
+ const collectorPins=Object.fromEntries(['support.mjs',scenario.toLowerCase()+'.test.mjs',...(['E04','E05','E06','E07','E12','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[])].map(name=>[name,sha(fs.readFileSync(new URL(name,import.meta.url)))]));
+ write('selection.json',{scenario,qualification:selection.qualification,candidate,candidateDigest,collectorPins,matrixDigest:sha(matrixBytes),selectedCaseIds:selectedIds,scenarioDenominator:all.length,fullDenominator:matrix.count,sourceQualification:'SEPARATE_E20_OBLIGATION',...(selection.principals?{principalConnections:selection.principals}:{}),...(selection.maintenance?{maintenance:selection.maintenance}:{}),...(selection.legacyCompatibility?{legacyCompatibility:selection.legacyCompatibility}:{}),...(selection.serviceUpgrade?{serviceUpgrade:selection.serviceUpgrade}:{}),...(selection.performanceConfiguration?{performanceConfiguration:selection.performanceConfiguration}:{}),...(selection.ciAuthority?{ciAuthority:selection.ciAuthority}:{})});
  let sequence=0,currentCase=null,uncertain=false,hostSequence=0;
  const evidence=[],results=[];
  async function request(operation,input={},meta={}){return principalRequest('default',operation,input,meta);}
@@ -172,12 +179,12 @@ export async function openScenario(scenario){
   const item={caseInstanceId:currentCase,artifact:ref,fileDigest:sha(bytes),mimeType:'image/png'};evidence.push(item);return item;
  }
  function traceArtifact(bytes){
-  assert(['E02','E04','E06'].includes(scenario));assert(Buffer.isBuffer(bytes)&&bytes.length<=16777216);assert.equal(bytes.readUInt32LE(0),0x04034b50);
+  assert(['E02','E04','E05','E06','E17','E19'].includes(scenario));assert(Buffer.isBuffer(bytes)&&bytes.length<=16777216);assert.equal(bytes.readUInt32LE(0),0x04034b50);
   const ref=String(++sequence).padStart(5,'0')+'-browser-trace.zip';fs.writeFileSync(path.join(selection.outputRoot,ref),bytes,{mode:0o600,flag:'wx'});
   const item={caseInstanceId:currentCase,artifact:ref,fileDigest:sha(bytes),mimeType:'application/zip'};evidence.push(item);return item;
  }
  async function browserCode(alias='default'){
-  assert(['E02','E03','E04','E06','E07','E10','E12'].includes(scenario));
+  assert(['E02','E03','E04','E05','E06','E07','E10','E12','E17','E19'].includes(scenario));
   const chosen=selectedPrincipal(alias);
   const args=[path.join(selection.installedRoot,'package/dist/server/cli.js'),'browser-code','--connection-ref',chosen.connectionRef];
   const result=await new Promise(resolve=>execFile(plan.nodeExecutable,args,{timeout:20000,maxBuffer:16384,encoding:'utf8'},(error,stdout,stderr)=>resolve({exitCode:error?error.code:0,signal:error?.signal??null,stdout,stderr})));
@@ -328,6 +335,8 @@ export async function openScenario(scenario){
    for(const item of Object.values(selection.principals??{}))assert.equal(sha(readRegular(item.connectionRef,131072,true)),item.connectionSha256,'Named principal connection changed during execution');
    for(const item of Object.values(selection.maintenance?.casePlans??{}))assert.equal(sha(readRegular(item.planRef,131072,true)),item.planSha256,'Reviewed maintenance plan changed during execution');
    if(selection.legacyCompatibility)assert.equal(sha(readRegular(selection.legacyCompatibility.ref,131072,true)),selection.legacyCompatibility.sha256,'Reviewed legacy compatibility selection changed during execution');
+   if(selection.ciAuthority)assert.equal(sha(readRegular(selection.ciAuthority.ref,1048576,true)),selection.ciAuthority.sha256,'Reviewed CI/authority selection changed during execution');
+   for(const item of Object.values(selection.serviceUpgrade?.casePlans??{}))for(const key of ['sourcePlan','destinationPlan','originalYaml','correctedYaml','qualification'])assert.equal(sha(readRegular(item[key+'Ref'],262144,true)),item[key+'Sha256'],'Reviewed service upgrade input changed during execution');
    const missing=all.filter(c=>!results.some(r=>r.caseInstanceId===c.caseInstanceId)).map(c=>c.caseInstanceId),passed=results.filter(r=>r.status==='PASS').length;
    const report={scenario,candidate,candidateDigest,selectionDigest:sha(fs.readFileSync(path.join(selection.outputRoot,'selection.json'))),qualification:selection.qualification,scenarioDenominator:all.length,fullDenominator:matrix.count,selected:cases.length,executed:results.length,passed,failed:results.length-passed,unexecutedCaseIds:missing,scenarioStatus:missing.length||passed!==all.length?'INCOMPLETE':'OBSERVED_PASS',productAcceptance:'NOT_EVALUATED',releaseAuthorized:false,dailyInstallationChanged:false,setupEvidence:evidence.filter(e=>e.caseInstanceId===null),results};
    write('REPORT.json',report);return report;

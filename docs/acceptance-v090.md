@@ -84,6 +84,34 @@ synthetic UI presentation and this package's construction do not themselves
 satisfy E05.EX10 or E17.EX10; those collectors still need the exact installed
 candidate, native migration and original browser/recovery evidence.
 
+The installed EX10 collectors select one independent `serviceUpgrade` campaign
+per scenario. Protected references pin both installation plans, the original and
+corrected YAML, and the predecessor qualification record. An explicit synthetic
+operator creates an active definition and a PENDING instance through native
+APIs; no lifecycle stage runs. The collector stops A, migrates with B's installer,
+checks all four incompatibility classes in the actual browser, explicitly fixes
+and activates the new definition, and rolls back after preserving B's new
+evidence. Original pins, receipts, source bytes and extensions must remain intact.
+E17's historical-format migration and all-entry coverage are separate cases;
+passing EX10 does not close them. Use the standalone archive's exact bytes and
+file modes for the installer bootstrap, rather than an unverified packing tree.
+
+E19 uses a separate synthetic project with 51 or more native-authorized PENDING
+instances, an empty-project reader and a dedicated initially valid reader whose
+access is removed by the isolated test operator. Its collector writes 1,000
+distinct revisions and 10,000 original events through serial native API calls;
+bounded batches retain every original request and response without direct
+database seeding. Twenty samples each measure first-summary and event-to-page
+latency, retaining the fixed p95 limits of 2 and 5 seconds, the 15-second
+disconnect indication and 50-item/256-KiB page limits. Synthetic inventory and
+controlled UI faults are labeled; missing fixtures, unknown writes and failed
+thresholds cannot qualify the scenario.
+
+EX10 每个场景使用独立的新目录和精确安装计划，通过原生 API 建立合成 PENDING
+实例，再执行迁移、实际页面校验／修正及回退。它不执行业务阶段，也不能代替 E17
+的其他固定用例。E19 的库存、授权实例与权限变化同样限定在独立合成项目中；
+采样保留原始请求、响应与浏览器观测，不能以直接写库、模拟响应或放宽阈值算通过。
+
 Set `EVOPILOT_V090_ACCEPTANCE_SELECTION` to a protected JSON file containing
 `schema: runtime-v090-acceptance-selection/v1`, `installedRoot`,
 `expectedManifestDigest`, `connectionRef`, `workspaceId`, `projectId`, `runId`,
