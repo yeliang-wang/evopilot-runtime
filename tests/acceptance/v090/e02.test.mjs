@@ -99,7 +99,10 @@ test('E02 actual installed GitLab lifecycle with external Codex and native owner
    await mutate('lifecycle.authority.record',{kind:'release',subject:releaseSubject,reviewDigest:releaseReview.reviewDigest,decision:'APPROVE',evidenceRef:releaseEvidence},'test-release-decision');await advance(ids['release-decision'],'release-decision-finish');await complete(ids['release-decision']);
    ids.publication=await stage(instanceId,'publication');await until('lifecycle.publication.evidence.read',{stageRequestId:ids.publication},r=>r.evidence?.artifact?.status==='PASSED','test publication original artifact');await advance(ids.publication,'publication-native');await complete(ids.publication);
    ids.closure=await stage(instanceId,'closure');await until('lifecycle.closure.evidence.read',{stageRequestId:ids.closure},r=>r.evidence?.smoke?.status==='PASSED','original distribution smoke');await advance(ids.closure,'closure-native');
-   const pendingFeedback=await run.read('lifecycle.closure.evidence.read',{stageRequestId:ids.closure});assert.equal(pendingFeedback.evidence.harness.status,'PASS');for(const owner of ['ontology','harness'])assert.equal(pendingFeedback.evidence.feedback[owner].status,'REVIEW_REQUIRED');assert.equal(pendingFeedback.archiveAction,null);
+   // Advance acknowledges scheduling. Observe its original asynchronous owner
+   // action and feedback delivery; never infer completion from that receipt or
+   // issue another advance while it is running.
+   const pendingFeedback=await until('lifecycle.closure.evidence.read',{stageRequestId:ids.closure},r=>r.evidence.harness.status==='PASS'&&['ontology','harness'].every(owner=>r.evidence.feedback[owner].status==='REVIEW_REQUIRED'),'original closure native action and feedback');assert.equal(pendingFeedback.archiveAction,null);
    await service('stop');
    for(const owner of ['ontology','harness']){
     const api=await import(pathToFileURL(path.join(fixture.packageRoots[owner],'dist/service.js')).href);
