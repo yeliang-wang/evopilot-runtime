@@ -1489,9 +1489,13 @@ the same owned journal. An existing journal never authorizes another dispatch.
 Compiled CLI, migrated HTTP and local stdio development probes exercise actual
 published owner validation and isolated Node execution with explicitly synthetic
 source, assets and decisions. They grant no real-project or product acceptance.
-Original online collection/worker and reconstruction provider composition,
-complete maintenance mapping and exact-candidate E15 qualification remain
-separate unfinished work.
+Original online collection, the independent worker and stopped maintenance
+mapping now have Runtime-owned implementations and isolated installed development
+evidence. Optional reconstruction adapters are available through Runtime's typed
+`reconstruction-adapters` entry; they remain explicitly supplied trusted providers,
+with original plan, isolation, budget and receipt rules. Default service startup
+does not register a builder. Exact installed-candidate E15 qualification remains
+separate from these development checks.
 
 Registered original feedback reads the retained Runtime event through the same
 managed gateway, then uses each published owner's public feedback API. It keeps

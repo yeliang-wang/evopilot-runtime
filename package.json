@@ -38,6 +38,10 @@
     "./online": {
       "types": "./dist/online.d.ts",
       "import": "./dist/online.js"
+    },
+    "./reconstruction-adapters": {
+      "types": "./dist/reconstruction-adapters.d.ts",
+      "import": "./dist/reconstruction-adapters.js"
     }
   },
   "scripts": {

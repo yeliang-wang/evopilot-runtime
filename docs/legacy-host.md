@@ -64,14 +64,14 @@ during the authenticated receiver's original ingestion callback. Finding deliver
 uses the same authenticated Runtime HTTP service and original finding request
 identity; Runtime independently reads the Harness finding. The resulting repair
 candidate requires review and grants no code-change, asset or release authority.
-This adapter does not itself implement the local configuration workflow or
-supervised worker lifecycle; those remain separate v0.9 compatibility work.
+This adapter delegates local configuration and the supervised worker lifecycle
+to the separate Runtime-owned operator entry points documented below.
 
 受保护的 owner Host 配置可绑定准确的 `online` 配置引用及摘要，复用原有配置格式。
 发现入口不读取密钥、不采集指标，也不自动选中监测绑定。实际采集、告警认证与评定
 由已发布 Harness 0.8.3 提供；配置、权限或发行字节变化会阻止继续使用。告警反馈经
 同一 Runtime HTTP 服务形成待审阅候选，不授权修改代码或发布。配置工作流及独立
-worker 生命周期仍是另外的兼容实现义务，不能用适配器测试替代。
+worker 由下文的 Runtime 操作入口负责，其实际验收不能用适配器单测替代。
 
 ## Definition and operation boundaries
 
@@ -782,3 +782,42 @@ worker or applying configuration again.
 路径及其摘要：内部凭据随目录迁移，外部引用保持原位置，各项目权限和有效期不变。
 尚未绑定 Host 的旧在线配置也可迁移，但不会因此新增授权或启动监控。原位置的历史
 记录和 worker 尝试保留；迁移后需要明确启动 Runtime、重连插件并选择启动新的 worker。
+
+## Optional reconstruction adapters
+
+`@evopilot-next/runtime/reconstruction-adapters` owns the original typed
+`createLocalReconstructionAdapter` and `createCodexReconstructionAdapter`
+interfaces, their descriptor functions, bounded state storage and exact original
+recovery readers. They no longer import or execute parent EvoPilot code.
+Importing this entry starts no worker, model or storage. These remain trusted
+programmatic providers, as in the 0.8.3 baseline; the default service and plugin
+do not register a builder, and request JSON cannot supply executable callbacks.
+
+The original `ReconstructionProviders` contract requires a current exact plan
+verifier, a specification-input resolver and, when equivalence evidence is
+requested, an independent observation callback. A generated file bundle or a
+successful build is not that observation. The existing Runtime plan, concrete
+decision, cumulative budget, claim and receipt remain authoritative. The
+managed HTTP compatibility gateway can receive these trusted providers during
+service composition; stdio and owner evidence reads then use that same writer.
+No new LLM profile, autonomous loop or automatic reconstruction is introduced.
+
+The offline adapter uses the pinned Node interpreter and an actual deny-by-default
+macOS sandbox. The external Codex adapter retains its explicitly supported
+historical Codex version and fixed no-tool generation policy; it uses the selected
+Host authentication context, without copying credentials into Runtime. Another
+Host version is not implicitly compatible. Unknown token usage or charges remain
+unknown, and an applicable hard budget cannot pass without its required data.
+
+Each attempt retains its original directory, process identity, input pins,
+output and trace digests. A controller exit does not authorize another attempt.
+Reconcile the original claim after interruption; unknown worker or storage
+cleanup stays unknown. The forensic pre-storage recovery API remains restricted
+to its exact historical module hashes and evidence, and cannot certify arbitrary
+crashes. Historical request paths and receipts are not rewritten on relocation.
+
+可选重建适配器现归 Runtime 独立包所有，仍按旧版方式由可信程序组合显式提供。
+导入包或连接 MCP 不会自动配置模型、启动重建，普通请求也不能注入执行函数。
+必须保留原计划、具体决定、累计预算和原始回执；生成或构建成功不能替代独立观察。
+离线适配器与外部 Codex 适配器保留原隔离规则，其他 Host 版本不能自动视为兼容。
+中断后核对原 claim，不重复派发；未知用量、未知进程结果和未知挂载清理均如实保留。

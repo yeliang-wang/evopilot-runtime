@@ -1,0 +1,28 @@
+{
+  "schema": "runtime-reconstruction-adapters-provenance/v1",
+  "sourceRepository": "https://github.com/yeliang-wang/evopilot",
+  "sourceCommit": "c24aace7a0e73e41323d3bbb044924070e1595f1",
+  "releaseBaseline": "0.8.3",
+  "license": "Apache-2.0",
+  "runtimeDependencyOnParent": false,
+  "referenceSources": {
+    "integration/usability/codex-reconstruction.ts": "00d277e35e11bbce752672035619e30102c52636d6fb13320406d4d1163ed4a6",
+    "integration/usability/codex-recovery.ts": "dea1130d63ff3feba6934f7849d43d897c575d5034253718643f1533af3a853d",
+    "integration/usability/reconstruction-worker.ts": "2d680c6c6ffc3776e8c00b8f1d5a4a8faf5a5f4fcd7519de13a7c085ea67fe67",
+    "integration/usability/codex-storage.ts": "1a150969426a1031d6b63867a7dd2ba056cbb478360f12fbcb3fb553eb1492cd",
+    "integration/usability/codex-stage.ts": "632bdf2d01ccd460b510704a6779003ce014b4cd2d9d8e6bbf1bcf5c6c1a235a",
+    "integration/usability/codex-state-phase.ts": "9ce0170215485103569622db5c50d7afe680bef163905d8692485ee27a0d9b2d",
+    "integration/usability/local-reconstruction.ts": "bdbf97f7c53a6541a923467fe247eb505d6400a7a2ea49e7eb54712997229b88",
+    "integration/usability/codex-worker.ts": "00848ed691ead0c7e99851ace2ba4d32b77cd06758a8afe7df9a012fff0dd53c",
+    "integration/usability/codex-generation.ts": "041832641096ac3bcdb1f70ce40649ef8bd230c3843c11bd8e89648dd88d8376"
+  },
+  "migration": [
+    "Original typed local offline and external Codex adapters, state isolation, process recovery and immutable receipt readers now belong to Runtime.",
+    "Imports resolve to Runtime-owned core and frozen compatible contracts. The state child receives the same canonical home explicitly rather than an ambient HOME value.",
+    "Codex protocol identification uses the independent Runtime 0.9 client version; the original explicitly pinned Codex compatibility version and model restrictions remain unchanged."
+  ],
+  "remaining": [
+    "Independent package, HTTP single-writer and original owner-evidence compatibility qualification",
+    "Complete fixed candidate-bound acceptance"
+  ]
+}
