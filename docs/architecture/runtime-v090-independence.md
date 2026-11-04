@@ -1627,3 +1627,47 @@ installation or release. Run it after build using
 `node node_modules/@playwright/test/cli.js test --config
 tests/browser/dashboard-v090.config.mjs`; optional `EVOPILOT_BROWSER_OUTPUT` keeps
 screenshots/traces in a private evidence directory.
+
+## User-requested v0.9 addendum: token usage and Base-stage reports
+
+The [token usage contract](../../governance/token-usage-v090.json) is an additive
+part of this Runtime release. Runtime owns collection, attribution, ledger,
+aggregation, snapshots and its own Expert presentation. Parent navigation,
+Ontology and Harness do not provide or validate these statistics. No third page,
+LLM profile, currency estimate, quality score or budget gate is introduced.
+
+Use the existing eight Base stage IDs and actual lifecycle instances. Each usage
+record binds the project, target version, instance, stage, task and attempt, with
+source identity and explicit parent/fork lineage. A project extension keeps its
+own detail and an explicit Base-stage reporting assignment. Parallel tasks and
+later versions require explicit bindings; neither current stage nor timestamp
+alone can determine ownership. Historical unbound usage remains unclassified or
+outside the declared coverage, rather than silently acquiring a guessed stage.
+
+The Codex adapter must read explicitly registered Host usage sources without
+model credentials or unrelated prompt retention. Actual source semantics govern
+cumulative deltas, duplicate/out-of-order events, resets, forks and subagents.
+Cached input and reasoning output are subsets when the source declares them so;
+they are not added again. Missing metrics remain null. A partial report says
+“recorded consumption”; it cannot claim a complete version total. Unsupported
+Host capabilities are reported and are not filled in with temporary scripts.
+
+Stage completion queues an idempotent report after the lifecycle result commits.
+In-progress queries are also supported. Publication emits its cumulative report;
+closure emits the final report including post-publication work. Reporting errors
+are retained and recover independently: they cannot fail a stage, change release
+authority, reset a budget or redispatch external work. Persistent cutoffs and
+source ledger positions make snapshots reproducible. Late observations produce
+new report revisions while prior snapshots remain immutable.
+
+Reports aggregate the raw ledger once and expose Base-stage totals/shares,
+project/Target/task, work type, model and main/subagent views through native CLI,
+HTTP MCP, Runtime Expert, Markdown and JSON. Different views are not totals to
+add together. Repeated cumulative reports are never summed. Backup, restore and
+restart preserve source cursors, attribution, deduplication and report revisions.
+
+Original acceptance remains 664 instances. UT01–UT24 add 24 required engineering
+instances, including actual installed Codex capture and publication/closure
+reporting. The combined release obligation is 688 instances: 678 before release
+and 10 after release. This addition is implementation scope, not completed
+functionality or evidence that any acceptance instance has passed.

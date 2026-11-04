@@ -1,8 +1,26 @@
 # Runtime roadmap
 
-Current edition: [RUN-F05 / v0.7 explainable workflow state and maintenance](#run-f05-v07-explainable-workflow-state-and-maintenance). Implemented for the v0.7 edition; exact publication and download records remain on the versioned Release page.
+Current evolution: Runtime v0.9 independent lifecycle service, including the
+[token usage addendum](../governance/token-usage-v090.json). Implementation and
+acceptance are separate; exact publication records remain on the Release page.
 
-Runtime owns project execution, decisions, durable claims, receipts and audit. Ontology and Harness own their respective assets and validation; the parent composes their public package APIs and provides the Expert and Codex entry. The [parent roadmap](https://github.com/yeliang-wang/evopilot/blob/main/docs/roadmap.md) coordinates product evolution and v1.0 readiness.
+Runtime owns project execution, decisions, durable claims, receipts and audit.
+In v0.9 it also owns its Expert, HTTP MCP integration and token usage reporting.
+Ontology and Harness retain their asset responsibilities; neither participates
+in statistics. The parent becomes introduction, index and navigation. Historical
+sections below retain the earlier composition and release boundaries.
+
+The user-requested statistics addition is part of this v0.9 delivery. It binds
+usage to actual Base stages and instances, retains a source ledger across chats,
+retries and versions, and supplies stage, publication-time and closure reports
+through Runtime's own Expert, Markdown and JSON. Collection gaps remain explicit;
+report generation neither changes stage outcomes nor gates a project's release.
+No cost estimation, budget control, scoring or additional Dashboard is included.
+
+The original 64 groups / 22 scenarios / 664 instances remain required. The
+addendum contributes UT01–UT24: 23 pre-release and one current-installation check,
+for 688 total instances (678 pre-release, 10 post-release). These additional
+engineering checks do not turn statistics into a consuming-project quality gate.
 
 This document distinguishes existing behavior, historical repair, proposed work and deferred targets. A roadmap entry is not an implementation, acceptance result or release decision. Exact verification and project-specific evidence remain private and candidate-bound.
 

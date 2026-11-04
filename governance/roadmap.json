@@ -20,7 +20,7 @@
     },
     {
       "id": "M3",
-      "work": "一份Expert Skill+HTTP MCP Codex插件、统一安装器、stdio桥、两平台/双方组件接线；Codex提出受管执行请求",
+      "work": "一份Expert Skill+HTTP MCP Codex插件、统一安装器、stdio桥、两平台/双方组件接线；Codex提出受管执行请求；追加原生Token台账、Codex采集、Base阶段归属和Runtime Expert报告",
       "exit": "L02/L07–L08/L12/L14–L15、S04/S06–S08、I03、X01–X08、N03–N05/N08–N09/N12实际接线通过；实际Codex服务/Host/工具链路无Runtime LLM配置、Host离线等待及安装失败恢复通过；包含Dashboard的完整发行包E2E统一在M5验收"
     },
     {
@@ -31,15 +31,15 @@
     {
       "id": "M5",
       "work": "准确发行候选全链路、兼容/迁移回退、独立CI及双语文档",
-      "exit": "62组发布前要求、E01–E20全部通过，N14核对分母；准备准确Release与安装审阅对象；准确候选EX01–EX12全通过（含EX10升级/回退）；六项最小闭环变体全部有准确候选证据"
+      "exit": "62组发布前要求、E01–E20全部通过，N14核对分母；准备准确Release与安装审阅对象；准确候选EX01–EX12全通过（含EX10升级/回退）；六项最小闭环变体全部有准确候选证据；UT01–UT23新增工程验收通过，不能用原664项替代"
     },
     {
       "id": "M6",
       "work": "适用授权后Runtime GitHub发布、当前Codex安装部署与最终复盘",
-      "exit": "P03–P04/E21–E22通过；64组无剩余必需缺口；父站只更新导航不新发父产品版本；服务、同插件Skill及HTTP连接三项真实回读，不以仅写入配置替代安装验收"
+      "exit": "P03–P04/E21–E22通过；64组无剩余必需缺口；父站只更新导航不新发父产品版本；服务、同插件Skill及HTTP连接三项真实回读，不以仅写入配置替代安装验收；UT24当前安装用量采集和报告回读通过"
     }
   ],
-  "direction": "Independent deterministic lifecycle service; external Codex; publisher Base; two-page Dashboard; shared same-entry definition admission.",
+  "direction": "Independent deterministic lifecycle service; external Codex; publisher Base; two-page Dashboard; shared same-entry definition admission. User-requested Runtime-only token usage ledger and Base-stage reports are included in this v0.9 release.",
   "exclusions": [
     "第三个及更多 Dashboard 管理页面",
     "Dashboard中业务运行的启动/暂停/重试、业务审批/发布或配置凭据管理；已有编辑页的项目定义启用在范围内",
@@ -70,5 +70,22 @@
     "独立审批中心、多人会签、审批委托"
   ],
   "acceptanceDigest": "612f78eefdeae8af3f8170656cc6d31a7208ea91b7415a86ba49f2720091b023",
-  "historicalRecordsImmutable": true
+  "historicalRecordsImmutable": true,
+  "addenda": [
+    {
+      "id": "v090-token-usage",
+      "contract": "governance/token-usage-v090.json",
+      "contractDigest": "644e7a3c4360f37db1184023e86fda71268cb6f34cef1179a33420a4b74d75e1",
+      "milestones": [
+        "M0",
+        "M3",
+        "M5",
+        "M6"
+      ],
+      "implementationRequired": true,
+      "originalAcceptanceUnchanged": true,
+      "additionalRequiredInstances": 24,
+      "releaseAuthorityUnchanged": true
+    }
+  ]
 }

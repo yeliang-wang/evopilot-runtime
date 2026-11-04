@@ -78,6 +78,18 @@ function readBoundedJson(path: string): { bytes: Buffer; value: RecordValue } {
   return { bytes, value: object(JSON.parse(bytes.toString('utf8')) as unknown) };
 }
 
+/** Additive engineering coverage; does not gate a consuming project's reports. */
+export function validateTokenUsageAddendum(value:unknown):void {
+  const addendum=object(value),acceptance=object(addendum.acceptance);
+  if(addendum.schema!=='runtime-token-usage-addendum/v1'||addendum.id!=='v090-token-usage'||addendum.owner!=='runtime'||addendum.targetVersion!=='0.9.0')fail('Wrong token usage addendum');
+  sameIds(list(addendum.baseStages).map(text),['scope','plan','implementation','candidate','verification','release-decision','publication','closure'],'Usage must reuse the eight Base stages');
+  if(acceptance.originalRequiredInstances!==664||acceptance.originalPreRelease!==655||acceptance.originalPostRelease!==9||acceptance.additionalPreRelease!==23||acceptance.additionalPostRelease!==1||acceptance.combinedRequiredInstances!==688)fail('Usage addendum cannot replace or shrink original acceptance');
+  if(acceptance.collector!=='tests/acceptance/v090/usage.test.mjs')fail('Usage collector binding differs');
+  const cases=list(acceptance.cases).map(object);sameIds(ids(cases),numbered('UT',24),'Missing token usage acceptance instances');
+  for(const c of cases){if(c.required!==true||c.phase!==(c.id==='UT24'?'POST_RELEASE':'PRE_RELEASE'))fail('Usage acceptance phase/requirement differs');text(c.expected);}
+  if(!list(addendum.requiredBehavior).length||!list(addendum.exclusions).length)fail('Usage behavior and boundary must be explicit');
+}
+
 export interface GovernanceRequest {
   mode: 'check' | 'gate' | 'release';
   intent?: string;
@@ -96,6 +108,13 @@ export function evaluateGovernance(root: string, request: GovernanceRequest): Ga
     const acceptanceDigest = governanceDigest(acceptance.bytes);
     if (target.value.acceptanceDigest !== acceptanceDigest || roadmap.value.acceptanceDigest !== acceptanceDigest) fail('Acceptance digest drift requires review');
     validateAcceptanceCatalog(acceptance.value);
+    const usage=readBoundedJson(resolve(root,'governance/token-usage-v090.json'));validateTokenUsageAddendum(usage.value);
+    const usageDigest=governanceDigest(usage.bytes);
+    for(const owner of [roadmap.value,target.value]){
+      const entries=list(owner===roadmap.value?owner.addenda:owner.approvedAddenda).map(object);sameIds(ids(entries),['v090-token-usage'],'Usage addendum must remain declared');
+      const a=entries[0];if(a.contract!=='governance/token-usage-v090.json'||a.contractDigest!==usageDigest||a.implementationRequired!==true||a.originalAcceptanceUnchanged!==true||a.additionalRequiredInstances!==24||a.releaseAuthorityUnchanged!==true)fail('Usage addendum binding drift');
+    }
+    if(object(target.value.implementationBindings)['governance/token-usage-v090.json']!==usageDigest)fail('Usage implementation binding missing');
     if (target.value.implementationBindings) {
       for (const [path, digest] of Object.entries(object(target.value.implementationBindings))) {
         if (!/^governance\/[a-z0-9-]+\.json$/.test(path)) fail('Unsafe implementation binding path');
@@ -136,6 +155,7 @@ export function evaluateGovernance(root: string, request: GovernanceRequest): Ga
     if (!request.authorization) return result('BLOCKED', 'Actual implementation decision reference is required.');
     const authority = readBoundedJson(request.authorization).value;
     if (authority.schema !== 'runtime-evolution-authorization/v1' || authority.decision !== 'IMPLEMENT' || authority.targetId !== target.value.id || authority.targetDigest !== governanceDigest(target.bytes) || authority.approvedPlanDigest !== target.value.approvedPlanDigest) fail('Authorization binding mismatch');
+    if(authority.addendumDigest!==usageDigest)fail('User-requested usage addendum authorization binding differs');
     if (!list(authority.implementationMilestones).includes(match[1])) return result('BLOCKED', 'Milestone is not covered by this implementation binding.');
     if (!request.files?.length) return result('BLOCKED', 'Exact proposed file paths are required.');
     const permitted = list(object(packet).paths).map(text);

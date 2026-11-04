@@ -29,8 +29,17 @@ test('E02 actual installed GitLab lifecycle with external Codex and native owner
   run.artifact('synthetic-decision.json',{subject,source:JSON.parse(source),evidence:JSON.parse(body),sourceDigest:sha(source),evidenceDigest:sha(body)});return pathToFileURL(ref).href+'#sha256='+sha(body);
  };
  const mutate=async(operation,input,label)=>{
-  const status=await run.read('runtime.status'),r=await run.request(operation,input,{requestId:run.requestId('E02.journey',label),expectedRevision:status.revision});
-  assert.equal(r.status,200,JSON.stringify(r.body));return r.body.result;
+  const requestId=run.requestId('E02.journey',label);
+  for(let attempt=0;attempt<20;attempt++){
+   const status=await run.read('runtime.status'),r=await run.request(operation,input,{requestId,expectedRevision:status.revision});
+   if(r.status===200)return r.body.result;
+   // These two definite pre-effect rejections do not dispatch a stage. Keep
+   // the same request key/input, inspect its original stage, and refresh CAS.
+   // Transport UNKNOWN and all authority/semantic failures still stop here.
+   if(operation==='lifecycle.stage.advance'&&['EXECUTOR_BUSY','REVISION_CONFLICT'].includes(r.body.error?.code)&&attempt<19){await run.read('lifecycle.stage.request.inspect',{stageRequestId:input.stageRequestId});await pause(600);continue;}
+   assert.equal(r.status,200,JSON.stringify(r.body));
+  }
+  throw Error('Original stage advance remained busy; inspect before continuing');
  };
  const until=async(operation,input,predicate,label,seconds=300)=>{
   const end=Date.now()+seconds*1000;let last;

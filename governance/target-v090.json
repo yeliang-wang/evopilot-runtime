@@ -2,11 +2,11 @@
   "schema": "evopilot-evolution-target/v1",
   "id": "runtime-v090-independent-lifecycle",
   "targetVersion": "0.9.0",
-  "roadmapDigest": "aeb36e9e9ee908bb74dcf0dee3712a12c2ab0d792f6e14216a46480d85469936",
+  "roadmapDigest": "f45df8309e17e63b5f8c8baeb575da6728098dc2a1fcf42cd007825ef1fbde8a",
   "acceptanceDigest": "612f78eefdeae8af3f8170656cc6d31a7208ea91b7415a86ba49f2720091b023",
   "sourceBaseline": "cbf46c713f5448a4feacf7990be09913c3fa4cf6",
   "approvedPlanDigest": "6b7effbfbd3be312b50bcffef3cffc29b7d3ae2aa5b85cadccf8d86885cbadb3",
-  "status": "IMPLEMENTATION_AUTHORIZED_M4_PATHS_BOUND",
+  "status": "IMPLEMENTATION_AUTHORIZED_M0_M5_WITH_USAGE_ADDENDUM",
   "milestones": [
     "M0",
     "M1",
@@ -33,7 +33,8 @@
         "package-lock.json",
         "governance/lifecycle-contract-v090.json",
         "governance/parameter-matrix-v090.json",
-        "governance/environment-contract-v090.json"
+        "governance/environment-contract-v090.json",
+        "governance/token-usage-v090.json"
       ],
       "purpose": "Formalize the approved architecture/Roadmap/Target and audit-complete acceptance; prepare environments and exact parameter bindings."
     },
@@ -357,7 +358,18 @@
         "tests/e2e/reconstruction-http-v090.test.mjs",
         "tests/fixtures/reconstruction-runner-v090.mjs",
         "tests/fixtures/reconstruction-codex-controller-v090.mjs",
-        "tests/fixtures/reconstruction-codex-server-v090.mjs"
+        "tests/fixtures/reconstruction-codex-server-v090.mjs",
+        "src/usage/contract.ts",
+        "src/usage/ledger.ts",
+        "src/usage/codex.ts",
+        "src/usage/reports.ts",
+        "src/usage/service.ts",
+        "src/usage/worker.ts",
+        "src/host/usage.ts",
+        "src/installation/usage.ts",
+        "plugins/codex/skills/evopilot-runtime-expert/references/usage.md",
+        "tests/e2e/token-usage-v090.test.mjs",
+        "tests/e2e/token-usage-host-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",
@@ -372,7 +384,11 @@
       "laterAcceptanceObligations": [
         "Actual owner/CI/Agent evidence, independent Expert/plugin, distribution and full accurate candidate E2E remain required. Synthetic adapters and probes do not satisfy them."
       ],
-      "productAcceptance": "NOT_EVALUATED"
+      "productAcceptance": "NOT_EVALUATED",
+      "tokenUsageAddendum": {
+        "contract": "governance/token-usage-v090.json",
+        "boundary": "Runtime-only deterministic telemetry. No owner/parent statistics, model engine, budget/scoring gate, new Dashboard or lifecycle outcome changes."
+      }
     },
     "M4": {
       "purpose": "Implement only the accepted two-page React/TSX Dashboard: SeeCode graph plus comment-preserving YAML editor with same-entry draft/save-and-activate, and a separate read-only current instance monitor. Same authenticated Runtime gates, no execution/release controls or owner authoring.",
@@ -481,7 +497,12 @@
         "src/release/source-ci.ts",
         "tests/e2e/release-source-ci-v090.test.mjs",
         "tests/acceptance/v090/e10.test.mjs",
-        "tests/acceptance/v090/e02.test.mjs"
+        "tests/acceptance/v090/e02.test.mjs",
+        "tests/acceptance/v090/usage.test.mjs",
+        "src/release/usage-evidence.ts",
+        "tests/e2e/token-usage-evidence-v090.test.mjs",
+        "docs/token-usage-v090.md",
+        "docs/zh-CN/token-usage-v090.md"
       ],
       "prerequisiteBindings": [
         "governance/acceptance-v090.json",
@@ -493,7 +514,40 @@
         "Exact selected installed package and distribution digest, authenticated same-service connection, isolated project and protected evidence output",
         "Prior actual independent HTTP/CLI/Host/package and owner/platform development evidence; complete final qualification still requires all remaining integration work"
       ],
-      "productAcceptance": "NOT_EVALUATED"
+      "productAcceptance": "NOT_EVALUATED",
+      "additionalAcceptance": {
+        "contract": "governance/token-usage-v090.json",
+        "requiredPreRelease": [
+          "UT01",
+          "UT02",
+          "UT03",
+          "UT04",
+          "UT05",
+          "UT06",
+          "UT07",
+          "UT08",
+          "UT09",
+          "UT10",
+          "UT11",
+          "UT12",
+          "UT13",
+          "UT14",
+          "UT15",
+          "UT16",
+          "UT17",
+          "UT18",
+          "UT19",
+          "UT20",
+          "UT21",
+          "UT22",
+          "UT23"
+        ],
+        "postRelease": [
+          "UT24"
+        ],
+        "originalRequiredInstances": 664,
+        "combinedRequiredInstances": 688
+      }
     }
   },
   "beforeProductImplementation": [
@@ -508,6 +562,24 @@
   "implementationBindings": {
     "governance/lifecycle-contract-v090.json": "5b18d80a73ec6ce249254aef2f78318aaac3c797d9b39d113993a4a66de966a1",
     "governance/parameter-matrix-v090.json": "27e01ab86483a5adf379f15c8987a4ba40017b222a5b31b699a5246143d43367",
-    "governance/environment-contract-v090.json": "c7f281b5a0e27444786bb655e50a479c3a0bb108f9d4248bbb9ae022ff9ab46a"
-  }
+    "governance/environment-contract-v090.json": "c7f281b5a0e27444786bb655e50a479c3a0bb108f9d4248bbb9ae022ff9ab46a",
+    "governance/token-usage-v090.json": "644e7a3c4360f37db1184023e86fda71268cb6f34cef1179a33420a4b74d75e1"
+  },
+  "approvedAddenda": [
+    {
+      "id": "v090-token-usage",
+      "contract": "governance/token-usage-v090.json",
+      "contractDigest": "644e7a3c4360f37db1184023e86fda71268cb6f34cef1179a33420a4b74d75e1",
+      "milestones": [
+        "M0",
+        "M3",
+        "M5",
+        "M6"
+      ],
+      "implementationRequired": true,
+      "originalAcceptanceUnchanged": true,
+      "additionalRequiredInstances": 24,
+      "releaseAuthorityUnchanged": true
+    }
+  ]
 }
