@@ -477,7 +477,9 @@
         "tests/fixtures/relocation-configuration-v090.mjs",
         "src/release/evidence.ts",
         "tests/e2e/release-evidence-v090.test.mjs",
-        "tests/acceptance/v090/e08.test.mjs"
+        "tests/acceptance/v090/e08.test.mjs",
+        "src/release/source-ci.ts",
+        "tests/e2e/release-source-ci-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/acceptance-v090.json",

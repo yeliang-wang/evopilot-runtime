@@ -152,6 +152,14 @@ actual release decision and public delivery/current-Host checks are separate
 remaining obligations. Synthetic tests of this auditor never count as actual
 product journeys.
 
+`src/release/source-ci.ts` checks original source-CI records separately: repository,
+commit, workflow, job attempt, frozen runner, successful required steps, nonempty
+test counts with no failures/skips, the job's exact upload ID/digest, downloaded
+ZIP bytes and all six distribution assets. Its manifest/archive must match the
+selected installed candidate. This pure record verifier does not authenticate
+arbitrary local JSON: the caller must retain authenticated provider reads. Its
+result does not authorize publication, and it is not a replacement for E01–E20.
+
 发布前记录核验固定要求 E01–E20 的全部 655 项，逐项绑定候选、收集器、选择文件、
 原用例结果及请求／响应／附件原始摘要。开发子集、遗漏、跳过、错误候选或修改后的
 原始记录不能通过。旧报告保留原样，不补写缺失证据；后置 9 项仍待实际交付完成。
