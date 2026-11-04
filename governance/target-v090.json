@@ -502,7 +502,31 @@
         "src/release/usage-evidence.ts",
         "tests/e2e/token-usage-evidence-v090.test.mjs",
         "docs/token-usage-v090.md",
-        "docs/zh-CN/token-usage-v090.md"
+        "docs/zh-CN/token-usage-v090.md",
+        "tests/acceptance/v090/e01.test.mjs",
+        "tests/acceptance/v090/e04.test.mjs",
+        "tests/acceptance/v090/e05.test.mjs",
+        "tests/acceptance/v090/e06.test.mjs",
+        "tests/acceptance/v090/e07.test.mjs",
+        "tests/acceptance/v090/e11.test.mjs",
+        "tests/acceptance/v090/e12.test.mjs",
+        "tests/acceptance/v090/e13.test.mjs",
+        "tests/acceptance/v090/e14.test.mjs",
+        "tests/acceptance/v090/e15.test.mjs",
+        "tests/acceptance/v090/e16.test.mjs",
+        "tests/acceptance/v090/e17.test.mjs",
+        "tests/acceptance/v090/e18.test.mjs",
+        "tests/acceptance/v090/e19.test.mjs",
+        "tests/acceptance/v090/e20.test.mjs",
+        "tests/acceptance/v090/e21.test.mjs",
+        "tests/acceptance/v090/e22.test.mjs",
+        "tests/acceptance/v090/browser.mjs",
+        "tests/acceptance/v090/execution.mjs",
+        "tests/acceptance/v090/maintenance.mjs",
+        "scripts/release-gate.mjs",
+        ".github/workflows/release.yml",
+        "src/release/gate.ts",
+        "tests/e2e/release-gate-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/acceptance-v090.json",
@@ -547,6 +571,23 @@
         ],
         "originalRequiredInstances": 664,
         "combinedRequiredInstances": 688
+      },
+      "completeCollectorBinding": {
+        "basis": "All original E01–E22 fixed requirements already belong to the accepted plan. This packet completes exact implementation paths, not acceptance or release authority.",
+        "sourceGapReview": {
+          "originalInstances": 664,
+          "existingImplementedBranches": 441,
+          "remainingCollectorBranches": 223,
+          "remainingPreReleaseBranches": 214,
+          "remainingPostReleaseBranches": 9
+        },
+        "sharedCollectorHelpers": "Any extracted helper must be pinned transitively by the collector selection and evidence auditor.",
+        "releasePreparation": "Implement independent source/evidence/release gates and delivery collectors; actual publication and current daily installation still require the exact release decision and all prerequisite evidence.",
+        "exclusions": [
+          "No changed acceptance denominator or scenario semantics",
+          "No owner-source evolution",
+          "No daily cutover or product publication from this implementation packet"
+        ]
       }
     }
   },
