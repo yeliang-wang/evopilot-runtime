@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtempSync,realpathSync,readFileSync,writeFileSync,existsSync,rmSync,chmodSync,mkdirSync,readdirSync,symlinkSync,lstatSync,cpSync,readlinkSync} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {tmpdir} from 'node:os';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 import {randomBytes,createHash} from 'node:crypto';
 import {createServer} from 'node:http';
 import {once} from 'node:events';
@@ -205,6 +205,24 @@ function developmentDistribution(){
  function inventory(relative=''){for(const name of readdirSync(join(f.source,relative))){const key=relative?relative+'/'+name:name,path=join(f.source,key),stat=lstatSync(path);if(stat.isSymbolicLink())f.manifest.files[key]={type:'symlink',target:readlinkSync(path)};else if(stat.isDirectory()){chmodSync(path,0o700);inventory(key);}else{const bytes=readFileSync(path),mode=(stat.mode&0o111)?0o755:0o644;chmodSync(path,mode);f.manifest.files[key]={type:'file',sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length,mode};}}}
  inventory();f.plan.distribution.manifestDigest=f.putManifest();return f;
 }
+test('unbound installed operator controls its own service without treating package ancestors as a Workspace', {timeout:120000},async()=>{
+ if(process.platform!=='darwin')return;
+ const f=developmentDistribution();let spec;
+ try{
+  f.plan.role='editor';const socket=createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');f.plan.port=socket.address().port;await new Promise(r=>socket.close(r));
+  const first=await runInstaller(f.plan,'install');spec=JSON.parse(readFileSync(join(f.plan.root,'service-specification.json')));
+  const client=createRuntimeHttpClient(join(f.plan.root,'connection.json')),request={operation:'lifecycle.draft.save',projectId:f.plan.projectId,input:{yaml:yaml(lifecycle())},requestId:'unbound-retained-draft',expectedRevision:0},original=await client.request(request);
+  const api=await import(pathToFileURL(join(f.plan.root,'package/dist/installation/service-control.js')).href),selection=api.inspectInstalledServiceSelection(f.plan.root);assert.equal(selection.binding,null);
+  const preserved=Object.fromEntries(['installation-plan.json','connection.json','client.json','data/auth.json'].map(p=>[p,readFileSync(join(f.plan.root,p))]));
+  const stopped=await api.operateInstalledService(selection,'stop');assert.equal(stopped.service.registered,false);assert.equal(stopped.businessWorkDispatched,false);
+  assert(!existsSync(f.plan.root+'.evopilot-coordination'),'An installation/package ancestor is not a legacy Workspace');
+  assert(existsSync(f.plan.root+'.evopilot-operations.evopilot-coordination/lease.db'));
+  const started=await api.operateInstalledService(selection,'start');assert.equal(started.service.running,true);assert.equal(started.service.identity.serviceId,first.service.identity.serviceId);assert.equal(started.hostRegistered,false);
+  assert.deepEqual((await client.request(request)).result,original.result,'Original draft receipt is reconciled, not written again');
+  for(const [p,bytes] of Object.entries(preserved))assert.deepEqual(readFileSync(join(f.plan.root,p)),bytes,p);
+  await api.operateInstalledService(selection,'stop');
+ }finally{if(spec)await stopUserService(spec);f.cleanup();}
+});
 test('actual installed service recovers committed adoption, preserves old receipts and restarts with one writer', {timeout:120000},async()=>{
  if(process.platform!=='darwin')return;
  const f=developmentDistribution();let spec,stdio;

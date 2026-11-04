@@ -271,6 +271,19 @@ test('official SDK client uses the same dispatcher and cannot read a project out
   }finally{await client.close();await server.close();f.cleanup();}
 });
 
+test('MCP malformed tool parameters are invalid client requests, not internal errors or business actions',async()=>{
+ const f=fixture(),server=await startRuntimeServer({stateRoot:f.root,workspaceId:'test'});
+ const headers={authorization:'Bearer '+f.token,'content-type':'application/json',accept:'application/json, text/event-stream','mcp-protocol-version':'2025-11-25'};
+ try{
+  const before=await request(server,f.token,'runtime.events.read');assert.equal(before.status,200);
+  for(const [i,params] of [undefined,{name:42},{name:'runtime_read',arguments:[]}].entries()){
+   const r=await fetch(server.url+'/mcp',{method:'POST',headers,body:JSON.stringify({jsonrpc:'2.0',id:'invalid-'+i,method:'tools/call',params})});
+   assert.equal(r.status,200);const body=await r.json();assert.equal(body.id,'invalid-'+i);assert.equal(body.error.code,-32602);assert.match(body.error.message,/Invalid (?:tools\/call request|tool call parameters)/);assert.equal(body.error.data,undefined);
+  }
+  const after=await request(server,f.token,'runtime.events.read');assert.equal(after.status,200);assert.deepEqual(after.body.result,before.body.result);
+ }finally{await server.close();f.cleanup();}
+});
+
 test('event stream reads persisted events and closes after permission revocation',async()=>{
   const f=fixture();const seed=new RuntimeStore(f.root,'test');seed.mutate(f.actor,mutation(),()=>change());seed.close();
   const server=await startRuntimeServer({stateRoot:f.root,workspaceId:'test'}),abort=new AbortController();

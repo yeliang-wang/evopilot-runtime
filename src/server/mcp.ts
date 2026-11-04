@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { CallToolRequestSchema, ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolRequestSchema, ListToolsRequestSchema, McpError, ErrorCode, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { record, ServiceError, canonicalReadback } from './errors.js';
 import { DEFINITION_READS, DEFINITION_WRITES } from '../lifecycle/service.js';
 import { AUTHORITY_READS, AUTHORITY_WRITES } from '../adapters/authority.js';
@@ -29,7 +29,13 @@ export function runtimeToolDefinitions():Tool[]{return [{
 export async function handleMcp(req: IncomingMessage, res: ServerResponse, body: unknown, version: string, dispatch: (value: unknown) => unknown|Promise<unknown>, requestId: string): Promise<void> {
   const server = new Server({ name: 'evopilot-runtime', version }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({tools:runtimeToolDefinitions()}));
-  server.setRequestHandler(CallToolRequestSchema, async request => {
+  // SDK handler schema failures otherwise become InternalError. Validate the
+  // parameters through the SDK's tools/call wrapper and explicit validation so
+  // invalid client parameters remain -32602 and never reach the dispatcher.
+  server.setRequestHandler(CallToolRequestSchema.omit({params:true}).passthrough(), async rawRequest => {
+    const parsed=CallToolRequestSchema.safeParse(rawRequest);
+    if(!parsed.success)throw new McpError(ErrorCode.InvalidParams,'Invalid tool call parameters');
+    const request=parsed.data;
     try {
       const argumentsValue=record(request.params.arguments),operation=argumentsValue.operation;
       if(request.params.name==='runtime_read'&&!READ_OPERATIONS.includes(operation as typeof READ_OPERATIONS[number])||request.params.name==='runtime_write'&&!WRITE_OPERATIONS.includes(operation as typeof WRITE_OPERATIONS[number])||!['runtime_read','runtime_write'].includes(request.params.name))throw new ServiceError('UNKNOWN_TOOL','Tool does not permit this operation',404);

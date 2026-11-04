@@ -443,11 +443,12 @@
       "productAcceptance": "NOT_EVALUATED"
     },
     "M5": {
-      "purpose": "Implement and execute the fixed candidate-bound acceptance collectors. Preparatory subset runs remain explicitly partial; no missing case, synthetic binding shortcut, development package or source-only regression can establish final acceptance. Remaining M3 compatibility stays open.",
+      "purpose": "Implement and execute the fixed candidate-bound acceptance collectors. Preparatory subset runs remain explicitly partial; no missing case, synthetic binding shortcut, development package or source-only regression can establish final acceptance.",
       "paths": [
         "tests/acceptance/v090/support.mjs",
         "tests/acceptance/v090/e03.test.mjs",
-        "docs/acceptance-v090.md"
+        "docs/acceptance-v090.md",
+        "tests/acceptance/v090/e09.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/acceptance-v090.json",

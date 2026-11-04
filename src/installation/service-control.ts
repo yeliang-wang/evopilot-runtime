@@ -95,7 +95,11 @@ export async function operateInstalledService(input:InstalledServiceSelection,op
     const service=await observeUserService(spec);verify();if(service.identity&&service.identity.serviceId!==selection.serviceId)changed();
     return{schema:'runtime-installed-service-observation/v1',selectionDigest:selection.selectionDigest,service,serviceStarted:false,hostRegistered:false,authority:false};
   }
-  const requestId=randomUUID(),context=selection.binding?{workspaceRoot:selection.binding.workspaceRoot,workspaceId:selection.workspaceId}:{workspaceRoot:selection.serviceRoot,workspaceId:selection.workspaceId};
+  // A fresh independent install has no legacy Workspace. Its package is inside
+  // serviceRoot, so that ancestor must never be passed as a Workspace lease.
+  // Reuse the separate operator coordination identity instead; retain both the
+  // strict code-directory exclusion and the installed service's exclusive lock.
+  const requestId=randomUUID(),context=selection.binding?{workspaceRoot:selection.binding.workspaceRoot,workspaceId:selection.workspaceId}:{workspaceRoot:selection.serviceRoot+'.evopilot-operations',workspaceId:selection.workspaceId};
   return withWorkspaceLease(context,requestId,async()=>{
     verify();const lockFile=path.join(selection.serviceRoot,'installer-lock.sqlite');readRegular(lockFile,1048576,true);
     const lock=new DatabaseSync(lockFile,{allowExtension:false});
