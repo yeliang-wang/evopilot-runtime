@@ -3,7 +3,7 @@
 [English](../runtime-v090.md) | 简体中文
 
 本指南面向本机运维人员和 Codex 用户，描述已实现的 v0.9 开发目标。
-当前分支的开发包版本仍为 v0.8.3，尚不是已发布的 v0.9 发行包，也不表示完整验收通过。
+当前分支的包版本已设为 0.9.0，用于候选验证；尚未发布，也不表示完整验收通过。
 使用时核对准确制品摘要、源码提交和验收报告；完成标准以[固定验收清单](../acceptance-v090.md)为准。
 
 ## 职责与前提
@@ -29,8 +29,8 @@ Runtime 通过公开 API 消费 Ontology/Harness 的已发布包；本次选择�
 示例路径和凭据不能直接当作真实安装计划。
 
 ```sh
-evopilot-runtime-install stage --plan-ref /absolute/private/installation-plan.json
-evopilot-runtime-install install --plan-ref /absolute/private/installation-plan.json
+node /absolute/downloads/unpacked/package/dist/installation/installer.js stage --plan-ref /absolute/private/installation-plan.json
+node /absolute/downloads/unpacked/package/dist/installation/installer.js install --plan-ref /absolute/private/installation-plan.json
 ```
 
 准备步骤核对并展开包；安装步骤启动服务，且在计划选择 Codex 时注册一个同时包含
@@ -42,10 +42,10 @@ Expert 与 HTTP MCP 配置的插件。返回 `AWAITING_HOST_VERIFICATION` 表示
 入口，不是第二个独立 daemon。服务运行后可以执行：
 
 ```sh
-evopilot-runtime help
-evopilot-runtime status --url http://127.0.0.1:PORT \
+node /absolute/installation/package/dist/server/cli.js help
+node /absolute/installation/package/dist/server/cli.js status --url http://127.0.0.1:PORT \
   --token-ref /absolute/private/principal.json --project example
-evopilot-runtime browser-code --connection-ref /absolute/installation/connection.json
+node /absolute/installation/package/dist/server/cli.js browser-code --connection-ref /absolute/installation/connection.json
 ```
 
 端口、项目和路径必须替换为当前选择。受保护文件归当前 OS 用户所有、权限为 0600，

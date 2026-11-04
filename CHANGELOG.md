@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.0 Preview — development
+
+Publication and full candidate acceptance are pending. The [planned versioned Release location](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.9.0) is not evidence of publication.
+
+Runtime becomes an independently versioned lifecycle service with HTTP API, Streamable HTTP MCP, one Expert/plugin, and two Dashboard pages. Publisher-owned Base rules, mandatory project configuration, fixed instances, scoped execution and durable receipts share server-side gates. Codex supplies reasoning and coding; Runtime has no model profile or autonomous model loop. The parent remains navigation, and published Ontology/Harness APIs retain their asset authority.
+
+The macOS arm64 distribution includes compiled JavaScript, declarations, static UI, offline Expert guidance, production dependencies, a complete installation manifest and source/checksum records. The npm package and exact dependency lock are separate accompanying assets. Installation, actual Host verification and release authority remain separately evidenced. Historical content grades and native records are preserved.
+
 ## 0.8.3 Preview — 2026-10-27
 
 [Versioned Preview release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.8.3).

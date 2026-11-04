@@ -13,11 +13,12 @@ import {initializeCredentials,tokenDigest} from '../../dist/server/security.js';
 const repo=new URL('../../',import.meta.url).pathname,node=fs.realpathSync(process.execPath),sha=b=>createHash('sha256').update(b).digest('hex'),nodeSha256=sha(fs.readFileSync(node));
 const put=(file,v)=>{fs.mkdirSync(dirname(file),{recursive:true,mode:0o700});fs.writeFileSync(file,Buffer.isBuffer(v)?v:typeof v==='string'?v:canonical(v)+'\n',{mode:0o600});};
 const read=file=>JSON.parse(fs.readFileSync(file));
+const selectedVersion=read(join(repo,'package.json')).version;
 const scoped=(binding,fn)=>{const c=acquireManagedLegacyContext(binding);try{return c.run(fn);}finally{c.close();}};
 function copy(source,target){fs.cpSync(source,target,{recursive:true,verbatimSymlinks:true});const visit=(a,b)=>{const s=fs.lstatSync(a);if(s.isSymbolicLink())return;fs.chmodSync(b,s.mode&0o777);if(s.isDirectory())for(const name of fs.readdirSync(a))visit(join(a,name),join(b,name));};visit(source,target);}
 export function relocationConfigurationFixture(t,withOwners=true,move=true,withOperator=false){
  const f=workspaceMaintenanceFixture(t),s=f.selection,packageRoot=join(s.serviceRoot,'package'),expiresAt=new Date(Date.now()+7*86400000).toISOString();
- fs.mkdirSync(packageRoot,{mode:0o700});put(join(packageRoot,'package.json'),{name:'@evopilot-next/runtime',version:'0.8.3'});
+ fs.mkdirSync(packageRoot,{mode:0o700});put(join(packageRoot,'package.json'),{name:'@evopilot-next/runtime',version:selectedVersion});
  copy(join(repo,'plugins'),join(packageRoot,'plugins'));
  for(const name of ['server/cli.js','host/bridge.js','host/header-helper.js','installation/workspace-host.js'])put(join(packageRoot,'dist',name),'#!/usr/bin/env node\n// Synthetic material fixture; never executed.\n');
  const token='synthetic_client_credential_1234567890abcdef';
@@ -38,7 +39,7 @@ export function relocationConfigurationFixture(t,withOwners=true,move=true,withO
   const host={schema:'runtime-legacy-owner-host/v1',workspaceId:s.workspaceId,projectId:'synthetic',legacyBindingRef:providers.legacyBindingRef,expiresAt,owners:Object.fromEntries(Object.entries(owners).map(([o,v])=>[o,{...v,calls:['request:workspace.inspect']}])) ,project:{root:s.projectRoot,calls:['native:inspect']}};
   put(join(f.root,'owner-host.json'),host);ownerHost={ownerConfigRef:join(f.root,'owner-host.json'),ownerConfigDigest:digest(host)};
  }
- const spec={schema:'runtime-user-service/v1',root:s.serviceRoot,packageRoot,version:'0.8.3',nodeExecutable:node,nodeSha256,workspaceId:s.workspaceId,projectId:'synthetic',principalId:'synthetic',tokenRef:join(s.serviceRoot,'client.json'),port:32198,integrationsRef:join(f.root,'integrations.json'),legacyRef:join(s.serviceRoot,'legacy-binding.json'),...(providers?{legacyProviders:{ref:join(f.root,'providers.json'),digest:digest(providers)}}:{})};
+ const spec={schema:'runtime-user-service/v1',root:s.serviceRoot,packageRoot,version:selectedVersion,nodeExecutable:node,nodeSha256,workspaceId:s.workspaceId,projectId:'synthetic',principalId:'synthetic',tokenRef:join(s.serviceRoot,'client.json'),port:32198,integrationsRef:join(f.root,'integrations.json'),legacyRef:join(s.serviceRoot,'legacy-binding.json'),...(providers?{legacyProviders:{ref:join(f.root,'providers.json'),digest:digest(providers)}}:{})};
  put(join(s.serviceRoot,'service-specification.json'),spec);put(join(s.serviceRoot,'service.plist'),userServicePlist(spec));
  put(join(s.serviceRoot,'connection.json'),{schema:'runtime-host-connection/v1',origin:'http://127.0.0.1:'+spec.port,workspaceId:s.workspaceId,projectId:'synthetic',principalId:'synthetic',serviceId:s.serviceId,version:spec.version,tokenRef:spec.tokenRef});
  let operatorConfig;

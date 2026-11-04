@@ -460,7 +460,21 @@
         "docs/service.md",
         ".github/workflows/ci.yml",
         "tests/e2e/reconstruction-codex-v090.test.mjs",
-        "tests/fixtures/reconstruction-codex-controller-v090.mjs"
+        "tests/fixtures/reconstruction-codex-controller-v090.mjs",
+        "src/installation/distribution.ts",
+        "scripts/package-distribution.mjs",
+        "tests/e2e/standalone-distribution-v090.test.mjs",
+        "package.json",
+        "package-lock.json",
+        "src/index.ts",
+        "scripts/check.mjs",
+        "tests/e2e/cli.test.mjs",
+        "tests/e2e/reference.test.mjs",
+        "governance/environment-contract-v090.json",
+        "CHANGELOG.md",
+        "src/service.ts",
+        "plugins/codex/.codex-plugin/plugin.json",
+        "tests/fixtures/relocation-configuration-v090.mjs"
       ],
       "prerequisiteBindings": [
         "governance/acceptance-v090.json",
@@ -487,6 +501,6 @@
   "implementationBindings": {
     "governance/lifecycle-contract-v090.json": "5b18d80a73ec6ce249254aef2f78318aaac3c797d9b39d113993a4a66de966a1",
     "governance/parameter-matrix-v090.json": "27e01ab86483a5adf379f15c8987a4ba40017b222a5b31b699a5246143d43367",
-    "governance/environment-contract-v090.json": "75b1fca11835c8d67de6d92e28a175ebd19d1c7d15ad13058edb2c207cda9a91"
+    "governance/environment-contract-v090.json": "c7f281b5a0e27444786bb655e50a479c3a0bb108f9d4248bbb9ae022ff9ab46a"
   }
 }

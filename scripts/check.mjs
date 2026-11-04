@@ -14,7 +14,7 @@ const PIN = 'c613b972cee9aa5638797880fab6a48839e74ee79545fdfb74ebe9b2b23c9a11';
 const LEGACY_PIN = 'df4f7246ae35ef9114e2b93663d520e7ff4f44f14f886ac8ba43e9fc080ddc9a';
 const expected = {
   "name": "@evopilot-next/runtime",
-  "version": "0.8.3",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -239,7 +239,7 @@ export async function checkSource() {
     "import assert from 'node:assert/strict';",
     'const api = await import(' + JSON.stringify(pathToFileURL(resolve(ROOT, 'dist/index.js')).href) + ');',
     'assert.equal(api.PRODUCT, ' + JSON.stringify(PRODUCT) + ');',
-    "assert.equal(api.VERSION, '0.8.3');",
+    "assert.equal(api.VERSION, '0.9.0');",
     'assert.equal(api.capabilities().authority, false);',
     "assert.equal(api.capabilities().implementationStage, \"NATIVE_STANDARDS\");",
     "assert.equal(api.capabilities().businessOperationsReady, true);",

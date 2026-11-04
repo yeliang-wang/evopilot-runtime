@@ -4,15 +4,15 @@
 
 独立 v0.9 开发目标请使用[中文使用指南](runtime-v090.md)、[生命周期 API（英文）](../lifecycle-api.md)、
 [兼容与迁移参考（英文）](../legacy-host.md)和[固定验收](../acceptance-v090.md)。
-这些文档描述候选分支，不代表 v0.9 已发布；下方 v0.8.3 安装入口属于历史发行说明。
+这些文档描述候选分支，不代表 v0.9 已发布。
 
-适用 v0.8.3 Preview。先阅读[中文首页](../../README_CN.md)，了解该组件职责、安装方式与边界。
+适用 v0.9.0 Preview 的开发分支，完整验收与发布尚未完成。先阅读[中文首页](../../README_CN.md)，了解该组件职责、安装方式与边界。
 
 | 任务 | 入口 |
 |---|---|
-| 在 Codex 使用组合产品 | [总项目中文安装指南](https://github.com/yeliang-wang/evopilot/blob/main/docs/zh-CN/installation.md) |
+| 安装独立 Runtime 与 Codex 插件 | [本组件安装入口](../../README_CN.md#安装发行包)、[使用指南](runtime-v090.md) |
 | 首次建模与选择等级 | [首次使用](https://github.com/yeliang-wang/evopilot/blob/main/docs/zh-CN/first-journey.md)、[内容等级 v2](https://github.com/yeliang-wang/evopilot/blob/main/docs/zh-CN/asset-readiness.md) |
-| 升级已有工作区 | [中文迁移指南](https://github.com/yeliang-wang/evopilot/blob/main/docs/zh-CN/migration.md) |
+| 升级已有工作区 | [本组件兼容与迁移参考（英文）](../legacy-host.md) |
 | 维护翻译 | [双语维护规则](documentation-languages.md) |
 
 以下精确技术参考目前为英文：

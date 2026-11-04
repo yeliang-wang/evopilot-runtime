@@ -3,7 +3,7 @@
 English | [简体中文](zh-CN/runtime-v090.md)
 
 This guide describes the implemented v0.9 development target for local operators
-and Codex users. The branch still carries the v0.8.3 development package version.
+and Codex users. The branch carries package version 0.9.0 for candidate qualification.
 It is not a released v0.9 distribution or a claim that acceptance is complete.
 Use the exact selected package manifest, source revision and acceptance report;
 the [fixed acceptance catalog](acceptance-v090.md) remains the completion rule.
@@ -38,8 +38,8 @@ The [installer types](../src/installation/installer.ts) define the fields.
 Do not reuse an example's paths or credentials as an actual plan.
 
 ```sh
-evopilot-runtime-install stage --plan-ref /absolute/private/installation-plan.json
-evopilot-runtime-install install --plan-ref /absolute/private/installation-plan.json
+node /absolute/downloads/unpacked/package/dist/installation/installer.js stage --plan-ref /absolute/private/installation-plan.json
+node /absolute/downloads/unpacked/package/dist/installation/installer.js install --plan-ref /absolute/private/installation-plan.json
 ```
 
 Staging prepares the verified package. Installation starts its service and, when
@@ -54,10 +54,10 @@ The independent service CLI is `evopilot-runtime`. The preserved
 independent daemon. For a running installation:
 
 ```sh
-evopilot-runtime help
-evopilot-runtime status --url http://127.0.0.1:PORT \
+node /absolute/installation/package/dist/server/cli.js help
+node /absolute/installation/package/dist/server/cli.js status --url http://127.0.0.1:PORT \
   --token-ref /absolute/private/principal.json --project example
-evopilot-runtime browser-code --connection-ref /absolute/installation/connection.json
+node /absolute/installation/package/dist/server/cli.js browser-code --connection-ref /absolute/installation/connection.json
 ```
 
 Replace `PORT`, the project and paths with the selected installation values.

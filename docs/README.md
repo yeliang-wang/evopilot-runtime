@@ -1,6 +1,6 @@
 # Runtime documentation
 
-Start with the [v0.8.3 Preview quickstart](../README.md#quickstart) for prerequisites and source setup.
+Start with the [v0.9.0 Preview quickstart](../README.md#quickstart) for prerequisites and source setup. Full acceptance and publication remain pending.
 
 English | [简体中文](zh-CN/README.md)
 
@@ -8,7 +8,7 @@ For the independent v0.9 development target, use the
 [operator and lifecycle guide](runtime-v090.md), [HTTP lifecycle API](lifecycle-api.md),
 [legacy Host/migration reference](legacy-host.md) and [fixed acceptance](acceptance-v090.md).
 These describe the candidate branch, not an already published v0.9 release.
-The v0.8.3 installation routes below remain historical release instructions.
+The historical version sections below retain their original scope.
 
 - [Conversation-driven planning](planning-api.md): scoped revisions, exact human decisions and immutable execution bindings.
 - [Service API](service.md): embed the durable service, configure trusted providers and recover uncertain execution.
@@ -21,9 +21,16 @@ The v0.8.3 installation routes below remain historical release instructions.
 
 ## Installation paths
 
-For the standalone SDK and CLI, follow the [published Runtime tarball installation](../README.md#install-a-release-tarball). The package includes compiled JavaScript and declarations; its standalone CLI supplies no execution providers.
+Use the [independent distribution](../README.md#install-a-release-tarball) and
+[operator guide](runtime-v090.md). The standalone archive includes compiled
+JavaScript, declarations, static UI, one Runtime plugin and locked production
+dependencies. Installation uses a protected exact plan; service and current Host
+verification are separate results. No parent source or parent daemon is required.
 
-For the composed product and Codex installation, use the [parent EvoPilot instructions](https://github.com/yeliang-wang/evopilot#readme) and [parent release assets](https://github.com/yeliang-wang/evopilot/releases). Provider configuration and the Codex entry belong to that separate distribution.
+The preserved native/embedded CLI and SDK are documented in [the CLI reference](cli.md)
+and [service reference](service.md). They do not substitute for the independent
+HTTP service or the installer. Historical parent composition instructions belong
+to their immutable older releases.
 
 ## v0.5 online integration
 
