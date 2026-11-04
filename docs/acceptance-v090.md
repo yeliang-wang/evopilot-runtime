@@ -3,7 +3,8 @@
 The fixed catalog contains 64 requirement groups, 22 scenarios and 664 instances
 (655 before release, 9 after delivery). Development regressions are separate.
 The E03 collector, `tests/acceptance/v090/e03.test.mjs`, executes the 332
-required-field HTTP instances and 48 fixed HTTP/MCP/CLI stage-entry instances
+required-field HTTP instances, 48 fixed HTTP/MCP/CLI stage-entry instances and
+32 actual browser graph/YAML stage-entry instances
 against an explicitly selected installed package
 and an existing activated isolated project. It checks field/rule/remedy errors,
 retained drafts, the original active revision and historical source bytes.
@@ -11,6 +12,17 @@ It never inserts state directly or supplies a synthetic binding provider. MCP
 cases use actual initialization and tool calls; CLI cases execute the installed
 CLI with protected credential/envelope references. Each case independently reads
 back the service state and confirms only draft/blocked-activation events occurred.
+
+The browser cases open the installed lifecycle page in the locked Playwright
+Chromium, authenticate using an installed-CLI one-use code and edit the actual
+SeeCode property form or YAML editor. They retain incomplete drafts, inspect
+field-specific errors and verify that activation stays disabled and the existing
+active revision is unchanged. Graph fields use their declared reference type's
+empty/invalid string representations; YAML cases remove a key or submit null.
+The report distinguishes these representations. Structural control setup is an
+explicit API draft save; it is not counted as a UI action or dependency readiness.
+Each case retains a screenshot and actual browser action/network transcript,
+without authentication headers, cookies, session values or the one-use code.
 
 Other E03 journeys and entry cases remain required. Selecting one without its
 implementation fails; it is not skipped or represented by a field test. A
@@ -54,11 +66,17 @@ They do not replace E10's actual Codex/Expert journey or E20's complete coverage
 qualification. CV07 in E09 requires every fixed E09 instance in the same campaign.
 
 固定验收分母为 664，开发回归与正式验收分别记账。E03 对真实安装包执行 332 个
-字段缺项／非法值检查，以及 HTTP、MCP、CLI 三个入口的 48 个阶段配置检查，
+字段缺项／非法值检查，以及 HTTP、MCP、CLI 三个入口的 48 个阶段配置检查和
+图形／YAML 两个实际浏览器入口的 32 个阶段配置检查，
 要求已有通过服务正常启用的隔离项目作为基线；
 检查准确字段与规则、草稿保留、原生效版本及历史源码不变，不直接写库或伪造依赖就绪。
 
-其余 E03 场景、Expert／Dashboard 等入口仍必须实现。未实现用例会失败；选择部分用例
+浏览器用例在真实安装页面操作 SeeCode 属性表单或 YAML 编辑器，保留草稿并确认
+启用按钮不可用、原生效版本不变。图形入口测试空引用／非法引用字符串，YAML 入口
+测试缺失键／null，分别记录，不能把 HTTP 注入冒充图形操作。每项保留实际截图和
+动作／网络记录，连接码和认证材料不写入记录。
+
+其余 E03 完整流程及 Expert 入口仍必须实现。未实现用例会失败；选择部分用例
 只生成明确的部分报告，保留完整分母及未执行 ID。开发版本不能声明最终候选验收通过。
 结果不替代完整源代码 CI、真实 Host／浏览器／平台流程、发行及当前 Codex 安装终验。
 

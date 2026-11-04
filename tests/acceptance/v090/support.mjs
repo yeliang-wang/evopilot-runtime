@@ -128,10 +128,24 @@ export async function openScenario(scenario){
   const ref=String(++sequence).padStart(5,'0')+'-'+name;write(ref,{caseInstanceId:currentCase,...value});
   const item={caseInstanceId:currentCase,artifact:ref,fileDigest:sha(fs.readFileSync(path.join(selection.outputRoot,ref)))};evidence.push(item);return item;
  }
+ function imageArtifact(bytes){
+  assert(Buffer.isBuffer(bytes)&&bytes.length<=16777216);assert.equal(bytes.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
+  const ref=String(++sequence).padStart(5,'0')+'-browser.png';fs.writeFileSync(path.join(selection.outputRoot,ref),bytes,{mode:0o600,flag:'wx'});
+  const item={caseInstanceId:currentCase,artifact:ref,fileDigest:sha(bytes),mimeType:'image/png'};evidence.push(item);return item;
+ }
+ async function browserCode(){
+  assert.equal(scenario,'E03');
+  const args=[path.join(selection.installedRoot,'package/dist/server/cli.js'),'browser-code','--connection-ref',selection.connectionRef];
+  const result=await new Promise(resolve=>execFile(plan.nodeExecutable,args,{timeout:20000,maxBuffer:16384,encoding:'utf8'},(error,stdout,stderr)=>resolve({exitCode:error?error.code:0,signal:error?.signal??null,stdout,stderr})));
+  assert.equal(result.exitCode,0,'Installed browser-code command failed');assert.equal(result.signal,null);
+  const code=JSON.parse(result.stdout);assert.equal(code.projectId,selection.projectId);assert.equal(code.url,connection.origin+'/monitor');assert.equal(code.oneUse,true);assert.equal(code.executionAuthorized,false);assert(/^[A-Za-z0-9_-]{43}$/.test(code.code));
+  artifact('browser-code-metadata.json',{installedCommand:true,projectId:code.projectId,url:code.url,expiresAt:code.expiresAt,oneUse:true,executionAuthorized:false,codeOmitted:true});
+  return code.code;
+ }
  async function read(operation,input={}){const r=await request(operation,input);assert.equal(r.status,200,JSON.stringify(r.body));return r.body.result;}
  async function source(revisionId){let offset=0;const chunks=[];for(;;){const page=await read('lifecycle.definition.source.read',{revisionId,offset});assert.equal(page.revisionId,revisionId);chunks.push(Buffer.from(page.data,'base64'));if(page.nextOffset===null)return Buffer.concat(chunks).toString('utf8');assert(page.nextOffset>offset);offset=page.nextOffset;}}
  const status=await read('runtime.status');assert.equal(status.serviceId,connection.serviceId);assert.equal(status.workspaceId,selection.workspaceId);assert.equal(status.version,manifest.version);
- return{selection,candidate,candidateDigest,cases,all,request,read,source,protocol,artifact,configurationEntry,serviceOrigin:connection.origin,
+ return{selection,candidate,candidateDigest,cases,all,request,read,source,protocol,artifact,imageArtifact,browserCode,configurationEntry,serviceOrigin:connection.origin,
   requestId:(caseId,suffix)=>scenario.toLowerCase()+'-'+sha(selection.runId+'|'+caseId+'|'+suffix).slice(0,48),
   async collect(c,fn){currentCase=c.caseInstanceId;const first=evidence.length;
    try{const assertions=await fn();results.push({caseInstanceId:c.caseInstanceId,status:'PASS',candidateDigest,qualification:selection.qualification,assertions,evidence:evidence.slice(first)});}
