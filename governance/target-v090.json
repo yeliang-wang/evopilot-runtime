@@ -64,7 +64,7 @@
       ]
     },
     "M2": {
-      "purpose": "Implement the approved trusted single-Base compiler, immutable project YAML revisions, guarded same-entry definition activation and pinned instance/AND stage admission. Published owner/platform adapters remain required in M3; unavailable real bindings fail closed.",
+      "purpose": "Implement the approved trusted single-Base compiler, immutable project YAML revisions, guarded same-entry definition activation and pinned instance/AND stage admission. Published owner/platform adapters remain required in M3; unavailable real bindings fail closed. Original EX10 adds exact source-verified historical Base readback and upgrade diff; ordinary compile, activation and new instances still require the single current publisher Base. No user-selectable weakened Base or historical admission flag.",
       "paths": [
         "src/lifecycle/base.ts",
         "src/lifecycle/compiler.ts",
@@ -86,7 +86,10 @@
         "tests/e2e/lifecycle-v090.test.mjs",
         "tests/e2e/service-http-v090.test.mjs",
         "tests/fixtures/lifecycle-v090.mjs",
-        "tests/fixtures/service-v090-worker.mjs"
+        "tests/fixtures/service-v090-worker.mjs",
+        "src/lifecycle/base-upgrade.ts",
+        "tests/e2e/base-upgrade-v090.test.mjs",
+        "tests/fixtures/base-upgrade-v090.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",
@@ -100,7 +103,7 @@
       "productAcceptance": "NOT_EVALUATED"
     },
     "M3": {
-      "purpose": "Implement the approved independent Runtime Expert/HTTP plugin, controlled installer, thin same-service stdio bridge and historical Host owner routes, protected configuration, published 0.8.3 owner API consumers and governed GitHub/GitLab/external Codex execution. Historical Host owner routes delegate to published owner APIs under separately scoped operator configuration; Runtime HTTP consumers never obtain owner authoring authority. No owner product evolution, daily cutover or product Release is conferred by this binding.",
+      "purpose": "Implement the approved independent Runtime Expert/HTTP plugin, controlled installer, thin same-service stdio bridge and historical Host owner routes, protected configuration, published 0.8.3 owner API consumers and governed GitHub/GitLab/external Codex execution. Historical Host owner routes delegate to published owner APIs under separately scoped operator configuration; Runtime HTTP consumers never obtain owner authoring authority. No owner product evolution, daily cutover or product Release is conferred by this binding. Original EX10 requires explicit stopped-service migration into a new installation, complete preserved history and separate old-installation rollback; no pending-request resumption, automatic startup, Host registration or daily cutover is implied.",
       "paths": [
         "src/adapters/config.ts",
         "src/adapters/published-owners.ts",
@@ -369,7 +372,9 @@
         "src/installation/usage.ts",
         "plugins/codex/skills/evopilot-runtime-expert/references/usage.md",
         "tests/e2e/token-usage-v090.test.mjs",
-        "tests/e2e/token-usage-host-v090.test.mjs"
+        "tests/e2e/token-usage-host-v090.test.mjs",
+        "src/installation/service-upgrade.ts",
+        "tests/e2e/service-upgrade-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",
@@ -526,7 +531,10 @@
         "scripts/release-gate.mjs",
         ".github/workflows/release.yml",
         "src/release/gate.ts",
-        "tests/e2e/release-gate-v090.test.mjs"
+        "tests/e2e/release-gate-v090.test.mjs",
+        "scripts/package-base-qualification.mjs",
+        "tests/fixtures/base-upgrade-v090/qualification-profile.json",
+        "tests/e2e/release-gate.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/acceptance-v090.json",
