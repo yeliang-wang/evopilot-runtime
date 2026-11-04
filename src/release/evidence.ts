@@ -82,7 +82,7 @@ export function inspectAcceptanceEvidence(repositoryRoot:string,input:Acceptance
     const selection=parse(selectionBytes);
     requireValue(selection.scenario===scenario&&selection.matrixDigest===matrixDigest&&selection.qualification==='FINAL_CANDIDATE'&&selection.candidateDigest===candidateDigest&&isDeepStrictEqual(selection.candidate,report.candidate),'Selection differs from the report or frozen cases');
     requireValue(isDeepStrictEqual(array(selection.selectedCaseIds).map(string).sort(),expected),'Selected case list is incomplete or duplicated');
-    const collectorPins=object(selection.collectorPins),collectorNames=['support.mjs',scenario.toLowerCase()+'.test.mjs'];exact(collectorPins,collectorNames);
+    const collectorPins=object(selection.collectorPins),collectorNames=['support.mjs',scenario.toLowerCase()+'.test.mjs',...(['E04','E06'].includes(scenario)?['browser.mjs']:[])];exact(collectorPins,collectorNames);
     for(const name of collectorNames){
       const relative='tests/acceptance/v090/'+name,committed=git(['show',input.sourceCommit+':'+relative]);
       requireValue(sha(committed)===digest(collectorPins[name])&&sha(read(join(repositoryRoot,relative),4194304,false))===sha(committed),'Collector differs from the tested source');

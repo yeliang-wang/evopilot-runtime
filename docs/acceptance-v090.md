@@ -244,3 +244,44 @@ inspect the actual execution provenance and independent original acceptance.
 精确安装包的 CLI／HTTP 运行，不直接写库。受控计数输入明确标为合成格式样本，不能
 冒充真实 Codex 用量；真实 Host、八阶段完成、恢复及当前安装仍需要各自执行证据。
 选择部分用例只产生部分报告。记录摘要一致仅证明字节完整，不能授予产品验收或发布权限。
+
+## Base constraints, revision isolation and browser editing
+
+E04 collects installed Base/extension constraints through API, CLI, MCP and the
+actual graph/YAML pages. Positive extension activation requires a current,
+registered configuration, supplied as optional protected
+`extensionConfiguration: {yamlRef, yamlSha256}` or already present in the active
+definition. Compiler-only structural controls are labeled as such; unresolved
+synthetic references never establish a usable extension. Actual parallel joins,
+frozen execution budgets and owner outcomes keep their separate fixed variants.
+
+E05 accepts `revisionEvolution: {instanceId, allowSyntheticDecisions: true}` only
+for its isolated test campaign. It reads an actual unfinished instance and
+preserves its original pins while changing the definition. Explicitly labeled
+fixture decisions create new PENDING instances through the native authority API;
+they do not execute stages or approve business assets/releases. Reading an old
+non-RC candidate is development evidence until its original execution is bound
+to the same qualified candidate. Base upgrades, changed candidate revalidation
+and REUSE/DELIVER remain independently required.
+
+E06 opens the installed SeeCode graph/YAML editor and separate read-only monitor.
+The browser helper records actual actions, sanitized request/response bodies and
+screenshots. Graph/keyboard changes, raw YAML/comment preservation, same-page
+activation, stale-client rejection and a response lost after an actual commit
+are exercised at their real UI entry. The response-loss probe inspects the
+original request rather than submitting another activation. Restart cases require
+`browserConfiguration: {allowServiceRestart: true}` on the selected isolated
+installation and use its native current-selection service-control API. They do
+not replay a historical installer plan or require a Codex conversation.
+
+E04 and E06 pin `browser.mjs` in addition to their own collector and `support.mjs`;
+the release evidence audit rejects missing or changed helper pins. The helper
+omits authentication headers, cookies, CSRF values, session responses and one-use
+connection codes. Exact variants requiring live extension execution, current
+permission revocation, in-flight instances or transaction fault points fail
+explicitly until their own conditions and evidence are supplied.
+
+E04／E05／E06 的采集器分别验证 Base 约束、版本与实例隔离、真实浏览器编辑。定义
+校验、真实启用、阶段执行分别记录，不能互相替代。浏览器重启仅操作明确选择的隔离
+安装，保留当前安装标识与原回执；涉及真实运行、权限撤销和事务故障的未实现变体
+继续列为未完成，不用已通过的页面或字段测试替代。

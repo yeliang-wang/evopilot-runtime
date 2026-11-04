@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {changeField,moveNode,data,addExtension,changeExtension,connectExtension,removeExtension,diffLines,document,draftNodes,at} from '../../dashboard/src/model.ts';
+import {changeField,moveNode,data,addExtension,changeExtension,connectExtension,removeExtension,diffLines,document,draftNodes,at,graphLayout} from '../../dashboard/src/model.ts';
+import {render} from '../../dashboard/vendor/seecode/lib/render/graph/graph.mjs';
 import {lifecycle,yaml,extension} from '../fixtures/lifecycle-v090.mjs';
 import {loadPublisherBase,valueDigest} from '../../dist/lifecycle/base.js';
 import {compileLifecycle} from '../../dist/lifecycle/compiler.js';
@@ -24,4 +25,38 @@ test('extension editing keeps AND joins, exact action pins and original YAML; ba
 test('malformed dynamic YAML is never normalized or silently discarded; accurate text differences remain inspectable',()=>{
  for(const source of ['a: [','a: &x 1\nb: *x','a: 1\na: 2','a: !custom value'])assert.throws(()=>document(source));
  const text=diffLines('a\nold\nz','a\nnew\nz');assert.match(text,/- old/);assert.match(text,/\+ new/);assert.equal(diffLines('same','same'),'没有变更');
+});
+
+test('real SeeCode keeps all extension nodes after a saved position collides with their default cell',()=>{
+ const project=lifecycle();project.extensions=[extension('first'),extension('second'),extension('third')];project.presentation={layout:{scope:{x:400,y:180}}};
+ const source='# Retain reviewed YAML and display preferences\n'+yaml(project),compiled=compileLifecycle(source,'alpha');assert.equal(compiled.valid,true);
+ const original=structuredClone(compiled.effective.nodes),saved=structuredClone(project.presentation.layout),positions=graphLayout(compiled.effective.nodes,project.presentation.layout);
+ assert.deepEqual({x:positions.scope.x,y:positions.scope.y},saved.scope);assert.equal(new Set(Object.values(positions).map(p=>p.row+','+p.col)).size,original.length);
+ const drawn=render({type:'flowchart',dir:'LR',budget:'off',legend:false,nodes:original.map(n=>({id:n.id,label:n.id,row:positions[n.id].row,col:positions[n.id].col,shape:'box'})),edges:original.flatMap(n=>n.dependsOn.map(p=>[p,n.id]))});
+ assert.deepEqual(drawn.problems.filter(p=>p.code.startsWith('E_')),[]);for(const n of original)assert(drawn.body.includes('data-sc-node="'+n.id+'"'),'Actual SeeCode omitted '+n.id);
+ assert.deepEqual(compiled.effective.nodes,original);assert.deepEqual(project.presentation.layout,saved);assert.equal(compileLifecycle(source,'alpha').effective.semanticDigest,compiled.effective.semanticDigest);
+});
+
+test('colliding explicit and rounded positions resolve deterministically without rewriting input or permitting invalid DAGs',()=>{
+ const project=lifecycle();project.extensions=[extension('first'),extension('second')];const nodes=compileLifecycle(yaml(project),'alpha').effective.nodes;
+ const layout={scope:{x:400,y:180},'project.first':{x:400,y:180},'project.second':{x:401,y:181}},original=structuredClone(layout);
+ const first=graphLayout(nodes,layout),reordered=graphLayout([...nodes].reverse(),layout);assert.deepEqual(first,reordered);assert.deepEqual(layout,original);
+ assert.equal(new Set(Object.values(first).map(p=>p.row+','+p.col)).size,nodes.length);
+ assert.throws(()=>graphLayout([{...nodes[0],dependsOn:['scope']}],{}),/循环/);assert.throws(()=>graphLayout([{...nodes[0],dependsOn:['missing']}],{}),/缺少依赖节点/);
+});
+
+test('all 72 supported nodes remain movable when explicit positions collide at either coordinate boundary',()=>{
+ const project=lifecycle();project.extensions=Array.from({length:64},(_,i)=>extension('edge-'+i));
+ const source=yaml(project),compiled=compileLifecycle(source,'alpha');assert.equal(compiled.valid,true);const nodes=compiled.effective.nodes;assert.equal(nodes.length,72);
+ for(const y of [-100000,100000]){
+  const layout=Object.fromEntries(nodes.map(n=>[n.id,{x:400,y}])),original=structuredClone(layout),positions=graphLayout(nodes,layout);
+  assert.equal(Object.keys(positions).length,72);assert.equal(new Set(Object.values(positions).map(p=>p.row+','+p.col)).size,72);
+  assert(Object.values(positions).every(p=>Math.abs(p.x)<=100000&&Math.abs(p.y)<=100000),'Collision projection must remain accepted by moveNode and the server schema');
+  assert.deepEqual(positions.scope,{x:400,y,row:Math.round(y/90),col:2},'First explicit boundary preference must remain exact');
+  assert.deepEqual(layout,original);assert.deepEqual(graphLayout([...nodes].reverse(),layout),positions);
+  const displaced=nodes.find(n=>positions[n.id].y!==y);assert(displaced);
+  const p=positions[displaced.id],moved=moveNode(source,nodes,displaced.id,p.x+200,p.y);
+  assert.deepEqual(data(moved).presentation.layout[displaced.id],{x:600,y:p.y});
+  const after=compileLifecycle(moved,'alpha');assert.equal(after.valid,true);assert.equal(after.effective.semanticDigest,compiled.effective.semanticDigest);
+ }
 });

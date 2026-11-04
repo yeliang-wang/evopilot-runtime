@@ -21,6 +21,30 @@ export function moveNode(source:string,nodes:GraphNode[],id:string,x:number,y:nu
  if(!nodes.some(n=>n.id===id)||![x,y].every(v=>Number.isFinite(v)&&Math.abs(v)<=100000))throw Error('节点或位置无效。');
  const doc=document(source);doc.setIn(['presentation','layout',id],{x,y});return doc.toString({lineWidth:0});
 }
+/** Resolve display cells only. Saved YAML positions are preferences, not an
+ * instruction to drop a node when another extension occupies the same cell.
+ * Reserve explicit positions first; put collisions in the next free row of
+ * the same column, searching back below the preference at the upper bound.
+ * Stable ordering makes this projection reproducible. */
+export function graphLayout(nodes:GraphNode[],layout:Record<string,{x:number;y:number}>={}){
+ if(nodes.length>72||new Set(nodes.map(n=>n.id)).size!==nodes.length||nodes.some(n=>! /^[a-z][a-z0-9.-]{0,100}$/.test(n.id)))throw Error('图形节点不符合支持范围。');
+ const ranks=new Map<string,number>(),visiting=new Set<string>(),byId=new Map(nodes.map(n=>[n.id,n]));
+ function rank(id:string):number{if(ranks.has(id))return ranks.get(id)!;if(visiting.has(id))throw Error('依赖图中存在循环。');const n=byId.get(id);if(!n)throw Error('缺少依赖节点。');visiting.add(id);const value=Math.max(0,...n.dependsOn.map(p=>rank(p)+1));ranks.set(id,value);visiting.delete(id);return value;}
+ nodes.forEach(n=>rank(n.id));
+ const ordered=[...nodes].sort((a,b)=>ranks.get(a.id)!-ranks.get(b.id)!||a.id.localeCompare(b.id)),rows=new Map<number,number>(),occupied=new Set<string>();
+ const positions:Record<string,{x:number;y:number;row:number;col:number}>={};
+ const place=(id:string,p:{x:number;y:number})=>{
+  if(![p.x,p.y].every(v=>Number.isFinite(v)&&Math.abs(v)<=100000))throw Error('节点位置无效。');
+  const col=Math.round(p.x/200),preferredRow=Math.round(p.y/90),minimumRow=Math.ceil(-100000/90),maximumRow=Math.floor(100000/90);let row=preferredRow;
+  while(row<=maximumRow&&occupied.has(row+','+col))row++;
+  if(row>maximumRow){row=preferredRow-1;while(row>=minimumRow&&occupied.has(row+','+col))row--;}
+  if(row<minimumRow)throw Error('没有界限内可用的节点位置。');
+  occupied.add(row+','+col);positions[id]={x:p.x,y:row===preferredRow?p.y:row*90,row,col};
+ };
+ for(const n of ordered)if(layout[n.id])place(n.id,layout[n.id]);
+ for(const n of ordered)if(!layout[n.id]){const col=ranks.get(n.id)!,row=rows.get(col)??0;rows.set(col,row+1);place(n.id,{x:col*200,y:row*90});}
+ return positions;
+}
 export function extensions(source:string):Record<string,unknown>[]{const v=data(source).extensions??[];if(!Array.isArray(v)||v.some(e=>!e||typeof e!=='object'||Array.isArray(e)))throw Error('扩展必须是映射列表。');return v as Record<string,unknown>[];}
 export function changeExtension(source:string,id:string,value:Record<string,unknown>):string{
  const doc=document(source),entries=extensions(source),index=entries.findIndex(e=>e.id===id);if(index<0||value.id!==id)throw Error('扩展标识不可通过属性编辑更改。');

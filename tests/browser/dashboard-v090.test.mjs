@@ -90,3 +90,12 @@ test('a concurrent revision after commit but before readback cannot silently aut
  await page.route('**/api/v1/dashboard/request',async route=>{if(route.request().postDataJSON().operation==='lifecycle.draft.save'){const response=await route.fetch();expect(response.status()).toBe(200);await f.write('lifecycle.draft.save',{yaml:concurrent});await route.fulfill({response});}else await route.continue();});
  await page.getByRole('button',{name:'保存草稿',exact:true}).click();await expect(page.getByRole('button',{name:'重新读取',exact:true})).toBeVisible();await expect(source(page)).toHaveValue(local);await expect(page.getByRole('button',{name:'保存草稿',exact:true})).toBeDisabled();expect(await f.source((await f.call('lifecycle.definition.inspect')).draft.id)).toBe(concurrent);
 });
+
+test('existing positioned node and newly added extensions remain visible in actual SeeCode without changing saved YAML coordinates',async({page})=>{
+ await login(page);const value=parse(f.initialSource);value.presentation={layout:{scope:{x:400,y:180}}};value.extensions=[extension('existing'),extension('second')];
+ const original='# Preserve explicit graph position\n'+yaml(value);await source(page).fill(original);await valid(page);
+ await page.getByText('添加项目扩展',{exact:true}).click();await page.getByLabel('扩展标识',{exact:true}).fill('project.third');await page.getByRole('button',{name:'加入草稿'}).click();
+ await expect(node(page,'project.third')).toBeVisible();await node(page,'project.third').click();await page.getByLabel('扩展属性（JSON）').fill(JSON.stringify(extension('third')));await page.getByRole('button',{name:'应用扩展属性'}).click();await valid(page);
+ await expect(page.getByRole('alert').filter({hasText:'图形暂不可用'})).toHaveCount(0);await expect(page.locator('svg [data-sc-node]')).toHaveCount(11);
+ const edited=await page.getByLabel('Project Lifecycle YAML').inputValue();expect(parse(edited).presentation.layout.scope).toEqual({x:400,y:180});expect(edited).toContain('# Preserve explicit graph position');await save(page);expect(await f.source((await f.call('lifecycle.definition.inspect')).draft.id)).toBe(edited);
+});

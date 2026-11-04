@@ -32,7 +32,10 @@ export async function openScenario(scenario){
  const selectionRef=process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;
  assert(selectionRef,'Set EVOPILOT_V090_ACCEPTANCE_SELECTION to a protected, explicit isolated candidate selection');
  const selection=JSON.parse(readRegular(selectionRef,131072,true));
- keys(selection,['schema','installedRoot','expectedManifestDigest','connectionRef','workspaceId','projectId','runId','outputRoot','qualification'],['caseIds','codexHost','packageCompatibility','expertConfiguration','lifecycleExecution']);
+ keys(selection,['schema','installedRoot','expectedManifestDigest','connectionRef','workspaceId','projectId','runId','outputRoot','qualification'],['caseIds','codexHost','packageCompatibility','expertConfiguration','lifecycleExecution','browserConfiguration','extensionConfiguration','revisionEvolution']);
+ if(selection.browserConfiguration){assert(['E04','E06'].includes(scenario));keys(selection.browserConfiguration,['allowServiceRestart']);assert.equal(typeof selection.browserConfiguration.allowServiceRestart,'boolean');}
+ if(selection.extensionConfiguration){assert.equal(scenario,'E04');keys(selection.extensionConfiguration,['yamlRef','yamlSha256']);assert.equal(typeof selection.extensionConfiguration.yamlRef,'string');assert(/^[a-f0-9]{64}$/.test(selection.extensionConfiguration.yamlSha256));}
+ if(selection.revisionEvolution){assert.equal(scenario,'E05');keys(selection.revisionEvolution,['instanceId','allowSyntheticDecisions']);assert.equal(typeof selection.revisionEvolution.instanceId,'string');assert.equal(selection.revisionEvolution.allowSyntheticDecisions,true);}
  if(selection.packageCompatibility)assert.equal(scenario,'E08','Package compatibility inputs are scoped to E08');
  if(selection.expertConfiguration)assert(['E02','E10'].includes(scenario),'Expert configuration inputs are scoped to E02/E10');
  if(selection.lifecycleExecution)assert.equal(scenario,'E02','Execution collection inputs are scoped to E02');
@@ -66,7 +69,7 @@ export async function openScenario(scenario){
  // Candidate identity is the immutable package, not a particular test service
  // or Workspace. Different scenario installations must share this identity.
  const candidateDigest='sha256:'+selection.expectedManifestDigest;
- const collectorPins=Object.fromEntries(['support.mjs',scenario.toLowerCase()+'.test.mjs'].map(name=>[name,sha(fs.readFileSync(new URL(name,import.meta.url)))]));
+ const collectorPins=Object.fromEntries(['support.mjs',scenario.toLowerCase()+'.test.mjs',...(['E04','E06'].includes(scenario)?['browser.mjs']:[])].map(name=>[name,sha(fs.readFileSync(new URL(name,import.meta.url)))]));
  write('selection.json',{scenario,qualification:selection.qualification,candidate,candidateDigest,collectorPins,matrixDigest:sha(matrixBytes),selectedCaseIds:selectedIds,scenarioDenominator:all.length,fullDenominator:matrix.count,sourceQualification:'SEPARATE_E20_OBLIGATION'});
  let sequence=0,currentCase=null,uncertain=false,hostSequence=0;
  const evidence=[],results=[];
@@ -89,9 +92,9 @@ export async function openScenario(scenario){
   assert(Object.values(extra).every(v=>typeof v==='string'&&v.length<=128));
   if(method==='POST'){
    assert.equal(typeof rawBody,'string');assert(Buffer.byteLength(rawBody)<=262144);
-   // The raw E09 entry is read-only. Only the typed E03 entry below can supply
+   // The raw E09 entry is read-only. Only the typed configuration entry can supply
    // an exact configuration mutation; it never permits execution or authority.
-   if(rawBody.includes('runtime_write'))assert(mutation?.requestId&&scenario==='E03'&&JSON.parse(rawBody).params.arguments.requestId===mutation.requestId,'Protocol qualification must not dispatch business mutations');
+   if(rawBody.includes('runtime_write'))assert(mutation?.requestId&&['E03','E04','E06'].includes(scenario)&&JSON.parse(rawBody).params.arguments.requestId===mutation.requestId,'Protocol qualification must not dispatch business mutations');
   }else assert.equal(rawBody,undefined);
   const safeHeaders={accept:'application/json, text/event-stream','content-type':'application/json',...extra};
   const id=String(++sequence).padStart(5,'0'),ref=id+'-protocol-request.json';
@@ -108,12 +111,12 @@ export async function openScenario(scenario){
   return{status:response.status,headers,rawBody:raw,body:raw?JSON.parse(raw):null};
  }
  async function configurationEntry(entry,operation,input={},meta={}){
-  assert(['E02','E03','E08','E10'].includes(scenario));assert(['http-api','http-mcp','cli'].includes(entry));
+  assert(['E02','E03','E04','E06','E08','E10'].includes(scenario));assert(['http-api','http-mcp','cli'].includes(entry));
   const writes=['lifecycle.draft.save','lifecycle.definition.save-and-activate'];
   const reads=['lifecycle.definition.inspect','lifecycle.definition.validate',...(scenario!=='E03'?['runtime.status','lifecycle.base.inspect']:[])];
   assert([...writes,...reads].includes(operation));
   const mutation=writes.includes(operation),envelope={operation,projectId:selection.projectId,input,...meta};
-  if(scenario!=='E03')assert(!mutation,'Package/Expert readback cannot substitute for actual Expert writes');
+  if(!['E03','E04','E06'].includes(scenario))assert(!mutation,'Package/Expert readback cannot substitute for actual Expert writes');
   assert.equal(Boolean(meta.requestId),mutation);assert(!uncertain,'Inspect the original uncertain request before another operation');
   if(entry==='http-api'){const r=await request(operation,input,meta);assert.equal(r.status,200,JSON.stringify(r.body));return r.body;}
   if(entry==='http-mcp'){
@@ -145,12 +148,12 @@ export async function openScenario(scenario){
   const item={caseInstanceId:currentCase,artifact:ref,fileDigest:sha(bytes),mimeType:'image/png'};evidence.push(item);return item;
  }
  function traceArtifact(bytes){
-  assert.equal(scenario,'E02');assert(Buffer.isBuffer(bytes)&&bytes.length<=16777216);assert.equal(bytes.readUInt32LE(0),0x04034b50);
+  assert(['E02','E04','E06'].includes(scenario));assert(Buffer.isBuffer(bytes)&&bytes.length<=16777216);assert.equal(bytes.readUInt32LE(0),0x04034b50);
   const ref=String(++sequence).padStart(5,'0')+'-browser-trace.zip';fs.writeFileSync(path.join(selection.outputRoot,ref),bytes,{mode:0o600,flag:'wx'});
   const item={caseInstanceId:currentCase,artifact:ref,fileDigest:sha(bytes),mimeType:'application/zip'};evidence.push(item);return item;
  }
  async function browserCode(){
-  assert(['E02','E03','E10'].includes(scenario));
+  assert(['E02','E03','E04','E06','E10'].includes(scenario));
   const args=[path.join(selection.installedRoot,'package/dist/server/cli.js'),'browser-code','--connection-ref',selection.connectionRef];
   const result=await new Promise(resolve=>execFile(plan.nodeExecutable,args,{timeout:20000,maxBuffer:16384,encoding:'utf8'},(error,stdout,stderr)=>resolve({exitCode:error?error.code:0,signal:error?.signal??null,stdout,stderr})));
   assert.equal(result.exitCode,0,'Installed browser-code command failed');assert.equal(result.signal,null);

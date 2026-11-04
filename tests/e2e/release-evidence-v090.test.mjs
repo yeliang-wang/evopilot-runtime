@@ -15,14 +15,14 @@ function fixture(t){
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));fs.mkdirSync(source);fs.mkdirSync(evidenceRoot,{mode:0o700});
  const put=(file,value)=>{fs.mkdirSync(dirname(file),{recursive:true});const bytes=Buffer.isBuffer(value)?value:Buffer.from(typeof value==='string'?value:JSON.stringify(value,null,2)+'\n');fs.writeFileSync(file,bytes,{mode:0o600});return{ref:file,sha256:sha(bytes)};};
  for(const file of ['package.json','package-lock.json',...fs.readdirSync(join(repository,'governance')).filter(n=>n.endsWith('.json')).map(n=>'governance/'+n)])put(join(source,file),fs.readFileSync(join(repository,file)));
- for(const file of ['support.mjs',...Array.from({length:22},(_,i)=>'e'+String(i+1).padStart(2,'0')+'.test.mjs')])put(join(source,'tests/acceptance/v090',file),'// SYNTHETIC collector identity fixture; never represents actual E2E.\n');
+ for(const file of ['support.mjs','browser.mjs',...Array.from({length:22},(_,i)=>'e'+String(i+1).padStart(2,'0')+'.test.mjs')])put(join(source,'tests/acceptance/v090',file),'// SYNTHETIC collector identity fixture; never represents actual E2E.\n');
  const git=args=>execFileSync('git',['-c','core.fsmonitor=false','-C',source,...args],{stdio:['ignore','pipe','pipe']}).toString();
  git(['init','--quiet']);git(['add','.']);git(['-c','user.name=Synthetic evidence test','-c','user.email=synthetic@example.invalid','-c','commit.gpgsign=false','commit','--quiet','-m','Synthetic audit fixture, not product evidence']);const sourceCommit=git(['rev-parse','HEAD']).trim();
  const archive=put(join(evidenceRoot,'synthetic.tgz'),'SYNTHETIC archive bytes; not an installable Release.\n'),manifest=put(join(evidenceRoot,'manifest.json'),{schema:'runtime-standalone-distribution/v1',version:'0.9.0',archiveDigest:archive.sha256,files:{'package.json':{type:'file',sha256:sha(Buffer.from('{}')),bytes:2,mode:0o644}}}),sourceRevision=put(join(evidenceRoot,'source.txt'),sourceCommit+'\n');
  const matrixBytes=fs.readFileSync(join(source,'governance/parameter-matrix-v090.json')),matrix=JSON.parse(matrixBytes),candidate={manifestDigest:manifest.sha256,archiveDigest:archive.sha256,version:'0.9.0',serviceId:'synthetic',workspaceId:'synthetic',projectId:'synthetic'},candidateDigest='sha256:'+manifest.sha256;
  const input={schema:'runtime-release-evidence-input/v1',sourceCommit,manifest,archive,sourceRevision,reports:[]};
  for(let i=1;i<=20;i++){
-  const scenario='E'+String(i).padStart(2,'0'),dir=join(evidenceRoot,scenario),ids=matrix.caseInstances.filter(c=>c.scenario===scenario).map(c=>c.caseInstanceId),collectorPins=Object.fromEntries(['support.mjs',scenario.toLowerCase()+'.test.mjs'].map(name=>[name,sha(fs.readFileSync(join(source,'tests/acceptance/v090',name)))]));
+  const scenario='E'+String(i).padStart(2,'0'),dir=join(evidenceRoot,scenario),ids=matrix.caseInstances.filter(c=>c.scenario===scenario).map(c=>c.caseInstanceId),collectorPins=Object.fromEntries(['support.mjs',scenario.toLowerCase()+'.test.mjs',...(['E04','E06'].includes(scenario)?['browser.mjs']:[])].map(name=>[name,sha(fs.readFileSync(join(source,'tests/acceptance/v090',name)))]));
   const selection=put(join(dir,'selection.json'),{scenario,qualification:'FINAL_CANDIDATE',candidate,candidateDigest,collectorPins,matrixDigest:sha(matrixBytes),selectedCaseIds:ids,scenarioDenominator:ids.length,fullDenominator:664});
   const records=id=>{const prefix=id??'setup',request=put(join(dir,prefix+'-request.json'),{caseInstanceId:id,synthetic:true,request:'read-only fixture'}),response=put(join(dir,prefix+'-response.json'),{caseInstanceId:id,synthetic:true,response:'fixture result'});return{caseInstanceId:id,request:prefix+'-request.json',requestDigest:request.sha256,response:prefix+'-response.json',fileDigest:response.sha256};};
   const results=ids.map(caseInstanceId=>{const r={caseInstanceId,status:'PASS',qualification:'FINAL_CANDIDATE',candidateDigest,assertions:{synthetic:'Schema/integrity fixture only; not product acceptance'},evidence:[records(caseInstanceId)]};put(join(dir,caseInstanceId+'.json'),r);return r;});
@@ -59,4 +59,16 @@ test('changed candidate, wrong source revision and edited collectors cannot reus
  const f=fixture(t),original=fs.readFileSync(f.input.archive.ref);fs.writeFileSync(f.input.archive.ref,'changed');assert.throws(f.audit);fs.writeFileSync(f.input.archive.ref,original);
  const source=f.input.sourceCommit;f.input.sourceCommit='b'.repeat(40);assert.throws(f.audit);f.input.sourceCommit=source;
  const collector=join(f.source,'tests/acceptance/v090/e01.test.mjs');fs.appendFileSync(collector,'// edited\n');assert.throws(f.audit,/clean committed source/);
+});
+test('browser helper dependency is part of both original collector evidence bindings',t=>{
+ const f=fixture(t);
+ for(const scenario of ['E04','E06']){
+  const entry=f.input.reports.find(r=>r.scenario===scenario),selectionRef=join(f.evidenceRoot,scenario,'selection.json'),selection=JSON.parse(fs.readFileSync(selectionRef)),original=structuredClone(selection),report=JSON.parse(fs.readFileSync(entry.report.ref));
+  for(const value of [null,'0'.repeat(64)]){
+   if(value===null)delete selection.collectorPins['browser.mjs'];else selection.collectorPins['browser.mjs']=value;
+   report.selectionDigest=f.put(selectionRef,selection).sha256;entry.report=f.put(entry.report.ref,report);assert.throws(f.audit);
+  }
+  report.selectionDigest=f.put(selectionRef,original).sha256;entry.report=f.put(entry.report.ref,report);
+ }
+ assert.equal(f.audit().passed,655);
 });

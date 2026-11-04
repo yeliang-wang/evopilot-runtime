@@ -1,18 +1,15 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
 import {render} from '../vendor/seecode/lib/render/graph/graph.mjs';
-import {stageLabels} from './model';
+import {stageLabels,graphLayout} from './model';
 import type {GraphNode,Stage} from './types';
 
 interface Props {nodes:GraphNode[];layout?:Record<string,{x:number;y:number}>;selected?:string;states?:Record<string,Stage>;onSelect?:(id:string)=>void;onMove?:(id:string,x:number,y:number)=>void;}
 export function Graph({nodes,layout={},selected,states,onSelect,onMove}:Props){
  const ref=useRef<SVGSVGElement>(null),drag=useRef<{id:string;x:number;y:number}|null>(null),[failure,setFailure]=useState(''),[zoom,setZoom]=useState(1);
  const result=useMemo(()=>{try{
-  if(nodes.length>72||new Set(nodes.map(n=>n.id)).size!==nodes.length||nodes.some(n=>! /^[a-z][a-z0-9.-]{0,100}$/.test(n.id)))throw Error('图形节点不符合支持范围。');
+  const positions=graphLayout(nodes,layout);
   if(!nodes.length)return null;
-  const ranks=new Map<string,number>(),visiting=new Set<string>(),byId=new Map(nodes.map(n=>[n.id,n]));
-  function rank(id:string):number{if(ranks.has(id))return ranks.get(id)!;if(visiting.has(id))throw Error('依赖图中存在循环。');const n=byId.get(id);if(!n)throw Error('缺少依赖节点。');visiting.add(id);const value=Math.max(0,...n.dependsOn.map(p=>rank(p)+1));ranks.set(id,value);visiting.delete(id);return value;}
-  nodes.forEach(n=>rank(n.id));const used=new Map<number,number>(),positions:Record<string,{x:number;y:number}>={};
-  const items=nodes.map(n=>{const col=ranks.get(n.id)!,row=used.get(col)??0;used.set(col,row+1);const p=layout[n.id]??{x:col*200,y:row*90};if(![p.x,p.y].every(v=>Number.isFinite(v)&&Math.abs(v)<=100000))throw Error('节点位置无效。');positions[n.id]=p;return{id:n.id,label:stageLabels[n.id]??n.id.replace(/^project\./,''),row:Math.round(p.y/90),col:Math.round(p.x/200),shape:'box',kind:n.source==='base'?'backend':'focal',tag:n.source==='base'?'BASE · LOCKED':'PROJECT',sub:states?.[n.id]?.status??n.stage};});
+  const items=nodes.map(n=>{const p=positions[n.id];return{id:n.id,label:stageLabels[n.id]??n.id.replace(/^project\./,''),row:p.row,col:p.col,shape:'box',kind:n.source==='base'?'backend':'focal',tag:n.source==='base'?'BASE · LOCKED':'PROJECT',sub:states?.[n.id]?.status??n.stage};});
   const drawn=render({type:'flowchart',dir:'LR',budget:'off',legend:false,nodes:items,edges:nodes.flatMap(n=>n.dependsOn.map(p=>[p,n.id]))});
   if(!drawn.body||!drawn.viewBox||drawn.problems.some(p=>p.code.startsWith('E_')))throw Error(drawn.problems.map(p=>p.msg).join('；')||'图形渲染未返回结果。');
   return{...drawn,positions};
