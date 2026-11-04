@@ -7,7 +7,7 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {parseDocument} from 'yaml';
 import {chromium,expect} from '@playwright/test';
-import {openScenario,sha} from './support.mjs';
+import {collectCaseCampaign,caseCampaignTestOptions,openScenario,sha} from './support.mjs';
 import {collectInstalledBaseUpgrade} from './maintenance.mjs';
 import {openBrowser} from './browser.mjs';
 
@@ -18,9 +18,10 @@ const missing={
  'E05.CV06':'Requires actual published-owner REUSE and DELIVER decisions, expiration/scope/known-defect variants and partial feedback recovery.',
 };
 
-test('E05 installed revision isolation and actual candidate evidence',async()=>{
+test('E05 installed revision isolation and actual candidate evidence',caseCampaignTestOptions('E05'),async()=>{
  const run=await openScenario('E05');let serial=0;
  try{
+  if(run.selection.caseCampaign){await collectCaseCampaign(run,'E05');return;}
   const cfg=run.selection.revisionEvolution;let baseline;
   if(run.cases.some(c=>c.caseInstanceId!=='E05.EX10')){
    assert(cfg&&Object.keys(cfg).sort().join(',')==='allowSyntheticDecisions,instanceId');

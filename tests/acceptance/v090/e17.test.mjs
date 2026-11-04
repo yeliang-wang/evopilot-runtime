@@ -3,12 +3,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
-import {openScenario} from './support.mjs';
+import {collectCaseCampaign,caseCampaignTestOptions,openScenario} from './support.mjs';
 import {collectInstalledBaseUpgrade} from './maintenance.mjs';
 import {openBrowser} from './browser.mjs';
 
-test('E17 native installed Base upgrade and retained rollback evidence',async()=>{
+test('E17 native installed Base upgrade and retained rollback evidence',caseCampaignTestOptions('E17'),async()=>{
  const run=await openScenario('E17');try{
+  if(run.selection.caseCampaign){await collectCaseCampaign(run,'E17');return;}
   for(const c of run.cases)await run.collect(c,async()=>{
    if(c.caseInstanceId==='E17.EX10')return collectInstalledBaseUpgrade(run,c,{chromium,expect,openBrowser});
    if(c.caseInstanceId==='E17.journey')assert.fail('UNIMPLEMENTED_FIXED_CASE: E17.journey additionally requires its selected historical-format migration, unknown-schema/incompatibility/failure injections and preservation of private owner assets/decisions; EX10 alone is insufficient.');

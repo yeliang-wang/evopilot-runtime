@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {chromium,expect} from '@playwright/test';
-import {openScenario,sha} from './support.mjs';
+import {collectCaseCampaign,caseCampaignTestOptions,openScenario,sha} from './support.mjs';
 import {openBrowser} from './browser.mjs';
 import {LIFECYCLE_READBACK_CASES,collectLifecycleReadback} from './execution.mjs';
 
@@ -14,7 +14,6 @@ import {LIFECYCLE_READBACK_CASES,collectLifecycleReadback} from './execution.mjs
 // calls below are read-only independent observations of those original requests.
 const stages=['scope','plan','implementation','candidate','verification','release-decision','publication','closure'];
 const unsupported={
- 'E02.variant.02':'Requires a genuinely changed candidate, rejection of old evidence and actual affected checks.',
  'E02.variant.03':'Requires all eight stage allow/deny representative input, permission and prerequisite combinations.',
  'E02.CV03':'Requires the complete actual managed-action time/attempt/resource boundary matrix and external call counts.',
  'E02.CV07':'Requires the exact collected branch/variant inventory and the independent final E20 check.',
@@ -115,9 +114,10 @@ async function proveCodingHost(run,selected,handoff,reported,claim,nodeExecutabl
   }};
  }finally{fs.closeSync(fd);}
 }
-test('E02 actual installed GitLab lifecycle with external Codex and native owners',async()=>{
+test('E02 actual installed GitLab lifecycle with external Codex and native owners',caseCampaignTestOptions('E02'),async()=>{
  const run=await openScenario('E02');let expert,browser,ui,primaryFailure;
  try{
+  if(run.selection.caseCampaign){await collectCaseCampaign(run,'E02');return;}
  if(!run.cases.some(c=>c.caseInstanceId==='E02.journey')){for(const c of run.cases)await run.collect(c,async()=>{if(Object.hasOwn(LIFECYCLE_READBACK_CASES,c.caseInstanceId))return collectLifecycleReadback(run,c,'gitlab',proveCodingHost);throw Error('UNIMPLEMENTED_ORIGINAL_CASE: '+unsupported[c.caseInstanceId]);});return;}
  const cfg=run.selection.lifecycleExecution;assert(cfg);const root=cfg.exchangeRoot;
  assert.equal(fs.realpathSync(root),root);assert.deepEqual(fs.readdirSync(root),['CODING-HOST-SELECTION.json'],'Only the preselected original Host source may exist before a new external Agent exchange');assert.equal(fs.lstatSync(root).mode&0o777,0o700);

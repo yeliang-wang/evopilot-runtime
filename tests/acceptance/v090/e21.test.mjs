@@ -11,7 +11,7 @@ import {execFile,execFileSync} from 'node:child_process';
 export const repos=Object.freeze(['yeliang-wang/evopilot-runtime','yeliang-wang/evopilot','yeliang-wang/evopilot-ontology','yeliang-wang/evopilot-harness']);
 const runtime=repos[0],runtimeId=1416265295,tag='v0.9.0';
 export const assets=Object.freeze(['SHA256SUMS','distribution-manifest.json','evopilot-next-runtime-0.9.0.tgz','evopilot-runtime-0.9.0-darwin-arm64.tar.gz','runtime-dependency-lock.json','source-revision.txt']);
-export const parentPaths=Object.freeze(['README.md','README_CN.md','docs/README.md']);
+export const parentPaths=Object.freeze(['README.md','README_CN.md','docs/README.md','docs/zh-CN/README.md']);
 const sha=b=>createHash('sha256').update(b).digest('hex');
 const sealedPrivateRecords=new Map();
 const canonical=v=>Array.isArray(v)?'['+v.map(canonical).join(',')+']':v&&typeof v==='object'?'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}':JSON.stringify(v);

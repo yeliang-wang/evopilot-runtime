@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {parseDocument} from 'yaml';
-import {openScenario,sha} from './support.mjs';
+import {collectCaseCampaign,caseCampaignTestOptions,openScenario,sha} from './support.mjs';
 import {chromium,expect} from '@playwright/test';
 import {openBrowser} from './browser.mjs';
 
@@ -479,9 +479,10 @@ async function permissionTiming(run,browser,c){
  return{actualInstalledCandidate:true,actualThreeRoles:true,monitor:roleMonitor,timings,postActivation:post,oldInstanceAndPinsUnchanged:true,authFaultInjection:true,productMembershipManagement:false,newInstanceOrStageDispatches:0,newModelCalls:0,newCiRuns:0,originalOwnerReferences:initial.original.definition.semantic.assets,originalRevisionId:initial.original.pins.definitionRevisionId,ownerFeedbackBranchesNotCredited:true,l3SoftwareAcceptanceClaimed:false};
 }
 
-test('E16 installed owner boundaries and original feedback replay',{timeout:240000},async()=>{
+test('E16 installed owner boundaries and original feedback replay',caseCampaignTestOptions('E16',{timeout:240000}),async()=>{
  const run=await openScenario('E16');
  try{
+  if(run.selection.caseCampaign){await collectCaseCampaign(run,'E16');return;}
   assert.equal(run.all.length,7,'The frozen E16 denominator must remain unchanged');
   for(const c of run.cases)await run.collect(c,async()=>{
    if(c.caseInstanceId==='E16.CV02'){const browser=await chromium.launch({headless:true});try{return await permissionTiming(run,browser,c);}finally{await browser.close();}}
