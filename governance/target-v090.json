@@ -457,7 +457,10 @@
         "docs/zh-CN/runtime-v090.md",
         "docs/lifecycle-api.md",
         "docs/cli.md",
-        "docs/service.md"
+        "docs/service.md",
+        ".github/workflows/ci.yml",
+        "tests/e2e/reconstruction-codex-v090.test.mjs",
+        "tests/fixtures/reconstruction-codex-controller-v090.mjs"
       ],
       "prerequisiteBindings": [
         "governance/acceptance-v090.json",

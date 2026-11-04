@@ -8,12 +8,16 @@ permissions:
   contents: read
 jobs:
   source:
-    runs-on: ubuntu-latest
+    # The frozen v0.9 environment is darwin-arm64. Source regression includes
+    # actual launchd, Seatbelt and HFS image recovery, not Linux substitutes.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24.14.0'
+      - name: Verify the declared source-test platform
+        run: node --input-type=module -e 'import assert from "node:assert/strict"; assert.equal(process.platform, "darwin"); assert.equal(process.arch, "arm64"); assert.equal(process.version, "v24.14.0");'
       - run: npm ci --ignore-scripts
       - run: npm run build
       - run: npm run check
