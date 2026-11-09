@@ -1,22 +1,23 @@
 import {randomUUID} from 'node:crypto';
-import {constants,openSync,closeSync,fstatSync,readFileSync} from 'node:fs';
-import {join} from 'node:path';
+import {constants,openSync,closeSync,fstatSync,readFileSync,readSync,lstatSync,realpathSync,type Stats} from 'node:fs';
+import {join,dirname} from 'node:path';
 import {byteDigest} from '../lifecycle/base.js';
-import {canonicalEvidence as canonical,evidenceValueDigest as valueDigest,record,reject,ServiceError,string} from '../server/errors.js';
+import {canonicalEvidence as canonical,evidenceValueDigest as valueDigest,exact,record,reject,ServiceError,string} from '../server/errors.js';
 import {authorize,privateFile,type Principal} from '../server/security.js';
 import {RuntimeStore} from '../server/store.js';
 import {loadPublisherBase} from '../lifecycle/base.js';
 import {atPath,type EffectiveNode} from '../lifecycle/compiler.js';
 import {inspectInstance,type LifecycleInstance} from '../lifecycle/instance.js';
 import {readPreparationPacket} from '../lifecycle/preparation.js';
-import type {StageAdapter,StageObservation,StageRequest} from '../lifecycle/execution.js';
-import {readIntegrationConfiguration,configuredPlatform,type IntegrationConfiguration,type ResourceRegistration,type PlatformRegistration} from './config.js';
+import type {StageAdapter,StageObservation,StageRequest,StageRepairSubject,StageRepairFacts} from '../lifecycle/execution.js';
+import {readIntegrationConfiguration,readRegisteredNativeToolchain,configuredPlatform,type IntegrationConfiguration,type ResourceRegistration,type PlatformRegistration} from './config.js';
 import {validateResourceDefinition} from './bindings.js';
 import {registeredPreparation} from './preparation-stages.js';
 import {nativeInventory,verifyNativeStageResult,type NativeStageConnections,type NativeAction,type OwnerPin,type VerifiedStageSource} from './stages.js';
 import {ownerRequestDigest,type Owner,type OwnerRequest} from './published-owners.js';
 import {validateCandidateInput,verifyCiArtifact,MAX_ARCHIVE_BYTES,type CandidateInput,type VerifiedCiArtifact} from './artifacts.js';
 import type {PlatformRunRequest,PlatformArtifactArchive} from './platforms.js';
+import {readNativeRepairCapture,readNativeRepairHistory} from './authority.js';
 import {readImplementationEvidence} from './implementation-stages.js';
 import type {SourceTreeObservation} from './source-tree.js';
 import {preparationAncestorIds,completedPreparationSource,readCiPreparationEvidence,type CiPreparationInput} from './ci-preparation.js';
@@ -32,6 +33,72 @@ interface Parameters {
   predecessors:Prior[];binding:PlatformRegistration;source:VerifiedStageSource;sourceTree:SourceTreeObservation;
   candidateDigest:string|null;candidateInput:CandidateInput|null;artifactInput:ArtifactCheckInput|null;owner:OwnerPin;effectiveConfigDigest:string;
   toolchainLockDigest:string;toolchainManifestDigest:string|null;
+}
+interface ToolFact {id:'conftest'|'opa';path:string;declaredDigest:string;observedDigest:string|null;status:'MATCH'|'ENOENT'|'UNKNOWN';}
+interface Prerequisite {
+  schema:'runtime-native-prerequisite/v1';requestId:string;requestDigest:string;planDigest:string;
+  nativeRequestId:string;manifestDigest:string;tools:ToolFact[];digest:string;
+}
+/** A bounded file observation, never a command or replacement toolchain. Only
+ * exact declared regular, owned, non-writable-by-others bytes are read. */
+function toolFacts(config:Readonly<IntegrationConfiguration>,p:Parameters):ToolFact[]|null{
+  if(p.kind!=='harness'||!config.nativeToolchain)return null;
+  const lock=readRegisteredNativeToolchain(config);
+  if(config.nativeToolchain.digest!==p.toolchainManifestDigest||lock.lockDigest!==p.toolchainLockDigest)reject('EXTENSION_PLAN_CHANGED','Native prerequisite manifest changed',409);
+  return(['conftest','opa'] as const).map(id=>{
+    const declared=lock.tools[id],fact:ToolFact={id,path:declared.executable,declaredDigest:'sha256:'+declared.sha256,observedDigest:null,status:'UNKNOWN'};let fd:number|undefined;
+    try{
+      if(realpathSync(dirname(declared.executable))!==dirname(declared.executable))return fact;
+      const stat=lstatSync(declared.executable);
+      if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1||stat.uid!==process.getuid?.()||(stat.mode&0o022)!==0||stat.size<1||stat.size>134217728)return fact;
+      const unchanged=(a:Stats,b:Stats)=>['dev','ino','size','mtimeMs','ctimeMs','uid','mode','nlink'].every(key=>a[key as keyof Stats]===b[key as keyof Stats]);
+      fd=openSync(declared.executable,constants.O_RDONLY|constants.O_NOFOLLOW);const opened=fstatSync(fd);
+      if(!unchanged(opened,stat))return fact;
+      const bytes=Buffer.alloc(stat.size+1);let length=0;
+      while(length<bytes.length){const count=readSync(fd,bytes,length,bytes.length-length,null);if(!count)break;length+=count;}
+      const after=fstatSync(fd),atPath=lstatSync(declared.executable);
+      if(length!==opened.size||!unchanged(after,opened)||!unchanged(atPath,opened)||atPath.isSymbolicLink())return fact;
+      fact.observedDigest=byteDigest(bytes.subarray(0,length));if(fact.observedDigest===fact.declaredDigest)fact.status='MATCH';
+    }catch(error){
+      // A missing canonical parent is not a proven missing declared tool.
+      if(fd===undefined&&(error as NodeJS.ErrnoException).code==='ENOENT')try{if(realpathSync(dirname(declared.executable))===dirname(declared.executable)){try{lstatSync(declared.executable);}catch(check){if((check as NodeJS.ErrnoException).code==='ENOENT')fact.status='ENOENT';}}}catch{/* Unresolved location remains UNKNOWN. */}
+    }finally{if(fd!==undefined)closeSync(fd);}
+    return fact;
+  });
+}
+function readPrerequisite(store:RuntimeStore,r:StageRequest,a:NativeAction):Prerequisite|null{
+  const raw=store.object(r.projectId,'lifecycle-recovery-ledger','native-prerequisite:'+r.id),pin=record(a).prerequisiteDigest;
+  if(pin===undefined){if(raw)reject('CORRUPT_REPAIR_CAPTURE','Historical actions cannot acquire prerequisite evidence later',503);return null;}
+  if(!raw)reject('CORRUPT_REPAIR_CAPTURE','Original action lost its prerequisite snapshot',503);
+  const v=record(raw);exact(v,['schema','requestId','requestDigest','planDigest','nativeRequestId','manifestDigest','tools','digest']);const{digest,...body}=v,p=r.plan.parameters as unknown as Parameters;
+  if(v.schema!=='runtime-native-prerequisite/v1'||digest!==valueDigest(body)||digest!==pin||v.requestId!==r.id||v.requestDigest!==r.digest||v.planDigest!==r.planDigest||v.nativeRequestId!==a.request.requestId||v.manifestDigest!==p.toolchainManifestDigest||!Array.isArray(v.tools)||v.tools.length!==2)reject('CORRUPT_REPAIR_CAPTURE','Original prerequisite snapshot differs from its pre-dispatch action',503);
+  for(const [index,raw]of v.tools.entries()){const t=record(raw);exact(t,['id','path','declaredDigest','observedDigest','status']);if(t.id!==['conftest','opa'][index]||!['MATCH','ENOENT','UNKNOWN'].includes(String(t.status))||t.status==='MATCH'&&t.observedDigest!==t.declaredDigest||t.status==='ENOENT'&&t.observedDigest!==null)reject('CORRUPT_REPAIR_CAPTURE','Invalid original declared tool observation',503);string(t.path,4096);hash(t.declaredDigest);if(t.observedDigest!==null)hash(t.observedDigest);}
+  return v as unknown as Prerequisite;
+}
+function repairProfile(p:Parameters){return{action:p.node.action!.actionRef,slot:p.node.stage,kind:p.kind,source:p.source,sourceTreeDigest:p.sourceTree.treeDigest,candidateDigest:p.candidateDigest,candidateInput:p.candidateInput,artifactInput:p.artifactInput,owner:p.owner,effectiveConfigDigest:p.effectiveConfigDigest,toolchainLockDigest:p.toolchainLockDigest,toolchainManifestDigest:p.toolchainManifestDigest,preparationDigest:p.preparationDigest,preparationFactsDigest:p.preparationFactsDigest,binding:p.binding};}
+function missingDeclaredTool(receipt:Record<string,unknown>,snapshot:Prerequisite):boolean{
+  if(receipt.status!=='FAILED'||snapshot.tools.some(t=>t.status==='UNKNOWN'))return false;
+  const error=record(record(receipt.result).error);
+  return error.code==='ENOENT'&&snapshot.tools.some(t=>t.status==='ENOENT'&&error.message===`ENOENT: no such file or directory, lstat '${t.path}'`);
+}
+/** Read-only stop check for another associated probe. Ordinary independent
+ * checks do not enter this correction-path guard. No supplied facts are used. */
+export function assertNativeRepairCaptureProgress(store:RuntimeStore,actor:Principal,originalId:string,projectId:string):void{
+  const history=readNativeRepairHistory(store,projectId,originalId,actor),r=store.object(projectId,'stage-request',originalId) as StageRequest,p=r.plan.parameters as unknown as Parameters;
+  if(r.plan.adapterId!==ID||p.kind!=='harness')return;
+  const original=readExtensionEvidence(store,r);if(!original.action||!original.receipt)return;
+  const snapshot=readPrerequisite(store,r,original.action);if(!snapshot||!missingDeclaredTool(record(original.receipt),snapshot))return;
+  const originalFacts=valueDigest({profile:repairProfile(p),tools:snapshot.tools});let before=originalFacts,noProgress=0;
+  for(const round of history.rounds){
+    const request=store.object(projectId,'stage-request',round.requestId) as StageRequest,params=request.plan.parameters as unknown as Parameters,view=readExtensionEvidence(store,request);if(!view.action||!view.receipt)reject('CORRUPT_REPAIR_HISTORY','Completed probe lost its original native evidence',503);
+    const observed=readPrerequisite(store,request,view.action);
+    // An unclassified earlier check cannot exempt subsequent confirmed repeats
+    // of the original failure. It breaks comparison, never erases later rounds.
+    if(!observed||observed.tools.some(t=>t.status==='UNKNOWN')){before=originalFacts;noProgress=0;continue;}
+    const after=valueDigest({profile:repairProfile(params),tools:observed.tools});
+    noProgress=before===after&&missingDeclaredTool(record(view.receipt),observed)?noProgress+1:0;
+    if(noProgress>=2)reject('TWO_NO_PROGRESS_ROUNDS','Two completed native missing-tool verification rounds stop this correction path',409);before=after;
+  }
 }
 function nodeFor(i:LifecycleInstance,id:string):EffectiveNode{
   const node=i.definition.nodes.find(n=>n.id===id),action=node?.action;
@@ -159,7 +226,8 @@ export function createNativeExtensionStageAdapter(store:RuntimeStore,configPath:
   function observation(r:StageRequest,p:Parameters,phase:StageObservation['phase'],ref:string):StageObservation{return{requestId:r.id,inputDigest:r.inputDigest,adapterDigest:ADAPTER_DIGEST,phase,handle:{owner:p.kind,requestId:'extension-native-'+valueDigest({requestDigest:r.digest}).slice(7,51)},outcome:{requestId:r.id,inputDigest:r.inputDigest,receiptRef:'runtime:extension/'+r.id,status:phase==='COMPLETE'?'COMPLETE':phase==='FAILED'?'FAILED':phase==='UNKNOWN'?'UNKNOWN':'RUNNING',expiresAt:r.deadlineAt,checks:phase==='COMPLETE'||phase==='FAILED'?p.node.checks.map(id=>({id,status:phase==='COMPLETE'?'PASS':'FAIL',evidenceRef:ref})):[]}};}
   function payload(r:StageRequest,i:LifecycleInstance,p:Parameters,s:ReturnType<typeof selected>){
     const context:NativeValidationContext={workspaceId:store.workspaceId,scope:{visibility:'private',projectId:r.projectId},projectCandidateDigest:p.candidateDigest??p.preparationDigest,claimId:valueDigest({stageRequestDigest:r.digest}),inputDigest:r.inputDigest,effectiveConfigDigest:p.effectiveConfigDigest,sourceScopeDigest:p.sourceTree.treeDigest,requirementSetDigest:i.pins.requirementsDigest},input={schema:'runtime-extension-observation/v1',stageId:r.stageId,slot:p.node.stage,action:p.node.action,preparation:s.packet.input,predecessors:p.predecessors,source:p.source,sourceTree:p.sourceTree,candidate:p.candidateInput?.manifest??null,...(p.artifactInput?{artifacts:p.artifactInput}:{})};
-    const observation={schema:'evopilot-observation/v1',origin:'execution-result',source:{revision:p.source.commit,digest:p.sourceTree.treeDigest},values:{runtimeExtension:input},collectionReceiptRef:{id:'extension:'+r.id,digest:valueDigest(input),claimId:context.claimId},sourceScopeDigest:context.sourceScopeDigest};
+    const capture=readNativeRepairCapture(store,r);
+    const observation={schema:'evopilot-observation/v1',origin:'execution-result',source:{revision:p.source.commit,digest:p.sourceTree.treeDigest},values:{runtimeExtension:input,...(capture?{runtimeRepairCapture:{schema:'runtime-repair-observation/v1',captureDigest:capture.digest,rootRef:capture.rootRef,rootDigest:capture.rootDigest,originalRequestId:capture.originalRequestId,originalRequestDigest:capture.originalRequestDigest,originalObservationRef:capture.originalObservationRef}}:{})},collectionReceiptRef:{id:'extension:'+r.id,digest:valueDigest(input),claimId:context.claimId},sourceScopeDigest:context.sourceScopeDigest};
     return{context,observation,requestInput:{id:p.owner.reference.id,version:p.owner.reference.version,context,...(p.kind==='harness'?{observation}:{})}};
   }
   async function inspect(r:StageRequest,i:LifecycleInstance,_progress:unknown,actor:Principal,signal:AbortSignal):Promise<StageObservation>{
@@ -175,10 +243,46 @@ export function createNativeExtensionStageAdapter(store:RuntimeStore,configPath:
     if(!Number.isSafeInteger(state.revision)||Number(state.revision)<0)reject('OWNER_REVISION_INVALID','Extension needs the current owner revision',409);
     const request:OwnerRequest={operation:'native.package.validate',scope:p.owner.scope,input:expected.requestInput,requestId:'extension-native-'+valueDigest({requestDigest:r.digest}).slice(7,51),expectedRevision:Number(state.revision)},body={request,requestDigest:ownerRequestDigest(p.kind,request),context,observationDigest:p.kind==='harness'?nativeSha256(observed):null};
     actor=await permit();authorize(actor,r.projectId,'execution.request');await original(r,i,actor,signal);if(actor.id!==r.initiatedBy.id||actor.revision!==r.initiatedBy.revision)reject('AUTHORITY_CHANGED','Extension requires the original current execution principal',409);signal.throwIfAborted();
-    retain(actor,r,'extension-native-action',r.id,{...body,digest:valueDigest(body)});
+    const tools=toolFacts(s.c,p),prerequisiteBody=tools?{schema:'runtime-native-prerequisite/v1' as const,requestId:r.id,requestDigest:r.digest,planDigest:r.planDigest,nativeRequestId:request.requestId!,manifestDigest:p.toolchainManifestDigest!,tools}:null;
+    const prerequisite:Prerequisite|null=prerequisiteBody?{...prerequisiteBody,digest:valueDigest(prerequisiteBody)}:null,actionBody={...body,...(prerequisite?{prerequisiteDigest:prerequisite.digest}:{})};
+    // The action pins the snapshot in the same transaction before the owner
+    // call. A later read cannot attach missing original-failure evidence.
+    store.mutate(actor,{projectId:r.projectId,operation:'lifecycle.extension.evidence',requestId:'extension-action-'+randomUUID(),expectedRevision:store.revision(r.projectId),input:{requestId:r.id,actionDigest:valueDigest(actionBody)},permission:'read'},()=>{
+      if(action(r)||store.object(r.projectId,'lifecycle-recovery-ledger','native-prerequisite:'+r.id))reject('CORRUPT_REPAIR_CAPTURE','Original action and prerequisites cannot be replaced',503);
+      return{objects:[{kind:'extension-native-action',id:r.id,value:{...actionBody,digest:valueDigest(actionBody)}},...(prerequisite?[{kind:'lifecycle-recovery-ledger',id:'native-prerequisite:'+r.id,value:prerequisite}]:[])],value:{requestId:r.id},event:{type:'extension-evidence-retained',data:{stageRequestId:r.id,kind:'extension-native-action',id:r.id}}};
+    });
+    actor=await permit();signal.throwIfAborted();
     await a.mutate(actor,r.projectId,request,{projectId:r.projectId,owner:p.kind,requestDigest:body.requestDigest,authorityRef:r.authorityRef,expiresAt:r.deadlineAt});return inspect(r,i,null,actor,signal);
   }
-  return{async prepare(i,id,actor,signal){
+  async function verifyRepair(subject:StageRepairSubject,actor:Principal,signal:AbortSignal):Promise<StageRepairFacts|null>{
+    authorize(actor,subject.projectId,'execution.request');signal.throwIfAborted();
+    const originalRequest=subject.history.at(-1)?.request;if(!originalRequest||subject.workspaceId!==store.workspaceId||originalRequest.instanceId!==subject.instanceId||originalRequest.stageId!==subject.stageId)return null;
+    const p=originalRequest.plan.parameters as unknown as Parameters,current=subject.preparedPlan.parameters as unknown as Parameters;
+    if(p.kind!=='harness'||p.node.action?.actionRef!=='runtime.check.harness'||subject.preparedPlan.adapterId!==ID||!same(repairProfile(p),repairProfile(current)))return null;
+    const originalEvidence=readExtensionEvidence(store,originalRequest);if(!originalEvidence.action||!originalEvidence.receipt)return null;
+    const prior=readPrerequisite(store,originalRequest,originalEvidence.action),receipt=record(originalEvidence.receipt);
+    if(!prior||!missingDeclaredTool(receipt,prior))return null;
+    const config=readIntegrationConfiguration(configPath,store.workspaceId),nowTools=toolFacts(config,current);
+    if(!nowTools||nowTools.some(t=>t.status!=='MATCH')||!same(prior.tools.map(({observedDigest,status,...declaration})=>declaration),nowTools.map(({observedDigest,status,...declaration})=>declaration)))return null;
+    const history=readNativeRepairHistory(store,subject.projectId,originalRequest.id,actor);if(history.open.length)return null;
+    const inputs=(parameters:Parameters,tools:ToolFact[])=>({sourceDigest:parameters.sourceTree.treeDigest,candidateDigest:parameters.candidateDigest,toolchainDigest:valueDigest({lock:parameters.toolchainLockDigest,manifest:parameters.toolchainManifestDigest}),dependencyClosureDigest:valueDigest({profile:repairProfile(parameters),tools})});
+    const before=inputs(p,prior.tools),after=inputs(current,nowTools),rounds:StageRepairFacts['rounds']=[];let recovered=false,previous=before,noProgress=0,selectedEvidence:string|null=null;
+    for(const round of history.rounds){
+      const capture=history.captures.find(c=>c.verificationRequestId===round.requestId)!;
+      const r=store.object(subject.projectId,'stage-request',round.requestId) as StageRequest,params=r.plan.parameters as unknown as Parameters,view=readExtensionEvidence(store,r);
+      if(!view.action||!view.receipt||round.nativeActionDigest!==view.action.digest||round.nativeReceiptDigest!==valueDigest(view.receipt)||round.nativeEvidenceRef!==view.evidenceRef)reject('CORRUPT_REPAIR_HISTORY','Repair round differs from its original native receipt',503);
+      if(params.kind==='harness'&&!same(record(record(view.action.request.input.observation).values).runtimeRepairCapture,{schema:'runtime-repair-observation/v1',captureDigest:capture.digest,rootRef:capture.rootRef,rootDigest:capture.rootDigest,originalRequestId:capture.originalRequestId,originalRequestDigest:capture.originalRequestDigest,originalObservationRef:capture.originalObservationRef}))reject('CORRUPT_REPAIR_HISTORY','Native action differs from its pre-bound original failure capture',503);
+      const snapshot=readPrerequisite(store,r,view.action),native=record(view.receipt),report=record(native.result),commands=report.commands;
+      const usable=snapshot&&capture.originalRequestId===originalRequest.id&&same(repairProfile(params),repairProfile(p))&&snapshot.tools.every(t=>t.status==='MATCH')&&same(snapshot.tools,nowTools)&&report.executionStatus==='SUCCEEDED'&&Array.isArray(commands)&&commands.length>0&&commands.every(raw=>{const c=record(raw);return['opa','conftest'].includes(String(c.tool))&&Number.isSafeInteger(c.exitCode)&&c.signal===null&&c.timedOut===false&&c.outputLimit===false;})&&['opa','conftest'].every(id=>commands.some(c=>record(c).tool===id));
+      if(!snapshot||!same(repairProfile(params),repairProfile(p))||snapshot.tools.some(t=>t.status==='UNKNOWN'))return null;
+      const next=inputs(params,snapshot.tools),entry={evidenceRef:'runtime:repair-round/'+r.id,beforeFactsDigest:valueDigest(previous),afterFactsDigest:valueDigest(next)};rounds.push(entry);noProgress=entry.beforeFactsDigest===entry.afterFactsDigest?noProgress+1:0;
+      if(noProgress>=2)reject('TWO_NO_PROGRESS_ROUNDS','Two completed native prerequisite verification rounds made no progress',409);
+      previous=next;recovered=Boolean(usable);selectedEvidence=usable?entry.evidenceRef:null;
+    }
+    signal.throwIfAborted();if(!recovered||!selectedEvidence)return null;
+    return{schema:'runtime-stage-repair-facts/v1',subjectDigest:valueDigest(subject),failureClass:'DETERMINISTIC',before,after,rounds,evidenceRef:selectedEvidence,expiresAt:new Date(Math.min(Date.parse(originalRequest.deadlineAt),...history.captures.map(c=>Date.parse(c.deadlineAt)))).toISOString()};
+  }
+  return{verifyRepair,async prepare(i,id,actor,signal){
     const s=selected(i,id,actor),resolved=await source(i,s.node,actor,signal),tree=await connections.platform(s.binding).sourceTree(actor,{commit:resolved.commit},signal);verifyTree(tree,s.binding,resolved.commit);
     const a=connections.owner(string(s.asset.adapterRef),s.c),scope={visibility:s.reference.visibility,projectId:string(s.asset.projectId)};if(a.owner!==s.kind||a.workspaceId!==store.workspaceId)reject('OWNER_SCOPE','Extension owner scope differs',409);
     const material=await a.readPackage(actor,i.pins.projectId,scope,s.reference);mappedCriteria(record(material.package),s.kind,s.resources.filter(r=>r.role==='extension.requirement'));

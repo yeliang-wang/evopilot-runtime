@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,realpathSync,rmSync,readFileSync,writeFileSync,symlinkSync} from 'node:fs';
+import {mkdtempSync,realpathSync,rmSync,readFileSync,writeFileSync,symlinkSync,lstatSync,chmodSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomBytes} from 'node:crypto';
@@ -23,7 +23,7 @@ import {nativeSha256,NATIVE_CONTRACT_DIGEST} from '../../vendor/compatibility/v1
 
 // The actual HTTP/store/policy/scope adapters are exercised with explicit
 // synthetic asset admission and a read-only synthetic source platform.
-async function fixture({plan=false,extensions=[],extensionSlot='after-plan',missingCriterion=false}={}){
+async function fixture({plan=false,extensions=[],extensionSlot='after-plan',missingCriterion=false,toolRecovery=false,repairConcurrency=1}={}){
   const dir=mkdtempSync(join(realpathSync(tmpdir()),'runtime-preparation-')),root=join(dir,'state'),workspaceId='synthetic',projectId='alpha',path=join(dir,'integrations.json'),expiry='2030-01-01T00:00:00Z';
   const pin=owner=>({product:owner,id:'synthetic-'+owner,version:'1.0.0',specVersion:'v1',visibility:'private',digest:valueDigest(owner),standardDigest:valueDigest(owner+'-standard'),standardLockDigest:valueDigest(owner+'-lock'),producer:{product:owner,version:'0.3.0'},contractDigest:NATIVE_CONTRACT_DIGEST});
   const platform={ref:'binding:alpha/platform',workspaceId,projectId,provider:'github',host:'https://github.com',repository:'synthetic/project',repositoryId:'42',defaultBranch:'main',credentialRef:'credential:alpha/platform',revision:1,expiresAt:expiry,workflowPath:'.github/workflows/build.yml',runner:'ubuntu-latest'};
@@ -38,22 +38,33 @@ async function fixture({plan=false,extensions=[],extensionSlot='after-plan',miss
     }
   }
   if(plan)data.config.plan.budget.timeoutSeconds=60; // Explicit synthetic recovery budget; no production grant is changed.
+  let recoveryTools=null;
+  if(toolRecovery){
+    // Isolated inert bytes; this fixture never executes a tool. Its owner below
+    // deliberately emulates the published ENOENT receipt shape. Installed-owner
+    // acceptance remains separate from these source-level state-machine tests.
+    data.config.plan.budget.maxAttempts=2;data.config.plan.budget.maxConcurrency=repairConcurrency;for(const e of data.extensions){e.budget.maxAttempts=2;e.budget.maxConcurrency=repairConcurrency;}
+    recoveryTools=Object.fromEntries(['python','pyshacl','opa','conftest'].map(id=>{const executable=join(dir,id),bytes=Buffer.from('synthetic inert '+id);writeFileSync(executable,bytes,{mode:0o700});return[id,{executable,version:id==='opa'?'1.21.2':id==='conftest'?'0.71.1':'synthetic',sha256:byteDigest(bytes).slice(7)}];}));
+    const manifest={schema:'evopilot-native-toolchain/v1',lockDigest:valueDigest('toolchain-lock'),platform:process.platform,arch:process.arch,tools:recoveryTools,dependencyLockDigest:valueDigest('synthetic dependencies'),environmentRoot:dir,dependencyFiles:[{path:recoveryTools.python.executable,sha256:recoveryTools.python.sha256}],timeoutMs:60000,maxInputBytes:1048576,maxPackageBytes:4194304},manifestPath=join(dir,'native-toolchain.json');writeFileSync(manifestPath,JSON.stringify(manifest),{mode:0o600});config.nativeToolchain={path:manifestPath,digest:byteDigest(readFileSync(manifestPath)),lockDigest:manifest.lockDigest};
+  }
   config.resources.find(r=>r.role==='config.release-decision.authorityPolicyRef').definition.principalIds.push('other-decider');
   const save=()=>writeFileSync(path,JSON.stringify(config),{mode:0o600});save();
   const tokens=Object.fromEntries(['fixture','reviewer','reader','other-decider','foreign'].map(id=>[id,randomBytes(32).toString('hex')]));
   const all=['read','draft.write','definition.activate','decision.record','execution.request'];
   initializeCredentials(root,workspaceId,Object.entries(tokens).map(([id,token])=>({id,projects:[id==='foreign'?'beta':projectId],permissions:id==='reader'||id==='foreign'?['read']:all,revision:1,expiresAt:expiry,tokenDigest:tokenDigest(token)})));
-  const state={commit:'a'.repeat(40),reads:0,pending:null,fail:null,missing:false,context:false,lost:null,beforeWrite:false,afterWrite:null,manifest:valueDigest('toolchain-manifest')},calls=[],receipts=new Map(),toolchainLockDigest=valueDigest('toolchain-lock'),effectiveConfigDigest=valueDigest('native-config'),bindings=syntheticBindings(),validator=registeredPreparation(path,workspaceId),policy=registeredAuthorityPolicy(path,workspaceId);
+  const state={commit:'a'.repeat(40),reads:0,pending:null,fail:null,missing:false,context:false,lost:null,beforeWrite:false,afterWrite:null,manifest:config.nativeToolchain?.digest??valueDigest('toolchain-manifest')},calls=[],receipts=new Map(),toolchainLockDigest=valueDigest('toolchain-lock'),effectiveConfigDigest=valueDigest('native-config'),bindings=syntheticBindings(),validator=registeredPreparation(path,workspaceId),policy=registeredAuthorityPolicy(path,workspaceId);
   const client={sourceTree:async(_actor,{commit},signal)=>{await state.onTree?.(signal);return syntheticSourceTree(platform,commit);},readiness:async()=>{state.reads++;return{provider:platform.provider,projectId,repositoryId:platform.repositoryId,bindingDigest:valueDigest(platform),commit:state.commit,factsDigest:valueDigest({commit:state.commit}),expiresAt:new Date(Date.now()+60000).toISOString()};}};
   const ownerAdapters=Object.fromEntries(['ontology','harness'].map(kind=>['binding:alpha/'+kind,{owner:kind,workspaceId,capabilities:()=>({registrationDigest:valueDigest(kind+'registration')}),
     readPackage:async()=>{const body={reference:pin('harness'),qualityStatus:'PASS',effectiveConfigDigest};return kind==='ontology'?{package:{manifest:{entrypoints:{cases:'cases.json'}},files:{'cases.json':JSON.stringify({cases:[{id:'positive',requirementIds:['scope']}]})}}}:{validation:{...body,reportDigest:nativeSha256(body)},package:{manifest:{entrypoints:{coverage:'coverage.json'}},files:{'coverage.json':JSON.stringify({requirements:[{id:'requirement-H001',ruleIds:['H001'],caseIds:['positive']}]})}}};},
-    read:async(_a,_p,r)=>{if(r.operation==='workspace.inspect')return{revision:0};const receipt=receipts.get(r.input.requestId);if(!receipt)throw new ServiceError('NOT_FOUND','Synthetic missing native receipt',404);return state.pending===kind?{...structuredClone(receipt),status:'RUNNING',result:{status:'RUNNING'}}:structuredClone(receipt);},
+    read:async(_a,_p,r)=>{if(r.operation==='workspace.inspect')return{revision:0};const receipt=receipts.get(r.input.requestId);if(!receipt)throw new ServiceError('NOT_FOUND','Synthetic missing native receipt',404);const stage=calls.find(c=>c.request.requestId===r.input.requestId)?.request.input.observation?.values.runtimeExtension?.stageId;return state.pending===kind||state.pendingStages?.has(stage)?{...structuredClone(receipt),status:'RUNNING',result:{status:'RUNNING'}}:structuredClone(receipt);},
     mutate:async(_a,_p,r)=>{
       calls.push({kind,request:r});const stored=activeStore.object(projectId,r.requestId.startsWith('extension-native-')?'extension-native-action':'plan-stage-native-action',r.requestId.startsWith('extension-native-')?activeRequest:activeRequest+':'+kind);assert(stored,'native action must be durable before any effect');
       if(state.lost===kind&&state.beforeWrite)throw new ServiceError('SYNTHETIC_RESPONSE_LOST','Synthetic loss before owner result',503);
+      if(toolRecovery&&kind==='harness')for(const id of ['conftest','opa'])try{lstatSync(recoveryTools[id].executable);}catch(error){const original={requestId:r.requestId,operation:r.operation,scope:r.scope,requestDigest:nativeSha256({operation:r.operation,scope:r.scope,input:r.input}),status:'FAILED',result:{error:{code:error.code,message:error.message}}};receipts.set(r.requestId,original);throw new ServiceError(error.code,error.message,409);}
       const criteria=(kind==='ontology'?[{criterionId:'scope',variantId:'positive'}]:[{criterionId:'requirement-H001',variantId:'positive'},{criterionId:'requirement-H001',variantId:'actual-observation'}]).map(x=>({...x,status:state.fail===kind?'FAIL':'PASS',evidenceDigest:valueDigest(x)}));if(state.missing)criteria.pop();
       const context=state.context?{...r.input.context,inputDigest:valueDigest('wrong')}:r.input.context;
       const body={context,toolchainLockDigest,criteria,...(kind==='ontology'?{status:state.fail===kind?'NONCONFORMING':'CONFORMS',packageDigest:pin(kind).digest,standardPins:{standardDigest:pin(kind).standardDigest,standardLockDigest:pin(kind).standardLockDigest}}:{reference:pin(kind),qualityStatus:state.fail===kind?'FAIL':'PASS',executionStatus:'SUCCEEDED',effectiveConfigDigest,observationDigest:nativeSha256(r.input.observation)})};
+      if(toolRecovery&&kind==='harness')body.commands=['opa','conftest'].map(tool=>({id:'synthetic-'+tool,tool,argv:[],exitCode:state.fail===kind?1:0,signal:null,stdout:'',stderr:'',timedOut:false,outputLimit:false,durationMs:1}));
       receipts.set(r.requestId,{requestId:r.requestId,operation:r.operation,scope:r.scope,requestDigest:nativeSha256({operation:r.operation,scope:r.scope,input:r.input}),result:{...body,reportDigest:nativeSha256(body)}});
       state.afterWrite?.(kind);if(state.lost===kind)throw new ServiceError('SYNTHETIC_RESPONSE_LOST','Synthetic lost response after persisted owner result',503);
     },
@@ -72,7 +83,7 @@ async function fixture({plan=false,extensions=[],extensionSlot='after-plan',miss
       }
       await state.beforeBaseOutcome?.(r);return{requestId:r.id,inputDigest:r.inputDigest,adapterDigest:r.plan.adapterDigest,phase:'COMPLETE',handle:null,outcome};
     }},select=id=>id==='scope'?scope:id==='plan'?adapter:id.startsWith('project.')?(data.extensions.find(e=>e.id===id)?.actionRef==='runtime.review.scope'?scopeReview:nativeExtension):syntheticBase;
-    return{prepare:(i,s,...a)=>select(s).prepare(i,s,...a),dispatch:(r,...a)=>{activeRequest=r.id;return select(r.stageId).dispatch(r,...a);},inspect:(r,...a)=>select(r.stageId).inspect(r,...a),reconcileAdvance:(r,...a)=>select(r.stageId).reconcileAdvance(r,...a),advance:(r,...a)=>{activeRequest=r.id;return select(r.stageId).advance(r,...a);}};
+    return{prepare:(i,s,...a)=>select(s).prepare(i,s,...a),verifyRepair:(subject,...args)=>select(subject.stageId).verifyRepair?.(subject,...args)??Promise.resolve(null),dispatch:(r,...a)=>{activeRequest=r.id;return select(r.stageId).dispatch(r,...a);},inspect:(r,...a)=>select(r.stageId).inspect(r,...a),reconcileAdvance:(r,...a)=>select(r.stageId).reconcileAdvance(r,...a),advance:(r,...a)=>{activeRequest=r.id;return select(r.stageId).advance(r,...a);}};
   },validator,undefined,store=>registeredExtensionReview(store,path,reviewConnections()));await start();
   async function request(operation,input={},write=false,actor='fixture',meta){
     if(write&&!meta){const status=await request('runtime.status',{},false,actor);meta={requestId:'prep-'+(++sequence),expectedRevision:status.result.revision};}
@@ -91,7 +102,7 @@ async function fixture({plan=false,extensions=[],extensionSlot='after-plan',miss
     const g=await request('lifecycle.authority.record',{kind:'execution',subject:s,reviewDigest:preview.result.reviewDigest,decision:'APPROVE',evidenceRef},true);assert.equal(g.status,200,JSON.stringify(g));return{ref:g.result.result.authorityRef,preview,subject:s};
   }
   async function instance(ref){const g=await grant(ref),r=await request('lifecycle.instance.create',{instanceId:g.subject.instanceId,definitionRevisionId,authorityRef:g.ref},true);assert.equal(r.status,200,JSON.stringify(r));return g;}
-  return{dir,root,path,config,data,input,definition,definitionRevisionId,tokens,state,calls,receipts,request,retain,subject,grant,instance,save,get store(){return activeStore;},get server(){return server;},async restart(){await server.close();await start();},async cleanup(){await server.close();rmSync(dir,{recursive:true,force:true});}};
+  return{dir,root,path,config,data,input,definition,definitionRevisionId,tokens,state,calls,receipts,recoveryTools,request,retain,subject,grant,instance,save,get store(){return activeStore;},get server(){return server;},async restart(){await server.close();await start();},async cleanup(){await server.close();rmSync(dir,{recursive:true,force:true});}};
 }
 test('preparation is immutable per-instance material, not an activation, decision, Run or asserted PASS',async()=>{
   const f=await fixture();try{
@@ -327,4 +338,110 @@ test('a superseded rejection cannot commit a stale terminal failure during revie
 
 test('service stop cancels a pending review guard and restart observes the original successor request',async()=>{
  const f=await fixture({plan:true,extensions:['review']});try{const id=await reviewStart(f);await reviewDecision(f,id);await waitStage(f,id,'COMPLETE');let observing=false,aborted=false;f.state.beforeBaseOutcome=()=>{f.state.onTree=signal=>new Promise(resolve=>{observing=true;signal.addEventListener('abort',()=>{aborted=true;resolve();},{once:true});if(signal.aborted){aborted=true;resolve();}});};const next=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:'implementation'},true);assert.equal(next.status,200,JSON.stringify(next));for(let n=0;n<100&&!observing;n++)await new Promise(r=>setTimeout(r,20));assert.equal(observing,true);const at=Date.now();await f.server.close();assert(Date.now()-at<2500,'shutdown must cancel its current read rather than wait for a new provider timeout');assert.equal(aborted,true);f.state.onTree=null;f.state.beforeBaseOutcome=null;await f.restart();await waitStage(f,next.result.result.stageRequestId,'COMPLETE');const stage=(await f.request('lifecycle.instance.inspect',{instanceId:'scope-instance'})).result.instance.stages.implementation;assert.equal(stage.requestId,next.result.result.stageRequestId);assert.equal(stage.attempts,1);}finally{await f.cleanup();}
+});
+
+async function repairCaptureStart(f,verificationIndex=1){
+ await waitStage(f,await planStart(f),'COMPLETE');f.state.fail='harness';
+ const original=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:f.data.extensions[0].id},true);assert.equal(original.status,200,JSON.stringify(original));const originalId=original.result.result.stageRequestId;await waitStage(f,originalId,'FAILED');f.state.fail=null;
+ const proposal={stageRequestId:originalId,hypothesis:'Synthetic engineering precondition needs an independent observation.',minimalVerification:'Run the already admitted fixed native check and retain its exact original receipt.',proposedChanges:[],verification:{instanceId:'scope-instance',stageId:f.data.extensions[verificationIndex].id}};
+ const proposed=await f.request('lifecycle.correction.propose',proposal,true);assert.equal(proposed.status,200,JSON.stringify(proposed));return{originalId,proposal,correctionRef:proposed.result.result.correctionRef};
+}
+test('pre-bound native repair capture retains actual independent check and completed round without granting retry',async()=>{
+ const f=await fixture({plan:true,extensions:['harness','harness']});try{
+  const selected=await repairCaptureStart(f),before=(await f.request('lifecycle.stage.request.inspect',{stageRequestId:selected.originalId})).result;
+  const request=await f.request('lifecycle.stage.request',{...selected.proposal.verification,correctionRef:selected.correctionRef},true);assert.equal(request.status,200,JSON.stringify(request));const id=request.result.result.stageRequestId;const finished=await waitStage(f,id,'COMPLETE');
+  const capture=f.store.object('alpha','lifecycle-recovery-ledger','repair-capture:'+id),round=f.store.object('alpha','lifecycle-recovery-ledger','repair-round:'+id),action=f.store.object('alpha','extension-native-action',id);
+  assert.equal(capture.originalRequestDigest,before.request.digest);assert.equal(capture.originalObservationRef,before.progress.observationRef);assert.equal(capture.verificationRequestDigest,finished.request.digest);assert.equal(capture.inputs.completeInputClosure,false);assert.equal(finished.request.correctionRef,selected.correctionRef);assert.equal(action.request.input.observation.values.runtimeRepairCapture.captureDigest,capture.digest);assert.equal(round.captureDigest,capture.digest);assert.equal(round.observationRef,finished.progress.observationRef);assert.equal(round.nativeRequestId,action.request.requestId);assert.equal(round.outcome,'PASS');assert.equal(round.repairVerified,false);
+  const read=await f.request('lifecycle.correction.inspect',{stageRequestId:selected.originalId,correctionRef:selected.correctionRef});assert.equal(read.result.captureHistory.rounds.length,1);assert.deepEqual(read.result.captureHistory.open,[]);assert.deepEqual((await f.request('lifecycle.stage.request.inspect',{stageRequestId:selected.originalId})).result.request,before.request);assert.equal((await f.request('lifecycle.correction.admission',{stageRequestId:selected.originalId,correctionRef:selected.correctionRef})).result.allowed,false);
+  const calls=f.calls.length;await f.restart();assert.deepEqual((await f.request('lifecycle.correction.inspect',{stageRequestId:selected.originalId})).result.captureHistory.rounds,[round]);const replay=await f.request('lifecycle.stage.request',{...selected.proposal.verification,correctionRef:selected.correctionRef},true,'fixture',{requestId:request.envelope.requestId,expectedRevision:0});assert.equal(replay.status,200);assert.equal(f.calls.length,calls);assert.equal((await f.request('lifecycle.stage.advance',{stageRequestId:id,correctionRef:selected.correctionRef},true)).error.code,'INVALID_FIELDS');
+ }finally{await f.cleanup();}
+});
+
+test('failed native verification rounds are retained and UNKNOWN actions do not complete rounds',async()=>{
+ const f=await fixture({plan:true,extensions:['harness','harness','harness']});try{
+  const selected=await repairCaptureStart(f);f.state.fail='harness';const failed=await f.request('lifecycle.stage.request',{...selected.proposal.verification,correctionRef:selected.correctionRef},true);assert.equal(failed.status,200,JSON.stringify(failed));await waitStage(f,failed.result.result.stageRequestId,'FAILED');assert.equal(f.store.object('alpha','lifecycle-recovery-ledger','repair-round:'+failed.result.result.stageRequestId).outcome,'FAIL');
+  f.state.fail=null;const second=await f.request('lifecycle.correction.propose',{...selected.proposal,verification:{instanceId:'scope-instance',stageId:f.data.extensions[2].id}},true);assert.equal(second.status,200,JSON.stringify(second));f.state.pending='harness';const unresolved=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:f.data.extensions[2].id,correctionRef:second.result.result.correctionRef},true);assert.equal(unresolved.status,200,JSON.stringify(unresolved));const id=unresolved.result.result.stageRequestId;await waitStage(f,id,'UNKNOWN');assert.equal(f.store.object('alpha','lifecycle-recovery-ledger','repair-round:'+id),null);
+  const pending=await f.request('lifecycle.correction.inspect',{stageRequestId:selected.originalId});assert.equal(pending.result.captureHistory.rounds.length,1);assert.deepEqual(pending.result.captureHistory.open,[id]);const calls=f.calls.length;await f.restart();f.state.pending=null;await waitStage(f,id,'COMPLETE');assert.equal(f.calls.length,calls);const done=await f.request('lifecycle.correction.inspect',{stageRequestId:selected.originalId});assert.equal(done.result.captureHistory.rounds.length,2);assert.deepEqual(done.result.captureHistory.open,[]);
+ }finally{await f.cleanup();}
+});
+
+test('repair selection cannot attach retrospectively, replace its fixed verifier, or bypass proposal scope',async()=>{
+ const f=await fixture({plan:true,extensions:['harness','harness','harness']});try{
+  const selected=await repairCaptureStart(f);
+  assert.equal((await f.request('lifecycle.correction.propose',{...selected.proposal,verification:{...selected.proposal.verification,rootRef:'caller-supplied'}},true)).error.code,'INVALID_FIELDS');
+  assert.equal((await f.request('lifecycle.correction.propose',{...selected.proposal,verification:{instanceId:'scope-instance',stageId:'implementation'}},true)).error.code,'REPAIR_VERIFICATION_SCOPE');
+  const denied=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:f.data.extensions[2].id,correctionRef:selected.correctionRef},true);assert.equal(denied.error.code,'REPAIR_CAPTURE_SELECTION');
+  const ordinary=await f.request('lifecycle.stage.request',selected.proposal.verification,true);await waitStage(f,ordinary.result.result.stageRequestId,'COMPLETE');assert.equal(f.store.object('alpha','lifecycle-recovery-ledger','repair-capture:'+ordinary.result.result.stageRequestId),null);
+  assert.equal((await f.request('lifecycle.correction.propose',selected.proposal,true)).error.code,'REPAIR_PREBIND_REQUIRED');assert.equal((await f.request('lifecycle.stage.request',{...selected.proposal.verification,correctionRef:selected.correctionRef},true)).error.code,'STAGE_BLOCKED');
+ }finally{await f.cleanup();}
+});
+
+async function missingToolFailure(f){
+ await waitStage(f,await planStart(f),'COMPLETE');const tool=f.recoveryTools.conftest,bytes=readFileSync(tool.executable);rmSync(tool.executable);
+ const start=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:f.data.extensions[0].id},true);assert.equal(start.status,200,JSON.stringify(start));const originalId=start.result.result.stageRequestId;await waitStage(f,originalId,'FAILED');
+ const proposal={stageRequestId:originalId,hypothesis:'Restore the exact declared missing validation tool.',minimalVerification:'Execute the existing independent fixed check with the unchanged toolchain and inputs.',proposedChanges:[],verification:{instanceId:'scope-instance',stageId:f.data.extensions[1].id}};
+ const proposed=await f.request('lifecycle.correction.propose',proposal,true);assert.equal(proposed.status,200,JSON.stringify(proposed));return{originalId,proposal,correctionRef:proposed.result.result.correctionRef,restore(){writeFileSync(tool.executable,bytes,{mode:0o700});}};
+}
+for(const quality of ['PASS','FAIL'])test('native missing-tool capture admits a bounded actual retry after protected probe execution with quality '+quality,async()=>{
+ const f=await fixture({plan:true,extensions:['harness','harness'],toolRecovery:true});try{
+  const selected=await missingToolFailure(f),original=(await f.request('lifecycle.stage.request.inspect',{stageRequestId:selected.originalId})).result,action=f.store.object('alpha','extension-native-action',selected.originalId),snapshot=f.store.object('alpha','lifecycle-recovery-ledger','native-prerequisite:'+selected.originalId);
+  assert.equal(snapshot.digest,action.prerequisiteDigest);assert.equal(snapshot.tools[0].status,'ENOENT');assert.equal(original.progress.phase,'FAILED');
+  assert.equal((await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:f.data.extensions[0].id},true)).error.code,'REPAIR_EVIDENCE_REQUIRED');selected.restore();
+  assert.equal((await f.request('lifecycle.correction.admission',{stageRequestId:selected.originalId,correctionRef:selected.correctionRef})).result.allowed,false);
+  f.state.fail=quality==='FAIL'?'harness':null;
+  const probe=await f.request('lifecycle.stage.request',{...selected.proposal.verification,correctionRef:selected.correctionRef},true);assert.equal(probe.status,200,JSON.stringify(probe));const probeId=probe.result.result.stageRequestId;await waitStage(f,probeId,quality==='PASS'?'COMPLETE':'FAILED');
+  const round=f.store.object('alpha','lifecycle-recovery-ledger','repair-round:'+probeId);assert.equal(round.outcome,quality);assert.equal(round.repairVerified,false);f.state.fail=null;
+  await f.restart();const preview=await f.request('lifecycle.correction.admission',{stageRequestId:selected.originalId,correctionRef:selected.correctionRef});assert.equal(preview.result.allowed,true,JSON.stringify(preview));assert.equal(preview.result.executionAuthorized,false);
+  const calls=f.calls.length,retry=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:f.data.extensions[0].id},true);assert.equal(retry.status,200,JSON.stringify(retry));await waitStage(f,retry.result.result.stageRequestId,'COMPLETE');assert.equal(f.calls.length,calls+1);
+  const retained=(await f.request('lifecycle.stage.request.inspect',{stageRequestId:selected.originalId})).result;assert.deepEqual(retained.request,original.request);assert.deepEqual(retained.progress,original.progress);assert.equal(f.store.object('alpha','lifecycle-recovery-admission',retry.result.result.stageRequestId).facts.failureClass,'DETERMINISTIC');
+  if(quality==='FAIL')assert.equal((await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:'implementation'},true)).error.code,'STAGE_BLOCKED');
+ }finally{await f.cleanup();}
+});
+
+test('two completed missing-tool probe rounds stop associated probes while independent checks remain admitted',async()=>{
+ const f=await fixture({plan:true,extensions:['harness','harness','harness','harness'],toolRecovery:true});try{
+  const selected=await missingToolFailure(f);
+  for(let index=1;index<=2;index++){
+   const proposal={...selected.proposal,verification:{instanceId:'scope-instance',stageId:f.data.extensions[index].id}},p=index===1?{result:{result:{correctionRef:selected.correctionRef}}}:await f.request('lifecycle.correction.propose',proposal,true),r=await f.request('lifecycle.stage.request',{...proposal.verification,correctionRef:p.result.result.correctionRef},true);assert.equal(r.status,200,JSON.stringify(r));await waitStage(f,r.result.result.stageRequestId,'FAILED');
+  }
+  selected.restore();const p=await f.request('lifecycle.correction.propose',{...selected.proposal,verification:{instanceId:'scope-instance',stageId:f.data.extensions[3].id}},true),calls=f.calls.length,r=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:f.data.extensions[3].id,correctionRef:p.result.result.correctionRef},true);assert.equal(r.error.code,'TWO_NO_PROGRESS_ROUNDS');assert.equal(f.calls.length,calls);
+  const ordinary=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:f.data.extensions[3].id},true);assert.equal(ordinary.status,200,JSON.stringify(ordinary));await waitStage(f,ordinary.result.result.stageRequestId,'COMPLETE');
+  const admission=await f.request('lifecycle.correction.admission',{stageRequestId:selected.originalId,correctionRef:selected.correctionRef});assert.equal(admission.result.allowed,false);assert(admission.result.reasons.includes('TWO_NO_PROGRESS_ROUNDS'),JSON.stringify(admission));
+  assert.equal((await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:f.data.extensions[0].id},true)).error.code,'TWO_NO_PROGRESS_ROUNDS');
+ }finally{await f.cleanup();}
+});
+
+for(const corruption of ['missing-original-snapshot','wrong-restored-bytes','missing-round','hidden-claim','retarget-capture','reordered-round-event'])test('native repair rejects '+corruption+' without another original dispatch',async()=>{
+ const f=await fixture({plan:true,extensions:['harness','harness'],toolRecovery:true});try{
+  const selected=await missingToolFailure(f);selected.restore();const r=await f.request('lifecycle.stage.request',{...selected.proposal.verification,correctionRef:selected.correctionRef},true);assert.equal(r.status,200,JSON.stringify(r));const probeId=r.result.result.stageRequestId;await waitStage(f,probeId,'COMPLETE');const calls=f.calls.length;
+  const replace=(id,value)=>f.store.db.prepare('UPDATE objects SET data=? WHERE project_id=? AND kind=? AND id=?').run(JSON.stringify(value),'alpha','lifecycle-recovery-ledger',id),remove=id=>f.store.db.prepare('DELETE FROM objects WHERE project_id=? AND kind=? AND id=?').run('alpha','lifecycle-recovery-ledger',id);
+  if(corruption==='missing-original-snapshot')remove('native-prerequisite:'+selected.originalId);
+  if(corruption==='wrong-restored-bytes')writeFileSync(f.recoveryTools.conftest.executable,'different bytes');
+  if(corruption==='missing-round')remove('repair-round:'+probeId);
+  if(corruption==='hidden-claim'){const capture=f.store.object('alpha','lifecycle-recovery-ledger','repair-capture:'+probeId),id='attempts:'+capture.rootRef,{digest,...ledger}=f.store.object('alpha','lifecycle-recovery-ledger',id);ledger.entries=ledger.entries.filter(e=>e.requestId!==probeId);replace(id,{...ledger,digest:valueDigest(ledger)});}
+  if(corruption==='retarget-capture'){const id='repair-capture:'+probeId,{digest,...capture}=f.store.object('alpha','lifecycle-recovery-ledger',id);capture.inputs.originalPlanDigest=valueDigest('different original');replace(id,{...capture,digest:valueDigest(capture)});}
+  if(corruption==='reordered-round-event'){const id='repair-round:'+probeId,{digest,...round}=f.store.object('alpha','lifecycle-recovery-ledger',id);round.completedRevision--;replace(id,{...round,digest:valueDigest(round)});}
+  const preview=await f.request('lifecycle.correction.admission',{stageRequestId:selected.originalId,correctionRef:selected.correctionRef});assert(preview.status!==200||preview.result.allowed===false,JSON.stringify(preview));const denied=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:f.data.extensions[0].id},true);assert.notEqual(denied.status,200,JSON.stringify(denied));assert.equal(f.calls.length,calls);
+ }finally{await f.cleanup();}
+});
+
+test('concurrent native repair probes retain authenticated completion order and unresolved claims block retry',async()=>{
+ const f=await fixture({plan:true,extensions:['harness','harness','harness'],toolRecovery:true,repairConcurrency:2});try{
+  const selected=await missingToolFailure(f);selected.restore();f.state.pendingStages=new Set([f.data.extensions[1].id]);
+  const first=await f.request('lifecycle.stage.request',{...selected.proposal.verification,correctionRef:selected.correctionRef},true);assert.equal(first.status,200,JSON.stringify(first));const firstId=first.result.result.stageRequestId;await waitStage(f,firstId,'UNKNOWN');
+  const selection={instanceId:'scope-instance',stageId:f.data.extensions[2].id},p=await f.request('lifecycle.correction.propose',{...selected.proposal,verification:selection},true),second=await f.request('lifecycle.stage.request',{...selection,correctionRef:p.result.result.correctionRef},true);assert.equal(second.status,200,JSON.stringify(second));const secondId=second.result.result.stageRequestId;await waitStage(f,secondId,'COMPLETE');
+  const pending=await f.request('lifecycle.correction.admission',{stageRequestId:selected.originalId,correctionRef:selected.correctionRef});assert.equal(pending.result.allowed,false);assert.deepEqual(pending.result.captureHistory.open,[firstId]);
+  const calls=f.calls.length;f.state.pendingStages.clear();await waitStage(f,firstId,'COMPLETE');assert.equal(f.calls.length,calls);
+  const complete=await f.request('lifecycle.correction.admission',{stageRequestId:selected.originalId,correctionRef:selected.correctionRef});assert.equal(complete.result.allowed,true,JSON.stringify(complete));assert.deepEqual(complete.result.captureHistory.rounds.map(r=>r.requestId),[secondId,firstId]);assert(complete.result.captureHistory.rounds[0].completedRevision<complete.result.captureHistory.rounds[1].completedRevision);
+ }finally{await f.cleanup();}
+});
+
+test('an UNKNOWN prerequisite prefix cannot hide two later confirmed no-progress repair rounds',async()=>{
+ const f=await fixture({plan:true,extensions:['harness','harness','harness','harness','harness'],toolRecovery:true});try{
+  const selected=await missingToolFailure(f);selected.restore();chmodSync(f.recoveryTools.conftest.executable,0o722);
+  const first=await f.request('lifecycle.stage.request',{...selected.proposal.verification,correctionRef:selected.correctionRef},true);assert.equal(first.status,200,JSON.stringify(first));const firstId=first.result.result.stageRequestId;await waitStage(f,firstId,'COMPLETE');assert.equal(f.store.object('alpha','lifecycle-recovery-ledger','native-prerequisite:'+firstId).tools[0].status,'UNKNOWN');
+  rmSync(f.recoveryTools.conftest.executable);
+  for(const index of [2,3]){const verification={instanceId:'scope-instance',stageId:f.data.extensions[index].id},p=await f.request('lifecycle.correction.propose',{...selected.proposal,verification},true),r=await f.request('lifecycle.stage.request',{...verification,correctionRef:p.result.result.correctionRef},true);assert.equal(r.status,200,JSON.stringify(r));await waitStage(f,r.result.result.stageRequestId,'FAILED');}
+  selected.restore();const verification={instanceId:'scope-instance',stageId:f.data.extensions[4].id},p=await f.request('lifecycle.correction.propose',{...selected.proposal,verification},true),calls=f.calls.length,last=await f.request('lifecycle.stage.request',{...verification,correctionRef:p.result.result.correctionRef},true);assert.equal(last.error.code,'TWO_NO_PROGRESS_ROUNDS');assert.equal(f.calls.length,calls);
+ }finally{await f.cleanup();}
 });

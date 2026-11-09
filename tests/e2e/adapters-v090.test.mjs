@@ -9,7 +9,7 @@ import { validatePlatformRegistration, readIntegrationConfiguration, configuredP
 import { githubClient } from '../../dist/adapters/github.js';
 import { gitlabClient } from '../../dist/adapters/gitlab.js';
 import { ciInputs, ciRunTitle, ciSourceRef, fileBytes, platformReader } from '../../dist/adapters/platforms.js';
-import { candidateDigest } from '../../dist/lifecycle/instance.js';
+import { candidateDigest, pinInstance, requiredChecksDigest } from '../../dist/lifecycle/instance.js';
 import { syntheticReadinessMaterial, lifecycleBindingExample } from '../fixtures/adapters-v090.mjs';
 import { nativeSha256 } from '../../vendor/compatibility/v1/native.mjs';
 import { READINESS_STANDARD_DIGEST, noReconstruction } from '../../vendor/compatibility/usability/v2/contract.mjs';
@@ -485,6 +485,24 @@ test('ordinary service cannot activate a lifecycle or request a native stage wit
     const validation=await validateBindings(f.definition(),actor,composition.provider);assert.equal(validation.ready,false);
     await assert.rejects(()=>composition.executor(store).prepare({},'candidate',actor,AbortSignal.timeout(1000)),{code:'TOOLCHAIN_NOT_REGISTERED'});
     assert.equal(store.revision('alpha'),0);
+  }finally{composition.close();store.close();f.cleanup();}
+});
+test('registered repair lookup enforces permission and immutable scope before consulting integration configuration',async()=>{
+  const f=bindingFixture(),missing=join(f.dir,'absent-repair-integrations.json'),composition=await openRegisteredBindings(missing,'test'),store=new RuntimeStore(join(f.dir,'repair-state'),'test');
+  const executor={...actor,permissions:['read','execution.request']},signal=new AbortController().signal;
+  try{
+    const adapter=composition.executor(store),definition=f.definition(),revisionId=valueDigest('synthetic-repair-definition');
+    const authority={projectId:'alpha',instanceId:'repair-test',definitionRevisionId:revisionId,semanticDigest:definition.semanticDigest,requirementsDigest:requiredChecksDigest(definition),goalRef:'synthetic:goal',targetRef:'synthetic:target',loopRef:'synthetic:loop',budget:{timeoutSeconds:3600,maxAttempts:4,maxConcurrency:4,maxLoops:4},evidenceRef:'synthetic:authority',revision:'synthetic-1',expiresAt:new Date(Date.now()+60000).toISOString()};
+    const instance=pinInstance(authority.instanceId,revisionId,definition,authority),subject={schema:'runtime-stage-repair-subject/v1',workspaceId:'test',projectId:'alpha',instanceId:instance.id,stageId:'verification',pinsDigest:instance.pinsDigest,authorityDigest:instance.pins.authorityDigest,candidateDigest:null,history:[],preparedPlan:{}};
+    assert.equal(await adapter.verifyRepair(subject,executor,signal),null,'No stored instance means no repair facts, not implicit configuration or dispatch');
+    await assert.rejects(()=>adapter.verifyRepair(subject,actor,signal),{code:'FORBIDDEN'});
+    await assert.rejects(()=>adapter.verifyRepair({...subject,workspaceId:'other'},executor,signal),{code:'INTEGRATION_SCOPE'});
+    await assert.rejects(()=>adapter.verifyRepair({...subject,projectId:'other'},executor,signal),{code:'FORBIDDEN'});
+    const cancelled=new AbortController();cancelled.abort();await assert.rejects(()=>adapter.verifyRepair(subject,executor,cancelled.signal),{name:'AbortError'});
+    store.mutate(executor,{projectId:'alpha',operation:'synthetic.seed',requestId:'repair-fixture',expectedRevision:0,input:{synthetic:true},permission:'execution.request'},()=>({objects:[{kind:'lifecycle-instance',id:instance.id,value:instance}],value:{synthetic:true},event:{type:'synthetic-seed',data:{}}}));
+    for(const change of [{pinsDigest:valueDigest('other')},{authorityDigest:valueDigest('other')},{candidateDigest:valueDigest('other')},{stageId:'project.missing'}])await assert.rejects(()=>adapter.verifyRepair({...subject,...change},executor,signal),{code:'REPAIR_SCOPE_CHANGED'});
+    await assert.rejects(()=>adapter.verifyRepair(subject,executor,signal),{code:'UNSAFE_INTEGRATION_CONFIG'},'Only exact stored scope can reach the existing registered adapter boundary');
+    assert.deepEqual(store.object('alpha','lifecycle-instance',instance.id),instance);assert.equal(store.revision('alpha'),1);assert.equal(existsSync(missing),false);
   }finally{composition.close();store.close();f.cleanup();}
 });
 test('GitHub runner binding rejects a wrong workflow label and mismatched completed job runner',()=>withNetwork('github',async f=>{

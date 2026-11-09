@@ -94,7 +94,7 @@ test('correction HTTP boundary rejects caller facts, path escape, missing origin
     assert.equal((await f.request('lifecycle.correction.propose',proposal,'reader',meta)).status,403);
     assert.equal((await f.request('lifecycle.correction.inspect',{stageRequestId:'failed-request'},'outsider')).status,403);
     assert.equal((await f.request('lifecycle.correction.admission',{stageRequestId:'failed-request'},'reader')).status,403);
-    for(const input of [{...proposal,facts:{status:'PASS'}},{...proposal,proposedChanges:[{path:'../outside',expectedEffect:'escape'}]},{...proposal,proposedChanges:[]}]) assert.equal((await f.request('lifecycle.correction.propose',input,'editor',meta)).status,400);
+    for(const input of [{...proposal,facts:{status:'PASS'}},{...proposal,proposedChanges:[{path:'../outside',expectedEffect:'escape'}]}]) assert.equal((await f.request('lifecycle.correction.propose',input,'editor',meta)).status,400);
     assert.equal((await f.request('lifecycle.correction.propose',{...proposal,stageRequestId:'missing'},'editor',meta)).status,404);
     const read=await f.request('runtime.status',{},'reader');assert.equal(read.result.revision,1);
     const tools=runtimeToolDefinitions();
@@ -102,6 +102,13 @@ test('correction HTTP boundary rejects caller facts, path escape, missing origin
     assert(tools.find(t=>t.name==='runtime_write').inputSchema.properties.operation.enum.includes('lifecycle.correction.propose'));
     assert(!tools.find(t=>t.name==='runtime_write').inputSchema.properties.operation.enum.includes('lifecycle.correction.execute'));
   } finally {await f.close();}
+});
+
+test('engineering prerequisite proposals can explicitly declare no source changes',async()=>{
+  const f=await fixture();try{
+    const response=await f.request('lifecycle.correction.propose',{...proposal,proposedChanges:[]},'editor',{requestId:'no-source-change',expectedRevision:1});assert.equal(response.status,200,JSON.stringify(response));
+    const read=await f.request('lifecycle.correction.inspect',{stageRequestId:'failed-request',correctionRef:response.result.result.correctionRef},'reader');assert.deepEqual(read.result.proposal.input.proposedChanges,[]);assert.equal(read.result.executionAuthorized,false);
+  }finally{await f.close();}
 });
 
 test('mutable progress cannot substitute a fabricated failure for the retained observation',async()=>{

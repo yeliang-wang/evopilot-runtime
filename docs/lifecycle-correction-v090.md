@@ -19,14 +19,45 @@ links through the existing scoped readers, then summarizes the original native
 criterion statuses. FAIL, ERROR, UNKNOWN and SKIPPED remain distinct. Missing,
 detached or changed records return unavailable evidence. Even an original PASS
 has `repairProof: false`: it does not bind a later minimal verification to the
-failure, establish complete before/after inputs, provide published failure
-classification or prove cumulative repair rounds. These missing bindings remain
+failure, establish protected fault-relevant before/after inputs, classify the
+engineering fault or prove cumulative repair rounds. These missing bindings remain
 explicit; readback neither launches an owner validation nor grants a retry.
+
+Engineering retry and cross-candidate evidence qualification have different
+proof requirements. A retry needs authenticated original failure facts, the
+inputs relevant to that particular fault, actual minimal verification and the
+complete cumulative repair history within existing authority and bounds. It
+does not require a separately published failure-classification asset or claim
+complete cross-candidate dependency closure. An unclassified failure remains
+ineligible; Runtime cannot reinterpret a Harness quality failure as an
+engineering success. `PASS_REUSED` still requires the published Harness policy
+and complete dependency closure described below.
 
 `lifecycle.correction.propose` retains a hypothesis, minimal verification and
 repository-relative change paths. It does not verify the hypothesis, run code,
 approve a domain model or rewrite the original request. Stable mutation IDs
 replay their existing receipt; changed input under the same ID is rejected.
+
+For a non-source engineering repair, `proposedChanges` may be empty; do not
+invent repository edits to describe restoring a declared tool. An optional
+`verification: {instanceId, stageId}` selects an existing, unrequested native
+check in the same recovery root. Passing the returned `correctionRef` to that
+check's ordinary `lifecycle.stage.request` binds the original failed observation
+and verification request before dispatch. It cannot attach verification to an
+already executed check or add a node to the frozen graph.
+
+The request claim and capture are committed together. A terminal native result
+records a round with its original action, receipt and observation in the same
+transaction as the stage outcome; unresolved actions do not create completed
+rounds. Readback preserves failed rounds and completion order. Captured rounds
+remain `repairVerified: false`: only the trusted adapter's separate examination
+of the fault and actual verification can establish retry eligibility. The
+capture also retains `completeInputClosure: false`; it is not a reuse certificate.
+
+An independent, predeclared sibling native check can run after its sibling
+fails, subject to the existing graph and limits. A failed predecessor still
+blocks its dependants. These APIs do not create a universal repair route for
+every Base stage, and source fixture tests do not establish installed acceptance.
 
 `lifecycle.correction.admission` can inspect a retained proposal and perform
 read-only trusted repair preparation. An eligible preview never grants execution:

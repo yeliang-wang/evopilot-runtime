@@ -14,7 +14,8 @@ import {EXTENSION_REVIEW_ADAPTER_ID,readExtensionReviewEvidence,type ExtensionRe
 import {CI_PREPARATION_ADAPTER_ID,readCiPreparationEvidence} from '../adapters/ci-preparation.js';
 import {readExtensionEvidence} from '../adapters/extension-stages.js';
 import {readVerificationFeedbackForRequest} from '../adapters/stage-feedback.js';
-import type { AuthorityPolicyProvider } from '../adapters/authority.js';
+import { readNativeRepairCapture, type AuthorityPolicyProvider } from '../adapters/authority.js';
+import { readCorrectionProposal, prepareNativeRepairCapture, completeNativeRepairCapture } from './correction.js';
 
 export const EXECUTION_READS=['lifecycle.stage.request.inspect','lifecycle.stage.observation.read','lifecycle.implementation.evidence.read','lifecycle.release.evidence.read','lifecycle.publication.evidence.read','lifecycle.verification.feedback.read','lifecycle.closure.evidence.read','lifecycle.extension.evidence.read'] as const;
 export const EXECUTION_WRITES=['lifecycle.stage.request','lifecycle.stage.reconcile','lifecycle.stage.advance'] as const;
@@ -24,16 +25,16 @@ export interface StageRequest {
   instanceId:string; stageId:string; pinsDigest:string; inputDigest:string;
   bindingStamp:string; authorityRef:string; releaseAuthorityRef:string|null;
   initiatedBy:{id:string;revision:number}; plan:StagePlan; planDigest:string;
-  requestedAt:string; deadlineAt:string; digest:string;
+  requestedAt:string; deadlineAt:string; digest:string; correctionRef?:string;
 }
 export type StagePhase='DISPATCHING'|'WAITING_AGENT'|'CI_PENDING'|'CI_RUNNING'|'RUNNING'|'UNKNOWN'|'COMPLETE'|'FAILED';
 export interface StageObservation { requestId:string; inputDigest:string; adapterDigest:string; phase:Exclude<StagePhase,'DISPATCHING'>; handle:Record<string,unknown>|null; outcome:StageOutcome; }
 export interface StageProgress { requestId:string; phase:StagePhase; terminal:boolean; handle:Record<string,unknown>|null; observation:StageObservation|null; observationRef:string|null; reason:string|null; observedAt:string; }
 export interface StageRepairInputs {
   sourceDigest:string; candidateDigest:string|null; toolchainDigest:string;
-  /** Complete semantic dependency/input closure, including generated/build,
-   * tests, assertions, locks, config, environment, fixtures, collector/prestate.
-   * An incomplete/dynamic unknown closure cannot produce verified repair facts. */
+  /** Digest of protected inputs relevant to this specific engineering fault,
+   * including its observed preconditions. This is not a declaration of the
+   * complete dependency manifest required for cross-candidate evidence reuse. */
   dependencyClosureDigest:string;
 }
 export interface StageRepairSubject {
@@ -239,6 +240,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
       validateRepair(retained.facts,subject);
     }
     const lineage=deps.recovery?.admission(saved,current.authority,r.stageId,actor,r.id);if(lineage&&!lineage.allowed)reject('EXECUTION_RECOVERY_BLOCKED',lineage.reasons.join('; '),409);
+    readNativeRepairCapture(store,r);
     const fresh=actorFor(r);deps.verifyAuthority?.(current.authority,saved.definition,fresh);deps.verifyProjectReviewState?.(saved,fresh);
     if(closed||Date.parse(r.deadlineAt)<=Date.now())reject('EXECUTION_DEADLINE','This original request cannot dispatch now',409);return fresh;
   }
@@ -258,7 +260,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     const updated:StageProgress={requestId:r.id,phase:observation.phase,terminal:['COMPLETE','FAILED'].includes(observation.phase),handle:observation.handle,observation,observationRef,reason,observedAt:evidence.observedAt};
     // A service observation is not a user decision. This internal identity
     // cannot exist in auth.json (':' is not an allowed principal ID).
-    store.mutate(system(r.projectId),{projectId:r.projectId,operation:'lifecycle.stage.observed',requestId:'observe-'+randomUUID(),expectedRevision:store.revision(r.projectId),input:{stageRequestId:r.id,observationRef,reason},permission:'read'},()=>({objects:[{kind:'lifecycle-instance',id:r.instanceId,value:next},{kind:'stage-progress',id:r.id,value:updated},{kind:'stage-observation',id:observationRef,value:evidence}],value:{stageRequestId:r.id,phase:updated.phase,observationRef},event:{type:'stage-observed',data:{instanceId:r.instanceId,stageId:r.stageId,stageRequestId:r.id,phase:updated.phase,reason,observationRef,initiatedBy:r.initiatedBy.id}}}));
+    store.mutate(system(r.projectId),{projectId:r.projectId,operation:'lifecycle.stage.observed',requestId:'observe-'+randomUUID(),expectedRevision:store.revision(r.projectId),input:{stageRequestId:r.id,observationRef,reason},permission:'read'},()=>({objects:[{kind:'lifecycle-instance',id:r.instanceId,value:next},{kind:'stage-progress',id:r.id,value:updated},{kind:'stage-observation',id:observationRef,value:evidence},...completeNativeRepairCapture(store,r,observation,observationRef,evidence.observedAt)],value:{stageRequestId:r.id,phase:updated.phase,observationRef},event:{type:'stage-observed',data:{instanceId:r.instanceId,stageId:r.stageId,stageRequestId:r.id,phase:updated.phase,reason,observationRef,initiatedBy:r.initiatedBy.id}}}));
     if(workerError?.projectId===r.projectId&&workerError.requestId===r.id)workerError=null;
   }
   function unknown(r:StageRequest,code:string):void{
@@ -381,7 +383,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     if(closed)reject('STOPPING','Service is stopping',503);
     if(!EXECUTION_WRITES.includes(operation as typeof EXECUTION_WRITES[number]))reject('UNKNOWN_OPERATION','Unsupported execution operation',404);
     const reconciling=operation==='lifecycle.stage.reconcile',continuing=operation==='lifecycle.stage.advance',permission=reconciling?'read':'execution.request';authorize(actor,projectId,permission);
-    exact(input,reconciling||continuing?['stageRequestId']:['instanceId','stageId']);
+    exact(input,reconciling||continuing?['stageRequestId']:['instanceId','stageId'],reconciling||continuing?[]:['correctionRef']);
     const mutation={projectId,operation,requestId,expectedRevision,input,permission} as const;
     if(store.findReceipt(actor,projectId,requestId))return store.mutate(actor,mutation,()=>{throw new Error('Unreachable replay callback');},reauthorize);
     if(continuing){
@@ -422,9 +424,11 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     const saved=instance(projectId,slug(input.instanceId)),stageId=string(input.stageId),node=saved.definition.nodes.find(n=>n.id===stageId);
     if(!node)reject('UNKNOWN_STAGE','Stage does not belong to this immutable instance');
     if(stageId==='publication')authorize(actor,projectId,'release.request');
+    const correctionRef=input.correctionRef===undefined?undefined:string(input.correctionRef,128),selection=correctionRef?readCorrectionProposal(store,projectId,correctionRef).verificationBinding:undefined;
+    if(correctionRef&&(!selection||selection.verificationInstanceId!==saved.id||selection.verificationStageId!==stageId||Date.parse(selection.deadlineAt)<=Date.now()))reject('REPAIR_CAPTURE_SELECTION','Use the exact live preselected verification stage',409);
     const {current,admitted,plan,repair,preparationDeadline}=await prepareAdmission(saved,stageId,actor);
     const planned=copy(plan),now=Date.now(),limit=stageBudget(saved,node);
-    const content:Omit<StageRequest,'digest'>={schema:'runtime-stage-request/v1',id:randomUUID(),workspaceId:store.workspaceId,projectId,instanceId:saved.id,stageId,pinsDigest:saved.pinsDigest,inputDigest:admitted.inputDigest,bindingStamp:current.checked.stamp!,authorityRef:current.authority.evidenceRef,releaseAuthorityRef:current.release?.decisionRef??null,initiatedBy:{id:actor.id,revision:actor.revision},plan:planned,planDigest:valueDigest(planned),requestedAt:new Date(now).toISOString(),deadlineAt:new Date(Math.min(now+limit.timeoutSeconds*1000,preparationDeadline,Date.parse(current.authority.expiresAt))).toISOString()};
+    const content:Omit<StageRequest,'digest'>={schema:'runtime-stage-request/v1',id:randomUUID(),workspaceId:store.workspaceId,projectId,instanceId:saved.id,stageId,pinsDigest:saved.pinsDigest,inputDigest:admitted.inputDigest,bindingStamp:current.checked.stamp!,authorityRef:current.authority.evidenceRef,releaseAuthorityRef:current.release?.decisionRef??null,initiatedBy:{id:actor.id,revision:actor.revision},...(correctionRef?{correctionRef}:{}),plan:planned,planDigest:valueDigest(planned),requestedAt:new Date(now).toISOString(),deadlineAt:new Date(Math.min(now+limit.timeoutSeconds*1000,preparationDeadline,Date.parse(current.authority.expiresAt),selection?Date.parse(selection.deadlineAt):Infinity)).toISOString()};
     const r=copy({...content,digest:valueDigest(content)});
     const repairBody=repair?{schema:'runtime-stage-repair-admission/v1' as const,requestId:r.id,requestDigest:r.digest,subjectDigest:valueDigest(repair.subject),facts:repair.facts,factsDigest:valueDigest(repair.facts)}:null;
     const retainedRepair:StageRepairAdmission|null=repairBody?copy({...repairBody,digest:valueDigest(repairBody)}):null;
@@ -437,6 +441,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
       if(repair)validateRepair(repair.facts,repair.subject);
       if(stageId==='publication'&&deps.releaseAuthority?.(saved,fresh)?.decisionRef!==r.releaseAuthorityRef)reject('AUTHORITY_CHANGED','Release authority changed before request commit',409);
       const recoveryObjects=deps.recovery?.claim(saved,current.authority,r,fresh)??[];
+      if(correctionRef){if(!deps.recovery)reject('REPAIR_NATIVE_ROOT_REQUIRED','Repair capture requires native root authority',409);const originalRoot=record(deps.recovery.inspect(instance(projectId,selection!.originalInstanceId))),currentRoot=record(deps.recovery.inspect(saved));if(originalRoot.rootRef!==selection!.rootRef||currentRoot.rootRef!==selection!.rootRef)reject('REPAIR_ROOT_MISMATCH','Current native root differs from the selected repair lineage',409);recoveryObjects.push(prepareNativeRepairCapture(store,fresh,correctionRef,r));}
       const next=requestStage(saved,stageId,r.id,current.context),p:StageProgress={requestId:r.id,phase:'DISPATCHING',terminal:false,handle:null,observation:null,observationRef:null,reason:null,observedAt:r.requestedAt};
       return{objects:[{kind:'lifecycle-instance',id:saved.id,value:next},{kind:'stage-request',id:r.id,value:r},{kind:'stage-progress',id:r.id,value:p},...recoveryObjects,...(retainedRepair?[{kind:'lifecycle-recovery-admission',id:r.id,value:retainedRepair}]:[])],value:{stageRequestId:r.id,instanceId:saved.id,stageId,inputDigest:r.inputDigest,status:'REQUEST_RETAINED',automaticRedispatch:false},event:{type:'stage-requested',data:{instanceId:saved.id,stageId,stageRequestId:r.id,inputDigest:r.inputDigest,planDigest:r.planDigest,initiatedBy:actor.id}}};
     },reauthorize);

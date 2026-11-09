@@ -59,10 +59,11 @@ and immutable input contracts are checked at the service boundary.
 | `lifecycle.definition.save-and-activate` | `yaml`, `validationDigest` | Both draft and activation permissions; atomic same-entry activation |
 | `lifecycle.instance.create` | `instanceId`, `definitionRevisionId`, `authorityRef` | `execution.request`; exact active revision and current separate authority required; does not dispatch a stage |
 | `lifecycle.instance.inspect` | `instanceId` | Pinned instance, current project revision and native recovery linkage when available |
-| `lifecycle.correction.inspect` | `stageRequestId`, optional `correctionRef` | Original verified observation and separately retained hypothesis |
-| `lifecycle.correction.propose` | `stageRequestId`, `hypothesis`, `minimalVerification`, `proposedChanges` | `draft.write`; immutable proposal, no execution or release authority |
+| `lifecycle.correction.inspect` | `stageRequestId`, optional `correctionRef` | Original verified observation, separately retained hypothesis and available protected capture history |
+| `lifecycle.correction.propose` | `stageRequestId`, `hypothesis`, `minimalVerification`, `proposedChanges`, optional `verification: {instanceId, stageId}` | `draft.write`; immutable proposal, optional pre-bound existing native check; no execution or release authority |
 | `lifecycle.correction.admission` | `stageRequestId`, optional `correctionRef` | `execution.request`; read-only repair eligibility, original request and remaining gates |
 | `lifecycle.stage.admission` | `instanceId`, `stageId` | `execution.request`, also `release.request` for publication; reads current admission without dispatch |
+| `lifecycle.stage.request` | `instanceId`, `stageId`, optional `correctionRef` | `execution.request`, also `release.request` for publication; ordinary graph, authority and budget gates remain required; a correction reference binds only its previously selected native verification |
 
 The authoritative definitions are in [definition service](../src/lifecycle/service.ts)
 and [HTTP dispatcher](../src/server/http.ts). Stage requests, observations,

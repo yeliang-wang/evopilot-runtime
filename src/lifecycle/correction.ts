@@ -1,10 +1,11 @@
 import { canonical, exact, record, reject, string, ServiceError, evidenceValueDigest } from '../server/errors.js';
 import { authorize, type Principal } from '../server/security.js';
-import { RuntimeStore, type Receipt } from '../server/store.js';
+import { RuntimeStore, type Receipt, type StoredObject } from '../server/store.js';
 import { valueDigest } from './base.js';
 import { containsInlineSecret } from './compiler.js';
-import type { StageProgress, StageRequest } from './execution.js';
-import { readExtensionEvidence } from '../adapters/extension-stages.js';
+import type { StageProgress, StageRequest, StageObservation } from './execution.js';
+import { readExtensionEvidence, assertNativeRepairCaptureProgress } from '../adapters/extension-stages.js';
+import { selectNativeRepairCapture, readNativeRepairCapture, readNativeRepairHistory, type NativeRepairSelection, type NativeRepairCapture, type NativeRepairRound } from '../adapters/authority.js';
 import { readVerificationFeedbackForRequest } from '../adapters/stage-feedback.js';
 
 export const CORRECTION_READS = ['lifecycle.correction.inspect', 'lifecycle.correction.admission'] as const;
@@ -14,6 +15,7 @@ interface ProposalInput {
   hypothesis: string;
   minimalVerification: string;
   proposedChanges: { path: string; expectedEffect: string }[];
+  verification?: { instanceId:string; stageId:string };
 }
 interface FailureFacts {
   originalRequestId: string; originalRequestDigest: string; instanceId: string; stageId: string;
@@ -23,9 +25,9 @@ interface FailureFacts {
   observationRef: string | null; observationDigest: string | null;
 }
 interface Proposal {
-  schema: 'runtime-correction-proposal/v1'; workspaceId: string; projectId: string;
+  schema: 'runtime-correction-proposal/v1'|'runtime-correction-proposal/v2'; workspaceId: string; projectId: string;
   input: ProposalInput; facts: FailureFacts; factsDigest: string;
-  createdBy: { id: string; revision: number }; digest: string;
+  createdBy: { id: string; revision: number }; digest: string; verificationBinding?:NativeRepairSelection;
 }
 export interface CorrectionDependencies {
   /** Trusted execution service read, never a caller-provided evidence payload. */
@@ -38,10 +40,11 @@ export interface CorrectionDependencies {
 
 function proposalInput(value: unknown): ProposalInput {
   const input = record(value);
-  exact(input, ['stageRequestId', 'hypothesis', 'minimalVerification', 'proposedChanges']);
+  exact(input, ['stageRequestId', 'hypothesis', 'minimalVerification', 'proposedChanges'], ['verification']);
+  if(input.verification!==undefined){const selected=record(input.verification);exact(selected,['instanceId','stageId']);string(selected.instanceId);string(selected.stageId);}
   string(input.stageRequestId); string(input.hypothesis, 4096); string(input.minimalVerification, 4096);
   if (containsInlineSecret(canonical(input))) reject('INLINE_SECRET', 'Correction records use references, not credentials');
-  if (!Array.isArray(input.proposedChanges) || !input.proposedChanges.length || input.proposedChanges.length > 64) reject('INVALID_CORRECTION', 'Declare a bounded minimal change scope');
+  if (!Array.isArray(input.proposedChanges) || input.proposedChanges.length > 64) reject('INVALID_CORRECTION', 'Declare a bounded minimal change scope');
   const paths = new Set<string>();
   for (const value of input.proposedChanges) {
     const change = record(value); exact(change, ['path', 'expectedEffect']);
@@ -51,6 +54,24 @@ function proposalInput(value: unknown): ProposalInput {
   }
   return JSON.parse(canonical(input)) as ProposalInput;
 }
+
+export function readCorrectionProposal(store:RuntimeStore, projectId: string, ref: unknown): Proposal {
+    const id = string(ref, 128);
+    if (!/^correction:sha256:[a-f0-9]{64}$/.test(id)) reject('INVALID_CORRECTION', 'Use an exact retained correction reference');
+    const raw = store.object(projectId, 'lifecycle-correction-proposal', id);
+    if (!raw) reject('NOT_FOUND', 'Correction not found in this project', 404);
+    const p = record(raw); exact(p, ['schema','workspaceId','projectId','input','facts','factsDigest','createdBy','digest'], ['verificationBinding']);
+    const { digest, ...body } = p;
+    if (!['runtime-correction-proposal/v1','runtime-correction-proposal/v2'].includes(String(p.schema)) || p.workspaceId !== store.workspaceId || p.projectId !== projectId || digest !== valueDigest(body) || id !== 'correction:' + digest || p.factsDigest !== valueDigest(p.facts)) reject('CORRUPT_CORRECTION', 'Retained correction changed', 503);
+    const input=proposalInput(p.input);
+    if((p.schema==='runtime-correction-proposal/v2')!==(input.verification!==undefined)|| (input.verification!==undefined)!==(p.verificationBinding!==undefined))reject('CORRUPT_CORRECTION','Linked proposal schema and native selection differ',503);
+    if(p.verificationBinding!==undefined){
+      const selected=record(p.verificationBinding);exact(selected,['schema','rootRef','rootDigest','originalRequestId','originalRequestDigest','originalObservationRef','originalInstanceId','originalStageId','deadlineAt','verificationInstanceId','verificationStageId','verificationPinsDigest','verificationNodeDigest']);
+      for(const value of Object.values(selected))string(value,512);
+      if(selected.schema!=='runtime-repair-selection/v1'||selected.originalRequestId!==input.stageRequestId||selected.verificationInstanceId!==input.verification!.instanceId||selected.verificationStageId!==input.verification!.stageId||!Number.isFinite(Date.parse(String(selected.deadlineAt))))reject('CORRUPT_CORRECTION','Native verification selection identity changed',503);
+    }
+    return JSON.parse(canonical(p)) as Proposal;
+  }
 
 /** Retaining a hypothesis cannot write execution outcomes, reset a budget or
  * authorize a repair. All original requests and receipts remain untouched. */
@@ -86,8 +107,8 @@ export function createCorrectionService(store: RuntimeStore, deps: CorrectionDep
     const { request: r, progress: p } = deps.original(actor, projectId, id);
     const base = { originalRequestId: r.id, originalRequestDigest: r.digest,
       purpose: 'ORIGINAL_STAGE_VALIDATION' as const, repairProof: false as const,
-      missingRepairBindings: ['FAILURE_BOUND_MINIMAL_VERIFICATION', 'COMPLETE_BEFORE_AFTER_INPUT_CLOSURE',
-        'PUBLISHED_FAILURE_CLASSIFICATION', 'COMPLETE_CUMULATIVE_REPAIR_ROUNDS'] };
+      missingRepairBindings: ['FAILURE_BOUND_MINIMAL_VERIFICATION', 'FAULT_RELEVANT_PROTECTED_INPUTS',
+        'ENGINEERING_FAILURE_CLASSIFICATION', 'COMPLETE_CUMULATIVE_REPAIR_ROUNDS'] };
     const summarize = (owner: string, receipt: unknown) => {
       const raw = record(receipt), report = record(raw.result ?? {}), counts: Record<string, number> = {};
       // Preserve native FAIL/ERROR/UNKNOWN/SKIPPED separately. No status is
@@ -123,27 +144,18 @@ export function createCorrectionService(store: RuntimeStore, deps: CorrectionDep
       return { ...base, status: 'UNAVAILABLE', reason: error instanceof ServiceError ? error.code : 'ORIGINAL_NATIVE_EVIDENCE_UNKNOWN' };
     }
   }
-  function retained(projectId: string, ref: unknown): Proposal {
-    const id = string(ref, 128);
-    if (!/^correction:sha256:[a-f0-9]{64}$/.test(id)) reject('INVALID_CORRECTION', 'Use an exact retained correction reference');
-    const raw = store.object(projectId, 'lifecycle-correction-proposal', id);
-    if (!raw) reject('NOT_FOUND', 'Correction not found in this project', 404);
-    const p = record(raw); exact(p, ['schema','workspaceId','projectId','input','facts','factsDigest','createdBy','digest']);
-    const { digest, ...body } = p;
-    if (p.schema !== 'runtime-correction-proposal/v1' || p.workspaceId !== store.workspaceId || p.projectId !== projectId || digest !== valueDigest(body) || id !== 'correction:' + digest || p.factsDigest !== valueDigest(p.facts)) reject('CORRUPT_CORRECTION', 'Retained correction changed', 503);
-    proposalInput(p.input);
-    return JSON.parse(canonical(p)) as Proposal;
-  }
   async function read(actor: Principal, projectId: string, operation: string, input: Record<string, unknown>): Promise<unknown> {
     authorize(actor, projectId, 'read');
     if (!CORRECTION_READS.includes(operation as typeof CORRECTION_READS[number])) reject('UNKNOWN_OPERATION', 'Unsupported correction read', 404);
     exact(input, ['stageRequestId'], ['correctionRef']);
     const current = facts(actor, projectId, string(input.stageRequestId));
-    const proposal = input.correctionRef === undefined ? null : retained(projectId, input.correctionRef);
+    const proposal = input.correctionRef === undefined ? null : readCorrectionProposal(store, projectId, input.correctionRef);
     if (proposal && proposal.input.stageRequestId !== current.originalRequestId) reject('CORRECTION_SCOPE', 'Correction belongs to a different original request', 409);
     const nativeEvidence = originalNativeEvidence(actor, projectId, current.originalRequestId);
     if (nativeEvidence.originalRequestDigest !== current.originalRequestDigest || nativeEvidence.originalRequestId !== current.originalRequestId) reject('CORRECTION_FACTS_CHANGED', 'Original request changed during protected evidence readback', 409);
-    const response = { facts: current, nativeEvidence, proposal, proposalCurrent: proposal ? proposal.factsDigest === valueDigest(current) : null,
+    let captureHistory:ReturnType<typeof readNativeRepairHistory>|null=null;let captureHistoryReason:string|null=null;
+    try{captureHistory=readNativeRepairHistory(store,projectId,current.originalRequestId,actor);}catch(error){captureHistoryReason=error instanceof ServiceError?error.code:'REPAIR_HISTORY_UNAVAILABLE';}
+    const response = { facts: current, nativeEvidence, captureHistory, captureHistoryReason, proposal, proposalCurrent: proposal ? proposal.factsDigest === valueDigest(current) : null,
       projectRevision: store.revision(projectId), executionAuthorized: false, releaseAuthorized: false, automaticRedispatch: false };
     if (operation === 'lifecycle.correction.inspect') return response;
     authorize(actor, projectId, 'execution.request');
@@ -180,7 +192,8 @@ export function createCorrectionService(store: RuntimeStore, deps: CorrectionDep
     const data = proposalInput(input);
     return store.mutate(actor, mutation, () => {
       const observed = facts(actor, projectId, data.stageRequestId);
-      const body = { schema: 'runtime-correction-proposal/v1' as const, workspaceId: store.workspaceId, projectId,
+      const verificationBinding=data.verification?selectNativeRepairCapture(store,projectId,data.stageRequestId,data.verification):undefined;
+      const body = { schema: verificationBinding?'runtime-correction-proposal/v2' as const:'runtime-correction-proposal/v1' as const, ...(verificationBinding?{verificationBinding}:{}), workspaceId: store.workspaceId, projectId,
         input: data, facts: observed, factsDigest: valueDigest(observed), createdBy: { id: actor.id, revision: actor.revision } };
       const proposal: Proposal = { ...body, digest: valueDigest(body) }, correctionRef = 'correction:' + proposal.digest;
       return { objects: [{ kind: 'lifecycle-correction-proposal', id: correctionRef, value: proposal }],
@@ -189,4 +202,26 @@ export function createCorrectionService(store: RuntimeStore, deps: CorrectionDep
     }, reauthorize);
   }
   return { read, write };
+}
+
+export function prepareNativeRepairCapture(store:RuntimeStore,actor:Principal,correctionRef:string,r:StageRequest):StoredObject {
+  authorize(actor,r.projectId,'execution.request');const proposal=readCorrectionProposal(store,r.projectId,correctionRef),selected=proposal.input.verification;
+  if(!selected||!proposal.verificationBinding||selected.instanceId!==r.instanceId||selected.stageId!==r.stageId||r.correctionRef!==correctionRef)reject('REPAIR_CAPTURE_SELECTION','Request must use the exact previously selected verification identity',409);
+  const selection=selectNativeRepairCapture(store,r.projectId,proposal.input.stageRequestId,selected);
+  assertNativeRepairCaptureProgress(store,actor,proposal.input.stageRequestId,r.projectId);
+  if(canonical(selection)!==canonical(proposal.verificationBinding)||proposal.facts.originalRequestDigest!==selection.originalRequestDigest||proposal.facts.observationRef!==selection.originalObservationRef||Date.parse(selection.deadlineAt)<=Date.now()||Date.parse(r.deadlineAt)>Date.parse(selection.deadlineAt)||r.plan.adapterId!=='runtime-native-extension-stage-v1')reject('REPAIR_CAPTURE_SELECTION','Original failure, root, fixed verifier or cutoff changed before admission',409);
+  if(store.object(r.projectId,'stage-request',r.id)||store.object(r.projectId,'lifecycle-recovery-ledger','repair-capture:'+r.id))reject('REPAIR_PREBIND_REQUIRED','Existing requests cannot acquire a repair association',409);
+  const body={...selection,schema:'runtime-repair-capture/v1' as const,workspaceId:r.workspaceId,projectId:r.projectId,correctionRef,verificationRequestId:r.id,verificationRequestDigest:r.digest,verificationPlanDigest:r.planDigest,expectedNativeRequestId:'extension-native-'+valueDigest({requestDigest:r.digest}).slice(7,51),boundAt:r.requestedAt,inputs:{originalPlanDigest:proposal.facts.planDigest,verificationPlanDigest:r.planDigest,completeInputClosure:false as const}};
+  const capture:NativeRepairCapture={...body,digest:valueDigest(body)};return{kind:'lifecycle-recovery-ledger',id:'repair-capture:'+r.id,value:capture};
+}
+/** Complete only from the actual fixed adapter receipt, in the same transaction
+ * as the terminal stage observation. A captured FAIL is retained as a round. */
+export function completeNativeRepairCapture(store:RuntimeStore,r:StageRequest,observation:StageObservation,observationRef:string,observedAt:string):StoredObject[]{
+  const capture=readNativeRepairCapture(store,r);if(!capture||!['COMPLETE','FAILED'].includes(observation.phase))return[];
+  const original=readExtensionEvidence(store,r);if(!original.evidence||!original.action||!original.receipt)reject('REPAIR_NATIVE_RECEIPT_REQUIRED','Terminal capture requires its original native action and receipt',409);
+  const evidence=record(original.evidence),result=record(evidence.result),receipt=record(original.receipt),phase=result.status==='PASS'?'COMPLETE':result.status==='FAIL'?'FAILED':null;
+  if(evidence.receiptTerminal!==true||phase!==observation.phase||original.action.request.requestId!==capture.expectedNativeRequestId||original.action.context.claimId!==valueDigest({stageRequestDigest:r.digest})||observation.outcome.receiptRef!=='runtime:extension/'+r.id||!observation.outcome.checks.length||observation.outcome.checks.some(c=>c.evidenceRef!==original.evidenceRef||c.status!==(phase==='COMPLETE'?'PASS':'FAIL')))reject('REPAIR_NATIVE_RECEIPT_REQUIRED','Native validation is not the pre-bound verification action',409);
+  const body={schema:'runtime-repair-round/v1' as const,rootRef:capture.rootRef,rootDigest:capture.rootDigest,captureDigest:capture.digest,requestId:r.id,requestDigest:r.digest,observationRef,observedAt,completedRevision:store.revision(r.projectId)+1,outcome:phase==='COMPLETE'?'PASS' as const:'FAIL' as const,nativeActionDigest:original.action.digest,nativeRequestId:capture.expectedNativeRequestId,nativeReceiptDigest:evidenceValueDigest(receipt),nativeReportDigest:typeof result.reportDigest==='string'?result.reportDigest:null,nativeEvidenceRef:string(original.evidenceRef),repairVerified:false as const};
+  const round:NativeRepairRound={...body,digest:valueDigest(body)},id='repair-round:'+r.id,old=store.object(r.projectId,'lifecycle-recovery-ledger',id);
+  if(old&&canonical(old)!==canonical(round))reject('CORRUPT_REPAIR_HISTORY','Completed native repair rounds are immutable',503);return old?[]:[{kind:'lifecycle-recovery-ledger',id,value:round}];
 }

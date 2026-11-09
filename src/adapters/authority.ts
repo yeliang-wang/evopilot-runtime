@@ -30,6 +30,93 @@ interface RecoveryAttempt {instanceId:string;stageId:string;requestId:string;req
 interface RecoveryAttempts {schema:'runtime-recovery-attempts/v1';rootRef:string;rootDigest:string;entries:RecoveryAttempt[];digest:string;}
 const RECOVERY_KIND='lifecycle-recovery-ledger';
 const recoveryReference=(v:unknown):string=>{const s=string(v,128);if(!/^recovery-root:sha256:[a-f0-9]{64}$/.test(s))reject('INVALID_RECOVERY_ROOT','Exact native recovery root reference required');return s;};
+export interface NativeRepairSelection {
+  schema:'runtime-repair-selection/v1';rootRef:string;rootDigest:string;
+  originalRequestId:string;originalRequestDigest:string;originalObservationRef:string;
+  originalInstanceId:string;originalStageId:string;deadlineAt:string;
+  verificationInstanceId:string;verificationStageId:string;verificationPinsDigest:string;verificationNodeDigest:string;
+}
+export interface NativeRepairCapture extends Omit<NativeRepairSelection,'schema'> {
+  schema:'runtime-repair-capture/v1';workspaceId:string;projectId:string;correctionRef:string;
+  verificationRequestId:string;verificationRequestDigest:string;verificationPlanDigest:string;
+  expectedNativeRequestId:string;boundAt:string;
+  inputs:{originalPlanDigest:string;verificationPlanDigest:string;completeInputClosure:false};
+  digest:string;
+}
+export interface NativeRepairRound {
+  schema:'runtime-repair-round/v1';rootRef:string;rootDigest:string;captureDigest:string;
+  requestId:string;requestDigest:string;observationRef:string;observedAt:string;completedRevision:number;outcome:'PASS'|'FAIL';
+  nativeActionDigest:string;nativeRequestId:string;nativeReceiptDigest:string;nativeReportDigest:string|null;nativeEvidenceRef:string;
+  repairVerified:false;digest:string;
+}
+function repairRequest(store:RuntimeStore,projectId:string,id:string):StageRequest{
+  const r=store.object(projectId,'stage-request',id) as StageRequest|null;if(!r)reject('REPAIR_ORIGINAL_REQUIRED','Original stage request is missing',409);
+  const{digest,...body}=r;if(r.schema!=='runtime-stage-request/v1'||r.id!==id||r.projectId!==projectId||r.workspaceId!==store.workspaceId||digest!==valueDigest(body)||r.planDigest!==valueDigest(r.plan))reject('CORRUPT_REPAIR_CAPTURE','Original request identity changed',503);return r;
+}
+/** Historical native membership only. Live authority and budgets are checked by
+ * recovery.admission/claim/permit; this reader cannot grant execution. */
+export function nativeRepairRoot(store:RuntimeStore,projectId:string,instanceId:string){
+  const saved=inspectInstance(record(store.object(projectId,'lifecycle-instance',instanceId)) as unknown as LifecycleInstance),binding=record(store.object(projectId,'instance-authority',instanceId));
+  if(saved.id!==instanceId||saved.pins.projectId!==projectId||typeof binding.recoveryRootRef!=='string')reject('REPAIR_NATIVE_ROOT_REQUIRED','Repair capture requires existing native recovery membership',409);
+  const root=record(store.object(projectId,RECOVERY_KIND,binding.recoveryRootRef)),member=record(store.object(projectId,RECOVERY_KIND,'member:'+instanceId)),{digest,...body}=root;
+  const d=record(store.object(projectId,'authority-decision',string(binding.evidenceRef))),{ref,...decisionBody}=d,subject=record(d.subject);
+  if(root.schema!=='runtime-recovery-lineage-root/v1'||root.workspaceId!==store.workspaceId||root.projectId!==projectId||root.ref!==binding.recoveryRootRef||digest!==valueDigest(body)||binding.recoveryRootDigest!==digest||member.schema!=='runtime-recovery-member/v1'||member.rootRef!==root.ref||member.rootDigest!==digest||member.instanceId!==instanceId||member.pinsDigest!==saved.pinsDigest||member.authorityRef!==binding.evidenceRef||d.schema!=='runtime-authority-decision/v1'||d.kind!=='execution'||d.projectId!==projectId||d.workspaceId!==store.workspaceId||ref!==binding.evidenceRef||ref!=='authority:'+valueDigest(decisionBody)||subject.instanceId!==instanceId||instanceId!==root.originalInstanceId&&(subject.recoveryRootRef!==root.ref||subject.recoveryRootDigest!==digest))reject('CORRUPT_REPAIR_CAPTURE','Repair native root membership differs from its original authority',503);
+  return{saved,rootRef:string(root.ref),rootDigest:string(digest),deadlineAt:string(root.deadlineAt)};
+}
+export function selectNativeRepairCapture(store:RuntimeStore,projectId:string,originalId:string,verification:{instanceId:string;stageId:string}):NativeRepairSelection{
+  const r=repairRequest(store,projectId,originalId),p=store.object(projectId,'stage-progress',r.id) as StageProgress|null,source=nativeRepairRoot(store,projectId,r.instanceId),target=nativeRepairRoot(store,projectId,verification.instanceId);
+  const stage=target.saved.stages[verification.stageId],node=target.saved.definition.nodes.find(n=>n.id===verification.stageId);
+  if(source.rootRef!==target.rootRef||source.rootDigest!==target.rootDigest)reject('REPAIR_ROOT_MISMATCH','Original failure and verification must share the same native root',409);
+  if(!node||node.source!=='project'||!['runtime.check.harness','runtime.check.ontology','runtime.check.artifact'].includes(String(node.action!.actionRef)))reject('REPAIR_VERIFICATION_SCOPE','Select an existing fixed native check',409);
+  if(!stage||stage.status!=='PENDING'||stage.attempts!==0||stage.requestId!==null)reject('REPAIR_PREBIND_REQUIRED','Verification must be selected before its first request',409);
+  if(!p||p.phase!=='FAILED'||p.terminal!==true||!p.observationRef||!p.observation||p.observation.phase!=='FAILED'||p.observation.outcome.status!=='FAILED'||source.saved.stages[r.stageId]?.requestId!==r.id)reject('REPAIR_CONFIRMED_FAILURE_REQUIRED','Select the current confirmed original failure; UNKNOWN permits observation only',409);
+  const envelope=record(store.object(projectId,'stage-observation',p.observationRef));
+  if(valueDigest(envelope)!==p.observationRef||envelope.schema!=='runtime-stage-observation/v1'||envelope.requestId!==r.id||canonical(envelope.observation)!==canonical(p.observation)||envelope.reason!==p.reason||envelope.observedAt!==p.observedAt||p.observation.requestId!==r.id||p.observation.inputDigest!==r.inputDigest||p.observation.adapterDigest!==r.plan.adapterDigest)reject('CORRUPT_REPAIR_CAPTURE','Original failure differs from its immutable observation',503);
+  return{schema:'runtime-repair-selection/v1',rootRef:source.rootRef,rootDigest:source.rootDigest,originalRequestId:r.id,originalRequestDigest:r.digest,originalObservationRef:p.observationRef,originalInstanceId:r.instanceId,originalStageId:r.stageId,deadlineAt:new Date(Math.min(Date.parse(r.deadlineAt),Date.parse(source.deadlineAt),Date.parse(target.saved.pins.authorityExpiresAt))).toISOString(),verificationInstanceId:target.saved.id,verificationStageId:node.id,verificationPinsDigest:target.saved.pinsDigest,verificationNodeDigest:valueDigest(node)};
+}
+export function readNativeRepairCapture(store:RuntimeStore,r:StageRequest):NativeRepairCapture|null{
+  const raw=store.object(r.projectId,RECOVERY_KIND,'repair-capture:'+r.id);
+  if(!r.correctionRef){if(raw)reject('CORRUPT_REPAIR_CAPTURE','A request cannot acquire a correction association after admission',503);return null;}
+  if(!raw)reject('REPAIR_CAPTURE_REQUIRED','Associated request has no atomic pre-dispatch capture',409);
+  const c=record(raw),{digest,...body}=c,root=nativeRepairRoot(store,r.projectId,r.instanceId),original=repairRequest(store,r.projectId,string(c.originalRequestId)),before=nativeRepairRoot(store,r.projectId,original.instanceId);
+  exact(c,['schema','rootRef','rootDigest','originalRequestId','originalRequestDigest','originalObservationRef','originalInstanceId','originalStageId','deadlineAt','verificationInstanceId','verificationStageId','verificationPinsDigest','verificationNodeDigest','workspaceId','projectId','correctionRef','verificationRequestId','verificationRequestDigest','verificationPlanDigest','expectedNativeRequestId','boundAt','inputs','digest']);
+  exact(record(c.inputs),['originalPlanDigest','verificationPlanDigest','completeInputClosure']);
+  if(record(c.inputs).originalPlanDigest!==original.planDigest||record(c.inputs).verificationPlanDigest!==r.planDigest||!Number.isFinite(Date.parse(String(c.deadlineAt))))reject('CORRUPT_REPAIR_CAPTURE','Original and verification input references changed',503);
+  const observation=record(store.object(r.projectId,'stage-observation',string(c.originalObservationRef))),node=root.saved.definition.nodes.find(n=>n.id===r.stageId);
+  if(c.schema!=='runtime-repair-capture/v1'||c.workspaceId!==r.workspaceId||c.projectId!==r.projectId||digest!==valueDigest(body)||c.correctionRef!==r.correctionRef||c.verificationRequestId!==r.id||c.verificationRequestDigest!==r.digest||c.verificationPlanDigest!==r.planDigest||c.verificationInstanceId!==r.instanceId||c.verificationStageId!==r.stageId||c.verificationPinsDigest!==r.pinsDigest||!node||c.verificationNodeDigest!==valueDigest(node)||root.rootRef!==c.rootRef||root.rootDigest!==c.rootDigest||before.rootRef!==root.rootRef||original.digest!==c.originalRequestDigest||original.instanceId!==c.originalInstanceId||original.stageId!==c.originalStageId||observation.schema!=='runtime-stage-observation/v1'||observation.requestId!==original.id||valueDigest(observation)!==c.originalObservationRef||record(observation.observation).phase!=='FAILED'||c.expectedNativeRequestId!=='extension-native-'+valueDigest({requestDigest:r.digest}).slice(7,51)||c.boundAt!==r.requestedAt||Date.parse(r.deadlineAt)>Date.parse(String(c.deadlineAt))||Date.parse(String(c.deadlineAt))>Math.min(Date.parse(original.deadlineAt),Date.parse(root.deadlineAt))||record(c.inputs).completeInputClosure!==false)reject('CORRUPT_REPAIR_CAPTURE','Pre-dispatch repair capture identity changed',503);
+  return c as unknown as NativeRepairCapture;
+}
+export function readNativeRepairHistory(store:RuntimeStore,projectId:string,originalId:string,actor:Principal){
+  authorize(actor,projectId,'read');
+  const original=repairRequest(store,projectId,originalId),root=nativeRepairRoot(store,projectId,original.instanceId),raw=record(store.object(projectId,RECOVERY_KIND,'attempts:'+root.rootRef)),{digest,...body}=raw;
+  if(raw.schema!=='runtime-recovery-attempts/v1'||raw.rootRef!==root.rootRef||raw.rootDigest!==root.rootDigest||digest!==valueDigest(body)||!Array.isArray(raw.entries)||raw.entries.length>4096)reject('CORRUPT_REPAIR_HISTORY','Complete original root attempts are required',503);
+  const captures:NativeRepairCapture[]=[],rounds:NativeRepairRound[]=[],open:string[]=[],claims=new Map<string,StageRequest>();
+  for(const item of raw.entries){const entry=record(item),r=repairRequest(store,projectId,string(entry.requestId));if(claims.has(r.id)||r.digest!==entry.requestDigest||r.instanceId!==entry.instanceId||r.stageId!==entry.stageId||r.deadlineAt!==entry.deadlineAt||nativeRepairRoot(store,projectId,r.instanceId).rootRef!==root.rootRef)reject('CORRUPT_REPAIR_HISTORY','Original recovery claim changed',503);claims.set(r.id,r);const capture=readNativeRepairCapture(store,r);if(!capture)continue;
+    const p=record(store.object(projectId,'stage-progress',r.id)),rawRound=store.object(projectId,RECOVERY_KIND,'repair-round:'+r.id);let round:NativeRepairRound|null=null;
+    if(p.terminal===true){if(!rawRound)reject('CORRUPT_REPAIR_HISTORY','Completed verification lost its atomic repair round',503);const v=record(rawRound),{digest,...body}=v,envelope=record(store.object(projectId,'stage-observation',String(p.observationRef)));if(v.schema!=='runtime-repair-round/v1'||valueDigest(body)!==digest||v.rootRef!==root.rootRef||v.rootDigest!==root.rootDigest||v.captureDigest!==capture.digest||v.requestId!==r.id||v.requestDigest!==r.digest||v.observationRef!==p.observationRef||v.observedAt!==p.observedAt||!Number.isSafeInteger(v.completedRevision)||Number(v.completedRevision)<1||Number(v.completedRevision)>store.revision(projectId)||v.outcome!==(p.phase==='COMPLETE'?'PASS':p.phase==='FAILED'?'FAIL':null)||v.repairVerified!==false||valueDigest(envelope)!==p.observationRef||envelope.requestId!==r.id||envelope.schema!=='runtime-stage-observation/v1'||canonical(envelope.observation)!==canonical(p.observation)||envelope.reason!==p.reason||envelope.observedAt!==p.observedAt)reject('CORRUPT_REPAIR_HISTORY','Completed repair round differs from its original terminal observation',503);round=v as unknown as NativeRepairRound;}else if(rawRound)reject('CORRUPT_REPAIR_HISTORY','Unresolved original actions cannot complete a repair round',503);
+    if(capture.originalStageId===original.stageId){captures.push(capture);if(round)rounds.push(round);else open.push(r.id);}
+  }
+  // Independently enumerate immutable requests and member counters. A shortened
+  // rehashed ledger must not hide an unfinished check or reset actual rounds.
+  const members=new Set<string>(),covered=new Set<string>();let after='',scanned=0;
+  for(;;){const rows=store.objectsPage(projectId,'lifecycle-instance',after,200);for(const row of rows){after=row.id;if(++scanned>4096)reject('RECOVERY_HISTORY_LIMIT','Repair member scan is bounded',503);
+    const rawBinding=store.object(projectId,'instance-authority',row.id),binding=rawBinding?record(rawBinding):{},member=store.object(projectId,RECOVERY_KIND,'member:'+row.id) as Record<string,unknown>|null;
+    if(binding.recoveryRootRef!==root.rootRef&&member?.rootRef!==root.rootRef)continue;
+    const saved=nativeRepairRoot(store,projectId,row.id).saved;members.add(saved.id);const counts=new Map<string,number>();
+    for(const id of saved.requestIds){const r=claims.get(id);if(covered.has(id)||!r||r.instanceId!==saved.id)reject('CORRUPT_REPAIR_HISTORY','A root request was omitted from repair history',503);covered.add(id);counts.set(r.stageId,(counts.get(r.stageId)??0)+1);}
+    for(const [stage,state]of Object.entries(saved.stages))if(state.attempts!==(counts.get(stage)??0))reject('CORRUPT_REPAIR_HISTORY','Root attempts differ from complete repair claims',503);
+  }if(rows.length<200)break;}
+  if(covered.size!==claims.size)reject('CORRUPT_REPAIR_HISTORY','Repair claims lost their member instance',503);
+  after='';scanned=0;for(;;){const rows=store.objectsPage(projectId,'stage-request',after,200);for(const row of rows){after=row.id;if(++scanned>4096)reject('RECOVERY_HISTORY_LIMIT','Repair request scan is bounded',503);if(members.has(String(record(row.value).instanceId))&&!claims.has(row.id))reject('CORRUPT_REPAIR_HISTORY','An immutable request was hidden from repair history',503);}if(rows.length<200)break;}
+  rounds.sort((a,b)=>a.completedRevision-b.completedRevision);if(new Set(rounds.map(r=>r.completedRevision)).size!==rounds.length)reject('CORRUPT_REPAIR_HISTORY','Native repair completion order changed',503);
+  const remaining=new Map(rounds.map(r=>[r.completedRevision,r]));let cursor:string|undefined;scanned=0;
+  while(remaining.size){const page=store.events(actor,projectId,cursor);cursor=page.cursor;if(!page.events.length)reject('CORRUPT_REPAIR_HISTORY','Repair completion has no original terminal event',503);
+    for(const raw of page.events){if(++scanned>65536)reject('RECOVERY_HISTORY_LIMIT','Repair event verification exceeds its bounded read limit',503);const event=record(raw),round=remaining.get(Number(event.revision));if(!round)continue;const data=record(event.data);
+      if(event.type!=='stage-observed'||data.stageRequestId!==round.requestId||data.observationRef!==round.observationRef||data.phase!==(round.outcome==='PASS'?'COMPLETE':'FAILED'))reject('CORRUPT_REPAIR_HISTORY','Repair round order differs from the original terminal event',503);remaining.delete(round.completedRevision);
+    }
+  }
+  return{rootRef:root.rootRef,rootDigest:root.rootDigest,captures,rounds,open,repairVerified:false as const};
+}
 interface DecisionRecord {
   schema:'runtime-authority-decision/v1'; ref:string; workspaceId:string; projectId:string;
   kind:Kind; subject:Record<string,unknown>; reviewDigest:string; policyDigest:string; bindingContextDigest:string;
@@ -271,6 +358,7 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
       const r=store.object(root.projectId,'stage-request',String(e.requestId)) as StageRequest|null;
       if(!r)reject('CORRUPT_RECOVERY_LEDGER','Original recovery request is missing',503);const{digest:requestDigest,...requestBody}=r;
       if(seen.has(r.id)||r.schema!=='runtime-stage-request/v1'||r.workspaceId!==root.workspaceId||r.projectId!==root.projectId||r.id!==e.requestId||r.instanceId!==e.instanceId||r.stageId!==e.stageId||requestDigest!==e.requestDigest||valueDigest(requestBody)!==requestDigest||valueDigest(r.plan)!==r.planDigest||r.deadlineAt!==e.deadlineAt||Date.parse(r.deadlineAt)>Date.parse(root.deadlineAt)||!Number.isFinite(Date.parse(r.deadlineAt))||member(instance(root.projectId,r.instanceId))?.ref!==root.ref)reject('CORRUPT_RECOVERY_LEDGER','Recovery request identity or membership changed',503);seen.add(r.id);requests.set(r.id,r);
+      const capture=readNativeRepairCapture(store,r);if(capture){const p=store.object(root.projectId,'stage-progress',r.id) as StageProgress|null,round=store.object(root.projectId,RECOVERY_KIND,'repair-round:'+r.id);if(p?.terminal===true&&!round||p?.terminal===false&&round)reject('CORRUPT_REPAIR_HISTORY','Root claims and completed repair rounds disagree',503);}
     }
     // Membership and the independently retained instance counters/request IDs
     // must be complete. A rehashed shortened ledger cannot renew an allowance.

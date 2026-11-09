@@ -12,6 +12,15 @@ through `lifecycle.correction.propose`. Its input is `stageRequestId`,
 request and revision. The resulting `correctionRef` records a proposal, not a
 verified cause, approved semantics, execution grant or quality PASS.
 
+Use an empty `proposedChanges` array for a non-source repair instead of inventing
+file edits. When the pinned graph already contains an appropriate unrequested
+native check, `verification: {instanceId, stageId}` may pre-bind it to the current
+confirmed failure within the same native recovery root. Request that exact check
+through `lifecycle.stage.request` with the returned `correctionRef`; all ordinary
+graph, authority and budget checks still apply. Do not attach a finished check,
+create an arbitrary runner or bypass a failed predecessor. Captured rounds are
+historical proof of the check's execution, not a retry approval by themselves.
+
 Query `lifecycle.correction.admission` with the original `stageRequestId` and
 the retained `correctionRef`. A response such as
 `VERIFIED_REPAIR_ADMISSION_REQUIRED` means the trusted repair verification is
@@ -25,6 +34,13 @@ receipt. They are not failed attempts that can be blindly resubmitted. A
 deterministic failure with no verified change must not be dispatched again.
 Two repair rounds with the same cause and no progress stop that path for
 reassessment. Existing cumulative attempt and time limits still apply.
+
+For an engineering retry, use protected original fault facts, relevant observed
+inputs and actual minimal verification. Do not invent a requirement to publish
+a new Harness failure-classification asset for every repair. Unknown causes
+remain unknown, and engineering recovery cannot override the owner's quality
+verdict. Complete dependency closure and a published qualification policy apply
+separately to cross-candidate `PASS_REUSED`, as described below.
 
 For a successor instance, read the original native recovery linkage through
 `lifecycle.instance.inspect`. Include its exact `recoveryRootRef` in the new

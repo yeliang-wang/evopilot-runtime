@@ -27,7 +27,7 @@ import { createPublicationStageAdapter } from './publication-stage.js';
 import {readVerificationFeedback} from './stage-feedback.js';
 import {createClosureStageAdapter} from './closure-stage.js';
 import {registeredExtensionReview,type ExtensionReviewBindings} from '../lifecycle/extension-review.js';
-import type {LifecycleInstance} from '../lifecycle/instance.js';
+import {inspectInstance,type LifecycleInstance} from '../lifecycle/instance.js';
 import {createNativeExtensionStageAdapter} from './extension-stages.js';
 import type { PreparationValidator } from '../lifecycle/preparation.js';
 import { createPlanStageAdapter, createScopeStageAdapter, registeredPreparation } from './preparation-stages.js';
@@ -347,6 +347,17 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
         const adapter=await current(signal,request.stageId,instance);
         if(!adapter.reconcileAdvance)reject('RECONCILE_ORIGINAL_REQUEST','Selected native adapter has no read-only original-receipt recovery',409);
         return adapter.reconcileAdvance(request,instance,progress,actor,signal);
+      },
+      async verifyRepair(subject,actor,signal){
+        signal.throwIfAborted();authorize(actor,subject.projectId,'execution.request');
+        if(subject.workspaceId!==workspaceId)reject('INTEGRATION_SCOPE','Repair must belong to the registered service workspace',403);
+        const saved=store.object(subject.projectId,'lifecycle-instance',subject.instanceId);
+        if(!saved)return null;
+        const instance=inspectInstance(saved as LifecycleInstance);
+        if(instance.id!==subject.instanceId||instance.pins.projectId!==subject.projectId||instance.pinsDigest!==subject.pinsDigest||instance.pins.authorityDigest!==subject.authorityDigest||instance.candidateDigest!==subject.candidateDigest||!instance.stages[subject.stageId])reject('REPAIR_SCOPE_CHANGED','Repair must retain the exact current instance, stage and candidate',409);
+        const adapter=await current(signal,subject.stageId,instance);
+        signal.throwIfAborted();
+        return adapter.verifyRepair?adapter.verifyRepair(subject,actor,signal):null;
       },
       async advance(request,instance,progress,permit,signal){return(await current(signal,request.stageId,instance)).advance!(request,instance,progress,permit,signal);},
     };
