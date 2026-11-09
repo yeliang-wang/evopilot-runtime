@@ -641,3 +641,25 @@ LC06／LC07 分别通过受保护的 `lcProvider` 选择一个原始场景。LC0
 故障。LC07 用原 GitLab 任务的真实异步变化产生过期 revision，确认原生冲突拒绝
 没有回执或副作用后，重新核对原定义及绑定，只允许一次相同启用请求的恢复。
 两例均不创建业务执行、不拼接其他用例的 PASS；缺少真实前置条件仍为 NOT_READY。
+
+LC16 uses a singleton protected `lc16: {ref, sha256}` selection. Its eleven
+vectors inspect genuine retained originals and a distinct authenticated current
+execution control. The collector independently expands the fixed catalog and
+checks all 698 PRE rows: current execution, eligible reuse and required execution
+must be disjoint and together cover the entire set. Caller-supplied status labels
+or expected partitions cannot establish evidence eligibility.
+
+The expired-original vector binds its authenticated original plan registration
+to the current native control, so registration drift cannot masquerade as expiry.
+Unaffected reuse requires an actual published policy, complete original LC20
+evidence, native owner assessment and still-valid current qualification. Unknown
+outcomes retain their original identities and observation-only next action.
+These are fixed read operations; the collector does not create fixtures, grant
+authority or dispatch work. Missing real prerequisites remain NOT_READY. FAILED
+and NOT_READY both retain all eleven vector results and fail the command; source
+guards alone do not establish installed acceptance or any formal case credit.
+
+LC16 通过受保护的 `lc16` 选择真实原始记录及独立的当前执行对照，逐项核对全部
+698 项发布前义务的执行、复用、待执行分区。过期与配置漂移分别识别，未知结果只观察
+原请求，不重新派发。十一组向量必须全部实证通过；缺少真实前提保留 NOT_READY，
+失败报告完整落盘且命令失败退出。源码回归不等于正式安装验收。
