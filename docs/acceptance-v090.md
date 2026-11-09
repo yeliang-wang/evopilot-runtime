@@ -608,3 +608,36 @@ The positive callback performs one authenticated status read. Observations,
 original responses and artifact pins use the correction report format consumed
 by release auditing. A singleton PASS still reports 1 of 20 PRE cases and an
 incomplete scenario; it grants no release authority or full-catalog completion.
+
+LC06 and LC07 each use a singleton `lcProvider: {ref, sha256}` selection. Both
+require the exact installed candidate, original implementation request and CI
+derivation, submitted Agent report, independent source review, existing authority
+and protected connection. The collector observes genuine provider run/job records
+and native receipts; it does not create these prerequisites or import another
+scenario's PASS. Both vectors of each case must belong to that one original
+scenario. Missing, expired or unresolved prerequisites leave the case NOT_READY.
+
+LC06's `ORIGINAL_FAULT` mode verifies a previously produced, case-owned GitHub
+accepted-response-loss fault and then reconciles the same original request. The
+fault must bind the selected candidate, original process and exact unread-response
+boundary. This collector does not inject the fault itself. It compares complete
+original run/job inventories and waits for the native observation worker to drain.
+A replacement run, retried job or unresolved CI outcome cannot establish recovery.
+Both a known PASSED and a known FAILED provider outcome can prove reconciliation;
+any later artifact or owner-validation problem remains visible in the parent
+stage state. The retained startup UNKNOWN observation supplies historical proof
+even if the worker has already progressed beyond it.
+
+LC07's `ORIGINAL_ACTIVATION` mode observes an actual GitLab task changing the
+Runtime revision, then submits a frozen activation request for an already reviewed
+definition with the stale revision. Only an actual REVISION_CONFLICT with no
+receipt or mutation qualifies. After rereading the original task, exact YAML,
+definition, preview and stable bindings, it may attempt one restoration of that
+same activation subject. Unknown transport, another conflict or a BLOCKED result
+cannot become a retry loop or a PASS. Neither lane starts a new business execution.
+
+LC06／LC07 分别通过受保护的 `lcProvider` 选择一个原始场景。LC06 核验已经真实
+发生且归属本例的 GitHub 响应丢失，再核对同一原请求、run 和 job；采集器本身不制造
+故障。LC07 用原 GitLab 任务的真实异步变化产生过期 revision，确认原生冲突拒绝
+没有回执或副作用后，重新核对原定义及绑定，只允许一次相同启用请求的恢复。
+两例均不创建业务执行、不拼接其他用例的 PASS；缺少真实前置条件仍为 NOT_READY。
