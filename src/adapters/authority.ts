@@ -427,7 +427,13 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
       });
       const inFlight=active.length,concurrency=Math.min(root.budget.maxConcurrency,grant.budget.maxConcurrency,local.maxConcurrency,root.stageBudgets[stageId].maxConcurrency,...activeBounds);
       if(inFlight>(requestId?concurrency:concurrency-1))reasons.push('RECOVERY_CONCURRENCY_EXHAUSTED');
-      const deadline=Math.min(Date.parse(root.deadlineAt),Date.parse(grant.expiresAt),...selected.map(e=>Date.parse(e.deadlineAt)));
+      // A separately reviewed successor actually reruns prior passing work.
+      // Its root window and cumulative attempts remain shared, but a completed
+      // other member's one-shot request deadline is not this new RC's window.
+      // Failed, unresolved and same-instance requests keep their original cutoff.
+      const reviewedSuccessor=saved.id!==root.originalInstanceId&&grant.recoveryRootRef===root.ref&&grant.recoveryRootDigest===root.digest;
+      const retainedCutoffs=states.filter(({entry,progress:p})=>entry.stageId===stageId&&(!reviewedSuccessor||entry.instanceId===saved.id||p.phase!=='COMPLETE'||p.terminal!==true)).map(({entry})=>Date.parse(entry.deadlineAt));
+      const deadline=Math.min(Date.parse(root.deadlineAt),Date.parse(grant.expiresAt),...retainedCutoffs);
       if(deadline<=Date.now())reasons.push('RECOVERY_DEADLINE_EXHAUSTED');return{allowed:reasons.length===0,reasons:[...new Set(reasons)],deadlineAt:new Date(deadline).toISOString(),rootRef:root.ref,stageAttempts:selected.length};
     },
     claim(saved,grant,r,actor){

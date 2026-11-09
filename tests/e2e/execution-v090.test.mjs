@@ -1079,3 +1079,43 @@ test('a pending candidate stage cannot carry a fabricated self-consistent candid
   RuntimeStore.prototype.object=originalObject;assert.deepEqual((await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance,before);assert.equal((await request(f,'runtime.receipt.read',{requestId:'fabricated-candidate'},'executor')).status,404);
  }finally{RuntimeStore.prototype.object=originalObject;await f.server.close();f.cleanup();}
 });
+
+async function shortStageRecoveryFixture(mode='complete'){
+ const f=fixture(),adapter=stageAdapter(f);f.data.config.plan.budget.timeoutSeconds=10;await f.open();await activate(f);
+ // Both bounds are reviewed before the first request: a short single stage,
+ // inside a longer original root window. No later budget amendment is made.
+ const subject=executionSubject(f);subject.budget.timeoutSeconds=600;const g=await grant(f,'execution',subject);await create(f,g);adapter.state.mode=mode;adapter.state.inspectMode=mode;
+ const first=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=first.result.result.stageRequestId,original=(await until(()=>stageState(f,id),v=>v.result.progress.phase===(mode==='complete'?'COMPLETE':mode==='fail'?'FAILED':'UNKNOWN'))).result;
+ return{f,g,...adapter,id,original};
+}
+
+test('reviewed successor really reruns an expired prior PASS within the unchanged root window',async()=>{
+ const{f,g,state,id,original}=await shortStageRecoveryFixture(),now=Date.now;try{
+  const root=await recoveryView(f);assert(Date.parse(original.request.deadlineAt)<Date.parse(root.deadlineAt));Date.now=()=>Date.parse(original.request.deadlineAt)+100;
+  await successor(f,g,'two');const next=await execWrite(f,'lifecycle.stage.request',{instanceId:'two',stageId:'scope'});assert.equal(next.status,200,JSON.stringify(next));const result=(await until(()=>stageState(f,next.result.result.stageRequestId),v=>v.result.progress.terminal)).result;
+  assert.equal(result.progress.phase,'COMPLETE');assert.equal(state.dispatches,2);assert(Date.parse(result.request.deadlineAt)>Date.parse(original.request.deadlineAt));assert(Date.parse(result.request.deadlineAt)<=Date.parse(root.deadlineAt));assert(Date.parse(result.request.deadlineAt)<=Date.parse(result.request.requestedAt)+10000);
+  assert.deepEqual((await stageState(f,id)).result.request,original.request);assert.deepEqual((await stageState(f,id)).result.progress,original.progress);assert.deepEqual((await recoveryView(f,'two')).budget,root.budget);assert.equal((await recoveryView(f,'two')).attempts.length,2);
+ }finally{Date.now=now;await f.server.close();f.cleanup();}
+});
+
+for(const mode of ['fail','unknown'])test('reviewed successor preserves the expired original '+mode+' cutoff',async()=>{
+ const{f,g,state,original}=await shortStageRecoveryFixture(mode),now=Date.now;try{
+  await successor(f,g,'two');Date.now=()=>Date.parse(original.request.deadlineAt)+100;
+  const denied=await execWrite(f,'lifecycle.stage.request',{instanceId:'two',stageId:'scope'});assert.equal(denied.error.code,'STAGE_BLOCKED',JSON.stringify(denied));assert.match(denied.error.message,/RECOVERY_DEADLINE_EXHAUSTED/);assert.equal(state.dispatches,1);
+ }finally{Date.now=now;await f.server.close();f.cleanup();}
+});
+
+test('completed prior PASS cannot renew an expired original root through a preapproved successor',async()=>{
+ const{f,g,state}=await shortStageRecoveryFixture(),now=Date.now;try{
+  await successor(f,g,'two');const root=await recoveryView(f);Date.now=()=>Date.parse(root.deadlineAt)+1;
+  const denied=await execWrite(f,'lifecycle.stage.request',{instanceId:'two',stageId:'scope'});assert.notEqual(denied.status,200);assert.equal(state.dispatches,1);assert.equal((await recoveryView(f,'two')).attempts.length,1);
+ }finally{Date.now=now;await f.server.close();f.cleanup();}
+});
+
+test('forged COMPLETE progress cannot remove a failed ancestor request cutoff',async()=>{
+ const{f,g,state,id,original}=await shortStageRecoveryFixture('fail'),now=Date.now,object=RuntimeStore.prototype.object;try{
+  await successor(f,g,'two');Date.now=()=>Date.parse(original.request.deadlineAt)+100;
+  RuntimeStore.prototype.object=function(projectId,kind,ref){const raw=object.call(this,projectId,kind,ref);if(projectId==='alpha'&&kind==='stage-progress'&&ref===id){const fake=structuredClone(raw);fake.phase='COMPLETE';fake.observation.phase='COMPLETE';fake.observation.outcome.status='COMPLETE';return fake;}return raw;};
+  const denied=await execWrite(f,'lifecycle.stage.request',{instanceId:'two',stageId:'scope'});assert.equal(denied.error.code,'CORRUPT_RECOVERY_LEDGER',JSON.stringify(denied));assert.equal(state.dispatches,1);
+ }finally{RuntimeStore.prototype.object=object;Date.now=now;await f.server.close();f.cleanup();}
+});
