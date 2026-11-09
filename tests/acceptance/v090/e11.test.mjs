@@ -242,7 +242,7 @@ function cv05AssertCiReadEvents(rows,childRequestId,currentObservation,valueDige
 // Private, unexecuted collector proposal for the original fixed E11.CV05.
 // All input fixtures are isolated synthetic technical records. No new authority
 // is recorded here; no CI dispatch, cancellation, owner write or service restart.
-async function activeCiExitReentry(run,c){
+export async function activeCiExitReentry(run,c){
  const began=Date.now(),wrapper=pinned(run.selection.multiClient);
  keys(wrapper,['schema','candidateDigest','workspaceId','serviceId','syntheticAssets','syntheticDecisions','twoProjectFixture','readOnlyClient','activeCi','revisionBoundary']);
  assert.equal(wrapper.schema,'runtime-e11-active-ci-fixture/v1');assert.equal(wrapper.candidateDigest,run.candidateDigest);assert.equal(wrapper.workspaceId,run.selection.workspaceId);assert.equal(wrapper.serviceId,run.candidate.serviceId);assert.equal(wrapper.syntheticAssets,true);assert.equal(wrapper.syntheticDecisions,true);
@@ -371,7 +371,7 @@ async function activeCiExitReentry(run,c){
 }
 
 
-test('E11 actual two-client two-project Runtime isolation',async()=>{
+if(process.argv[1] && import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)test('E11 actual two-client two-project Runtime isolation',async()=>{
  const run=await openScenario('E11');try{assert.equal(run.all.length,2);for(const c of run.cases)await run.collect(c,async()=>{
   if(c.caseInstanceId==='E11.journey')return journey(run,c);
   assert.equal(c.caseInstanceId,'E11.CV05');return activeCiExitReentry(run,c);

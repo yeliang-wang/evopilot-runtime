@@ -109,6 +109,16 @@ execution. Failed, unresolved and same-instance request cutoffs remain binding;
 all cumulative attempts still count. This does not reuse the old PASS, renew an
 expired root or alter any historical request or observation.
 
+Native `maxLoops` accounting is separate from stage attempts. A reviewed window
+binds the exact Goal and Target ID/version, starts at the founding authority
+commit, and charges each distinct Loop only on its first retained stage request.
+A different request, directory, Host or successor instance cannot replenish that
+window. A later window needs an explicit reviewed selection after the prior
+fixed deadline; expiry permits observation and reconciliation, not renewal or
+redispatch. See [native Loop budget accounting](lifecycle-api.md#native-loop-budget-accounting)
+for the public selection and readback fields. This development implementation
+still requires the fixed installed acceptance cases before release.
+
 ## Independent checks and evidence
 
 The deterministic branch planner preserves actual FAIL results, blocks their
@@ -170,12 +180,13 @@ complete cross-attempt case history.
 ## Storage and rollback
 
 Ordinary service state remains schema 1. The first committed correction,
-recovery, qualification or CI acceptance capture record upgrades the state marker to schema 2 in the
-same transaction. Failed writes do not upgrade it, and reopening cannot downgrade
-it. Old readers that support only schema 1 reject newer state. Current snapshot
-and restore preserve both schemas and original receipts. Downgrade recovery uses
-a verified pre-upgrade snapshot and retains subsequent evidence separately;
-never point an older binary at newer data.
+recovery, qualification or CI acceptance capture record raises the state marker
+to schema 2 in the same transaction. Native Loop-window accounting raises it to
+schema 3; subsequent writes never lower it. Snapshot and restore preserve these
+supported schemas and original receipts. Older readers reject newer state rather
+than ignoring its budget or evidence semantics. Downgrade recovery requires a
+verified compatible pre-upgrade snapshot; never open schema 3 data with a schema
+2 binary, and preserve all later evidence separately.
 
 ## Acceptance
 
@@ -207,10 +218,26 @@ source-authentication obligation in the release auditor. Neither branch makes a
 caller-provided PASS trustworthy.
 
 The registered closed probe remains a functionality/protocol probe with formal
-case credit zero. This integration does not yet supply a formal cross-candidate
-producer for the 28 conditional Runtime cases. Unknown actual Host/prestate
-inputs still require full execution. A subsequent bounded producer must cover an
-entire accepted case, its complete original inputs and attempt history; LC20's
-six-case dependency fixture and all four vectors are a candidate scope, not a
-completed or approved execution result. Existing LC14/LC20 acceptance must still
-run against the final integrated candidate.
+case credit zero. The bounded LC20 producer protocol covers the whole accepted
+case: unrelated, direct, transitive and missing-edge-fallback vectors, each with
+six actual baseline/full child executions and the installed Runtime's original
+decisions. Its independently authorized native assessments do not borrow the
+outer CI stage's authority. The resumable collector retains exact plans while
+waiting for those grants; UNKNOWN does not cause redispatch.
+
+The producer's published contract, actual committed collector/workflow bytes,
+inner Runtime distribution, pre-dispatch protocol observation, before/after
+inputs and complete managed history are separate checks. Arbitrary environment
+JSON cannot establish COMPLETE. Source loaders, unresolvable shared objects,
+unknown external/prestate dependencies and hidden/failed history require FULL.
+The fixed prestate projection preserves original history digests and does not
+erase failures or renew budgets. This source path is not a claim that the
+semantic asset has been approved/published or that actual LC20 acceptance passed.
+The other conditional cases gain no producer by analogy.
+
+Current CI execution capture also distinguishes the outer lifecycle artifact-set
+digest from the inner Runtime distribution manifest digest. Original archive,
+manifest and source-revision bytes must prove both; v3 private source records
+back the existing v2 public capture. Historical records without this proof stay
+readable but cannot be upgraded into formal distribution evidence. Final
+LC14/LC20 acceptance must run against the integrated candidate and actual policy.

@@ -34,6 +34,14 @@ const run=f=>relocateWithOwners(f.request,f.owners);
 const journal=f=>JSON.parse(fs.readFileSync(join(f.source.workspaceRoot+'.evopilot-maintenance','requests',f.request.requestId+'.json')));
 const absent=f=>Object.values(f.request.destination).every(p=>!fs.existsSync(p));
 
+test('relocation keeps schema3 Loop counters and original immutable receipt identities',async t=>{
+ const f=await fixture(t),actor={id:'synthetic',projects:['synthetic'],permissions:['read'],revision:1,expiresAt:'2030-01-01T00:00:00Z'},store=new RuntimeStore(join(f.source.serviceRoot,'data'),f.source.workspaceId),value={synthetic:true,windowRef:'original-window',entries:[{loopRef:'original-loop',ordinal:1,firstRequestId:'original-request'}]};let receipt;
+ try{receipt=store.mutate(actor,{projectId:'synthetic',operation:'synthetic.loop-preservation',requestId:'loop-preservation',expectedRevision:store.revision('synthetic'),input:{synthetic:true},permission:'read'},()=>({objects:[{kind:'lifecycle-loop-budget',id:'synthetic-original',value}],value:{retained:true},event:{type:'synthetic-loop-evidence',data:{}}}));}finally{store.close();}
+ const snapshot=await inspectManagedWorkspace(f.source,'schema3-source'),saved=await createManagedWorkspaceBackup(f.source,'schema3-backup',snapshot.snapshotDigest,join(f.root,'schema3-backup'));assert.equal(snapshot.databases.find(d=>d.owner==='service').schemaVersion,3);f.request.backupRoot=saved.backupRoot;f.request.backupDigest=saved.backupDigest;
+ const result=await run(f);assert.equal(result.status,'VERIFIED');const relocated=new RuntimeStore(join(f.destination.serviceRoot,'data'),f.source.workspaceId);try{assert.deepEqual(relocated.object('synthetic','lifecycle-loop-budget','synthetic-original'),value);assert.deepEqual(relocated.receipt(actor,'synthetic','loop-preservation'),receipt);}finally{relocated.close();}
+ assert.equal((await inspectManagedWorkspace(f.source,'schema3-source-after')).snapshotDigest,snapshot.snapshotDigest);
+});
+
 test('one durable relocation preserves selected roots, all opaque tables, credentials and adoption; completed replay preserves newer destination work',async t=>{
  const f=await fixture(t),result=await run(f);
  assert.equal(result.status,'VERIFIED');for(const name of ['serviceStarted','hostRegistered','businessWorkDispatched','authority'])assert.equal(result[name],false);

@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, realpathSync, chmodSync, symlinkSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
+import ts from 'typescript';
 import { spawn, spawnSync } from 'node:child_process';
 import { request as httpRequest } from 'node:http';
 import { once } from 'node:events';
@@ -208,6 +210,25 @@ test('schema2 reopening retains full ledger integrity checks',()=>{
     const db=new DatabaseSync(join(f.root,'service.sqlite'));try{db.exec('DROP TABLE audit;');}finally{db.close();}
     assert.throws(()=>new RuntimeStore(f.root,'test'),{code:'CORRUPT_STATE'});assert.equal(serviceSchema(f.root),2);
   }finally{s.close();f.cleanup();}
+});
+
+test('native Loop schema3 commits atomically, never downgrades, and the exact earlier schema2 reader refuses it',async()=>{
+  const f=fixture();let store=new RuntimeStore(f.root,'test');
+  try{
+    const original=store.mutate(f.actor,mutation(),()=>correctionChange());assert.equal(serviceSchema(f.root),2);store.close();
+    // Execute the actual pinned pre-accounting store implementation, with only
+    // TypeScript erasure and import routing to this checkout's dependencies.
+    // This is a source reader test, not installed release acceptance.
+    const selected=spawnSync('git',['show','05770e29f7e6b50228802489c9550eb7112979fe:src/server/store.ts'],{cwd:new URL('../../',import.meta.url),encoding:'utf8',maxBuffer:1048576});assert.equal(selected.status,0,selected.stderr);assert.equal(createHash('sha256').update(selected.stdout).digest('hex'),'b9d192555988ee1f8553a6c12a17073e6d20af38e3b84de8a8254415d833343d');assert.equal(ts.version,'5.9.3');
+    const routed=selected.stdout.replace(/from '(\.[^']+)'/g,(_all,ref)=>'from '+JSON.stringify(new URL(ref,new URL('../../dist/server/store.js',import.meta.url)).href));
+    const oldFile=join(f.dir,'actual-schema2-reader.mjs');writeFileSync(oldFile,ts.transpileModule(routed,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2023}}).outputText,{mode:0o600});const Old=(await import(pathToFileURL(oldFile).href)).RuntimeStore;
+    const old=new Old(f.root,'test');assert.deepEqual(old.receipt(f.actor,'alpha','one'),original);old.close();store=new RuntimeStore(f.root,'test');
+    assert.throws(()=>store.mutate(f.actor,mutation('rolled-back-window',1),()=>correctionChange('lifecycle-loop-budget'),()=>({...f.actor,permissions:['read']})),{code:'FORBIDDEN'});assert.equal(serviceSchema(f.root),2);assert.equal(store.object('alpha','lifecycle-loop-budget','synthetic-correction'),null);
+    const charged=store.mutate(f.actor,mutation('window',1),()=>correctionChange('lifecycle-loop-budget'),()=>{assert.equal(serviceSchema(f.root),2);return f.actor;});assert.equal(serviceSchema(f.root),3);
+    store.mutate(f.actor,mutation('later-correction',2),()=>correctionChange());assert.equal(serviceSchema(f.root),3);store.mutate(f.actor,mutation('ordinary',3),()=>change());assert.equal(serviceSchema(f.root),3);store.close();
+    const bytes=readFileSync(join(f.root,'service.sqlite'));assert.throws(()=>new Old(f.root,'test'),{code:'INCOMPATIBLE_STATE'});assert.deepEqual(readFileSync(join(f.root,'service.sqlite')),bytes);
+    store=new RuntimeStore(f.root,'test');assert.equal(serviceSchema(f.root),3);assert.deepEqual(store.receipt(f.actor,'alpha','one'),original);assert.deepEqual(store.receipt(f.actor,'alpha','window'),charged);assert.equal(store.revision('alpha'),4);
+  }finally{store.close();f.cleanup();}
 });
 
 for(const phase of ['before','after'])test('OS crash '+phase+' commit recovers transaction and single-writer lock without redispatch',async()=>{

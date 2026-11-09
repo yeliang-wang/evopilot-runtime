@@ -11,7 +11,7 @@ import { ownerRequestDigest, type PublishedOwnerAdapter, type OwnerMutationPermi
 import { nativeInventory, verifyNativeStageResult, type NativeAction, type OwnerPin } from '../adapters/stages.js';
 import { nativeSha256, type NativeValidationContext } from '../../vendor/compatibility/v1/native.mjs';
 import {
-  EVIDENCE_INPUT_KINDS, correctionDigest, correctionEnum, correctionTime, immutableCorrection,
+  EVIDENCE_INPUT_KINDS, LC20_CHILDREN, correctionDigest, correctionEnum, correctionTime, immutableCorrection,
   type EvidenceInputManifest, type EvidenceQualification, type EvidenceScope,
   type HarnessQualificationAssessment, type QualificationInput, type TrustedQualificationVerifier,
   type QualificationSelection, type NativeEvidenceQualification, type TypedCurrentExecutionCapture,
@@ -380,6 +380,8 @@ export function createNativeQualificationService(store:RuntimeStore,bindings:Nat
 
 export interface ClosedFixtureQualificationConfiguration {
   scope:EvidenceScope;caseId:string;fixtureRoot:string;
+  /** Fixed subordinate LC20 fixture only; it never gains formal case credit. */
+  lc20Child?:typeof LC20_CHILDREN[number];
   /** Operator-installed current published policy/trust reader. A configured
    * native asset still needs real publication and semantic approval at use. */
   policy(actor:Principal,signal:AbortSignal):Promise<ProtectedQualificationFacts['policy']>;
@@ -407,6 +409,17 @@ function closedFixtureEvaluate(input:string,expected:string):{actualDigest:strin
   const actualDigest='sha256:'+createHash('sha256').update(JSON.stringify(normalize(JSON.parse(input) as unknown))).digest('hex'),expectedDigest=oracle.canonicalDigest;
   return{actualDigest,expectedDigest,outcome:actualDigest===expectedDigest?'PASS':'FAIL'};
 }
+export const LC20_FIXTURE_GRAPH=Object.freeze({a:[],b:['a'],c:['b'],d:[],e:['d'],f:[]} as const);
+/** Finite test fixture protocol, not a general program or execution API. */
+function lc20FixtureInput(root:string,child:typeof LC20_CHILDREN[number]) {
+  const expectedFiles=['a.json','d.json','f.json','graph.json','unrelated.txt',...LC20_CHILDREN.map(id=>'expected-'+id+'.json')].sort();
+  if(!sameQualification(readdirSync(root).sort(),expectedFiles))reject('QUALIFICATION_FIXTURE_INVENTORY','LC20 requires its exact fixed subordinate file set',409);
+  const graphText=closedFixtureFile(join(root,'graph.json'),4096).toString('utf8'),graph=JSON.parse(graphText),complete=sameQualification(graph,LC20_FIXTURE_GRAPH);
+  const leaf=['a','b','c'].includes(child)?'a':['d','e'].includes(child)?'d':'f',bytes=closedFixtureFile(join(root,leaf+'.json'),1024),v=record(JSON.parse(bytes.toString('utf8')));exact(v,['value']);
+  if(!Number.isSafeInteger(v.value)||Math.abs(Number(v.value))>1000000)reject('QUALIFICATION_FIXTURE_INPUT','Fixed bounded integer fixture input required',409);
+  const value=Number(v.value)+(child==='b'||child==='e'?1:child==='c'?2:0),input=canonical({value}),expected=closedFixtureFile(join(root,'expected-'+child+'.json'),1024).toString('utf8');
+  return{input,expected,complete,leafDigest:byteDigest(bytes),graphDigest:byteDigest(graphText),child};
+}
 function closedFixtureFile(path:string,limit:number,privateRequired=true):Buffer {
   if(!isAbsolute(path)||resolve(path)!==path||realpathSync(path)!==path)reject('QUALIFICATION_FIXTURE_PATH','Use canonical fixture paths without links');
   const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW);
@@ -420,19 +433,21 @@ function closedFixtureFile(path:string,limit:number,privateRequired=true):Buffer
  * through it. Their unknown external dependencies continue to require execution. */
 export function createClosedFixtureQualificationProducer(store:RuntimeStore,config:ClosedFixtureQualificationConfiguration) {
   scope(config.scope);boundedText(config.caseId);if(config.scope.workspaceId!==store.workspaceId)reject('QUALIFICATION_SCOPE_CHANGED','Closed fixture must belong to this workspace');
-  const kind='lifecycle-evidence-qualification',key='closed-fixture:'+valueDigest({scope:config.scope,caseId:config.caseId}),projectId=config.scope.projectId;
+  if(config.lc20Child!==undefined&&(config.caseId!=='LC20'||!LC20_CHILDREN.includes(config.lc20Child)))reject('QUALIFICATION_FIXTURE_INPUT','LC20 child protocol cannot stand for another case');
+  const kind='lifecycle-evidence-qualification',key='closed-fixture:'+valueDigest({scope:config.scope,caseId:config.caseId,...(config.lc20Child?{lc20Child:config.lc20Child}:{})}),projectId=config.scope.projectId;
   function ledger():ClosedFixtureAttempt[]{const value=store.object(projectId,kind,key);if(value===null)return[];const r=record(value);if(r.schema!=='runtime-closed-fixture-history/v2'||!Array.isArray(r.attempts)||r.attempts.length>4096)reject('QUALIFICATION_HISTORY_CHANGED','Complete closed producer history unavailable');return r.attempts as ClosedFixtureAttempt[];}
   function save(attempts:ClosedFixtureAttempt[],actor:Principal,mutation?:QualificationMutationContext):void {
     const value={schema:'runtime-closed-fixture-history/v2',attempts};store.mutate(actor,{projectId,...(mutation??{operation:'lifecycle.qualification.fixture.execute',requestId:'fixture-'+randomUUID(),expectedRevision:store.revision(projectId),input:{historyDigest:valueDigest(value)}}),permission:'execution.request'},()=>({objects:[{kind,id:key,value}],value:{historyRef:key,historyDigest:valueDigest(value),formalCaseCredit:0},event:{type:'closed-fixture-execution',data:{historyDigest:valueDigest(value),formalCaseCredit:0}}}),mutation?.reauthorize);
   }
   function inventory(candidateDigest:string,p:ProtectedQualificationFacts['policy']):{manifest:EvidenceInputManifest;input:string;expected:string} {
-    if(!sameQualification(readdirSync(config.fixtureRoot).sort(),['expected.json','input.json']))reject('QUALIFICATION_FIXTURE_INVENTORY','Closed fixture contains exactly input.json and expected.json');
-    const input=closedFixtureFile(join(config.fixtureRoot,'input.json'),32768).toString('utf8'),expected=closedFixtureFile(join(config.fixtureRoot,'expected.json'),1024).toString('utf8');
+    const lc20=config.lc20Child?lc20FixtureInput(config.fixtureRoot,config.lc20Child):null;
+    if(!lc20&&!sameQualification(readdirSync(config.fixtureRoot).sort(),['expected.json','input.json']))reject('QUALIFICATION_FIXTURE_INVENTORY','Closed fixture contains exactly input.json and expected.json');
+    const input=lc20?.input??closedFixtureFile(join(config.fixtureRoot,'input.json'),32768).toString('utf8'),expected=lc20?.expected??closedFixtureFile(join(config.fixtureRoot,'expected.json'),1024).toString('utf8');
     const evaluator={evaluate:closedFixtureEvaluate.toString(),canonical:canonical.toString(),digest:valueDigest.toString(),record:record.toString(),exact:exact.toString(),correctionDigest:correctionDigest.toString(),string:string.toString(),reject:reject.toString()};
-    const executable=byteDigest(closedFixtureFile(realpathSync(process.execPath),268435456,false)),source=valueDigest(evaluator),fixture=byteDigest(input),assertion=byteDigest(expected);
+    const executable=byteDigest(closedFixtureFile(realpathSync(process.execPath),268435456,false)),source=valueDigest(lc20?{...evaluator,lc20:lc20FixtureInput.toString()}:evaluator),fixture=lc20?valueDigest({input:byteDigest(input),leaf:lc20.leafDigest,graph:lc20.graphDigest}):byteDigest(input),assertion=byteDigest(expected);
     const values:Record<(typeof EVIDENCE_INPUT_KINDS)[number],string>={source,test:valueDigest({operation:'CANONICAL_JSON_DIGEST_EQUALS',version:1}),assertion,generated:source,build:valueDigest({evaluator:source,node:process.version}),lock:executable,toolchain:valueDigest({executable,versions:process.versions}),config:valueDigest({scope:config.scope,caseId:config.caseId,operation:'CLOSED_FIXTURE_ONLY',formalCaseCredit:0}),environment:valueDigest({platform:process.platform,arch:process.arch,osRelease:osRelease()}),collector:source,fixture,prestate:valueDigest({state:'PURE_NO_EXTERNAL_STATE',version:1}),policy:p.owner.reference.digest,ttl:p.validityContractDigest};
     const nodes=EVIDENCE_INPUT_KINDS.map(id=>({id,kind:id,digest:values[id],dependsOn:id==='test'?EVIDENCE_INPUT_KINDS.filter(k=>k!=='test'):[]}));
-    return{manifest:{schema:'runtime-evidence-input-manifest/v1',candidateDigest,completeness:'COMPLETE',dynamicInputs:'RESOLVED',externalInputs:'RESOLVED',roots:['test'],nodes,notApplicable:[]},input,expected};
+    return{manifest:{schema:'runtime-evidence-input-manifest/v1',candidateDigest,completeness:lc20&&!lc20.complete?'UNKNOWN':'COMPLETE',dynamicInputs:'RESOLVED',externalInputs:'RESOLVED',roots:['test'],nodes,notApplicable:[]},input,expected};
   }
   function snapshot(selection:Readonly<QualificationSelection>,actor:Principal,policy:ProtectedQualificationFacts['policy'],assessmentAuthority:ProtectedQualificationFacts['assessmentAuthority']):ProtectedQualificationFacts {
     validateSelection(selection);authorize(actor,projectId,'read');if(!sameQualification(selection.scope,config.scope)||selection.caseId!==config.caseId)reject('QUALIFICATION_SCOPE_CHANGED','Closed producer scope differs');

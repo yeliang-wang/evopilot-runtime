@@ -87,8 +87,44 @@ export interface TypedCurrentExecutionCapture {
   protectedFactsDigest:string; historyWatermark:string; expiresAt:string; formalAcceptanceEligible:true;
   requirement:'ALWAYS_MUST_EXECUTE'|'AFFECTED_OR_UNKNOWN_MUST_EXECUTE';
   policy:{referenceDigest:string;profileDigest:string;catalogScopeDigest:string};
-  origin:{kind:'REGISTERED_CI';stageRequestId:string;stageRequestDigest:string;provider:'github'|'gitlab';runId:string;archiveDigest:string;reportDigest:string;collectorDigest:string;catalogDigest:string};
+  origin:{kind:'REGISTERED_CI';stageRequestId:string;stageRequestDigest:string;provider:'github'|'gitlab';runId:string;archiveDigest:string;reportDigest:string;collectorDigest:string;catalogDigest:string;distributionIdentity?:RuntimeDistributionIdentity};
   establishesEnvironmentState:false; executionAuthorized:false; releaseAuthorized:false;
+}
+export interface RuntimeDistributionIdentity {
+  schema:'runtime-distribution-execution-identity/v1';lifecycleCandidateDigest:string;
+  manifestDigest:string;archiveDigest:string;sourceRevisionDigest:string;sourceCommit:string;
+}
+
+/** One reviewed, finite producer. Its nodes are an owner-reviewed protocol,
+ * never a public caller's assertion that an arbitrary program is hermetic. */
+export const LC20_VECTORS=['unrelated','direct','transitive','missing-edge-fallback'] as const;
+export const LC20_CHILDREN=['a','b','c','d','e','f'] as const;
+export interface Lc20ProducerContract {
+  schema:'runtime-lc20-producer-contract/v1';caseId:'LC20';phase:'PRE_RELEASE';
+  catalogDigest:string;collector:{sourcePath:string;digest:string};
+  workflows:{EXECUTE:{sourcePath:string;digest:string};INVENTORY:{sourcePath:string;digest:string}};
+  roots:string[];
+  /** Every source/generated/runtime/ambient input is resolved to original bytes.
+   * Policy and TTL are added from the authenticated published registration. */
+  /** null is permitted only for the five fixed runtime:* observations. Their
+   * actual digests come from the immutable pre-dispatch protected read. */
+  nodes:{id:string;kind:Exclude<EvidenceInputKind,'policy'|'ttl'>;digest:string|null;sourcePath:string|null;candidatePath:string|null;dependsOn:string[]}[];
+  vectors:typeof LC20_VECTORS;children:typeof LC20_CHILDREN;
+  maxAgeSeconds:number;
+  protocol:'runtime-lc20-local-installed/v1';
+}
+export interface Lc20ProtocolObservation {
+  schema:'runtime-lc20-protocol-observation/v1';scope:EvidenceScope;
+  status:'COMPLETE'|'UNKNOWN';reasons:string[];installedCandidateDigest:string|null;
+  inputs:{id:string;kind:EvidenceInputKind;raw:string;digest:string}[];
+  files:{path:string;digest:string;bytes:number}[];
+  childHistory:{child:typeof LC20_CHILDREN[number];ledgerRef:string;digest:string;attempts:number}[];
+}
+export interface Lc20ProducerPin {
+  schema:'runtime-lc20-producer-pin/v1';registrationRef:string;registrationDigest:string;registrationExpiresAt:string;
+  policyReferenceDigest:string;publicationRequestId:string;validityContractDigest:string;contract:Lc20ProducerContract;contractDigest:string;
+  mode:'EXECUTE'|'INVENTORY';
+  protocolObservation:Lc20ProtocolObservation;
 }
 
 export interface RecoveryRoot {

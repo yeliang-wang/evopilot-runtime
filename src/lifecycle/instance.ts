@@ -12,12 +12,19 @@ export interface ExecutionAuthority {
   goalRef:string; targetRef:string; loopRef:string; requirementsDigest:string;
   budget:Budget; evidenceRef:string; revision:string; expiresAt:string;
   recoveryRootRef?:string; recoveryRootDigest?:string;
+  loopWindowRef?:string; loopWindowDigest?:string;
+}
+export interface LoopBudgetView {
+  accounting:'NATIVE'|'UNAVAILABLE';ref:string|null;digest:string|null;deadlineAt:string|null;
+  identity:{workspaceId:string;projectId:string;goalRef:string;target:{id:string;version:string}}|null;
+  maxLoops:number|null;consumed:number|null;remaining:number|null;currentForNewLoops:boolean;
+  selectedLoop:{ref:string;ordinal:number;firstRequestId:string}|null;executionAuthorized:false;
 }
 /** Native reviewed authority integration only. Legacy/injected grants do not
  * acquire a fabricated original recovery root. No method dispatches work. */
 export interface RecoveryLineageService {
   create(instance:LifecycleInstance,authority:ExecutionAuthority,actor:Principal):StoredObject[];
-  admission(instance:LifecycleInstance,authority:ExecutionAuthority,stageId:string,actor:Principal,requestId?:string,repair?:RecoveryRepairCoverage):{allowed:boolean;reasons:string[];deadlineAt:string;rootRef:string|null;stageAttempts:number;repairOrigins?:RecoveryFailureOrigin[];rootDigest?:string};
+  admission(instance:LifecycleInstance,authority:ExecutionAuthority,stageId:string,actor:Principal,requestId?:string,repair?:RecoveryRepairCoverage):{allowed:boolean;reasons:string[];deadlineAt:string;rootRef:string|null;stageAttempts:number;repairOrigins?:RecoveryFailureOrigin[];rootDigest?:string;loopBudget?:LoopBudgetView};
   claim(instance:LifecycleInstance,authority:ExecutionAuthority,request:StageRequest,actor:Principal,repair?:RecoveryRepairCoverage):StoredObject[];
   inspect(instance:LifecycleInstance):unknown;
 }
@@ -86,11 +93,12 @@ function budget(value:unknown):Budget{
   return v as unknown as Budget;
 }
 function validateAuthority(a:ExecutionAuthority):void{
-  const v=record(a);exact(v,['projectId','instanceId','definitionRevisionId','semanticDigest','goalRef','targetRef','loopRef','requirementsDigest','budget','evidenceRef','revision','expiresAt'],['recoveryRootRef','recoveryRootDigest']);
+  const v=record(a);exact(v,['projectId','instanceId','definitionRevisionId','semanticDigest','goalRef','targetRef','loopRef','requirementsDigest','budget','evidenceRef','revision','expiresAt'],['recoveryRootRef','recoveryRootDigest','loopWindowRef','loopWindowDigest']);
   slug(a.projectId);slug(a.instanceId);for(const k of ['definitionRevisionId','semanticDigest','requirementsDigest'])if(!hash(v[k]))reject('INVALID_AUTHORITY','Authority must pin exact content');
   for(const s of [a.goalRef,a.targetRef,a.loopRef,a.evidenceRef,a.revision])string(s,512);
   if(!Number.isFinite(Date.parse(a.expiresAt)))reject('INVALID_AUTHORITY','Authority needs an exact expiry');budget(a.budget);
   if(a.recoveryRootRef!==undefined||a.recoveryRootDigest!==undefined){if(typeof a.recoveryRootRef!=='string'||!/^recovery-root:sha256:[a-f0-9]{64}$/.test(a.recoveryRootRef)||!hash(a.recoveryRootDigest))reject('INVALID_AUTHORITY','Recovery authority requires the exact native root reference and digest');}
+  if(a.loopWindowRef!==undefined||a.loopWindowDigest!==undefined){if(typeof a.loopWindowRef!=='string'||!/^loop-window:sha256:[a-f0-9]{64}$/.test(a.loopWindowRef)||!hash(a.loopWindowDigest))reject('INVALID_AUTHORITY','Loop accounting requires its exact native window and digest');}
 }
 function verify(instance:LifecycleInstance):void{
   if(instance.schema!=='runtime-lifecycle-instance/v1'||valueDigest(instance.pins)!==instance.pinsDigest||valueDigest(instance.definition.semantic)!==instance.pins.semanticDigest||instance.definition.semanticDigest!==instance.pins.semanticDigest||valueDigest(instance.definition.nodes)!==instance.pins.graphDigest||requiredChecksDigest(instance.definition)!==instance.pins.requirementsDigest||canonical(instance.definition.base)!==canonical(instance.pins.base)||instance.definition.projectId!==instance.pins.projectId)reject('CORRUPT_INSTANCE','Instance pins or required obligations changed',503);

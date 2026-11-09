@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {openScenario,sha} from './support.mjs';
+import {collectCoverageInventory} from './execution.mjs';
 
 // This file consumes original records from the selected installed service. It
 // never seeds a database, changes an instance outcome, dispatches CI, approves a
@@ -35,7 +36,7 @@ import {openScenario,sha} from './support.mjs';
 //  publication:{stageRequestId,unknownObservationRef,allowReconciliation:true}}.
 // E18.journey selects {providers:[<github plan>,<gitlab plan>]}. No free-form
 // operations, remote commands, authority evidence or supplied PASS are accepted.
-// Fork credential loss and CV03/CV07 remain explicit obligations below until
+// Fork credential loss and CV03 remain explicit obligations below until
 // their original real fixtures can establish the exact frozen predicates.
 const stages=['scope','plan','implementation','candidate','verification','release-decision','publication','closure'];
 const outcomes=['not-run','failed','unknown','missing-evidence','passed'];
@@ -57,6 +58,7 @@ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 test('E18 installed CI evidence and exact release-authority mismatch',async()=>{
  const run=await openScenario('E18');
  try{
+  if(run.cases.every(c=>c.caseInstanceId==='E18.CV07')){for(const c of run.cases)await run.collect(c,()=>collectCoverageInventory(run,c));return;}
   assert(run.selection.ciAuthority,'Select the protected original CI/authority fixture; a historical source-test report is not a fixture');
   const fixture=pinned(run.selection.ciAuthority);
   keys(fixture,['schema','candidateDigest','workspaceId','projectId','syntheticAssets','syntheticDecisions','casePlans']);
@@ -357,6 +359,7 @@ test('E18 installed CI evidence and exact release-authority mismatch',async()=>{
   }
   const predicateClaims=new Set();
   for(const c of run.cases)await run.collect(c,async()=>{
+   if(c.caseInstanceId==='E18.CV07')return collectCoverageInventory(run,c);
    const plan=fixture.casePlans[c.caseInstanceId];
    if(c.kind==='STAGE_ADMISSION'){
     assert(plan,'Missing original native precondition for '+c.caseInstanceId);
@@ -374,7 +377,6 @@ test('E18 installed CI evidence and exact release-authority mismatch',async()=>{
    const requirements=c.parameters.variantContract;assert(requirements);
    run.artifact('unfulfilled-fixed-contract.json',{caseInstanceId:c.caseInstanceId,contract:requirements,denominatorRetained:true,sourceTestsCredited:false,releaseAuthorized:false});
    if(c.caseInstanceId==='E18.CV03')assert.fail('CV03 requires original managed-action timing/resource/attempt boundary observations and external call counts; stage-state reads alone do not satisfy it');
-   if(c.caseInstanceId==='E18.CV07')assert.fail('CV07 requires both actual provider campaigns, GitLab MR/job/artifact/feedback evidence and E20 inventory rejection evidence; fixed IDs alone are not acceptance');
    assert.fail('Unimplemented fixed E18 case '+c.caseInstanceId);
   });
  }finally{run.finish();}

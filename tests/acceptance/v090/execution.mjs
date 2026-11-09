@@ -6,7 +6,8 @@ import path from 'node:path';
 import http from 'node:http';
 import {pathToFileURL} from 'node:url';
 import {performance} from 'node:perf_hooks';
-import {sha} from './support.mjs';
+import {sha,assertLiveChildReport,repository} from './support.mjs';
+import {execFileSync} from 'node:child_process';
 import {parse,stringify} from 'yaml';
 import {openBrowser} from './browser.mjs';
 
@@ -154,7 +155,7 @@ export async function collectLifecycleReadback(run,c,provider,proveCodingHost,cu
  if(LIFECYCLE_READBACK_CASES[c.caseInstanceId]==='candidate-drift')return collectCandidateDrift(run,c,provider,proveCodingHost,plan,currentSource,deadline);
  return(await lifecycleRecordEvidence(run,c,provider,proveCodingHost,plan,currentSource,deadline)).summary;
 }
-async function lifecycleRecordEvidence(run,c,provider,proveCodingHost,plan,currentSource,deadline,throughVerification=false,missingCandidate=false){
+async function lifecycleRecordEvidence(run,c,provider,proveCodingHost,plan,currentSource,deadline,throughVerification=false,missingCandidate=false,recheckPlan=()=>lifecycleReadbackPlan(run,c,provider)){
  assert(Date.now()<deadline);const signal=AbortSignal.timeout(deadline-Date.now()),boundedSignal=ms=>AbortSignal.any([signal,AbortSignal.timeout(ms)]),time=()=>{signal.throwIfAborted();assert(Date.now()<deadline,'Independent readback exceeded its fixed 600-second bound');};
  const load=relative=>import(pathToFileURL(path.join(run.selection.installedRoot,'package/dist',relative)).href);
  const base=await load('lifecycle/base.js'),instanceApi=await load('lifecycle/instance.js'),configApi=await load('adapters/config.js'),security=await load('server/security.js'),platformApi=await load('adapters/platforms.js'),artifactApi=await load('adapters/artifacts.js'),github=await load('adapters/github.js'),gitlab=await load('adapters/gitlab.js'),control=await load('installation/service-control.js'),feedbackApi=await load('adapters/feedback.js'),ownerApi=await load('adapters/published-owners.js');
@@ -260,7 +261,7 @@ async function lifecycleRecordEvidence(run,c,provider,proveCodingHost,plan,curre
   // Release refusal supplements the original candidate action and real archive.
   const refused=await run.request('lifecycle.authority.preview',input);assert.equal(refused.status,409);assert.equal(refused.body.error?.code,'CANDIDATE_REQUIRED');
   assert.deepEqual((await read('lifecycle.instance.inspect',{instanceId:instance.id})).instance,instance);for(const id of stages)assert.deepEqual(await read('lifecycle.stage.request.inspect',{stageRequestId:originals[id].id}),snapshots[id]);
-  const finalAuthority=await read('lifecycle.authority.inspect',{authorityRef:originals.candidate.authorityRef});assert.deepEqual(finalAuthority.decision,authority.decision);assert.deepEqual(finalAuthority.revocation,authority.revocation);assert.deepEqual(await driver.events(),events);assert.equal((await read('runtime.status')).revision,initialRevision);run.artifact('missing-rc-candidate-host-recheck.json',hostProof.revalidate());lifecycleReadbackPlan(run,c,provider);for(const key of ['preparation','ownerFixture'])readbackPrivate(plan[key]);if(plan.codingSourceSelection.kind==='ORIGINAL_RECORD')readbackPrivate({ref:plan.codingSourceSelection.ref,sha256:plan.codingSourceSelection.sha256});
+  const finalAuthority=await read('lifecycle.authority.inspect',{authorityRef:originals.candidate.authorityRef});assert.deepEqual(finalAuthority.decision,authority.decision);assert.deepEqual(finalAuthority.revocation,authority.revocation);assert.deepEqual(await driver.events(),events);assert.equal((await read('runtime.status')).revision,initialRevision);run.artifact('missing-rc-candidate-host-recheck.json',hostProof.revalidate());recheckPlan();for(const key of ['preparation','ownerFixture'])readbackPrivate(plan[key]);if(plan.codingSourceSelection.kind==='ORIGINAL_RECORD')readbackPrivate({ref:plan.codingSourceSelection.ref,sha256:plan.codingSourceSelection.sha256});
   const summary={caseInstanceId:c.caseInstanceId,provider,instanceId:instance.id,declaredRcVersion:plan.expectedVersion,originalCandidateRequestId:originals.candidate.id,originalProviderRunId:candidate.observation.runId,archiveDigest:candidate.archive.archiveDigest,missingPaths:candidate.rejection.missingPaths,nativeCandidatePhase:'UNKNOWN',nativeCandidateReason:'CI_ARTIFACT_INTEGRITY',productCandidatePassed:false,candidateRemainsNull:true,expectedRefusalProved:true,originalHostAndImplementationVerified:true,priorCasePassLabelConsumed:false,nativeRedispatches:0,newGrants:0,newProviderWrites:0,remainingCasesNotCredited:true};
   run.artifact('missing-rc-candidate-native-refusal.json',{summary,instance,originals,snapshots,scope,planning,implementation,originalCodingHost:hostProof.summary,prepared,source,candidateRequest:candidate.request,candidateRun:candidate.observation,rejection:candidate.rejection,releasePreviewInput:input,releasePreviewResponse:refused,authority,originalHistoryUnchanged:true});return{summary};
  }
@@ -274,7 +275,7 @@ async function lifecycleRecordEvidence(run,c,provider,proveCodingHost,plan,curre
  if(throughVerification){
   time();assert.deepEqual((await read('lifecycle.instance.inspect',{instanceId:instance.id})).instance,instance);assert.deepEqual(await read('lifecycle.verification.feedback.read',{stageRequestId:originals.verification.id}),feedback);
   for(const id of stages)assert.deepEqual(await read('lifecycle.stage.request.inspect',{stageRequestId:originals[id].id}),snapshots[id]);assert.equal((await read('runtime.status')).revision,initialRevision);run.artifact('independent-candidate-host-source-recheck.json',hostProof.revalidate());
-  for(const key of ['preparation','ownerFixture'])readbackPrivate(plan[key]);if(plan.codingSourceSelection.kind==='ORIGINAL_RECORD')readbackPrivate({ref:plan.codingSourceSelection.ref,sha256:plan.codingSourceSelection.sha256});lifecycleReadbackPlan(run,c,provider);
+  for(const key of ['preparation','ownerFixture'])readbackPrivate(plan[key]);if(plan.codingSourceSelection.kind==='ORIGINAL_RECORD')readbackPrivate({ref:plan.codingSourceSelection.ref,sha256:plan.codingSourceSelection.sha256});recheckPlan();
   const summary={caseInstanceId:c.caseInstanceId,purpose:'candidate-drift',provider,instanceId:instance.id,version:instance.candidate.version,candidateDigest:instance.candidateDigest,verifiedOriginalStages:stages,originalHostRecordsVerified:true,originalSourceChange:change,originalCi:Object.fromEntries(Object.entries(ciProofs).map(([id,v])=>[id,{requestId:v.request.requestId,runId:v.observation.runId,archive:v.verified.sourceArchive,resultDigest:v.verified.resultDigest}])),nativeMutations:0,providerWrites:0,authorityCreatedOrExtended:false,releaseOrClosureRequiredForThisCase:false,priorCasePassLabelConsumed:false};
   return{summary,instance,originals,snapshots,ciProofs,handoff,reported,feedback,hostProof};
  }
@@ -300,9 +301,9 @@ async function lifecycleRecordEvidence(run,c,provider,proveCodingHost,plan,curre
  }catch(error){readFailure=error;throw error;}finally{if(stopped){try{await service('start',true);}catch(error){throw new AggregateError([...(readFailure?[readFailure]:[]),error],'Independent owner readback cleanup incomplete');}}}
  time();assert.deepEqual((await read('lifecycle.instance.inspect',{instanceId:instance.id})).instance,instance);assert.deepEqual(await read('lifecycle.verification.feedback.read',{stageRequestId:originals.verification.id}),feedback);assert.deepEqual(await read('lifecycle.closure.evidence.read',{stageRequestId:originals.closure.id}),closure);assert.deepEqual(await execution.events(),beforeEvents);assert.equal((await read('runtime.status')).revision,initialRevision);
  for(const id of stages)assert.deepEqual(await read('lifecycle.stage.request.inspect',{stageRequestId:originals[id].id}),snapshots[id]);
- run.artifact('independent-coding-source-recheck.json',hostProof.revalidate());for(const key of ['preparation','ownerFixture'])readbackPrivate(plan[key]);if(plan.codingSourceSelection.kind==='ORIGINAL_RECORD')readbackPrivate({ref:plan.codingSourceSelection.ref,sha256:plan.codingSourceSelection.sha256});lifecycleReadbackPlan(run,c,provider);assert.equal((await read('runtime.status')).independentLlm,false);
+ run.artifact('independent-coding-source-recheck.json',hostProof.revalidate());for(const key of ['preparation','ownerFixture'])readbackPrivate(plan[key]);if(plan.codingSourceSelection.kind==='ORIGINAL_RECORD')readbackPrivate({ref:plan.codingSourceSelection.ref,sha256:plan.codingSourceSelection.sha256});recheckPlan();assert.equal((await read('runtime.status')).independentLlm,false);
  const identities=Object.fromEntries(Object.entries(ciProofs).map(([id,v])=>[id,{requestId:v.request.requestId,runId:v.observation.runId,jobs:v.observation.jobs.map(j=>({jobId:j.jobId,runnerId:j.runnerId})),archive:v.verified.sourceArchive,resultDigest:v.verified.resultDigest}]));
- const summary={caseInstanceId:c.caseInstanceId,purpose:LIFECYCLE_READBACK_CASES[c.caseInstanceId],provider,instanceId:instance.id,version:instance.candidate.version,candidateDigest:instance.candidateDigest,allEightOriginalStagesPassed:true,originalHostRecordsVerified:true,originalSourceChange:change,originalCi:identities,independentDistributionDownload:true,independentOwnerInboxes:owners,priorCasePassLabelConsumed:false,nativeMutations:0,providerWrites:0,authorityCreatedOrExtended:false,assetGradeMeaning:'CONTENT_ONLY_NOT_SOFTWARE_ACCEPTANCE_OR_AUTHORITY',currentSoftwareReleaseAuthorized:false,remainingCasesNotCredited:true};
+ const summary={caseInstanceId:c.caseInstanceId,purpose:LIFECYCLE_READBACK_CASES[c.caseInstanceId]??'provider-inventory',provider,instanceId:instance.id,version:instance.candidate.version,candidateDigest:instance.candidateDigest,allEightOriginalStagesPassed:true,originalHostRecordsVerified:true,originalSourceChange:change,originalCi:identities,independentDistributionDownload:true,independentOwnerInboxes:owners,priorCasePassLabelConsumed:false,nativeMutations:0,providerWrites:0,authorityCreatedOrExtended:false,assetGradeMeaning:'CONTENT_ONLY_NOT_SOFTWARE_ACCEPTANCE_OR_AUTHORITY',currentSoftwareReleaseAuthorized:false,remainingCasesNotCredited:true};
  return{summary,instance,originals,snapshots,ciProofs,handoff,reported,feedback,closure,hostProof,events:beforeEvents};
 }
 
@@ -568,4 +569,107 @@ export function assertMissingRcPayload(result,entries,expectedVersion,request,ar
 }
 export async function collectE05MissingCandidate(run,c){
  assert.equal(c.caseInstanceId,'E05.variant.02');const {value}=readbackPrivate(run.selection.lifecycleVariants);return collectLifecycleReadback(run,c,value.provider,proveOriginalCodingHost);
+}
+
+// CV07 is a pre-E20 inventory observation, not the aggregate release audit.
+// Only the existing support.mjs original-execution emit format is accepted.
+// Original sibling executions remain inputs; this callback executes its own
+// inventory guards and independently rereads real Host/provider/owner records.
+const COVERAGE_SCENARIOS=Object.freeze({E01:['github'],E02:['gitlab'],E18:['github','gitlab']});
+const ORIGINAL_REPORT_KEYS=['scenario','candidate','candidateDigest','selectionDigest','qualification','scenarioDenominator','fullDenominator','selected','executed','passed','failed','unexecutedCaseIds','scenarioStatus','productAcceptance','releaseAuthorized','dailyInstallationChanged','setupEvidence','results'];
+const ORIGINAL_RESULT_KEYS=['caseInstanceId','status','candidateDigest','qualification','assertions','evidence'];
+export function validateCoverageInventoryRecords(records,context){
+ const {scenario,expectedIds,qualification,candidate,matrixDigest,collectorPins}=context;
+ assert(Object.hasOwn(COVERAGE_SCENARIOS,scenario));assert(expectedIds.includes(scenario+'.CV07'));
+ const required=expectedIds.filter(id=>id!==scenario+'.CV07');assert(required.length>0);
+ assert(Array.isArray(records)&&records.length>0,'CV07_EMPTY_INVENTORY');
+ assert.equal(new Set(records.map(r=>r.caseInstanceId)).size,records.length,'CV07_DUPLICATE_CASE');
+ assert.deepEqual(records.map(r=>r.caseInstanceId),required,'CV07_MISSING_OR_UNEXPECTED_CASE');
+ for(const item of records){
+  exactKeys(item,['caseInstanceId','report','selection','caseRecord']);const {report,selection,caseRecord}=item;
+  try{exactKeys(report,ORIGINAL_REPORT_KEYS);assert(Array.isArray(report.results)&&report.results.length===1);exactKeys(report.results[0],ORIGINAL_RESULT_KEYS);}catch{throw Error('CV07_ORIGINAL_EXECUTION_SCHEMA_REQUIRED');}
+  assert.equal(report.dailyInstallationChanged,false);assert.equal(report.results[0].status,'PASS','CV07_SKIP_XFAIL_OR_NONPASS');
+  assert.equal(report.candidateDigest,'sha256:'+candidate.manifestDigest,'CV07_WRONG_CANDIDATE');
+  assert.equal(report.results[0].candidateDigest,report.candidateDigest,'CV07_WRONG_CANDIDATE');
+  assert(!selection.caseCampaign,'CV07_REQUIRES_ORIGINAL_SINGLETON_NOT_CAMPAIGN_PROXY');
+  for(const value of [selection,report.results[0].assertions]){assert(value&&typeof value==='object'&&!Array.isArray(value));for(const key of ['mode','executionMode','qualificationMode'])if(Object.hasOwn(value,key))assert.equal(value[key],'EXECUTED','CV07_QUALIFIED_ONLY_OR_REUSED_RECORD');if(Object.hasOwn(value,'status'))assert(!['PASS_REUSED','QUALIFIED','SKIP','SKIPPED','XFAIL'].includes(value.status),'CV07_QUALIFIED_ONLY_OR_REUSED_RECORD');}
+  assert.equal(selection.sourceQualification,'SEPARATE_E20_OBLIGATION');assert.equal(selection.matrixDigest,matrixDigest,'CV07_WRONG_MATRIX');
+  assert.deepEqual(selection.collectorPins,collectorPins,'CV07_WRONG_COLLECTOR_SOURCE');
+  const result=assertLiveChildReport(report,selection,item.caseInstanceId,expectedIds,qualification,candidate);
+  assert.deepEqual(caseRecord,result,'CV07_ORIGINAL_CASE_BYTES_MISMATCH');
+ }
+ return{originalCaseIds:required,originalExecutions:records.length,qualification,sourceQualification:'SEPARATE_E20_OBLIGATION',siblingExecutionsReexecuted:false};
+}
+function coverageSource(commit,qualification){
+ assert(/^[a-f0-9]{40}$/.test(commit));const options={encoding:'utf8',timeout:15000,maxBuffer:1048576,env:{PATH:'/usr/bin:/bin',LC_ALL:'C',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_OPTIONAL_LOCKS:'0'}};
+ assert.equal(execFileSync('/usr/bin/git',['-c','core.fsmonitor=false','-C',repository,'rev-parse','HEAD'],options).trim(),commit,'CV07_SOURCE_COMMIT_CHANGED');
+ if(qualification==='FINAL_CANDIDATE')assert.equal(execFileSync('/usr/bin/git',['-c','core.fsmonitor=false','-C',repository,'status','--porcelain'],options),'','Final inventory requires clean exact source');
+}
+export function validateCoverageProviderBindings(providers,scenario,records){
+ assert(Object.hasOwn(COVERAGE_SCENARIOS,scenario));assert(Array.isArray(providers));
+ assert.deepEqual(providers.map(p=>p.provider),COVERAGE_SCENARIOS[scenario],'CV07_EXACT_REAL_PROVIDER_BINDINGS_REQUIRED');
+ for(const p of providers){exactKeys(p,['provider','reportCaseId','selection','allowServiceRestart','record']);assert.equal(p.allowServiceRestart,true,'Owner inbox readback needs explicit isolated service restart authority');assert.equal(p.record.codingSourceSelection.kind,'ORIGINAL_RECORD');assert(records.some(r=>r.caseInstanceId===p.reportCaseId),'CV07_PROVIDER_REQUIRES_ORIGINAL_SIBLING');}
+ return providers;
+}
+// HTTP, JSON-only MCP and CLI retain different original wire shapes. The
+// existing CLI envelope lacks the wrapper's caseInstanceId; never invent it.
+export function coverageOriginalInstance(request,response,item,caseId,candidate){
+ assert.equal(response.caseInstanceId,caseId);
+ if(Object.hasOwn(request,'caseInstanceId'))assert.equal(request.caseInstanceId,caseId);
+ if(Object.hasOwn(item,'responseDigest')){assert.equal(typeof response.rawBody,'string');assert.equal(sha(response.rawBody),item.responseDigest);}
+ if(Object.hasOwn(response,'body'))assert.deepEqual(JSON.parse(response.rawBody),response.body);
+ if(request.envelope?.operation!=='lifecycle.instance.inspect'||response.status!==200)return null;
+ assert.equal(request.caseInstanceId,caseId);assert.equal(request.envelope.projectId,candidate.projectId);
+ const instance=response.body.result.instance;assert.equal(instance.id,request.envelope.input.instanceId);assert.equal(instance.pins.projectId,candidate.projectId);return instance.id;
+}
+async function coverageTarget(run,p,original,deadline,recheck){
+ const {value:input}=readbackPrivate(p.selection);assert.equal(input.schema,'runtime-v090-acceptance-selection/v1');assert.equal(input.expectedManifestDigest,run.candidate.manifestDigest);assert.equal(input.qualification,run.selection.qualification);assert.deepEqual(input.caseIds,[p.reportCaseId]);assert(!input.caseCampaign);
+ assert.equal(input.connectionRef,path.join(input.installedRoot,'connection.json'));assert.equal(input.outputRoot,path.dirname(original.reportRef));
+ const load=relative=>import(pathToFileURL(path.join(input.installedRoot,'package/dist',relative)).href),control=await load('installation/service-control.js'),security=await load('server/security.js');
+ const selected=control.inspectInstalledServiceSelection(input.installedRoot),manifestPin={ref:path.join(input.installedRoot,'distribution-manifest.json'),sha256:input.expectedManifestDigest},manifest=readbackPrivate(manifestPin).value;
+ assert.equal(selected.distributionManifestDigest,input.expectedManifestDigest);assert.equal(manifest.archiveDigest,run.candidate.archiveDigest);assert.equal(manifest.version,run.candidate.version);
+ const connectionBytes=fs.readFileSync(input.connectionRef),connectionPin=sha(connectionBytes),connection=security.readHostConnection(input.connectionRef),url=new URL(connection.origin);assert.equal(url.protocol,'http:');assert.equal(url.hostname,'127.0.0.1');assert.equal(url.pathname,'/');assert.equal(url.search,'');assert.equal(url.username,'');assert.equal(url.password,'');
+ const candidate={manifestDigest:input.expectedManifestDigest,archiveDigest:manifest.archiveDigest,version:manifest.version,serviceId:connection.serviceId,workspaceId:input.workspaceId,projectId:input.projectId};assert.deepEqual(candidate,original.report.candidate);assert.equal(connection.serviceId,selected.serviceId);for(const k of ['workspaceId','projectId'])assert.equal(connection[k],input[k]);assert.equal(connection.version,manifest.version);
+ const planPin={ref:path.join(input.installedRoot,'installation-plan.json'),sha256:sha(fs.readFileSync(path.join(input.installedRoot,'installation-plan.json')))},plan=readbackPrivate(planPin).value;assert.equal(plan.codex,null,'CV07 readback cannot stop a daily/Host-registered installation');
+ const specPin={ref:path.join(input.installedRoot,'service-specification.json'),sha256:sha(fs.readFileSync(path.join(input.installedRoot,'service-specification.json')))},spec=readbackPrivate(specPin).value;assert(spec.integrationsRef);const configPin={ref:spec.integrationsRef,sha256:sha(fs.readFileSync(spec.integrationsRef))};readbackPrivate(configPin);
+ const token=security.hostHeaders(connection).Authorization.slice(7),safe=value=>{assert(!Buffer.from(typeof value==='string'?value:JSON.stringify(value)).includes(Buffer.from(token)),'CV07 credential exposure');};
+ let calls=0;const operations=new Set(['runtime.status','runtime.events.read','lifecycle.instance.inspect','lifecycle.stage.request.inspect','lifecycle.stage.observation.read','lifecycle.agent.handoff.read','lifecycle.agent.report.read','lifecycle.scope.evidence.read','lifecycle.implementation.evidence.read','lifecycle.preparation.read','lifecycle.release.evidence.read','lifecycle.plan.evidence.read','lifecycle.verification.feedback.read','lifecycle.publication.evidence.read','lifecycle.closure.evidence.read','lifecycle.extension.evidence.read','lifecycle.authority.inspect']);
+ async function read(operation,inputBody={}){
+  assert(operations.has(operation),'CV07 readback operation is outside its fixed read-only allowlist');assert(Date.now()<deadline);assert(++calls<=1200,'CV07 native read count exceeded');
+  const envelope={operation,projectId:input.projectId,input:inputBody};run.artifact('cv07-original-service-request.json',{provider:p.provider,serviceId:connection.serviceId,envelope,readOnly:true});
+  const response=await fetch(new URL('/api/v1/request',connection.origin),{method:'POST',redirect:'error',headers:{...security.hostHeaders(connection),'content-type':'application/json'},body:JSON.stringify(envelope),signal:AbortSignal.timeout(Math.min(30000,deadline-Date.now()))});
+  const chunks=[];let total=0;for await(const chunk of response.body){total+=chunk.length;assert(total<=1048576,'CV07 native response exceeds 1MiB');chunks.push(chunk);}const raw=Buffer.concat(chunks).toString('utf8');safe(raw);const body=JSON.parse(raw);run.artifact('cv07-original-service-response.json',{provider:p.provider,serviceId:connection.serviceId,status:response.status,rawBody:raw,body});assert.equal(response.status,200,'CV07 actual native read denied: '+(body.error?.code??'UNKNOWN'));return body.result;
+ }
+ function intact(){recheck();readbackPrivate(p.selection);readbackPrivate(manifestPin);readbackPrivate(planPin);readbackPrivate(specPin);readbackPrivate(configPin);assert.equal(sha(fs.readFileSync(input.connectionRef)),connectionPin);assert.deepEqual(control.inspectInstalledServiceSelection(input.installedRoot),selected);}
+ const status=await read('runtime.status');assert.equal(status.serviceId,connection.serviceId);assert.equal(status.workspaceId,input.workspaceId);assert.equal(status.version,manifest.version);assert.equal(status.independentLlm,false);
+ const target={...run,selection:{...input,browserConfiguration:{allowServiceRestart:true}},candidate,serviceOrigin:connection.origin,read,request:()=>{throw Error('CV07 never submits an authority or execution request');},source:()=>{throw Error('CV07 requires original Host source records');},assertNoCredentialExposure:async(surfaces,options)=>{for(const item of surfaces)safe(item.text);return run.assertNoCredentialExposure(surfaces,options);}};
+ intact();run.artifact('cv07-provider-installed-binding.json',{provider:p.provider,reportCaseId:p.reportCaseId,originalInputSelection:p.selection,candidate,installationSelection:selected,manifest:manifestPin,installationPlan:planPin,serviceSpecification:specPin,integrationConfiguration:configPin,connectionSha256:connectionPin,allowServiceRestart:true,dailyInstallationChanged:false});return{target,intact};
+}
+export async function collectCoverageInventory(run,c){
+ const scenario=c.caseInstanceId.split('.')[0];assert.equal(c.caseInstanceId,scenario+'.CV07');assert(Object.hasOwn(COVERAGE_SCENARIOS,scenario));assert(run.selection.coverageInventory,'CV07_NOT_READY: select protected original reports and real provider bindings');
+ const pin=run.selection.coverageInventory,{value:fixture}=readbackPrivate(pin);exactKeys(fixture,['schema','scenario','candidateDigest','sourceCommit','reports','providers']);assert.equal(fixture.schema,'runtime-v090-coverage-inventory/v1');assert.equal(fixture.scenario,scenario);assert.equal(fixture.candidateDigest,run.candidateDigest);
+ const deadline=Date.now()+600000,observed=JSON.parse(fs.readFileSync(path.join(run.selection.outputRoot,'selection.json'))),context={scenario,expectedIds:run.all.map(row=>row.caseInstanceId),qualification:run.selection.qualification,candidate:run.candidate,matrixDigest:observed.matrixDigest,collectorPins:observed.collectorPins};
+ const rechecks=[],records=[],originals=new Map();let total=0,leaves=0;
+ const sourceCheck=()=>{assert(Date.now()<deadline,'CV07 inventory exceeded its absolute 600-second window');coverageSource(fixture.sourceCommit,run.selection.qualification);readbackPrivate(pin);for(const[name,digest]of Object.entries(context.collectorPins))assert.equal(sha(fs.readFileSync(new URL(name,import.meta.url))),digest);};sourceCheck();
+ const retain=(label,ref,bytes)=>{total+=bytes.length;assert(total<=1073741824,'CV07 original input bytes exceed 1GiB');const digest=sha(bytes);rechecks.push({ref,sha256:digest,max:Math.max(bytes.length,1)});const chunks=Math.ceil(bytes.length/1048576)||1;for(let index=0;index<chunks;index++)run.artifact('cv07-original-input-bytes.json',{label,ref,sha256:digest,totalBytes:bytes.length,index,chunks,encoding:'base64',bytes:bytes.subarray(index*1048576,(index+1)*1048576).toString('base64')});};
+ assert(Array.isArray(fixture.reports)&&fixture.reports.length===context.expectedIds.length-1,'CV07_MISSING_OR_UNEXPECTED_CASE');assert.equal(new Set(fixture.reports.map(v=>v.caseInstanceId)).size,fixture.reports.length,'CV07_DUPLICATE_CASE');
+ for(const entry of fixture.reports){
+  sourceCheck();exactKeys(entry,['caseInstanceId','report']);assert(context.expectedIds.includes(entry.caseInstanceId)&&entry.caseInstanceId!==c.caseInstanceId);assert.equal(path.basename(entry.report.ref),'REPORT.json');
+  const report=readbackPrivate(entry.report,33554432),root=path.dirname(entry.report.ref),selectionRef=path.join(root,'selection.json'),selection=readbackPrivate({ref:selectionRef,sha256:report.value.selectionDigest}),caseRef=path.join(root,entry.caseInstanceId+'.json'),caseBytes=hostPrivateBytes(caseRef,16777216),caseRecord=readbackPrivate({ref:caseRef,sha256:sha(caseBytes)},16777216);
+  const record={caseInstanceId:entry.caseInstanceId,report:report.value,selection:selection.value,caseRecord:caseRecord.value};records.push(record);
+  retain('original-singleton-report',entry.report.ref,report.bytes);retain('original-singleton-selection',selectionRef,selection.bytes);retain('original-singleton-case',caseRef,caseRecord.bytes);
+  const seen=new Map(),instanceIds=new Set();let childBytes=0;
+  const leaf=(name,digest)=>{assert(typeof name==='string'&&/^[A-Za-z0-9_.-]+$/.test(name)&&!['.','..','REPORT.json','selection.json',entry.caseInstanceId+'.json'].includes(name));assert(/^[a-f0-9]{64}$/.test(digest));if(seen.has(name)){assert.equal(seen.get(name).digest,digest);return seen.get(name).bytes;}const ref=path.join(root,name),st=fs.lstatSync(ref);assert.equal(fs.realpathSync(ref),ref);assert(st.isFile()&&!st.isSymbolicLink()&&st.nlink===1&&st.uid===process.getuid()&&(st.mode&0o077)===0&&st.size<=16777216);const bytes=fs.readFileSync(ref);assert.equal(sha(bytes),digest);childBytes+=bytes.length;assert(childBytes<=268435456&&++leaves<=30000,'CV07 original raw evidence exceeds fixed bounds');seen.set(name,{digest,bytes});retain('original-raw-evidence',ref,bytes);return bytes;};
+  const evidence=(item,id)=>{assert.equal(item.caseInstanceId,id);if(Object.hasOwn(item,'artifact')){assert(!Object.hasOwn(item,'request')&&!Object.hasOwn(item,'response'));leaf(item.artifact,item.fileDigest);}else{const request=JSON.parse(leaf(item.request,item.requestDigest)),response=JSON.parse(leaf(item.response,item.fileDigest));const instanceId=coverageOriginalInstance(request,response,item,id,report.value.candidate);if(instanceId)instanceIds.add(instanceId);}};
+  assert(Array.isArray(report.value.setupEvidence)&&report.value.results.length===1);for(const item of report.value.setupEvidence)evidence(item,null);for(const item of caseRecord.value.evidence)evidence(item,entry.caseInstanceId);
+  originals.set(entry.caseInstanceId,{...record,reportRef:entry.report.ref,instanceIds});
+ }
+ const inventory=validateCoverageInventoryRecords(records,context);validateCoverageProviderBindings(fixture.providers,scenario,records);
+ // Each fault is explicitly a copied validator input. No faulted bytes are
+ // submitted as a protected service record or claimed as a provider response.
+ const guards=[['missing',v=>v.pop(),/CV07_MISSING_OR_UNEXPECTED_CASE/],['empty',v=>v.splice(0),/CV07_EMPTY_INVENTORY/],['duplicate',v=>v.push(structuredClone(v[0])),/CV07_DUPLICATE_CASE/],['empty-report',v=>v[0].report.results=[],/CV07_ORIGINAL_EXECUTION_SCHEMA_REQUIRED/],['skip',v=>v[0].report.results[0].status='SKIP',/CV07_SKIP_XFAIL_OR_NONPASS/],['xfail',v=>v[0].report.results[0].status='XFAIL',/CV07_SKIP_XFAIL_OR_NONPASS/],['wrong-candidate',v=>v[0].report.candidateDigest='sha256:'+'0'.repeat(64),/CV07_WRONG_CANDIDATE/]];
+ for(const[name,mutate,reason]of guards){const fault=structuredClone(records);mutate(fault);let rejected;assert.throws(()=>validateCoverageInventoryRecords(fault,context),error=>{rejected=error.message;return reason.test(error.message);});run.artifact('cv07-explicit-inventory-fault-guard.json',{name,faultInjected:true,inputKind:'COPIED_VALIDATOR_INPUT_ONLY',originalInputAltered:false,faultedInputDigest:sha(JSON.stringify(fault)),expectedReason:reason.source,actualRejection:rejected,submittedToProtectedSource:false});}
+ const providers=[];for(const p of fixture.providers){sourceCheck();lifecycleRecordPlan(p.record);const original=originals.get(p.reportCaseId);assert(original.instanceIds.has(p.record.instanceId),'CV07 provider instance must occur in its original raw singleton native response');const {target,intact}=await coverageTarget(run,p,original,deadline,sourceCheck);providers.push((await lifecycleRecordEvidence(target,c,p.provider,proveOriginalCodingHost,p.record,null,deadline,false,false,intact)).summary);intact();}
+ for(const item of rechecks){const st=fs.lstatSync(item.ref);assert.equal(fs.realpathSync(item.ref),item.ref);assert(st.isFile()&&st.nlink===1&&st.uid===process.getuid()&&(st.mode&0o077)===0&&st.size<=item.max);assert.equal(sha(fs.readFileSync(item.ref)),item.sha256,'CV07 original evidence changed during independent readback');}sourceCheck();validateCoverageInventoryRecords(records,context);
+ return{...inventory,sourceCommit:fixture.sourceCommit,candidateDigest:run.candidateDigest,providers,independentNegativeGuards:guards.map(g=>g[0]),originalRawFiles:leaves,originalInputBytes:total,actualProviderFactsReread:true,finalE20AggregateExecuted:false,finalE20StillRequired:true,releaseAuthorized:false,originalSiblingExecutionsAreInputsOnly:true};
 }

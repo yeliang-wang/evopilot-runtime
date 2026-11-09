@@ -61,7 +61,8 @@ export function createDefinitionService(store:RuntimeStore,bindings?:DefinitionB
     authorize(actor,projectId,'read');
     if(operation==='lifecycle.instance.inspect'){
       exact(input,['instanceId']);const saved=instance(projectId,string(input.instanceId));
-      return{instance:saved,...(recovery?{recovery:recovery.inspect(saved)}:{}),projectRevision:store.revision(projectId)};
+      const lineage=recovery?.inspect(saved),loopBudget=lineage&&typeof lineage==='object'&&'loopBudget'in lineage?lineage.loopBudget:{accounting:'UNAVAILABLE',ref:null,digest:null,identity:null,deadlineAt:null,maxLoops:null,consumed:null,remaining:null,currentForNewLoops:false,selectedLoop:null,executionAuthorized:false};
+      return{instance:saved,...(recovery?{recovery:lineage,loopBudget}:{}),projectRevision:store.revision(projectId)};
     }
     if(operation==='lifecycle.stage.admission'){
       exact(input,['instanceId','stageId']);authorize(actor,projectId,'execution.request');

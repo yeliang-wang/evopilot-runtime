@@ -4,7 +4,7 @@ import { authorize, type Principal } from '../server/security.js';
 import { RuntimeStore, type Receipt, type StoredObject } from '../server/store.js';
 import { valueDigest } from '../lifecycle/base.js';
 import { atPath, bindingPattern, containsInlineSecret, type EffectiveDefinition } from '../lifecycle/compiler.js';
-import { inspectInstance, pinInstance, requiredChecksDigest, stageBudget, type RecoveryLineageService, type RecoveryFailureOrigin, type Budget, type AuthorityResolver, type ExecutionAuthority, type LifecycleInstance, type ReleaseAuthority } from '../lifecycle/instance.js';
+import { inspectInstance, pinInstance, requiredChecksDigest, stageBudget, type RecoveryLineageService, type RecoveryFailureOrigin, type Budget, type AuthorityResolver, type ExecutionAuthority, type LifecycleInstance, type ReleaseAuthority, type LoopBudgetView } from '../lifecycle/instance.js';
 import { readIntegrationConfiguration } from './config.js';
 import { validateResourceDefinition } from './bindings.js';
 import { isPreparationRef, readPreparationPacket, type PreparationVerifier } from '../lifecycle/preparation.js';
@@ -77,7 +77,18 @@ export type AuthorityPolicyProvider=(definition:EffectiveDefinition,actor:Princi
 export type PrincipalLookup=(id:string)=>Principal|null;
 type Kind='execution'|'release';
 type Choice='APPROVE'|'REJECT';
-interface RecoveryIdentity {goalRef:string;loopRef:string;target:{kind:'preparation';id:string;version:string}|{kind:'opaque';ref:string};}
+interface RecoveryIdentity {goalRef:string;loopRef:string;target:{kind:'preparation';id:string;version:string}|{kind:'opaque';ref:string};loopWindowRef?:string;}
+interface LoopWindowIdentity {workspaceId:string;projectId:string;goalRef:string;target:{id:string;version:string};}
+interface LoopWindow {
+  schema:'runtime-loop-window/v1';ref:string;digest:string;identity:LoopWindowIdentity;identityDigest:string;
+  originalAuthorityRef:string;reviewDigest:string;founderInstanceId:string;preparationRef:string;
+  source:{provider:string;repositoryId:string};base:EffectiveDefinition['base'];graphDigest:string;requirementsDigest:string;
+  predecessorRef:string|null;openedAt:string;deadlineAt:string;caps:{authority:number;plan:number;verification:number};maxLoops:number;
+}
+interface LoopCharge {loopRef:string;ordinal:number;firstInstanceId:string;firstStageRequestId:string;firstStageRequestDigest:string;firstAuthorityRef:string;chargedAt:string;recoveryRootRef:string;recoveryRootDigest:string;}
+interface LoopConsumption {schema:'runtime-loop-consumption/v1';windowRef:string;windowDigest:string;entries:LoopCharge[];digest:string;}
+const LOOP_KIND='lifecycle-loop-budget';
+const loopReference=(v:unknown):string=>{const s=string(v,128);if(!/^loop-window:sha256:[a-f0-9]{64}$/.test(s))reject('INVALID_LOOP_WINDOW','Exact native Loop window reference required');return s;};
 interface NativeRecoveryRoot {
   schema:'runtime-recovery-lineage-root/v1';ref:string;workspaceId:string;projectId:string;
   identity:RecoveryIdentity;identityDigest:string;originalTargetRef:string;originalInstanceId:string;
@@ -295,6 +306,117 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
     return d;
   }
   function selectedDefinition(d:DecisionRecord):EffectiveDefinition{return definition(d.projectId,d.subject.definitionRevisionId);}
+  function loopIdentity(projectId:string,subject:Record<string,unknown>,packet:NonNullable<ReturnType<typeof prepared>>):LoopWindowIdentity{
+    return{workspaceId:store.workspaceId,projectId,goalRef:String(subject.goalRef),target:{id:packet.input.target.id,version:packet.input.target.version}};
+  }
+  const loopCaps=(subject:Record<string,unknown>,effective:EffectiveDefinition)=>({authority:Number(record(subject.budget).maxLoops),plan:Number(atPath(effective.semantic,'config.plan.budget.maxLoops')),verification:Number(atPath(effective.semantic,'config.verification.budget.maxLoops'))});
+  function loopIndex(projectId:string,identityDigest:string):{ref:string;digest:string}|null{
+    const raw=store.object(projectId,LOOP_KIND,'target:'+identityDigest);if(!raw)return null;const v=record(raw),{digest,...body}=v;
+    exact(v,['schema','identityDigest','ref','windowDigest','digest']);
+    if(v.schema!=='runtime-loop-window-index/v1'||v.identityDigest!==identityDigest||digest!==valueDigest(body))reject('CORRUPT_LOOP_WINDOW','Native target window index changed',503);
+    return{ref:loopReference(v.ref),digest:hash(v.windowDigest)};
+  }
+  function windowFromDecision(d:DecisionRecord):LoopWindow{
+    const selection=record(d.subject.loopWindow),effective=selectedDefinition(d),packet=readPreparationPacket(store,d.projectId,String(d.subject.targetRef)),identity=loopIdentity(d.projectId,d.subject,packet),caps=loopCaps(d.subject,effective);
+    const body={schema:'runtime-loop-window/v1' as const,ref:loopReference(selection.ref),identity,identityDigest:valueDigest(identity),originalAuthorityRef:d.ref,reviewDigest:d.reviewDigest,founderInstanceId:String(d.subject.instanceId),preparationRef:String(d.subject.targetRef),source:{provider:packet.input.source.provider,repositoryId:packet.input.source.repositoryId},base:effective.base,graphDigest:valueDigest(effective.nodes),requirementsDigest:requiredChecksDigest(effective),predecessorRef:selection.predecessorRef===null?null:loopReference(selection.predecessorRef),openedAt:d.at,deadlineAt:new Date(Math.min(Date.parse(d.at)+Number(record(d.subject.budget).timeoutSeconds)*1000,Date.parse(String(d.subject.expiresAt)))).toISOString(),caps,maxLoops:Math.min(...Object.values(caps))};
+    if(selection.mode!=='NEW'||body.ref!=='loop-window:'+valueDigest({identity,founderInstanceId:body.founderInstanceId,predecessorRef:body.predecessorRef})||!Number.isSafeInteger(body.maxLoops)||body.maxLoops<1||body.maxLoops>4||Date.parse(body.deadlineAt)<=Date.parse(body.openedAt))reject('CORRUPT_LOOP_WINDOW','Founding decision does not define a finite exact window',503);
+    return{...body,digest:valueDigest(body)};
+  }
+  function readLoopWindow(projectId:string,ref:unknown):LoopWindow{
+    const id=loopReference(ref),raw=store.object(projectId,LOOP_KIND,id);if(!raw)reject('LOOP_WINDOW_NOT_FOUND','Native Loop window is unavailable',409);
+    const v=record(raw),d=savedDecision(projectId,v.originalAuthorityRef),expected=windowFromDecision(d);
+    if(d.kind!=='execution'||d.choice!=='APPROVE'||expected.ref!==id||canonical(v)!==canonical(expected))reject('CORRUPT_LOOP_WINDOW','Native Loop window differs from its original decision',503);
+    const index=loopIndex(projectId,expected.identityDigest);if(!index)reject('CORRUPT_LOOP_WINDOW','Native target window index is missing',503);
+    if(index.ref===id&&index.digest!==expected.digest)reject('CORRUPT_LOOP_WINDOW','Current window digest differs',503);
+    const founders=loopHistory(projectId,expected.identity).map(ref=>savedDecision(projectId,ref)).filter(d=>d.choice==='APPROVE'&&d.subject.loopWindow!==undefined&&record(d.subject.loopWindow).mode==='NEW'),predecessors=new Set(founders.map(d=>record(d.subject.loopWindow).predecessorRef)),heads=founders.filter(d=>!predecessors.has(record(d.subject.loopWindow).ref));
+    if(heads.length!==1||record(heads[0].subject.loopWindow).ref!==index.ref)reject('CORRUPT_LOOP_WINDOW','Current window index cannot omit or roll back an approved successor',503);
+    const head=windowFromDecision(heads[0]);if(head.digest!==index.digest||canonical(store.object(projectId,LOOP_KIND,head.ref))!==canonical(head))reject('CORRUPT_LOOP_WINDOW','Current window must retain its exact approved root',503);
+    return expected;
+  }
+  function loopHistory(projectId:string,identity:LoopWindowIdentity):string[]{
+    const found:string[]=[];let after='',seen=0;
+    for(;;){const rows=store.objectsPage(projectId,'authority-decision',after,200);for(const row of rows){after=row.id;if(++seen>4096)reject('LOOP_HISTORY_LIMIT','Native target history exceeds the bounded reader',503);const d=savedDecision(projectId,row.id);if(d.kind!=='execution'||!isPreparationRef(d.subject.targetRef))continue;const packet=readPreparationPacket(store,projectId,String(d.subject.targetRef));if(canonical(loopIdentity(projectId,d.subject,packet))===canonical(identity))found.push(d.ref);}if(rows.length<200)break;}return found.sort();
+  }
+  function windowAuthority(root:LoopWindow,actor:Principal):void{
+    const d=savedDecision(root.identity.projectId,root.originalAuthorityRef),selected=store.object(d.projectId,'instance-execution',root.founderInstanceId) as {authorityRef:string}|null;
+    if(d.choice!=='APPROVE'||store.object(d.projectId,'authority-revocation',d.ref)||selected?.authorityRef!==d.ref)reject('LOOP_WINDOW_AUTHORITY_REVOKED','Original window authority was revoked or superseded',403);
+    const p=policy(selectedDefinition(d),actor),grantor=principals(d.principalId);
+    if(!grantor||grantor.revision!==d.principalRevision||!p.principalIds.includes(grantor.id)||p.digest!==d.policyDigest)reject('LOOP_WINDOW_AUTHORITY_CHANGED','Original window authority or policy changed',403);
+    authorize(grantor,d.projectId,'decision.record');verifyEvidence(d);
+    if(Date.parse(root.deadlineAt)<=Date.now())reject('LOOP_WINDOW_EXPIRED','Original Loop window permits observation only',409);
+  }
+  function matchWindow(root:LoopWindow,subject:Record<string,unknown>,effective:EffectiveDefinition,packet:NonNullable<ReturnType<typeof prepared>>):void{
+    if(canonical(loopIdentity(root.identity.projectId,subject,packet))!==canonical(root.identity)||canonical({provider:packet.input.source.provider,repositoryId:packet.input.source.repositoryId})!==canonical(root.source)||canonical(effective.base)!==canonical(root.base)||valueDigest(effective.nodes)!==root.graphDigest||requiredChecksDigest(effective)!==root.requirementsDigest)reject('LOOP_WINDOW_SCOPE_CHANGED','Loop must preserve its exact target, repository and obligations',409);
+    if(record(subject.loopWindow??{}).mode!=='NEW'&&Date.parse(String(subject.expiresAt))>Date.parse(root.deadlineAt))reject('LOOP_WINDOW_BUDGET_WIDENED','A joined authority cannot extend its original window',409);
+  }
+  function bindLoopSubject(projectId:string,source:Record<string,unknown>,subject:Record<string,unknown>,effective:EffectiveDefinition,actor:Principal,packet:ReturnType<typeof prepared>):void{
+    if(!packet){if(source.loopWindow!==undefined)reject('LOOP_PREPARATION_REQUIRED','Native Loop accounting requires an exact prepared target ID/version',409);return;}
+    const identity=loopIdentity(projectId,subject,packet),index=loopIndex(projectId,valueDigest(identity)),history=index?[]:loopHistory(projectId,identity);let selected:Record<string,unknown>;
+    if(!index&&history.some(ref=>savedDecision(projectId,ref).choice==='APPROVE'&&savedDecision(projectId,ref).subject.loopWindow!==undefined))reject('CORRUPT_LOOP_WINDOW','Known native window history cannot lose its target index',503);
+    if(source.loopWindow===undefined){if(index||history.length)reject('LOOP_WINDOW_SELECTION_REQUIRED','Select the exact existing window or explicitly review a later NEW window',409);selected={mode:'NEW',predecessorRef:null};}
+    else selected=record(source.loopWindow);
+    if(selected.mode==='EXISTING'){
+      exact(selected,['mode','ref']);const root=readLoopWindow(projectId,selected.ref);windowAuthority(root,actor);matchWindow(root,subject,effective,packet);
+      if(!index||index.ref!==root.ref||index.digest!==root.digest)reject('LOOP_WINDOW_NOT_CURRENT','New membership requires the exact current window',409);
+      subject.loopWindow={mode:'EXISTING',ref:root.ref,digest:root.digest};
+    }else if(selected.mode==='NEW'){
+      exact(selected,['mode','predecessorRef']);const predecessorRef=selected.predecessorRef===null?null:loopReference(selected.predecessorRef);
+      if(predecessorRef!==(index?.ref??null))reject('LOOP_WINDOW_PREDECESSOR_CHANGED','Review the actual current predecessor window',409);
+      if(index){const prior=readLoopWindow(projectId,index.ref);if(prior.digest!==index.digest)reject('CORRUPT_LOOP_WINDOW','Predecessor index differs',503);if(Date.parse(prior.deadlineAt)>Date.now())reject('LOOP_WINDOW_ACTIVE','NEW cannot refill a window before its fixed deadline',409);}
+      const ref='loop-window:'+valueDigest({identity,founderInstanceId:String(subject.instanceId),predecessorRef});
+      if(store.object(projectId,LOOP_KIND,ref))reject('LOOP_WINDOW_EXISTS','An original window cannot be overwritten',409);
+      subject.loopWindow={mode:'NEW',ref,predecessorRef,identity,caps:loopCaps(subject,effective),historicalAuthorities:history};
+    }else reject('INVALID_LOOP_WINDOW','Choose NEW or EXISTING explicitly');
+  }
+  function loopBinding(d:DecisionRecord):{loopWindowRef:string;loopWindowDigest:string}|Record<string,never>{
+    if(d.subject.loopWindow===undefined)return{};
+    const selection=record(d.subject.loopWindow),root=readLoopWindow(d.projectId,selection.ref);
+    if(selection.mode==='NEW'?root.originalAuthorityRef!==d.ref:selection.mode!=='EXISTING'||selection.digest!==root.digest)reject('CORRUPT_LOOP_WINDOW','Authority window binding changed',503);
+    return{loopWindowRef:root.ref,loopWindowDigest:root.digest};
+  }
+  function windowMember(saved:LifecycleInstance,grant?:ExecutionAuthority):LoopWindow|null{
+    inspectInstance(saved);
+    const binding=record(store.object(saved.pins.projectId,'instance-authority',saved.id)),d=existingNativeDecision(saved.pins.projectId,binding.evidenceRef);
+    if(!binding.loopWindowRef){if(binding.loopWindowDigest||d?.subject.loopWindow!==undefined||grant?.loopWindowRef)reject('CORRUPT_LOOP_WINDOW','Native membership cannot lose its window',503);return null;}
+    if(!d)reject('CORRUPT_LOOP_WINDOW','Native membership requires its retained decision',503);
+    const exactBinding=loopBinding(d),root=readLoopWindow(saved.pins.projectId,binding.loopWindowRef),projection=execution(d);
+    if(exactBinding.loopWindowRef!==root.ref||exactBinding.loopWindowDigest!==root.digest||binding.loopWindowDigest!==root.digest||projection.instanceId!==saved.id||valueDigest(projection)!==saved.pins.authorityDigest||grant&&canonical(projection)!==canonical(grant))reject('CORRUPT_LOOP_WINDOW','Window membership differs from original authority/pins',503);
+    return root;
+  }
+  function consumption(root:LoopWindow):LoopConsumption{
+    const raw=store.object(root.identity.projectId,LOOP_KIND,'consumption:'+root.ref);if(!raw)reject('CORRUPT_LOOP_BUDGET','Original Loop consumption ledger is missing',503);
+    const v=record(raw),{digest,...body}=v;exact(v,['schema','windowRef','windowDigest','entries','digest']);
+    if(v.schema!=='runtime-loop-consumption/v1'||v.windowRef!==root.ref||v.windowDigest!==root.digest||digest!==valueDigest(body)||!Array.isArray(v.entries)||v.entries.length>root.maxLoops)reject('CORRUPT_LOOP_BUDGET','Native Loop consumption changed',503);
+    const ledger=v as unknown as LoopConsumption,loops=new Set<string>();
+    for(const [index,entry]of ledger.entries.entries()){
+      exact(record(entry),['loopRef','ordinal','firstInstanceId','firstStageRequestId','firstStageRequestDigest','firstAuthorityRef','chargedAt','recoveryRootRef','recoveryRootDigest']);
+      const saved=instance(root.identity.projectId,entry.firstInstanceId),request=store.object(root.identity.projectId,'stage-request',entry.firstStageRequestId) as StageRequest|null,binding=record(store.object(root.identity.projectId,'instance-authority',saved.id));
+      if(!request)reject('CORRUPT_LOOP_BUDGET','Original charged request is missing',503);const{digest:requestDigest,...requestBody}=request;
+      if(entry.ordinal!==index+1||loops.has(entry.loopRef)||entry.loopRef!==saved.pins.loopRef||requestDigest!==valueDigest(requestBody)||requestDigest!==entry.firstStageRequestDigest||request.id!==entry.firstStageRequestId||request.instanceId!==saved.id||request.pinsDigest!==saved.pinsDigest||request.authorityRef!==entry.firstAuthorityRef||request.requestedAt!==entry.chargedAt||!saved.requestIds.includes(request.id)||binding.evidenceRef!==entry.firstAuthorityRef||binding.loopWindowRef!==root.ref||binding.loopWindowDigest!==root.digest||binding.recoveryRootRef!==entry.recoveryRootRef||binding.recoveryRootDigest!==entry.recoveryRootDigest||windowMember(saved)?.ref!==root.ref)reject('CORRUPT_LOOP_BUDGET','Original charged request or native membership changed',503);
+      const recovery=member(saved);if(!recovery||recovery.ref!==entry.recoveryRootRef||recovery.digest!==entry.recoveryRootDigest)reject('CORRUPT_LOOP_BUDGET','Charged Loop lacks its original recovery membership',503);
+      loops.add(entry.loopRef);
+    }
+    let after='',seen=0;for(;;){const rows=store.objectsPage(root.identity.projectId,'lifecycle-instance',after,200);for(const row of rows){after=row.id;if(++seen>4096)reject('LOOP_HISTORY_LIMIT','Native membership exceeds the bounded reader',503);const saved=row.value as LifecycleInstance,binding=store.object(root.identity.projectId,'instance-authority',row.id) as {loopWindowRef?:string}|null;if(binding?.loopWindowRef!==root.ref)continue;windowMember(saved);if(saved.requestIds.length&&!loops.has(saved.pins.loopRef))reject('CORRUPT_LOOP_BUDGET','A native admitted Loop was omitted from consumption',503);}if(rows.length<200)break;}
+    // Immutable requests and their original decisions independently identify
+    // admitted members even if both a mutable binding and charge are omitted.
+    after='';seen=0;for(;;){const rows=store.objectsPage(root.identity.projectId,'stage-request',after,200);for(const row of rows){after=row.id;if(++seen>4096)reject('LOOP_HISTORY_LIMIT','Native request history exceeds the bounded reader',503);const request=row.value as StageRequest,d=existingNativeDecision(root.identity.projectId,request.authorityRef);if(!d?.subject.loopWindow||record(d.subject.loopWindow).ref!==root.ref)continue;const saved=instance(root.identity.projectId,request.instanceId);if(!loops.has(saved.pins.loopRef)||windowMember(saved)?.ref!==root.ref||!saved.requestIds.includes(request.id))reject('CORRUPT_LOOP_BUDGET','An original native request lost its admitted Loop',503);}if(rows.length<200)break;}
+    return ledger;
+  }
+  function loopView(saved:LifecycleInstance,root:LoopWindow|null):LoopBudgetView{
+    if(!root)return{accounting:'UNAVAILABLE',ref:null,digest:null,identity:null,deadlineAt:null,maxLoops:null,consumed:null,remaining:null,currentForNewLoops:false,selectedLoop:null,executionAuthorized:false};
+    const ledger=consumption(root),selected=ledger.entries.find(e=>e.loopRef===saved.pins.loopRef);
+    return{accounting:'NATIVE',ref:root.ref,digest:root.digest,identity:root.identity,deadlineAt:root.deadlineAt,maxLoops:root.maxLoops,consumed:ledger.entries.length,remaining:root.maxLoops-ledger.entries.length,currentForNewLoops:loopIndex(root.identity.projectId,root.identityDigest)?.ref===root.ref,selectedLoop:selected?{ref:selected.loopRef,ordinal:selected.ordinal,firstRequestId:selected.firstStageRequestId}:null,executionAuthorized:false};
+  }
+  function loopAdmission(saved:LifecycleInstance,grant:ExecutionAuthority,stageId:string,actor:Principal,requestId?:string){
+    const root=windowMember(saved,grant),view=loopView(saved,root),reasons:string[]=[];
+    if(!root)return{root,view,reasons:['LOOP_BUDGET_UNAVAILABLE']};
+    windowAuthority(root,actor);const node=saved.definition.nodes.find(n=>n.id===stageId);if(!node)reject('RECOVERY_SCOPE_CHANGED','Stage is outside this Loop',409);
+    const ordinal=view.selectedLoop?.ordinal??(view.consumed!+1),caps=loopCaps({budget:grant.budget},saved.definition),limit=Math.min(root.maxLoops,...Object.values(caps),stageBudget(saved,node).maxLoops);
+    if(ordinal>limit)reasons.push('LOOP_BUDGET_EXHAUSTED');
+    if(!view.selectedLoop&&!view.currentForNewLoops)reasons.push('LOOP_WINDOW_NOT_CURRENT');
+    if(requestId&&!view.selectedLoop)reject('LOOP_CLAIM_REQUIRED','Original dispatch requires a retained Loop charge',409);
+    return{root,view,reasons};
+  }
   function current(d:DecisionRecord,actor:Principal):void{
     authorize(actor,d.projectId,'read');
     if(d.choice!=='APPROVE'||store.object(d.projectId,'authority-revocation',d.ref))reject('AUTHORITY_REVOKED','This decision is not an active approval',403);
@@ -309,6 +431,7 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
     authorize(grantor,d.projectId,'decision.record');verifyEvidence(d);
     if(d.kind==='execution'){
       const packet=prepared(d.subject,effective,actor,grantor.id);
+      if(d.subject.loopWindow!==undefined){const root=readLoopWindow(d.projectId,record(d.subject.loopWindow).ref);windowAuthority(root,actor);if(!packet)reject('LOOP_PREPARATION_REQUIRED','Native window requires its original preparation',409);matchWindow(root,d.subject,effective,packet);}
       if(d.subject.recoveryRootRef!==undefined)verifySuccessor(readRecoveryRoot(d.projectId,d.subject.recoveryRootRef),d.subject,effective,actor,packet);
     }
     if(d.kind==='release'){
@@ -319,10 +442,10 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
       if(material.digest!==d.subject.releaseMaterialDigest||material.bindingContextDigest!==p.bindingContextDigest)reject('RELEASE_MATERIAL_CHANGED','Release decision no longer matches exact collected material and configuration',409);
     }
   }
-  function execution(d:DecisionRecord):ExecutionAuthority{
+  function execution(d:DecisionRecord,preview=false):ExecutionAuthority{
     if(d.kind!=='execution')reject('AUTHORITY_KIND_MISMATCH','An execution decision is required',403);
     const s=d.subject;
-    return{projectId:d.projectId,instanceId:String(s.instanceId),definitionRevisionId:String(s.definitionRevisionId),semanticDigest:String(s.semanticDigest),requirementsDigest:String(s.requirementsDigest),goalRef:String(s.goalRef),targetRef:String(s.targetRef),loopRef:String(s.loopRef),budget:s.budget as ExecutionAuthority['budget'],...(s.recoveryRootRef!==undefined?{recoveryRootRef:String(s.recoveryRootRef),recoveryRootDigest:String(s.recoveryRootDigest)}:{}),evidenceRef:d.ref,revision:d.reviewDigest,expiresAt:String(s.expiresAt)};
+    return{projectId:d.projectId,instanceId:String(s.instanceId),definitionRevisionId:String(s.definitionRevisionId),semanticDigest:String(s.semanticDigest),requirementsDigest:String(s.requirementsDigest),goalRef:String(s.goalRef),targetRef:String(s.targetRef),loopRef:String(s.loopRef),budget:s.budget as ExecutionAuthority['budget'],...(s.recoveryRootRef!==undefined?{recoveryRootRef:String(s.recoveryRootRef),recoveryRootDigest:String(s.recoveryRootDigest)}:{}),...(!preview?loopBinding(d):{}),evidenceRef:d.ref,revision:d.reviewDigest,expiresAt:String(s.expiresAt)};
   }
   function release(d:DecisionRecord):ReleaseAuthority{
     if(d.kind!=='release')reject('AUTHORITY_KIND_MISMATCH','A separate release decision is required',403);
@@ -334,7 +457,7 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
     if(containsInlineSecret(canonical(source)))reject('INLINE_SECRET','Authority subjects use references, not raw credentials');
     let effective:EffectiveDefinition,subject:Record<string,unknown>,releaseMaterial:ReleaseMaterial|undefined;
     if(type==='execution'){
-      exact(source,['instanceId','definitionRevisionId','goalRef','targetRef','loopRef','budget','expiresAt'],['recoveryRootRef']);
+      exact(source,['instanceId','definitionRevisionId','goalRef','targetRef','loopRef','budget','expiresAt'],['recoveryRootRef','loopWindow']);
       const instanceId=slug(source.instanceId),revisionId=hash(source.definitionRevisionId);
       if(store.object(projectId,'lifecycle-instance',instanceId))reject('INSTANCE_EXISTS','An authority amendment cannot reset an existing instance',409);
       const pointer=store.object(projectId,'definition-pointer','active') as {revisionId:string}|null;
@@ -355,16 +478,17 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
     if(Date.parse(String(subject.expiresAt))>Math.min(Date.parse(p.expiresAt),Date.parse(actor.expiresAt)))reject('AUTHORITY_EXPIRY_BOUND','Decision expiry must fit the current policy and deciding credential');
     const preparation=type==='execution'?prepared(subject,effective,actor,actor.id):null;
     if(type==='execution'){
+      bindLoopSubject(projectId,source,subject,effective,actor,preparation);
       if(source.recoveryRootRef!==undefined)subject.recoveryRootRef=recoveryReference(source.recoveryRootRef);
       bindRecoverySubject(projectId,subject,effective,actor,preparation);
       // Reuse publisher budget/pin verification without persisting or dispatching.
-      pinInstance(String(subject.instanceId),String(subject.definitionRevisionId),effective,execution({kind:type,projectId,subject,ref:'preview',reviewDigest:'preview'} as DecisionRecord));
+      pinInstance(String(subject.instanceId),String(subject.definitionRevisionId),effective,execution({kind:type,projectId,subject,ref:'preview',reviewDigest:'preview'} as DecisionRecord,true));
     }
     const review={schema:'runtime-authority-review/v1',workspaceId:store.workspaceId,projectId,kind:type,subject,policyDigest:p.digest,bindingContextDigest:p.bindingContextDigest,principalId:actor.id,principalRevision:actor.revision,...(preparation?{preparation}:{}),...(releaseMaterial?{releaseMaterial}:{})};
     return{...review,reviewDigest:evidenceValueDigest(review)};
   }
   function recoveryIdentity(subject:Record<string,unknown>,packet:ReturnType<typeof prepared>):RecoveryIdentity{
-    return{goalRef:String(subject.goalRef),loopRef:String(subject.loopRef),target:packet?{kind:'preparation',id:packet.input.target.id,version:packet.input.target.version}:{kind:'opaque',ref:String(subject.targetRef)}};
+    return{goalRef:String(subject.goalRef),loopRef:String(subject.loopRef),target:packet?{kind:'preparation',id:packet.input.target.id,version:packet.input.target.version}:{kind:'opaque',ref:String(subject.targetRef)},...(subject.loopWindow!==undefined?{loopWindowRef:loopReference(record(subject.loopWindow).ref)}:{})};
   }
   function readRecoveryRoot(projectId:string,ref:unknown):NativeRecoveryRoot{
     const id=recoveryReference(ref),raw=store.object(projectId,RECOVERY_KIND,id);
@@ -375,7 +499,7 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
     const root=r as unknown as NativeRecoveryRoot,original=instance(projectId,root.originalInstanceId),d=savedDecision(projectId,root.originalAuthorityRef);
     if(d.kind!=='execution'||d.subject.recoveryRootRef!==undefined||d.subject.instanceId!==root.originalInstanceId||valueDigest(execution(d))!==root.originalAuthorityDigest||original.pinsDigest!==root.originalPinsDigest||original.pins.authorityDigest!==root.originalAuthorityDigest||original.createdAt!==root.createdAt||original.pins.graphDigest!==root.graphDigest||original.pins.requirementsDigest!==root.requirementsDigest||canonical(original.pins.budget)!==canonical(root.budget)||root.originalTargetRef!==original.pins.targetRef)reject('CORRUPT_RECOVERY_ROOT','Recovery root must bind its actual original native authority and instance',503);
     const originalPacket=isPreparationRef(d.subject.targetRef)?readPreparationPacket(store,projectId,String(d.subject.targetRef)):null;
-    if(canonical(root.identity)!==canonical(recoveryIdentity(d.subject,originalPacket))||canonical(root.stageBudgets)!==canonical(Object.fromEntries(original.definition.nodes.map(n=>[n.id,stageBudget(original,n)])))||root.deadlineAt!==new Date(Math.min(Date.parse(original.createdAt)+original.pins.budget.timeoutSeconds*1000,Date.parse(original.pins.authorityExpiresAt))).toISOString())reject('CORRUPT_RECOVERY_ROOT','Original native scope or cumulative bounds changed',503);
+    if(canonical(root.identity)!==canonical(recoveryIdentity(d.subject,originalPacket))||canonical(root.stageBudgets)!==canonical(Object.fromEntries(original.definition.nodes.map(n=>[n.id,stageBudget(original,n)])))||root.deadlineAt!==new Date(Math.min(Date.parse(original.createdAt)+original.pins.budget.timeoutSeconds*1000,Date.parse(original.pins.authorityExpiresAt),d.subject.loopWindow!==undefined?Date.parse(readLoopWindow(projectId,record(d.subject.loopWindow).ref).deadlineAt):Infinity)).toISOString())reject('CORRUPT_RECOVERY_ROOT','Original native scope or cumulative bounds changed',503);
     const index=record(store.object(projectId,RECOVERY_KIND,'lineage:'+root.identityDigest));
     if(index.schema!=='runtime-recovery-lineage-index/v1'||index.rootRef!==root.ref||index.rootDigest!==root.digest||index.identityDigest!==root.identityDigest)reject('CORRUPT_RECOVERY_ROOT','Original native lineage index differs',503);
     return root;
@@ -491,16 +615,16 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
       else{
         if(store.object(saved.pins.projectId,RECOVERY_KIND,'lineage:'+valueDigest(identity)))reject('RECOVERY_ROOT_REQUIRED','Exact native lineage already has an original root; obtain an explicit reviewed successor link',409);
         requireNewOrigin(saved.pins.projectId,identity,saved.id);
-        const ref='recovery-root:'+valueDigest({workspaceId:store.workspaceId,projectId:saved.pins.projectId,instanceId:saved.id,authorityRef:grant.evidenceRef}),body={schema:'runtime-recovery-lineage-root/v1' as const,ref,workspaceId:store.workspaceId,projectId:saved.pins.projectId,identity,identityDigest:valueDigest(identity),originalTargetRef:saved.pins.targetRef,originalInstanceId:saved.id,originalAuthorityRef:grant.evidenceRef,originalAuthorityDigest:saved.pins.authorityDigest,originalPinsDigest:saved.pinsDigest,createdAt:saved.createdAt,deadlineAt:new Date(Math.min(Date.parse(saved.createdAt)+grant.budget.timeoutSeconds*1000,Date.parse(grant.expiresAt))).toISOString(),graphDigest:saved.pins.graphDigest,requirementsDigest:saved.pins.requirementsDigest,budget:grant.budget,stageBudgets:Object.fromEntries(saved.definition.nodes.map(n=>[n.id,stageBudget(saved,n)]))};root={...body,digest:valueDigest(body)};
+        const ref='recovery-root:'+valueDigest({workspaceId:store.workspaceId,projectId:saved.pins.projectId,instanceId:saved.id,authorityRef:grant.evidenceRef}),body={schema:'runtime-recovery-lineage-root/v1' as const,ref,workspaceId:store.workspaceId,projectId:saved.pins.projectId,identity,identityDigest:valueDigest(identity),originalTargetRef:saved.pins.targetRef,originalInstanceId:saved.id,originalAuthorityRef:grant.evidenceRef,originalAuthorityDigest:saved.pins.authorityDigest,originalPinsDigest:saved.pinsDigest,createdAt:saved.createdAt,deadlineAt:new Date(Math.min(Date.parse(saved.createdAt)+grant.budget.timeoutSeconds*1000,Date.parse(grant.expiresAt),grant.loopWindowRef?Date.parse(readLoopWindow(saved.pins.projectId,grant.loopWindowRef).deadlineAt):Infinity)).toISOString(),graphDigest:saved.pins.graphDigest,requirementsDigest:saved.pins.requirementsDigest,budget:grant.budget,stageBudgets:Object.fromEntries(saved.definition.nodes.map(n=>[n.id,stageBudget(saved,n)]))};root={...body,digest:valueDigest(body)};
         const ledger={schema:'runtime-recovery-attempts/v1',rootRef:root.ref,rootDigest:root.digest,entries:[]};
         objects.push({kind:RECOVERY_KIND,id:ref,value:root},{kind:RECOVERY_KIND,id:'lineage:'+root.identityDigest,value:{schema:'runtime-recovery-lineage-index/v1',identityDigest:root.identityDigest,rootRef:root.ref,rootDigest:root.digest}},{kind:RECOVERY_KIND,id:'attempts:'+root.ref,value:{...ledger,digest:valueDigest(ledger)}});
       }
-      objects.push({kind:RECOVERY_KIND,id:'member:'+saved.id,value:{schema:'runtime-recovery-member/v1',instanceId:saved.id,pinsDigest:saved.pinsDigest,authorityRef:grant.evidenceRef,rootRef:root.ref,rootDigest:root.digest}},{kind:'instance-authority',id:saved.id,value:{evidenceRef:grant.evidenceRef,recoveryRootRef:root.ref,recoveryRootDigest:root.digest}});return objects;
+      objects.push({kind:RECOVERY_KIND,id:'member:'+saved.id,value:{schema:'runtime-recovery-member/v1',instanceId:saved.id,pinsDigest:saved.pinsDigest,authorityRef:grant.evidenceRef,rootRef:root.ref,rootDigest:root.digest}},{kind:'instance-authority',id:saved.id,value:{evidenceRef:grant.evidenceRef,recoveryRootRef:root.ref,recoveryRootDigest:root.digest,...loopBinding(d)}});return objects;
     },
     admission(saved,grant,stageId,actor,requestId,repair){
-      const root=member(saved,grant),fallback={allowed:true,reasons:[] as string[],deadlineAt:new Date(Math.min(Date.parse(saved.createdAt)+saved.pins.budget.timeoutSeconds*1000,Date.parse(grant.expiresAt))).toISOString(),rootRef:null,stageAttempts:saved.stages[stageId]?.attempts??0};if(!root)return fallback;
+      const loop=loopAdmission(saved,grant,stageId,actor,requestId),root=member(saved,grant),fallback={allowed:loop.reasons.length===0,reasons:loop.reasons,deadlineAt:new Date(Math.min(Date.parse(saved.createdAt)+saved.pins.budget.timeoutSeconds*1000,Date.parse(grant.expiresAt),loop.root?Date.parse(loop.root.deadlineAt):Infinity)).toISOString(),rootRef:null,stageAttempts:saved.stages[stageId]?.attempts??0,loopBudget:loop.view};if(!root)return fallback;
       rootAuthority(root,actor);const ledger=attempts(root),selected=ledger.entries.filter(e=>e.stageId===stageId),node=saved.definition.nodes.find(n=>n.id===stageId);if(!node||!root.stageBudgets[stageId])reject('RECOVERY_SCOPE_CHANGED','Stage is outside the original root graph',409);
-      const local=stageBudget(saved,node),limit=Math.min(root.budget.maxAttempts,root.stageBudgets[stageId].maxAttempts,grant.budget.maxAttempts,local.maxAttempts),reasons:string[]=[],states=ledger.entries.map(e=>({entry:e,progress:attemptProgress(root,e)}));
+      const local=stageBudget(saved,node),limit=Math.min(root.budget.maxAttempts,root.stageBudgets[stageId].maxAttempts,grant.budget.maxAttempts,local.maxAttempts),reasons:string[]=[...loop.reasons],states=ledger.entries.map(e=>({entry:e,progress:attemptProgress(root,e)}));
       if(requestId&&!selected.some(e=>e.requestId===requestId&&e.instanceId===saved.id))reject('RECOVERY_CLAIM_REQUIRED','Dispatch requires its retained original root attempt claim',409);
       if(selected.length>(requestId?limit:limit-1))reasons.push('RECOVERY_ATTEMPTS_EXHAUSTED');
       const failed=states.filter(s=>s.entry.stageId===stageId&&s.progress.phase==='FAILED');
@@ -520,16 +644,18 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
       // Failed, unresolved and same-instance requests keep their original cutoff.
       const reviewedSuccessor=saved.id!==root.originalInstanceId&&grant.recoveryRootRef===root.ref&&grant.recoveryRootDigest===root.digest;
       const retainedCutoffs=states.filter(({entry,progress:p})=>entry.stageId===stageId&&(!reviewedSuccessor||entry.instanceId===saved.id||p.phase!=='COMPLETE'||p.terminal!==true)).map(({entry})=>Date.parse(entry.deadlineAt));
-      const deadline=Math.min(Date.parse(root.deadlineAt),Date.parse(grant.expiresAt),...retainedCutoffs);
-      if(deadline<=Date.now())reasons.push('RECOVERY_DEADLINE_EXHAUSTED');return{allowed:reasons.length===0,reasons:[...new Set(reasons)],deadlineAt:new Date(deadline).toISOString(),rootRef:root.ref,rootDigest:root.digest,stageAttempts:selected.length,...(repairOrigins.length?{repairOrigins}:{})};
+      const deadline=Math.min(Date.parse(root.deadlineAt),Date.parse(grant.expiresAt),loop.root?Date.parse(loop.root.deadlineAt):Infinity,...retainedCutoffs);
+      if(deadline<=Date.now())reasons.push('RECOVERY_DEADLINE_EXHAUSTED');return{allowed:reasons.length===0,reasons:[...new Set(reasons)],deadlineAt:new Date(deadline).toISOString(),rootRef:root.ref,rootDigest:root.digest,stageAttempts:selected.length,loopBudget:loop.view,...(repairOrigins.length?{repairOrigins}:{})};
     },
     claim(saved,grant,r,actor,repair){
       const root=member(saved,grant);if(!root)return[];const admitted=recovery.admission(saved,grant,r.stageId,actor,undefined,repair);if(!admitted.allowed)reject('STAGE_BLOCKED',admitted.reasons.join('; '),409);
       if(r.instanceId!==saved.id||r.pinsDigest!==saved.pinsDigest||r.authorityRef!==grant.evidenceRef||Date.parse(r.deadlineAt)>Date.parse(admitted.deadlineAt))reject('RECOVERY_CLAIM_MISMATCH','New request does not fit the original root',409);
       const prior=attempts(root);if(prior.entries.some(e=>e.requestId===r.id))reject('RECOVERY_CLAIM_MISMATCH','An original request cannot consume another attempt',409);
-      const body={schema:'runtime-recovery-attempts/v1' as const,rootRef:root.ref,rootDigest:root.digest,entries:[...prior.entries,{instanceId:saved.id,stageId:r.stageId,requestId:r.id,requestDigest:r.digest,deadlineAt:r.deadlineAt}]};return[{kind:RECOVERY_KIND,id:'attempts:'+root.ref,value:{...body,digest:valueDigest(body)}}];
+      const body={schema:'runtime-recovery-attempts/v1' as const,rootRef:root.ref,rootDigest:root.digest,entries:[...prior.entries,{instanceId:saved.id,stageId:r.stageId,requestId:r.id,requestDigest:r.digest,deadlineAt:r.deadlineAt}]},objects:StoredObject[]=[{kind:RECOVERY_KIND,id:'attempts:'+root.ref,value:{...body,digest:valueDigest(body)}}];
+      const window=windowMember(saved,grant);if(!window)reject('LOOP_BUDGET_UNAVAILABLE','Historical work has no native Loop accounting',409);const consumed=consumption(window);
+      if(!consumed.entries.some(e=>e.loopRef===saved.pins.loopRef)){const charge:LoopCharge={loopRef:saved.pins.loopRef,ordinal:consumed.entries.length+1,firstInstanceId:saved.id,firstStageRequestId:r.id,firstStageRequestDigest:r.digest,firstAuthorityRef:grant.evidenceRef,chargedAt:r.requestedAt,recoveryRootRef:root.ref,recoveryRootDigest:root.digest},ledger={schema:consumed.schema,windowRef:window.ref,windowDigest:window.digest,entries:[...consumed.entries,charge]};objects.push({kind:LOOP_KIND,id:'consumption:'+window.ref,value:{...ledger,digest:valueDigest(ledger)}});}return objects;
     },
-    inspect(saved){const root=member(saved);if(!root)return null;const ledger=attempts(root);return{rootRef:root.ref,rootDigest:root.digest,originalInstanceId:root.originalInstanceId,originalAuthorityRef:root.originalAuthorityRef,originalTargetRef:root.originalTargetRef,identity:root.identity,deadlineAt:root.deadlineAt,budget:root.budget,attempts:ledger.entries,executionAuthorized:false};},
+    inspect(saved){const root=member(saved);if(!root)return null;const ledger=attempts(root);return{rootRef:root.ref,rootDigest:root.digest,originalInstanceId:root.originalInstanceId,originalAuthorityRef:root.originalAuthorityRef,originalTargetRef:root.originalTargetRef,identity:root.identity,deadlineAt:root.deadlineAt,budget:root.budget,attempts:ledger.entries,loopBudget:loopView(saved,windowMember(saved)),executionAuthorized:false};},
   };
   const resolveExecution:AuthorityResolver=async(ref,effective,actor,signal)=>{
     signal.throwIfAborted();const d=savedDecision(effective.projectId,ref);current(d,actor);
@@ -573,11 +699,18 @@ export function createAuthorityService(store:RuntimeStore,policies:AuthorityPoli
       const review=prepare(fresh,projectId,{kind:input.kind,subject:input.subject});
       if(hash(input.reviewDigest)!==review.reviewDigest)reject('AUTHORITY_REVIEW_STALE','Exact subject, policy or principal changed after review',409);
       if(input.decision!=='APPROVE'&&input.decision!=='REJECT')reject('INVALID_DECISION','An explicit APPROVE or REJECT decision is required');
-      const content:Omit<DecisionRecord,'ref'>={schema:'runtime-authority-decision/v1',workspaceId:store.workspaceId,projectId,kind:review.kind,subject:review.subject,reviewDigest:review.reviewDigest,policyDigest:review.policyDigest,bindingContextDigest:review.bindingContextDigest,principalId:fresh.id,principalRevision:fresh.revision,choice:input.decision,evidenceRef:string(input.evidenceRef,8192),at:new Date().toISOString()};
+      const content:Omit<DecisionRecord,'ref'>={schema:'runtime-authority-decision/v1',workspaceId:store.workspaceId,projectId,kind:review.kind,subject:review.subject,reviewDigest:review.reviewDigest,policyDigest:review.policyDigest,bindingContextDigest:review.bindingContextDigest,principalId:fresh.id,principalRevision:fresh.revision,choice:input.decision,evidenceRef:string(input.evidenceRef,8192),at:new Date(Date.now()).toISOString()};
       const d:DecisionRecord={...content,ref:'authority:'+valueDigest(content)};verifyEvidence(d);
       const objects:StoredObject[]=[{kind:'authority-decision',id:d.ref,value:d}];
+      let opened:LoopWindow|undefined;
+      if(d.kind==='execution'&&d.choice==='APPROVE'&&d.subject.loopWindow!==undefined&&record(d.subject.loopWindow).mode==='NEW'){
+        const root=windowFromDecision(d),ledger={schema:'runtime-loop-consumption/v1',windowRef:root.ref,windowDigest:root.digest,entries:[]},index={schema:'runtime-loop-window-index/v1',identityDigest:root.identityDigest,ref:root.ref,windowDigest:root.digest};
+        opened=root;
+        objects.push({kind:LOOP_KIND,id:root.ref,value:root},{kind:LOOP_KIND,id:'consumption:'+root.ref,value:{...ledger,digest:valueDigest(ledger)}},{kind:LOOP_KIND,id:'target:'+root.identityDigest,value:{...index,digest:valueDigest(index)}});
+      }
       objects.push({kind:d.kind==='release'?'instance-release':'instance-execution',id:String(d.subject.instanceId),value:{authorityRef:d.ref}});
-      return{objects,value:{authorityRef:d.ref,status:d.choice==='APPROVE'?'APPROVED':'REJECTED',kind:d.kind,reviewDigest:d.reviewDigest,instanceId:d.subject.instanceId,executionDispatched:false},event:{type:'authority-recorded',data:{authorityRef:d.ref,kind:d.kind,reviewDigest:d.reviewDigest,instanceId:d.subject.instanceId,choice:d.choice,principalId:fresh.id,executionDispatched:false}}};
+      const window=d.kind==='execution'&&d.choice==='APPROVE'&&d.subject.loopWindow!==undefined?(opened??readLoopWindow(projectId,record(d.subject.loopWindow).ref)):undefined;
+      return{objects,value:{authorityRef:d.ref,status:d.choice==='APPROVE'?'APPROVED':'REJECTED',kind:d.kind,reviewDigest:d.reviewDigest,instanceId:d.subject.instanceId,executionDispatched:false,...(window?{loopWindow:{ref:window.ref,digest:window.digest,deadlineAt:window.deadlineAt,maxLoops:window.maxLoops,opened:!!opened}}:{})},event:{type:'authority-recorded',data:{authorityRef:d.ref,kind:d.kind,reviewDigest:d.reviewDigest,instanceId:d.subject.instanceId,choice:d.choice,principalId:fresh.id,executionDispatched:false,...(window?{loopWindowRef:window.ref,windowOpened:!!opened}:{})}}};
     },reauthorize);
   }
   return{read,write,resolveExecution,verifyExecution,resolveRelease,recovery};

@@ -18,7 +18,13 @@ if(mode.startsWith('execution-crash-')){
     },
     async inspect(){throw new Error('A crashed process cannot synthesize provider completion');},
   };
-  const server=await startRuntimeServer({stateRoot:root,workspaceId},bindings.provider,undefined,registeredAuthorityPolicy(join(dirname(root),'integrations.json'),workspaceId),adapter);
+  // This validator is confined to the synthetic crash fixture. The native
+  // preparation service still verifies exact bytes, definition and check set.
+  const preparation=packet=>{
+    if(packet.workspaceId!==workspaceId||packet.projectId!=='alpha'||packet.input.target.id!=='synthetic-budget'||packet.input.target.version!=='0.9.0'||packet.input.goalRef!=='synthetic:goal/one'||packet.input.loopRef!=='synthetic:loop/one'||packet.input.source.provider!=='github'||packet.input.source.repositoryId!=='42'||packet.input.source.commit!=='a'.repeat(40))throw new Error('Synthetic crash preparation differs from its exact fixed target/source');
+    return{reviewerIds:['decider'],evidence:{syntheticFixture:true,targetId:packet.input.target.id,sourceCommit:packet.input.source.commit}};
+  };
+  const server=await startRuntimeServer({stateRoot:root,workspaceId},bindings.provider,undefined,registeredAuthorityPolicy(join(dirname(root),'integrations.json'),workspaceId),adapter,preparation);
   process.stdout.write(JSON.stringify({ready:true,url:server.url})+'\n');
   await new Promise(()=>{});
 }else{

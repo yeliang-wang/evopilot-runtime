@@ -45,6 +45,18 @@ test('backup preserves all three trees, external configuration and internal link
   await assert.rejects(createManagedWorkspaceBackup(f.selection,'backup','a'.repeat(64),f.backupRoot),{code:'MAINTENANCE_CONFLICT'});
 });
 
+test('whole workspace backup preserves service schema3 Loop accounting and original receipts exactly',async t=>{
+  const f=fixture(t),actor={id:'synthetic',projects:['synthetic'],permissions:['read'],revision:1,expiresAt:'2030-01-01T00:00:00Z'},store=new RuntimeStore(join(f.selection.serviceRoot,'data'),f.selection.workspaceId);
+  const retained={synthetic:true,window:'original',entries:[{loopRef:'one',firstRequestId:'original-request',ordinal:1}],historicalAcceptance:false};let receipt;
+  try{receipt=store.mutate(actor,{projectId:'synthetic',operation:'synthetic.loop-preservation',requestId:'loop-evidence',expectedRevision:store.revision('synthetic'),input:{synthetic:true},permission:'read'},()=>({objects:[{kind:'lifecycle-loop-budget',id:'synthetic-original',value:retained}],value:{retained:true},event:{type:'synthetic-loop-evidence',data:{}}}));}finally{store.close();}
+  const before=inventory(f),snapshot=await inspectManagedWorkspace(f.selection,'schema3-inspect');assert.equal(snapshot.databases.find(d=>d.owner==='service').schemaVersion,3);
+  const saved=await createManagedWorkspaceBackup(f.selection,'schema3-backup',snapshot.snapshotDigest,f.backupRoot);assert.deepEqual(verifyManagedWorkspaceBackup(f.backupRoot,saved.backupDigest),saved);assert.deepEqual(inventory(f),before);
+  // SQLite can create WAL sidecars even for a read-only connection. Inspect a
+  // byte-identical scratch copy without changing the immutable backup tree.
+  const inspection=join(f.root,'backup-inspection.sqlite');fs.copyFileSync(join(f.backupRoot,'service','data','service.sqlite'),inspection);
+  const copied=new DatabaseSync(inspection,{readOnly:true});try{assert.equal(copied.prepare('PRAGMA user_version').get().user_version,3);assert.deepEqual(JSON.parse(copied.prepare('SELECT data FROM objects WHERE project_id=? AND kind=? AND id=?').get('synthetic','lifecycle-loop-budget','synthetic-original').data),retained);assert.deepEqual(JSON.parse(copied.prepare('SELECT data FROM receipts WHERE project_id=? AND request_id=?').get('synthetic','loop-evidence').data),receipt);}finally{copied.close();}assert.deepEqual(verifyManagedWorkspaceBackup(f.backupRoot,saved.backupDigest),saved);
+});
+
 test('all payloads, added files, external pins and the manifest remain bound to the external digest',async t=>{
   const f=fixture(t),snapshot=await inspectManagedWorkspace(f.selection,'inspect'),saved=await createManagedWorkspaceBackup(f.selection,'backup',snapshot.snapshotDigest,f.backupRoot);
   for(const file of [join(f.backupRoot,'project','assets','asset.json'),join(f.backupRoot,'workspace','state/ontology/ontology.db'),join(f.backupRoot,'service','client.json'),join(f.backupRoot,'references',fs.readdirSync(join(f.backupRoot,'references'))[0])]){

@@ -44,7 +44,7 @@ export class RuntimeStore {
       for (const suffix of ['-wal','-shm','-journal']) if (existsSync(path + suffix)) privateFile(path + suffix);
       database = new DatabaseSync(path); this.db = database;
       const version = Number(database.prepare('PRAGMA user_version').get()!.user_version);
-      if (![0, 1, 2].includes(version)) reject('INCOMPATIBLE_STATE', 'Unsupported service state schema', 409);
+      if (![0, 1, 2, 3].includes(version)) reject('INCOMPATIBLE_STATE', 'Unsupported service state schema', 409);
       if (version === 0 && Number(database.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table'").get()!.n) !== 0) reject('INCOMPATIBLE_STATE', 'Existing unrecognized database will not be adopted', 409);
       if (version !== 0) {
         const tables=database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(r=>String(r.name));
@@ -173,7 +173,10 @@ export class RuntimeStore {
         slug(item.kind); string(item.id);
         this.db.prepare('INSERT INTO objects VALUES(?,?,?,?) ON CONFLICT(project_id,kind,id) DO UPDATE SET data=excluded.data').run(request.projectId,item.kind,item.id,LARGE_EVIDENCE_KINDS.has(item.kind)?canonicalEvidence(item.value):canonical(item.value));
       }
-      if (result.objects?.some(item=>CORRECTION_STATE_KINDS.has(item.kind))) this.db.exec('PRAGMA user_version=2;');
+      // Loop accounting needs a reader that enforces its finite window. Never
+      // downgrade it when a later ordinary correction record is retained.
+      const featureVersion=result.objects?.some(item=>item.kind==='lifecycle-loop-budget')?3:result.objects?.some(item=>CORRECTION_STATE_KINDS.has(item.kind))?2:1;
+      if(Number(this.db.prepare('PRAGMA user_version').get()!.user_version)<featureVersion)this.db.exec('PRAGMA user_version='+featureVersion+';');
       if (reauthorize) {
         const current = reauthorize(); authorize(current, request.projectId, request.permission);
         if (current.id !== principal.id || current.revision !== principal.revision) reject('AUTHORITY_CHANGED', 'Authority changed during this request', 409);

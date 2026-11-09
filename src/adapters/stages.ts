@@ -14,7 +14,7 @@ import { nativeSha256, validateNativeReference, type NativeReference, type Nativ
 import { configuredPlatform, readIntegrationConfiguration, type IntegrationConfiguration, type PlatformRegistration } from './config.js';
 import { validateResourceDefinition, type BindingConnections } from './bindings.js';
 import { ciSourceRef, type PlatformArtifactArchive, type PlatformClient, type PlatformRunObservation, type PlatformRunRequest } from './platforms.js';
-import { MAX_ARCHIVE_BYTES, CI_ACCEPTANCE_REPORT_PATH, ciSourceDigest, readArtifactArchive, readCurrentCaseReceipt, verifyCiArtifact, validateCandidateInput, inspectCiAcceptanceReport, unavailableCiAcceptanceReport, type CiAcceptanceReportCapture, type CandidateInput, type VerifiedCiArtifact } from './artifacts.js';
+import { MAX_ARCHIVE_BYTES, CI_ACCEPTANCE_REPORT_PATH, ciSourceDigest, readRuntimeDistributionCandidate, readArtifactArchive, readCurrentCaseReceipt, verifyCiArtifact, validateCandidateInput, inspectCiAcceptanceReport, unavailableCiAcceptanceReport, type CiAcceptanceReportCapture, type CandidateInput, type VerifiedCiArtifact } from './artifacts.js';
 import { ownerRequestDigest, type Owner, type OwnerRequest, type PublishedOwnerAdapter } from './published-owners.js';
 import type {SourceTreeObservation} from './source-tree.js';
 import type {NativeSourceScope} from '../native-types.js';
@@ -22,6 +22,8 @@ import {retainVerificationRun} from './stage-feedback.js';
 import {CI_PREPARATION_ADAPTER_ID,CI_PREPARATION_ADAPTER_DIGEST,preparationConfiguration,validatePreparationInput,observePreparedSource,verifyPreparationNativeAction,type CiPreparationInput,type PreparedSourceObservation} from './ci-preparation.js';
 import {mappedExtensionCriteria} from './extension-stages.js';
 import {readNativeRepairCapture,readNativeRepairHistory,type NativeRepairCapture,type NativeRepairSelection} from './authority.js';
+import {readLc20ProducerContract,observeLc20Protocol,readLc20InputSnapshot,readLc20Execution,LC20_INPUT_PATH} from './artifacts.js';
+import type {Lc20ProducerPin} from '../lifecycle/correction-contract.js';
 
 const LEGACY_ID='runtime-ci-owner-stage-v1';
 const LEGACY_DIGEST=valueDigest({id:LEGACY_ID,stages:['implementation','candidate','verification'],source:'verified-exact-commit/v1',candidate:'immutable-archive-consumption/v1',workflow:'runtime-ci/v1',owners:'native/v1',observation:'runtime-ci-owner-values/v1',continuation:'explicit-original-request/v1'});
@@ -39,6 +41,7 @@ interface CiPlan {
   sourceTree?:SourceTreeObservation;sourceScope?:NativeSourceScope;
   preparation?:{configuration:ReturnType<typeof preparationConfiguration>;input:CiPreparationInput};
   repairComparison?:RepairComparisonPlan;
+  qualificationProducer?:Lc20ProducerPin;
 }
 export interface RepairComparisonPlan {schema:'runtime-repair-comparison-policy/v1';resourceDigest:string;owner:OwnerPin;effectiveConfigDigest:string;criteria:{comparable:string;regression:string;progress:string;transient?:string};}
 export interface NativeAction {request:OwnerRequest;requestDigest:string;context:NativeValidationContext;observationDigest:string|null;digest:string;}
@@ -118,6 +121,62 @@ export interface PublishedExecutionProducer {
   caseId:string;phase:'PRE_RELEASE'|'POST_RELEASE';collectorPath:string;collectorDigest:string;
   workflowDigest:string;catalogDigest:string;maxAgeSeconds:number;
 }
+/** Preparation observes the actual published asset, never a registration's
+ * assertion that a collector is trusted or complete. No owner mutation occurs. */
+export async function prepareLc20Producer(store:RuntimeStore,config:Readonly<IntegrationConfiguration>,connections:Pick<BindingConnections,'owner'>,projectId:string,selection:unknown,workflow:{path:string;digest:string},actor:Principal,signal:AbortSignal):Promise<Lc20ProducerPin>{
+  const s=record(selection);exact(s,['registrationRef','caseId','mode']);if(s.caseId!=='LC20'||!['EXECUTE','INVENTORY'].includes(String(s.mode)))reject('LC20_PRODUCER_CONTRACT','Fixed LC20 workflow mode required',409);
+  const r=config.resources.find(r=>r.ref===s.registrationRef&&r.projectId===projectId&&r.role==='runtime.qualification');if(!r||Date.parse(r.expiresAt)<=Date.now())reject('QUALIFICATION_POLICY_UNAVAILABLE','Current exact qualification registration required',409);validateResourceDefinition(r);
+  const d=r.definition,scope=d.scope as NativeScope,reference=validateNativeReference(d.reference,{product:'harness'}),owner=connections.owner(string(d.adapterRef),config);
+  const pkg=record(await owner.readPackage(actor,projectId,scope,reference)),published=record(await owner.read(actor,projectId,{operation:'native.receipt.inspect',scope,input:{requestId:d.publicationRequestId}}));signal.throwIfAborted();
+  if(published.status!=='SUCCEEDED'||published.operation!=='native.package.publish'||published.requestId!==d.publicationRequestId||!same(published.scope,scope)||record(published.result).published!==true||!same(record(published.result).reference,reference)||record(pkg.validation).executionStatus!=='SUCCEEDED'||record(pkg.validation).qualityStatus!=='PASS')reject('QUALIFICATION_POLICY_UNPUBLISHED','Exact original published producer receipt required',409);
+  const files=record(record(pkg.package).files),text=files['sources/qualification-producers.json'];if(typeof text!=='string'||Buffer.byteLength(text)>262144)reject('LC20_PRODUCER_CONTRACT','Published fixed complete producer contract required',409);const body=record(JSON.parse(text));exact(body,['schema','cases']);if(body.schema!=='runtime-qualification-producers/v1'||!Array.isArray(body.cases)||body.cases.length!==1)reject('LC20_PRODUCER_CONTRACT','Only the reviewed complete LC20 producer is supported',409);
+  const params=record(record(JSON.parse(string(files['data/qualification.json'],262144))).params),validityContractDigest=hash(params.validityContractDigest),contract=readLc20ProducerContract(body.cases[0]),mode=s.mode as 'EXECUTE'|'INVENTORY',expected=contract.workflows[mode];if(expected.sourcePath!==workflow.path||expected.digest!==workflow.digest)reject('LC20_PRODUCER_CONTRACT','The actual original workflow is not the published producer',409);
+  return{schema:'runtime-lc20-producer-pin/v1',registrationRef:r.ref,registrationDigest:valueDigest(r),registrationExpiresAt:r.expiresAt,policyReferenceDigest:reference.digest,publicationRequestId:string(d.publicationRequestId),validityContractDigest,contract,contractDigest:valueDigest(contract),mode,protocolObservation:observeLc20Protocol(store,config,{workspaceId:store.workspaceId,projectId,acceptanceScopeDigest:contract.catalogDigest},reference.digest,actor)};
+}
+/** The stage request is already immutable and claimed before this read. Both
+ * the full execution and inventory-only lanes use the real original ZIP. */
+export async function readProtectedLc20Candidate(store:RuntimeStore,projectId:string,originRef:string,signal:AbortSignal){
+  if(!originRef.startsWith('stage-request:'))reject('LC20_ORIGIN_REQUIRED','Select a protected original stage request',409);const id=originRef.slice(14),request=store.object(projectId,'stage-request',id) as StageRequest|null;
+  if(!request||request.workspaceId!==store.workspaceId||request.projectId!==projectId)reject('LC20_ORIGIN_REQUIRED','Original scoped request required',409);
+  const view=readCiRepairEvidence(store,request),pin=view.plan.qualificationProducer,progress=store.object(projectId,'stage-progress',id) as StageProgress|null,run=store.object(projectId,'ci-stage-observation',id) as PlatformRunObservation|null;
+  if(!pin||pin.schema!=='runtime-lc20-producer-pin/v1'||pin.contractDigest!==valueDigest(readLc20ProducerContract(pin.contract))||!progress?.observationRef)reject('LC20_ORIGIN_REQUIRED','A pre-dispatch complete producer binding is required',409);
+  const observation=record(store.object(projectId,'stage-observation',progress.observationRef)),{observation:actual,...envelope}=observation;
+  if(valueDigest(observation)!==progress.observationRef||envelope.schema!=='runtime-stage-observation/v1'||envelope.requestId!==id||!same(actual,progress.observation)||envelope.reason!==progress.reason||envelope.observedAt!==progress.observedAt||record(actual).phase!=='COMPLETE'||record(record(actual).outcome).status!=='COMPLETE'||progress.phase!=='COMPLETE'||!progress.terminal||run?.status!=='PASSED'||view.ci?.status!=='PASSED'||view.harness?.result?.status!=='PASS'||view.ontology?.result?.status!=='PASS'||!view.plan.sourceTree)reject('LC20_ORIGIN_REQUIRED','Authentic complete original provider/native stage observation required',409);
+  const ci=view.ci,path=join(store.root,'stage-ci-artifacts',hash(ci.archiveDigest).slice(7)+'.zip');privateFile(path);if(realpathSync(path)!==path||lstatSync(path).size>MAX_ARCHIVE_BYTES)reject('LC20_INPUT_UNAVAILABLE','Bounded original archive required',409);const bytes=readFileSync(path);if(byteDigest(bytes)!==ci.archiveDigest)reject('LC20_INPUT_UNAVAILABLE','Original archive changed',409);
+  const files=await readArtifactArchive(bytes,signal),distribution=readRuntimeDistributionCandidate(files,ci.candidate??view.plan.candidateInput!.manifest,view.plan.commit),snapshot=record(JSON.parse((files.get(LC20_INPUT_PATH)??Buffer.alloc(0)).toString('utf8'))),jobId=string(snapshot.producerJobId,20);
+  if(run.runId!==ci.runId||run.requestId!==ci.requestId||run.inputDigest!==request.inputDigest||run.commit!==view.plan.commit||!run.jobs.some(j=>j.jobId===jobId&&j.runId===run.runId&&j.commit===run.commit)||run.provider==='github'&&run.jobs.length!==1||run.provider==='gitlab'&&ci.sourceArchive.jobId!==jobId)reject('LC20_ORIGIN_REQUIRED','Input capture must belong to the exact original producer job',409);
+  // The controller and protocol readbacks name the original Runtime claim.
+  // The distinct provider request remains authenticated by readCiRepairEvidence
+  // and the run/job checks above; it must not replace the controller identity.
+  const expected={requestId:request.id,inputDigest:request.inputDigest,sourceCommit:view.plan.commit,candidateDigest:distribution.candidateDigest},inputs=readLc20InputSnapshot(files,pin,{...expected,producerJobId:jobId},view.plan.sourceTree,distribution.files),execution=pin.mode==='EXECUTE'?readLc20Execution(files,pin,expected):null;
+  if(execution&&(execution.stageRequestDigest!==request.digest||Date.parse(execution.startedAt)<Date.parse(request.requestedAt)||Date.parse(execution.completedAt)>Date.parse(request.deadlineAt)))reject('LC20_ORIGIN_REQUIRED','Execution must stay within its original grant deadline',409);
+  signal.throwIfAborted();if(!same(store.object(projectId,'stage-request',id),request)||!same(store.object(projectId,'stage-progress',id),progress))reject('LC20_ORIGIN_CHANGED','Original request changed during inspection',409);
+  return{request,pin,inputs,execution,expiresAt:string(record(record(progress.observation).outcome).expiresAt,64),distribution:distribution.identity,archiveDigest:ci.archiveDigest,snapshotDigest:byteDigest(files.get(LC20_INPUT_PATH)!),stateDigest:valueDigest({request,progress,observation,run,ci,distribution:distribution.identity})};
+}
+export type ProtectedLc20Candidate=Awaited<ReturnType<typeof readProtectedLc20Candidate>>;
+/** Includes every retained managed claim across candidates/old registrations.
+ * Event membership makes a shortened request list fail closed. These are read
+ * limits, never new attempt/execution budgets. */
+export function lc20ManagedHistoryState(store:RuntimeStore,projectId:string,actor:Principal){
+  authorize(actor,projectId,'read');const events=new Map<string,Record<string,unknown>>();let cursor:string|undefined,count=0;
+  for(;;){const page=store.events(actor,projectId,cursor);for(const raw of page.events){if(++count>32768)reject('LC20_HISTORY_UNKNOWN','Complete managed history exceeds its read bound',409);const e=record(raw);if(e.type==='stage-requested'){const d=record(e.data),id=string(d.stageRequestId);if(events.has(id))reject('LC20_HISTORY_UNKNOWN','Duplicate original stage claim',409);events.set(id,d);}}if(!page.events.length)break;cursor=page.cursor;}
+  const requests=new Map<string,StageRequest>();let after='';for(;;){const page=store.objectsPage(projectId,'stage-request',after,200);for(const row of page){if(requests.size>=4096)reject('LC20_HISTORY_UNKNOWN','Complete request inventory exceeds its read bound',409);requests.set(row.id,row.value as StageRequest);}if(page.length<200)break;after=page.at(-1)!.id;}
+  for(const [id,event]of events){const r=requests.get(id);if(!r)reject('LC20_HISTORY_UNKNOWN','An original stage request was removed',409);const{digest,...body}=r;if(r.id!==id||r.workspaceId!==store.workspaceId||r.projectId!==projectId||digest!==valueDigest(body)||r.planDigest!==valueDigest(r.plan)||event.planDigest!==r.planDigest||event.inputDigest!==r.inputDigest||event.instanceId!==r.instanceId||event.stageId!==r.stageId)reject('LC20_HISTORY_UNKNOWN','An original claim was changed or downgraded out of the protocol',409);}
+  const claims=[];let totalBytes=0;
+  for(const [id,r]of requests){const pin=(r.plan?.parameters as unknown as CiPlan)?.qualificationProducer;if(!pin)continue;
+    const event=events.get(id),{digest,...body}=r,instance=store.object(projectId,'lifecycle-instance',r.instanceId) as LifecycleInstance|null;
+    if(!event||r.workspaceId!==store.workspaceId||r.projectId!==projectId||r.id!==id||digest!==valueDigest(body)||r.planDigest!==valueDigest(r.plan)||event.planDigest!==r.planDigest||event.inputDigest!==r.inputDigest||!instance?.requestIds.includes(id)||pin.schema!=='runtime-lc20-producer-pin/v1'||pin.contract.caseId!=='LC20'||pin.contractDigest!==valueDigest(pin.contract))reject('LC20_HISTORY_UNKNOWN','Protected original producer claim inventory differs',409);
+    const progress=store.object(projectId,'stage-progress',id) as StageProgress|null,observed=progress?.observationRef?store.object(projectId,'stage-observation',progress.observationRef):null,ci=store.object(projectId,'ci-stage-artifact',id) as VerifiedCiArtifact|null,run=store.object(projectId,'ci-stage-observation',id);
+    if(progress?.observationRef){const envelope=record(observed),actual=record(envelope.observation),terminal=['COMPLETE','FAILED'].includes(String(actual.phase));if(valueDigest(observed)!==progress.observationRef||envelope.schema!=='runtime-stage-observation/v1'||!same(actual,progress.observation)||envelope.requestId!==id||envelope.reason!==progress.reason||envelope.observedAt!==progress.observedAt||progress.requestId!==id||progress.phase!==actual.phase||progress.terminal!==terminal||terminal&&(record(actual.outcome).status!==actual.phase)||!terminal&&actual.outcome!==null)reject('LC20_HISTORY_UNKNOWN','Original progress and immutable observation disagree',409);}
+    if(ci){const path=join(store.root,'stage-ci-artifacts',hash(ci.archiveDigest).slice(7)+'.zip');privateFile(path);const size=lstatSync(path).size;totalBytes+=size;if(realpathSync(path)!==path||size>MAX_ARCHIVE_BYTES||totalBytes>536870912||byteDigest(readFileSync(path))!==ci.archiveDigest)reject('LC20_HISTORY_UNKNOWN','Complete original archive bytes are unavailable',409);}
+    claims.push({request:r,pin,progress,observed,ci,run});if(claims.length>64)reject('LC20_HISTORY_UNKNOWN','Complete LC20 history exceeds the bounded fixed producer',409);
+  }
+  // Old observed LC20 runs without an execution-before-effect producer claim
+  // cannot be silently dropped when a new registration is introduced.
+  after='';for(;;){const page=store.objectsPage(projectId,'ci-acceptance-capture',after,200);for(const row of page){const capture=record(row.value),report=record(capture.report);if(Array.isArray(report.cases)&&report.cases.some(c=>record(c).caseId==='LC20')&&!claims.some(c=>c.request.id===capture.stageRequestId))reject('LC20_HISTORY_UNKNOWN','Historical LC20 origin has no complete managed producer claim',409);}if(page.length<200)break;after=page.at(-1)!.id;}
+  claims.sort((a,b)=>a.request.requestedAt<b.request.requestedAt?-1:a.request.requestedAt>b.request.requestedAt?1:a.request.id<b.request.id?-1:1);
+  return{claims,watermark:valueDigest(claims)};
+}
 /** Original store records and original ZIP bytes only; no caller observation
  * or future completeness declaration is accepted at this boundary. */
 export function protectedCiExecutionState(store:RuntimeStore,projectId:string,captureRef:string,caseId:string){
@@ -145,10 +204,11 @@ export async function readProtectedCiExecution(store:RuntimeStore,projectId:stri
   if(!reportBytes||byteDigest(reportBytes)!==report.report.digest||!raw||raw.length!==state.entry.rawReceipt.bytes||byteDigest(raw)!==state.entry.rawReceipt.digest)reject('QUALIFICATION_ORIGINAL_CHANGED','Exact original case/report bytes required',409);
   const parsed=record(JSON.parse(reportBytes.toString('utf8'))),collector=record(parsed.collector),collectorFile=record(collector.file),collectorBytes=files.get(string(collectorFile.path));
   if(collector.sourcePath!==producer.collectorPath||!collectorBytes||byteDigest(collectorBytes)!==producer.collectorDigest||collectorFile.digest!==producer.collectorDigest)reject('QUALIFICATION_COLLECTOR_UNAPPROVED','Actual collector differs from the published producer contract',409);
-  const receipt=readCurrentCaseReceipt(raw,{caseId:producer.caseId,sourceCommit:view.plan.commit,candidateDigest:view.ci.candidateDigest,requestId:view.ci.requestId,inputDigest:request.inputDigest});
+  const distribution=readRuntimeDistributionCandidate(files,view.ci.candidate??view.plan.candidateInput!.manifest,view.plan.commit);
+  const receipt=readCurrentCaseReceipt(raw,{caseId:producer.caseId,sourceCommit:view.plan.commit,candidateDigest:distribution.candidateDigest,lifecycleCandidateDigest:view.ci.candidateDigest,requestId:view.ci.requestId,inputDigest:request.inputDigest});
   if(Date.parse(receipt.startedAt)<Date.parse(request.requestedAt)||Date.parse(receipt.completedAt)>Date.parse(request.deadlineAt))reject('QUALIFICATION_ORIGINAL_CHANGED','Case execution is outside its original request',409);
   signal.throwIfAborted();if(protectedCiExecutionState(store,projectId,captureRef,producer.caseId).stateDigest!==state.stateDigest)reject('QUALIFICATION_ORIGINAL_CHANGED','Original execution changed during byte inspection',409);
-  return{stateDigest:state.stateDigest,historyWatermark:state.historyWatermark,request,candidateDigest:view.ci.candidateDigest,rawReceipt:raw.toString('utf8'),...receipt,origin:{kind:'REGISTERED_CI' as const,stageRequestId:request.id,stageRequestDigest:request.digest,provider:view.plan.binding.provider,runId:run.runId!,archiveDigest:view.ci.archiveDigest,reportDigest:report.report.digest,collectorDigest:producer.collectorDigest,catalogDigest:producer.catalogDigest}};
+  return{stateDigest:state.stateDigest,historyWatermark:state.historyWatermark,request,candidateDigest:distribution.candidateDigest,rawReceipt:raw.toString('utf8'),...receipt,origin:{kind:'REGISTERED_CI' as const,stageRequestId:request.id,stageRequestDigest:request.digest,provider:view.plan.binding.provider,runId:run.runId!,archiveDigest:view.ci.archiveDigest,reportDigest:report.report.digest,collectorDigest:producer.collectorDigest,catalogDigest:producer.catalogDigest,distributionIdentity:distribution.identity}};
 }
 
 function comparisonStatuses(p:RepairComparisonPlan,receipt:Record<string,unknown>|null){
@@ -266,10 +326,10 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
     if(stageId==='candidate'&&instance.candidate||stageId==='verification'&&!instance.candidate)reject('CANDIDATE_SCOPE','Stage does not match the current immutable candidate');
     const config=configuration(actor,instance.pins.projectId),preparationConfig=preparing?preparationConfiguration(store,config,instance,stageId):null;
     const implementation=record(atPath(instance.definition.semantic,'config.implementation'));
-    let binding:PlatformRegistration;
+    let binding:PlatformRegistration,workflowResource:ReturnType<typeof resource>|null=null;
     if(stageId==='implementation'){
       const matches=config.platforms.filter(p=>p.projectId===instance.pins.projectId&&(['provider','host','repository','repositoryId','defaultBranch','credentialRef','workflowPath','pipelinePath','runner'] as const).every(k=>p[k]===implementation[k]));if(matches.length!==1)reject('PLATFORM_SCOPE','Implementation must use one exact configured connection',409);binding=configuredPlatform(config,actor,instance.pins.projectId,matches[0]!.ref);
-    }else{const workflow=preparationConfig?.workflow??resource(config,instance,'config.'+stageId+'.'+(stageId==='candidate'?'buildWorkflowRef':'verifyWorkflowRef'));binding=configuredPlatform(config,actor,instance.pins.projectId,string(workflow.definition.platformRef));}
+    }else{const workflow=preparationConfig?.workflow??resource(config,instance,'config.'+stageId+'.'+(stageId==='candidate'?'buildWorkflowRef':'verifyWorkflowRef'));workflowResource=workflow;binding=configuredPlatform(config,actor,instance.pins.projectId,string(workflow.definition.platformRef));}
     for(const key of ['provider','host','repository','repositoryId','defaultBranch'] as const)if(binding[key]!==implementation[key])reject('PLATFORM_SCOPE','CI stage uses a different source repository');
     const selected=await source(instance,stageId,actor,signal),current=await connections.platform(binding).revision(actor,selected.commit,signal);
     if(current.commit!==selected.commit||current.sourceSelection!=='exact-commit'||current.bindingDigest!==valueDigest(binding)||current.projectId!==instance.pins.projectId||current.repositoryId!==binding.repositoryId||Date.parse(current.expiresAt)<=Date.now())reject('PLATFORM_SCOPE','CI stage readiness differs from its exact source registration');
@@ -310,7 +370,8 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
       if(reportDigest!==nativeSha256(body)||!same(validation.reference,reference)||validation.qualityStatus!=='PASS'||!same(actual,required))reject('REPAIR_POLICY_INVALID','Exact published comparison policy and its complete declared actual criteria are required',409);
       repairComparison={schema:'runtime-repair-comparison-policy/v1',resourceDigest:valueDigest(failure),owner:{ref:string(policy.adapterRef),registrationDigest:hash(record(adapter.capabilities()).registrationDigest),scope,reference,criteria},effectiveConfigDigest:hash(validation.effectiveConfigDigest),criteria:policy.criteria as RepairComparisonPlan['criteria']};
     }
-    const parameters:CiPlan={stageId,binding,commit:current.commit,workflowDigest:current.workflowDigest,source:selected,sourceTree:tree,sourceScope:scope,...(preparation?{preparation}:{}),...(originalCandidate?{candidateInput:originalCandidate}:{}),...(repairComparison?{repairComparison}:{}),expectedChecks:[...instance.definition.nodes.find(n=>n.id===stageId)!.checks],owners:pins,toolchainLockDigest:connections.toolchainLockDigest,...(connections.toolchainManifestDigest?{toolchainManifestDigest:connections.toolchainManifestDigest}:{}),effectiveConfigDigest,candidateDigest:instance.candidateDigest};
+    const qualificationProducer=workflowResource?.definition.qualificationProducer===undefined?undefined:await prepareLc20Producer(store,config,connections,instance.pins.projectId,workflowResource.definition.qualificationProducer,{path:binding.provider==='github'?binding.workflowPath!:binding.pipelinePath!,digest:current.workflowDigest},actor,signal);
+    const parameters:CiPlan={stageId,binding,commit:current.commit,workflowDigest:current.workflowDigest,source:selected,sourceTree:tree,sourceScope:scope,...(preparation?{preparation}:{}),...(originalCandidate?{candidateInput:originalCandidate}:{}),...(repairComparison?{repairComparison}:{}),...(qualificationProducer?{qualificationProducer}:{}),expectedChecks:[...instance.definition.nodes.find(n=>n.id===stageId)!.checks],owners:pins,toolchainLockDigest:connections.toolchainLockDigest,...(connections.toolchainManifestDigest?{toolchainManifestDigest:connections.toolchainManifestDigest}:{}),effectiveConfigDigest,candidateDigest:instance.candidateDigest};
     return{adapterId:preparing?CI_PREPARATION_ADAPTER_ID:ADAPTER_ID,adapterDigest:preparing?CI_PREPARATION_ADAPTER_DIGEST:ADAPTER_DIGEST,action:preparing?'runtime.operation.ci-prepare':'base.'+stageId,bindingDigest:valueDigest(parameters),parameters:parameters as unknown as Record<string,unknown>};
   }
   function plan(r:StageRequest,instance:LifecycleInstance,actor:Principal):{p:CiPlan;config:Readonly<IntegrationConfiguration>;client:PlatformClient;ci:PlatformRunRequest}{
@@ -327,6 +388,7 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
     if(!same(p.candidateInput??null,candidateInput(instance,p.binding,p.commit)??null))reject('CI_CANDIDATE_INPUT_INVALID','Original candidate delivery identity cannot change',409);
     for(const kind of ['ontology','harness'] as const)owner(config,p.owners[kind],kind,r.projectId);
     if(p.repairComparison){const failure=config.resources.find(x=>x.projectId===r.projectId&&x.ref===atPath(instance.definition.semantic,'config.verification.failurePolicyRef')&&x.role==='config.verification.failurePolicyRef');if(!failure||valueDigest(failure)!==p.repairComparison.resourceDigest||Date.parse(failure.expiresAt)<=Date.now())reject('REPAIR_POLICY_CHANGED','Original repair comparison registration changed',409);owner(config,p.repairComparison.owner,'harness',r.projectId);}
+    if(p.qualificationProducer){const q=p.qualificationProducer,r=config.resources.find(x=>x.ref===q.registrationRef&&x.projectId===instance.pins.projectId&&x.role==='runtime.qualification');if(!r||valueDigest(r)!==q.registrationDigest||Date.parse(r.expiresAt)<=Date.now()||q.policyReferenceDigest!==record(r.definition.reference).digest)reject('QUALIFICATION_POLICY_CHANGED','Original complete producer registration changed',409);}
     const ci:PlatformRunRequest={schema:'runtime-ci-request/v1',requestId:'stage-'+valueDigest({workspaceId:r.workspaceId,projectId:r.projectId,requestId:r.id}).slice(7,55),projectId:r.projectId,bindingDigest:valueDigest(p.binding),commit:p.commit,workflowDigest:p.workflowDigest,inputDigest:r.inputDigest,stageId:r.stageId,candidateDigest:p.candidateDigest,...(p.preparation?{preparationInput:p.preparation.input}:{}),...(p.candidateInput?{candidateInput:p.candidateInput}:{}),requestedAt:r.requestedAt,deadlineAt:r.deadlineAt};
     return{p,config,client:connections.platform(p.binding),ci};
   }

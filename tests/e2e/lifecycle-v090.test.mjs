@@ -211,6 +211,17 @@ test('bounded attempts and elapsed budget cannot be reset by a new request or an
   assert.ok(stageAdmission(f.instance,'scope',{...f.context,authority:{...f.authority,revision:'2'}}).reasons.includes('AUTHORITY_STALE'));
 });
 
+test('trusted Loop window bindings are exact authority pins and keep the publisher range one through four',()=>{
+  for(const maxLoops of [1,2,3,4]){
+    const f=pinned(),definition=structuredClone(f.definition.semantic);for(const phase of ['plan','verification'])definition.config[phase].budget.maxLoops=maxLoops;
+    const effective=compile(definition).effective,authority={...f.authority,semanticDigest:effective.semanticDigest,requirementsDigest:requiredChecksDigest(effective),budget:{...f.authority.budget,maxLoops},loopWindowRef:'loop-window:'+valueDigest('native-window'),loopWindowDigest:valueDigest('native-window-body')};
+    const bound=pinInstance(f.instance.id,f.instance.pins.definitionRevisionId,effective,authority);assert.equal(bound.pins.budget.maxLoops,maxLoops);assert.equal(bound.pins.authorityDigest,valueDigest(authority));
+    assert.ok(stageAdmission(bound,'scope',{...f.context,authority:{...authority,loopWindowDigest:valueDigest('replacement')}}).reasons.includes('AUTHORITY_STALE'));
+    const{loopWindowDigest,...partial}=authority;assert.throws(()=>pinInstance(bound.id,bound.pins.definitionRevisionId,effective,partial),{code:'INVALID_AUTHORITY'});
+  }
+  const f=pinned(),invalid=structuredClone(f.definition.semantic);invalid.config.plan.budget.maxLoops=5;assert.equal(compile(invalid).valid,false);
+});
+
 test('candidate validation requires immutable artifacts, not RC naming; publication needs its own exact authority',()=>{
   const f=pinned();let i=f.instance;
   for(const id of ['scope','plan','implementation'])i=pass(i,id,f.context);

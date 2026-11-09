@@ -7,6 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 import {openScenario} from './support.mjs';
+import {activeCiExitReentry} from './e11.test.mjs';
 import {openBrowser} from './browser.mjs';
 import {exactKeys,interruptionFixture,openExecution} from './execution.mjs';
 
@@ -27,11 +28,14 @@ import {exactKeys,interruptionFixture,openExecution} from './execution.mjs';
 // 05 plan={instanceId,stageRequestId,reportDigest,hostAvailabilityEvidence:{ref,sha256},codingHostEvidence:{ref,sha256}}.
 // 06 plan={instanceId,targetVersion}.
 // 07/MC04 plan={}; each runs new actual browser conflicts and one activation.
+// CV05 plan={}; selection.multiClient pins the runtime-e11-active-ci-fixture/v1
+// contract with this candidate/service, actual running original GitHub CI, two
+// project clients, a read-only client and an unused exact old-revision grant.
+// It runs fresh Host turns under this E13 case; it never imports E11 PASS records.
 // A fixture is selection, never a supplied expected outcome or new authority.
 const unsupported={
  'E13.journey':'Full original Host, provider-channel interruption, cancellation and managed-action budget journey is not yet implemented.',
- 'E13.CV03':'Requires the full original eight-stage admission and supported measured-budget matrix; one fixed loop is not a fabricated exhausted-loop result.',
- 'E13.CV05':'Requires actual Host exit/reentry and exact authority recovery conversation.'
+ 'E13.CV03':'Requires the full original eight-stage admission and supported measured-budget matrix; one fixed loop is not a fabricated exhausted-loop result.'
 };
 const slug=value=>assert(typeof value==='string'&&/^[a-z0-9][a-z0-9-]{0,63}$/.test(value));
 async function noReceipt(run,id){const result=await run.request('runtime.receipt.read',{requestId:id});assert.equal(result.status,404);assert.equal(result.body.error?.code,'NOT_FOUND');}
@@ -641,7 +645,7 @@ async function originalProviderLoss(run,driver,c,plan){
  run.artifact('real-provider-loss-recovery.json',{parentRequest:original.request,derivation:retained.derivation,ci,advance,actualPause:received,remote,finalRemote,beforeInventory,afterInventory,nativeReadback:observed,addedEvents:added,providerRedispatches:0,remoteRunCount:afterInventory.matchingRuns.length,transportCancellationImpliesRollback:false,formalCaseCredit:0});assert.deepEqual(lossPinned(plan.faultPlan),f);for(const pin of [f.producer.entry,...f.producer.helpers])assert.equal(faultSha(faultPrivate(pin.ref)),pin.sha256);return{sameBusinessInstance:instance.id,originalCodingClaimPreserved:true,actualGitHubResponseBodyLost:true,independentOriginalRunId:String(remote.id),runAttempt:1,oneOriginalProviderRun:true,nativeOriginalReadbackRecovered:true,newProviderDispatchAfterFault:false,newHostTurn:false,fullJourneyNotCredited:true};
 }
 
-test('E13 installed interruption and truthful unavailable measurement branches',{timeout:240000},async t=>{
+test('E13 installed interruption and truthful unavailable measurement branches',{timeout:900000},async t=>{
  const captured=await openScenario('E13'),run={...captured};
  // A bounded request already in flight retains its original response through
  // support. If the test was aborted meanwhile, stop before issuing any next
@@ -652,6 +656,7 @@ test('E13 installed interruption and truthful unavailable measurement branches',
   for(const c of run.cases)await run.collect(c,async()=>{
    if(unsupported[c.caseInstanceId])throw Error('UNIMPLEMENTED_ORIGINAL_CASE: '+unsupported[c.caseInstanceId]);
    const plan=fixture.casePlans[c.caseInstanceId];assert(plan,'A fixed case requires its exact native fixture selection');
+   if(c.caseInstanceId==='E13.CV05'){exactKeys(plan,[]);return activeCiExitReentry(run,c);}
    if(c.caseInstanceId==='E13.CV04')return activationAtomicity(run,driver,c,plan);
    if(['E13.variant.07','E13.MC04'].includes(c.caseInstanceId))return definitionConflict(run,driver,c,plan);
    if(['E13.variant.01','E13.variant.02'].includes(c.caseInstanceId)){assert(!used.has(plan.instanceId),'Interruption cases require independent original instances');used.add(plan.instanceId);return interruption(run,driver,c,plan);}

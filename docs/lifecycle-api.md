@@ -72,6 +72,50 @@ operation families. The installed [Expert execution guide](../plugins/codex/skil
 documents that governed workflow. A configuration-only client cannot obtain
 execution or decision authority by selecting a write tool.
 
+## Native Loop budget accounting
+
+For a prepared Target, execution authority binds a native budget window to the
+workspace, project, Goal and exact Target ID/version. `maxLoops` remains an
+integer from 1 through 4. The window uses the minimum of the reviewed execution,
+plan and verification limits; a stage's lower limit can further restrict its
+admission. `maxAttempts` separately limits attempts within a Loop.
+
+The execution authority subject accepts these illustrative selections:
+
+```json
+{"loopWindow":{"mode":"NEW","predecessorRef":null}}
+```
+
+```json
+{"loopWindow":{"mode":"EXISTING","ref":"loop-window:sha256:<exact-original-digest>"}}
+```
+
+These fragments are not complete requests or approvals. For the first authority
+only, omission is normalized to a visible `NEW` selection if no prior window or
+authority history exists. Once history exists, select the exact existing window
+or explicitly review a later `NEW` window with its actual `predecessorRef`.
+A new window cannot refill an active window before its fixed deadline.
+
+The window starts when its founding decision is committed, not when an instance
+is created. Its deadline is the earlier of the reviewed timeout and authority
+expiry. `lifecycle.authority.record` returns the committed window reference,
+digest, deadline and limit. The first retained `lifecycle.stage.request` charges
+one distinct `loopRef` atomically with the request, receipt and event; its result
+contains `loopCharge`. Creating instances, previews, replays, restarts and
+reconciliation do not create fresh capacity. Successor instances for the same
+Loop retain its original charge and recovery limits.
+
+`lifecycle.instance.inspect` exposes `loopBudget`: native identity, window
+reference/digest, deadline, `maxLoops`, `consumed`, `remaining`, current-window
+status and the selected Loop's ordinal/original request. This is observation,
+not execution authority; an expired or revoked window may still have a retained
+unused count. Admission checks current permissions, deadline, stage limits and
+remaining capacity again. Missing legacy accounting is `UNAVAILABLE` with null
+counts, never an invented zero; such history remains readable/reconcilable but
+cannot authorize a new native dispatch. `LOOP_WINDOW_SELECTION_REQUIRED`,
+`LOOP_WINDOW_ACTIVE`, `LOOP_BUDGET_EXHAUSTED` and `LOOP_BUDGET_UNAVAILABLE` require
+inspection of the existing window, not an automatic retry with new identifiers.
+
 ## Exact activation and recovery
 
 Read the current definition, save a draft if desired, and validate the exact YAML
@@ -175,10 +219,58 @@ case bytes, and a collector mapping in the published policy's optional
 `sources/execution-producers.json`. The fixed mapping is
 `{schema:"runtime-execution-producers/v1",cases:[{caseId,phase,collectorPath,collectorDigest,workflowDigest,catalogDigest,maxAgeSeconds}]}`;
 `maxAgeSeconds` is 1–86400. The collector must emit
-`runtime-case-execution-receipt/v1` with exact case/source/candidate/request/input,
+`runtime-case-execution-receipt/v2` with exact case/source/candidate/request/input,
 actual start/completion timestamps, PASS outcome and nonempty assertions. An
 unapproved collector, generic JSON PASS, missing native receipt or old UNKNOWN
 capture is insufficient. Capture does not assert complete reuse dependencies.
+The receipt's `candidateDigest` is the actual inner Runtime distribution manifest
+digest; `lifecycleCandidateDigest` is the distinct outer artifact-set identity.
+The original CI manifest must bind the real distribution manifest, tar archive
+and source-revision file. Runtime checks every archived distribution entry.
+Private source records use `runtime-current-execution-source/v3`; public captures
+remain v2 and expose `origin.distributionIdentity`. Old source records are not
+migrated or relabeled: history stays readable, but formal consumption requires
+the original inner-byte proof. An echoed manifest alone cannot supply it.
+
+The optional `sources/qualification-producers.json` in the published policy may
+select one `runtime-lc20-producer-contract/v1`. It pins the complete LC20 collector,
+EXECUTE/INVENTORY workflows, fixed input graph and
+`runtime-lc20-local-installed/v1` protocol. The workflow registration's optional
+`qualificationProducer: {registrationRef,caseId:"LC20",mode}` is copied into the
+original stage plan before its request CAS. No legacy plan gains a default field.
+Only `runtime:installed-code`, `runtime:environment`, `runtime:toolchain`,
+`runtime:configuration` and `runtime:prestate` use `digest:null` in that contract:
+their actual digests come from Runtime's protected pre-dispatch observation.
+Every static source, collector and file input still requires an exact hash.
+Null is neither a caller wildcard nor permission to ignore changed inputs.
+
+For this producer, `.origin.inspect` accepts
+`{registrationRef,caseId:"LC20",originRef:"stage-request:…",protocol:"runtime-lc20-local-installed/v1"}`.
+It reads the original plan and actual current installed code, Node/shared objects,
+registered owner/toolchain and complete closed-child history. It returns
+`PROVEN_FIXED_INPUTS` or `FULL`, never execution authority. Source loaders,
+unreadable dependencies, incomplete/failed child histories and changed inputs
+stay unproven. This is a finite protocol, not an arbitrary OS sandbox verifier.
+The versioned prestate projection requires every original child attempt to be
+terminal PASS and sufficient remaining capacity for the fixed ten-attempt maximum
+per child; complete original history digests are retained separately and rechecked.
+
+The collector saves `evidence/lc20-input-snapshot.json` before its first child
+action and `evidence/lc20-execution.json` only after all four vectors, all six
+baseline/full child executions, actual selective executions, native child
+assessments and before/after protocol observations agree. Child formal credit
+remains zero. Missing assessment grants return `WAITING_FOR_GRANT`; an uncertain
+write only reads its original receipt. The existing independent grant workflow
+must authorize each actual native assessment.
+
+For a complete original, `.plan` additionally accepts the paired selectors
+`originalOriginRef` and `currentInputRef`. Both resolve original managed stage
+requests and actual archives; current candidate identity is never caller evidence.
+INVENTORY captures establish no case execution. History spans all managed LC20
+claims across candidates and registrations, including FAILED/UNKNOWN claims.
+Each later qualification selects the original EXECUTED A, including A→B→C.
+Producer code support does not approve or publish the required semantic asset,
+nor establish an actual installed LC20 execution.
 
 Final consumers use the same service instance's synchronous `assertCurrent` or
 `assertExecutionCurrent` after their final await. Copied API JSON is not that
