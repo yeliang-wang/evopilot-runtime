@@ -644,3 +644,14 @@ test('LC04 and LC05 reject absent native proofs and ambiguous deterministic refu
   const calls=[];const read=async op=>{calls.push(op);return op==='lifecycle.correction.inspect'?view:{...view,allowed:false,repairAdmission:{allowed:false,reasons:[reason]}};};await assert.rejects(observe(caseId,vector,{original:{},correctionRef:'synthetic'},read,async()=>stage),/NOT_READY|Assertion/);assert.deepEqual(calls,['lifecycle.correction.inspect','lifecycle.correction.admission']);
  }
 });
+
+// Explicit synthetic byte/error guards only; not an actual old/native E17 run.
+function e17SyntheticSQLite(version=9){const bytes=Buffer.alloc(4096);Buffer.from('SQLite format 3\0').copy(bytes);bytes.writeUInt16BE(4096,16);bytes[18]=2;bytes[19]=2;bytes.writeUInt32BE(version,60);return bytes;}
+test('E17 pinned public schema refusal requires literal managed header9 verified native reads and unchanged bytes',async()=>{
+ const{assertE17PublicSchemaRefusal:check}=await import('../acceptance/v090/maintenance.mjs'),before=e17SyntheticSQLite(),context=()=>({officialArchiveSha256:'4eef2130c2854fe1ecd56ca664882c4aa3026145388cad88d258de3bba3fd42d',managedReadbacksVerified:true,beforeBytes:Buffer.from(before),afterBytes:Buffer.from(before)}),error={code:'CORRUPT_STATE',message:'Cannot open verified Runtime state: CORRUPT_STATE'},result=check(error,context());assert.equal(result.before.sqliteUserVersion,9);assert.deepEqual(result.officialSourceSchemas,[1,2,3,4,5,6,7,8]);assert.deepEqual(result.publicError,error);
+ for(const mutate of [c=>c.officialArchiveSha256='0'.repeat(64),c=>c.managedReadbacksVerified=false,c=>c.beforeBytes.writeUInt32BE(7,60),c=>{c.beforeBytes.writeUInt32BE(999,60);c.afterBytes.writeUInt32BE(999,60);},c=>c.afterBytes[4095]=1,c=>c.afterBytes.writeUInt32BE(8,60),c=>c.beforeBytes[0]=0,c=>c.beforeBytes[18]=0,c=>c.beforeBytes=c.beforeBytes.subarray(0,100)]){const invalid=context();mutate(invalid);assert.throws(()=>check(error,invalid));}
+ for(const invalid of [null,{...error,code:'NOT_FOUND'},{...error,message:'Unknown state schema'},{...error,message:'Cannot open verified Runtime state: INVALID_LINEAGE'},{...error,message:'Cannot open verified Runtime state: invalid database'},{...error,message:'SQLite integrity check failed'}])assert.throws(()=>check(invalid,context()));
+});
+test('E17 postrollback receipt absence retains the exact unwrapped public NOT_FOUND contract',async()=>{
+ const{e17MissingReceipt:check}=await import('../acceptance/v090/maintenance.mjs');assert.equal(check({code:'NOT_FOUND',message:'Receipt not found'}),true);for(const value of [null,{},new Error('Receipt not found'),{code:'NOT_FOUND',message:'Goal not found'},{code:'CORRUPT_STATE',message:'Cannot open verified Runtime state: NOT_FOUND'},{code:'NOT_FOUND',message:'Cannot open verified Runtime state: NOT_FOUND'}])assert.equal(check(value),false);
+});
