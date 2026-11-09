@@ -11,17 +11,15 @@ import {collectCaseCampaign,caseCampaignTestOptions,openScenario,sha} from './su
 import {collectInstalledBaseUpgrade} from './maintenance.mjs';
 import {openBrowser} from './browser.mjs';
 import {ownerObligations,collectE05Journey,collectE05MissingCandidate} from './execution.mjs';
+import {ownerFeedbackCase} from './e16.test.mjs';
 
-const missing={
- 'E05.CV06':'Requires actual published-owner REUSE and DELIVER decisions, expiration/scope/known-defect variants and partial feedback recovery.',
-};
 
 test('E05 installed revision isolation and actual candidate evidence',caseCampaignTestOptions('E05'),async()=>{
  const run=await openScenario('E05');let serial=0,browser;
  try{
   if(run.selection.caseCampaign){await collectCaseCampaign(run,'E05');return;}
   const cfg=run.selection.revisionEvolution;let baseline;
-  if(run.cases.some(c=>!['E05.journey','E05.variant.02','E05.EX10','E05.EX11'].includes(c.caseInstanceId))){
+  if(run.cases.some(c=>!['E05.journey','E05.variant.02','E05.EX10','E05.EX11','E05.CV06'].includes(c.caseInstanceId))){
    assert(cfg&&Object.keys(cfg).sort().join(',')==='allowSyntheticDecisions,instanceId');
    assert.equal(cfg.allowSyntheticDecisions,true,'Native synthetic test decisions must be explicitly selected, never inferred as human authority');
    assert(/^[a-z0-9][a-z0-9-]{0,63}$/.test(cfg.instanceId));
@@ -147,7 +145,7 @@ test('E05 installed revision isolation and actual candidate evidence',caseCampai
    if(c.caseInstanceId==='E05.variant.02')return collectE05MissingCandidate(run,c);
    if(c.caseInstanceId==='E05.EX11'){browser??=await chromium.launch({headless:true});return ownerObligations(run,c,browser);}
    if(c.caseInstanceId==='E05.EX10')return collectInstalledBaseUpgrade(run,c,{chromium,expect,openBrowser});
-   if(missing[c.caseInstanceId])assert.fail('UNIMPLEMENTED_FIXED_CASE: '+missing[c.caseInstanceId]);
+   if(c.caseInstanceId==='E05.CV06')return ownerFeedbackCase(run,c);
    if(c.caseInstanceId==='E05.variant.01')return nonRc();
    if(c.caseInstanceId==='E05.variant.03')return latest(c);
    if(['E05.variant.04','E05.MC05'].includes(c.caseInstanceId))return reviseAndPin(c);

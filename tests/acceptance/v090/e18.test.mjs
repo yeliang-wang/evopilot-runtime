@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {openScenario,sha} from './support.mjs';
-import {collectCoverageInventory} from './execution.mjs';
+import {collectCoverageInventory,collectManagedBudget} from './execution.mjs';
 
 // This file consumes original records from the selected installed service. It
 // never seeds a database, changes an instance outcome, dispatches CI, approves a
@@ -36,8 +36,8 @@ import {collectCoverageInventory} from './execution.mjs';
 //  publication:{stageRequestId,unknownObservationRef,allowReconciliation:true}}.
 // E18.journey selects {providers:[<github plan>,<gitlab plan>]}. No free-form
 // operations, remote commands, authority evidence or supplied PASS are accepted.
-// Fork credential loss and CV03 remain explicit obligations below until
-// their original real fixtures can establish the exact frozen predicates.
+// Fork credential loss remains a separate obligation. CV03 uses the shared
+// exact native budget collector and never closes the fork-credential gap.
 const stages=['scope','plan','implementation','candidate','verification','release-decision','publication','closure'];
 const outcomes=['not-run','failed','unknown','missing-evidence','passed'];
 const hash=/^sha256:[a-f0-9]{64}$/;
@@ -58,6 +58,7 @@ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 test('E18 installed CI evidence and exact release-authority mismatch',async()=>{
  const run=await openScenario('E18');
  try{
+  if(run.cases.every(c=>c.caseInstanceId==='E18.CV03')){for(const c of run.cases)await run.collect(c,()=>collectManagedBudget(run,c));return;}
   if(run.cases.every(c=>c.caseInstanceId==='E18.CV07')){for(const c of run.cases)await run.collect(c,()=>collectCoverageInventory(run,c));return;}
   assert(run.selection.ciAuthority,'Select the protected original CI/authority fixture; a historical source-test report is not a fixture');
   const fixture=pinned(run.selection.ciAuthority);
@@ -376,7 +377,7 @@ test('E18 installed CI evidence and exact release-authority mismatch',async()=>{
    if(['E18.variant.01','E18.variant.02'].includes(c.caseInstanceId)){assert(plan);return requireCompleteProvider(await providerMismatches(c,plan));}
    const requirements=c.parameters.variantContract;assert(requirements);
    run.artifact('unfulfilled-fixed-contract.json',{caseInstanceId:c.caseInstanceId,contract:requirements,denominatorRetained:true,sourceTestsCredited:false,releaseAuthorized:false});
-   if(c.caseInstanceId==='E18.CV03')assert.fail('CV03 requires original managed-action timing/resource/attempt boundary observations and external call counts; stage-state reads alone do not satisfy it');
+   if(c.caseInstanceId==='E18.CV03')return collectManagedBudget(run,c);
    assert.fail('Unimplemented fixed E18 case '+c.caseInstanceId);
   });
  }finally{run.finish();}

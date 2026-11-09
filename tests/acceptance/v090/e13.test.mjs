@@ -9,7 +9,7 @@ import {chromium,expect} from '@playwright/test';
 import {openScenario} from './support.mjs';
 import {activeCiExitReentry} from './e11.test.mjs';
 import {openBrowser} from './browser.mjs';
-import {exactKeys,interruptionFixture,openExecution} from './execution.mjs';
+import {exactKeys,interruptionFixture,openExecution,collectManagedBudget} from './execution.mjs';
 
 // The implemented branches consume an explicitly prepared isolated
 // service. 01/02 require a genuinely admitted instance with real native scope
@@ -35,7 +35,6 @@ import {exactKeys,interruptionFixture,openExecution} from './execution.mjs';
 // A fixture is selection, never a supplied expected outcome or new authority.
 const unsupported={
  'E13.journey':'Full original Host, provider-channel interruption, cancellation and managed-action budget journey is not yet implemented.',
- 'E13.CV03':'Requires the full original eight-stage admission and supported measured-budget matrix; one fixed loop is not a fabricated exhausted-loop result.'
 };
 const slug=value=>assert(typeof value==='string'&&/^[a-z0-9][a-z0-9-]{0,63}$/.test(value));
 async function noReceipt(run,id){const result=await run.request('runtime.receipt.read',{requestId:id});assert.equal(result.status,404);assert.equal(result.body.error?.code,'NOT_FOUND');}
@@ -652,6 +651,7 @@ test('E13 installed interruption and truthful unavailable measurement branches',
  // read/write; never interpret cancellation as permission to replay.
  for(const method of ['request','read'])run[method]=async(...args)=>{t.signal.throwIfAborted();const value=await captured[method](...args);t.signal.throwIfAborted();return value;};
  try{
+  if(run.cases.every(c=>c.caseInstanceId==='E13.CV03')){for(const c of run.cases)await run.collect(c,()=>collectManagedBudget(run,c));return;}
   const fixture=interruptionFixture(run),driver=await openExecution(run,t.signal),used=new Set();
   for(const c of run.cases)await run.collect(c,async()=>{
    if(unsupported[c.caseInstanceId])throw Error('UNIMPLEMENTED_ORIGINAL_CASE: '+unsupported[c.caseInstanceId]);

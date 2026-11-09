@@ -6,7 +6,7 @@ import {pathToFileURL} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import {collectCaseCampaign,caseCampaignTestOptions,openScenario,sha} from './support.mjs';
 import {openBrowser} from './browser.mjs';
-import {LIFECYCLE_READBACK_CASES,collectLifecycleReadback,collectCoverageInventory,collectStageAdmission} from './execution.mjs';
+import {LIFECYCLE_READBACK_CASES,collectLifecycleReadback,collectCoverageInventory,collectStageAdmission,collectManagedBudget} from './execution.mjs';
 
 // E02 journey and independently collected non-RC/feedback readbacks.
 // Remaining fixed instances keep their own unmet contracts.
@@ -14,7 +14,6 @@ import {LIFECYCLE_READBACK_CASES,collectLifecycleReadback,collectCoverageInvento
 // calls below are read-only independent observations of those original requests.
 const stages=['scope','plan','implementation','candidate','verification','release-decision','publication','closure'];
 const unsupported={
- 'E02.CV03':'Requires the complete actual managed-action time/attempt/resource boundary matrix and external call counts.',
 };
 const digest=/^sha256:[a-f0-9]{64}$/,numeric=/^[1-9][0-9]{0,19}$/;
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
@@ -116,7 +115,7 @@ test('E02 actual installed GitLab lifecycle with external Codex and native owner
  const run=await openScenario('E02');let expert,browser,ui,primaryFailure;
  try{
   if(run.selection.caseCampaign){await collectCaseCampaign(run,'E02');return;}
- if(!run.cases.some(c=>c.caseInstanceId==='E02.journey')){for(const c of run.cases)await run.collect(c,async()=>{if(c.caseInstanceId==='E02.variant.03')return collectStageAdmission(run,c,'gitlab');if(c.caseInstanceId==='E02.CV07')return collectCoverageInventory(run,c);if(Object.hasOwn(LIFECYCLE_READBACK_CASES,c.caseInstanceId))return collectLifecycleReadback(run,c,'gitlab',proveCodingHost);throw Error('UNIMPLEMENTED_ORIGINAL_CASE: '+unsupported[c.caseInstanceId]);});return;}
+ if(!run.cases.some(c=>c.caseInstanceId==='E02.journey')){for(const c of run.cases)await run.collect(c,async()=>{if(c.caseInstanceId==='E02.CV03')return collectManagedBudget(run,c,'gitlab');if(c.caseInstanceId==='E02.variant.03')return collectStageAdmission(run,c,'gitlab');if(c.caseInstanceId==='E02.CV07')return collectCoverageInventory(run,c);if(Object.hasOwn(LIFECYCLE_READBACK_CASES,c.caseInstanceId))return collectLifecycleReadback(run,c,'gitlab',proveCodingHost);throw Error('UNIMPLEMENTED_ORIGINAL_CASE: '+unsupported[c.caseInstanceId]);});return;}
  const cfg=run.selection.lifecycleExecution;assert(cfg);const root=cfg.exchangeRoot;
  assert.equal(fs.realpathSync(root),root);assert.deepEqual(fs.readdirSync(root),['CODING-HOST-SELECTION.json'],'Only the preselected original Host source may exist before a new external Agent exchange');assert.equal(fs.lstatSync(root).mode&0o777,0o700);
  const selectedHost=selectCodingHost(root);
@@ -238,7 +237,7 @@ test('E02 actual installed GitLab lifecycle with external Codex and native owner
   return{request:ci,observation:observed,verified,client,transport};
  }
   for(const c of run.cases)await run.collect(c,async()=>{
-   if(c.caseInstanceId==='E02.variant.03')return collectStageAdmission(run,c,'gitlab');if(c.caseInstanceId==='E02.CV07')return collectCoverageInventory(run,c);if(Object.hasOwn(LIFECYCLE_READBACK_CASES,c.caseInstanceId))return collectLifecycleReadback(run,c,'gitlab',proveCodingHost,selectedHost);
+   if(c.caseInstanceId==='E02.CV03')return collectManagedBudget(run,c,'gitlab');if(c.caseInstanceId==='E02.variant.03')return collectStageAdmission(run,c,'gitlab');if(c.caseInstanceId==='E02.CV07')return collectCoverageInventory(run,c);if(Object.hasOwn(LIFECYCLE_READBACK_CASES,c.caseInstanceId))return collectLifecycleReadback(run,c,'gitlab',proveCodingHost,selectedHost);
    if(unsupported[c.caseInstanceId])throw Error('UNIMPLEMENTED_ORIGINAL_CASE: '+unsupported[c.caseInstanceId]);assert.equal(c.caseInstanceId,'E02.journey');
    const input=run.selection.expertConfiguration,yaml=pinned(input.ref,input.sha256).toString();assert(yaml.endsWith('\n')&&!yaml.endsWith('\n\n'));
    run.artifact('gitlab-exact-fixture-inputs.json',{preparation,preparationSha256:cfg.preparationSha256,ownerFixtureSha256:cfg.ownerFixtureSha256,yaml,yamlSha256:input.sha256,syntheticAssets:true,syntheticDecisions:true});
