@@ -432,3 +432,27 @@ test('E05 RC missing-artifact callback rejects absent original evidence before i
   await assert.rejects(openScenario('E05'),/E05\.variant\.02 requires exact original RC candidate missing-artifact records/);assert.equal(fs.existsSync(selection.outputRoot),false);
  }finally{if(prior===undefined)delete process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;else process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION=prior;f.cleanup();}
 });
+
+// LC guard inputs are synthetic; no source test establishes actual tool vectors.
+test('LC collector keeps the fixed twenty PRE and one POST obligations',async()=>{
+ const {correctionCatalog,correctionCounts,validateCorrectionCases}=await import('../acceptance/v090/correction.test.mjs'),catalog=JSON.parse(fs.readFileSync(new URL('../../governance/lifecycle-correction-v090.json',import.meta.url)));
+ const pre=correctionCatalog(catalog,'PRE_RELEASE'),post=correctionCatalog(catalog,'POST_RELEASE');assert.equal(pre.length,20);assert.deepEqual(post.map(c=>c.id),['LC12']);
+ const partial=correctionCounts(pre,['LC21'],[{caseInstanceId:'LC21',status:'PASS'}]);assert.equal(partial.fullDenominator,709);for(const ids of [[],['LC21','LC21'],['LC12'],['unknown']])assert.throws(()=>validateCorrectionCases(pre,ids));assert.deepEqual(validateCorrectionCases(pre,['LC21']),['LC21']);assert.equal(partial.unexecutedCaseIds.length,19);assert.equal(partial.scenarioStatus,'INCOMPLETE');assert.equal(partial.executed,1);assert.equal(correctionCounts(post,['LC12'],[]).executed,0);
+ for(const change of [c=>c.acceptance.cases.pop(),c=>c.acceptance.cases.find(c=>c.id==='LC21').vectors.pop(),c=>c.acceptance.cases.find(c=>c.id==='LC12').phase='PRE_RELEASE']){const invalid=structuredClone(catalog);change(invalid);assert.throws(()=>correctionCatalog(invalid,'PRE_RELEASE'));}
+});
+test('LC21 parser verifies real failure protocol and preserves unknown costs',async()=>{
+ const {parseLC21Driver:parse,LC21_FAULTS}=await import('../acceptance/v090/correction.test.mjs');
+ const result={schema:'runtime-correction-tooling-result/v1',tool:'graph',status:'COMPLETED',toolIdentity:{node:'v24.14.0','dependency-cruiser':'18.7.2'},elapsedMs:4,tokenUsage:null,monetaryCost:null,costStatus:'UNKNOWN',acceptance:'NOT_EVALUATED',graph:{closureComplete:false,modules:4,edges:3}},raw=value=>({code:0,signal:null,exceeded:null,stdout:JSON.stringify(value)+'\n',stderr:'',elapsedMs:5});
+ assert.equal(parse(raw(result),'valid-output').status,'COMPLETED');assert.equal(parse(raw(result),'unknown-cost').monetaryCost,null);
+ const protocol={...result,status:'FAILED',error:'Invalid dependency graph protocol'},command={...result,status:'FAILED',error:'graph exited 23: LC21 controlled command failure\n'};
+ assert.equal(parse({...raw(protocol),code:1},'cli-protocol-mismatch').status,'FAILED');assert.equal(parse({...raw(command),code:1},'command-fail').status,'FAILED');
+ for(const change of [r=>r.code=1,r=>r.signal='SIGKILL',r=>r.exceeded='TIME_LIMIT',r=>r.stdout='noise\n'+r.stdout]){const invalid=raw(result);change(invalid);assert.throws(()=>parse(invalid,'valid-output'));}
+ for(const change of [r=>r.monetaryCost=0,r=>r.tokenUsage=0,r=>r.costStatus='KNOWN',r=>r.toolIdentity['dependency-cruiser']='invented',r=>r.graph.closureComplete=true]){const invalid=structuredClone(result);change(invalid);assert.throws(()=>parse(raw(invalid),'unknown-cost'));}
+ assert.throws(()=>parse({...raw(protocol),code:0},'cli-protocol-mismatch'));assert.throws(()=>parse({...raw({...command,error:'unrelated error'}),code:1},'command-fail'));
+ assert.match(LC21_FAULTS['cli-protocol-mismatch'],/CONTROLLED/);assert.match(LC21_FAULTS['command-fail'],/exitCode=23/);
+});
+
+test('LC21 executable streaming identity has a distinct bounded executable budget',async()=>{
+ const {hashExecutable}=await import('../acceptance/v090/correction.test.mjs'),f=collectorFixture();
+ try{const file=path.join(f.root,'node-executable-fixture');const fd=fs.openSync(file,'wx',0o700);fs.ftruncateSync(fd,16777217);fs.closeSync(fd);const identity=hashExecutable(file);assert.equal(identity.bytes,16777217);assert(/^[a-f0-9]{64}$/.test(identity.sha256));const huge=fs.openSync(file,'r+');fs.ftruncateSync(huge,268435457);fs.closeSync(huge);assert.throws(()=>hashExecutable(file));const link=path.join(f.root,'alias');fs.symlinkSync(file,link);assert.throws(()=>hashExecutable(link));}finally{f.cleanup();}
+});
