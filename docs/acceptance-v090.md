@@ -678,3 +678,35 @@ receipt, an owner reuse decision or release authority.
 LC 报告统一绑定上述五个执行文件的提交摘要。单例报告保留完整分母与 INCOMPLETE，
 共享原始记录只归属一次，每个向量保留独立观察。发布读取器验证报告结构和原始字节，
 实际执行真实性仍须独立审阅，不能把报告改名为原生 CI 回执或发布批准。
+
+LC08 and LC19 use a singleton protected `lcContinuity: {ref, sha256}` selection.
+LC08 observes the same original request through an installed service restart and
+two sequential, independently owned Codex Host sessions. It compares original
+records, authority and complete provider inventories; startup UNKNOWN is a
+historical observation, not permission to redispatch the request.
+
+LC19 checks the original recovery root across request keys, working directories,
+Host sessions, a pre-existing successor instance, service restart and the original
+deadline. Its fixture must already have consumed the selected root's attempt and
+loop limits. Native denials and unchanged business inventories establish that
+these changes do not renew the budget. Crossing the actual original cutoff is
+required; a terminal-stage no-op does not prove expiry. The collector neither
+creates successor authority nor resets limits. Missing or unreachable original
+fixtures remain NOT_READY, with all vector results retained and a nonzero exit.
+
+LC08／LC19 只沿用选定原请求及恢复根，核对重启、Host 切换和原始预算截止后的
+真实行为。原权限、尝试次数和截止时间不可重置；源码检查不替代实际环境验收。
+
+LC09 uses a singleton protected `lc09: {ref, sha256}` selection for executed,
+reused and missing-owner-policy vectors. The first two require genuine current
+capture and original qualification records, with an independent full-catalog
+partition check. The missing-policy vector proves that the original selected
+registration's required policy binding is absent from the actual installed
+service configuration. A separate valid registration for the same published
+policy supplies the positive control; this does not mean the published policy
+itself has disappeared. Expiry, wrong identity and unrelated denial cannot
+substitute for that absence. The collector reads existing state only and never
+removes a binding, creates an approval or manufactures a fixture.
+
+LC09 分别核验真实执行、有效复用、原选定注册缺少必需政策绑定的情况。缺失绑定
+与政策全局不存在是不同事实；三组观察完整留痕，缺少真实前提仍为 NOT_READY。
