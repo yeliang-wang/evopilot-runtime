@@ -723,3 +723,40 @@ conditions. All five rows are retained; missing prerequisites remain NOT_READY.
 
 LC10 的拒绝必须对应真实权限、项目、有效期、所有者或批准边界。源码回归只验证
 采集机制，正式计分仍需实际安装中的完整观察。
+
+LC17 uses a protected `lc17` selection to authenticate registered original
+capture, archive and receipt bytes. Ordinary CI originals supply candidate
+relabel, raw-tamper and restart checks. The label-only-chain vector separately
+binds a genuine complete LC20 qualification to its own original execution and
+archive; it does not pretend that this qualification belongs to the ordinary CI
+capture. Each installed parser must first accept its genuine original before
+rejecting the modified copy or substituted qualification label.
+
+For raw tampering, the unchanged repacked control must pass and changing only
+the selected receipt bytes must fail integrity validation. An arbitrary broken
+ZIP is insufficient. Complete archives and copies are retained as separate
+binary evidence leaves within the existing 16 MiB reader limit. A single owned
+service restart checks the original identities and immutable bytes without
+rewriting protected records or redispatching work.
+
+LC17 每个向量分别绑定其真实原件。普通 CI 回执与完整 LC20 资格原件使用各自原生
+解析器；复制容器的故障检查不能冒充存储原件被修改，也不能只保留标签或摘要替代字节。
+
+LC12 is POST_RELEASE only and uses a protected `lc12` selection. Its five fresh
+observations cover the current installed service, an owned Expert turn, HTTP
+MCP, the installed CLI and immutable correction history. Current service checks
+bind actual startup arguments, configuration, connection and stable process
+identity; a historical installation receipt alone is insufficient. Host tool
+evidence is retained separately from independent HTTP MCP calls.
+
+The LC12 import path loads installed helpers only after verifying the installed
+manifest. Importing its shared E22 helper does not start E22 or load development
+clients; E22's direct entry retains its existing behavior. LC12 binds six local
+collector files, adding `e22.test.mjs` to the five-file PRE closure. This single
+POST case retains the full 709 denominator and does not count toward 698 PRE
+checks. Commands and reads share the original absolute deadline; late results
+fail rather than renewing the budget. Missing release, installation or Host
+prerequisites retain all five NOT_READY rows and a failing command outcome.
+
+LC12 只在发布及当前安装完成后执行五组新的只读观察，不借用其他场景的 PASS。
+当前连接、进程和安装字节必须一致；缺少真实前提不计分，源码检查也不代表部署已验收。

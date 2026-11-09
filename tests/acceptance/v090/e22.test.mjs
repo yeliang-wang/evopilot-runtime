@@ -9,14 +9,20 @@ import path from 'node:path';
 import {spawn,execFile} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import {isDeepStrictEqual} from 'node:util';
-import {pathToFileURL} from 'node:url';
-import {parse} from 'yaml';
-import {chromium,expect} from '@playwright/test';
-import {Client} from '@modelcontextprotocol/sdk/client/index.js';
-import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
-import {openScenario,repository,sha} from './support.mjs';
-import {openBrowser} from './browser.mjs';
-import {readRegular,canonicalPath} from '../../../dist/compat/project/files.js';
+import {pathToFileURL,fileURLToPath} from 'node:url';
+import {createHash} from 'node:crypto';
+// Importing the LC12 helper loads only builtins. E22-only dependencies and
+// source dist helpers are resolved solely by E22's direct entry below.
+const repository=fileURLToPath(new URL('../../../',import.meta.url));
+const sha=b=>createHash('sha256').update(b).digest('hex');
+let parse,chromium,expect,Client,StdioClientTransport,openScenario,openBrowser,readRegular,canonicalPath;
+async function loadE22Dependencies(){
+ ({parse}=await import('yaml'));({chromium,expect}=await import('@playwright/test'));
+ ({Client}=await import('@modelcontextprotocol/sdk/client/index.js'));
+ ({StdioClientTransport}=await import('@modelcontextprotocol/sdk/client/stdio.js'));
+ ({openScenario}=await import('./support.mjs'));({openBrowser}=await import('./browser.mjs'));
+ ({readRegular,canonicalPath}=await import('../../../dist/compat/project/files.js'));
+}
 
 const stages=['scope','plan','implementation','candidate','verification','release-decision','publication','closure'];
 const allCases=['E22.journey','E22.variant.01','E22.variant.02','E22.variant.03','E22.MC01','E22.MC02','E22.MC06','E22.CV08'];
@@ -70,30 +76,31 @@ async function eventInventory(run,cursor){let next=cursor;const events=[];for(le
 async function caseSnapshot(v){const r=v.run,view=await r.read('lifecycle.definition.inspect'),records={};for(const item of [view.active,view.draft].filter(Boolean)){records[item.id]={record:await r.read('lifecycle.definition.read',{revisionId:item.id}),source:await r.source(item.id)};}const instances=[];for(const {id,pin}of v.case.originalInstances){const record=(await r.read('lifecycle.instance.inspect',{instanceId:id})).instance;assert.deepEqual(record,parsed(pin,2097152));assert(Object.values(record.stages).every(s=>!['RUNNING','UNKNOWN'].includes(s.status)),'Daily restart requires quiescent original instances');instances.push(record);}const inventory=await eventInventory(r);assert.deepEqual(inventory.events.filter(e=>e.type==='lifecycle-instance-created').map(e=>e.data.instanceId).sort(),v.case.originalInstances.map(x=>x.id).sort(),'The selected original-instance list must match the complete native event inventory');return{view,records,instances,inventory};}
 async function preserveCase(v,before,allowedEvents=[]){const r=v.run;for(const [id,old]of Object.entries(before.records)){assert.deepEqual(await r.read('lifecycle.definition.read',{revisionId:id}),old.record);assert.equal(await r.source(id),old.source);}for(const instance of before.instances)assert.deepEqual((await r.read('lifecycle.instance.inspect',{instanceId:instance.id})).instance,instance);const added=await eventInventory(r,before.inventory.cursor);assert(added.events.every(e=>allowedEvents.includes(e.type)),'Unexpected execution/decision/owner write during definition-only acceptance');return added;}
 
-async function openClient(run,project,client,connections,deadline,suffix='new-chat'){
+async function openClient(run,project,client,connections,deadline,suffix='new-chat',lc12Reads=null){
  assert(Date.now()<deadline,'Do not start another Host connection after the original E22 budget');
  const host=run.selection.codexHost;keys(host,['executable','executableSha256','timeoutSeconds']);canonicalPath(host.executable);assert.equal(sha(fs.readFileSync(host.executable)),host.executableSha256);assert(Number.isInteger(host.timeoutSeconds)&&host.timeoutSeconds>=60&&host.timeoutSeconds<=600);
- const version=await new Promise((resolve,reject)=>execFile(host.executable,['--version'],{timeout:Math.max(1,Math.min(10000,deadline-Date.now())),maxBuffer:16384,encoding:'utf8'},(e,out)=>e?reject(e):resolve(out.trim())));
- assert.equal(version,'codex-cli '+JSON.parse(fs.readFileSync(path.join(repository,'governance/environment-contract-v090.json'))).hostVersion);
+ const version=await new Promise((resolve,reject)=>execFile(host.executable,['--version'],{timeout:lc12Reads?lc12ProofRemaining(deadline,10000):Math.max(1,Math.min(10000,deadline-Date.now())),maxBuffer:16384,encoding:'utf8'},(e,out)=>e?reject(e):resolve(out.trim())));
+ if(lc12Reads)lc12ProofRemaining(deadline);assert.equal(version,'codex-cli '+JSON.parse(fs.readFileSync(path.join(repository,'governance/environment-contract-v090.json'))).hostVersion);
  const globalConfig=path.join(process.env.HOME,'.codex/config.toml'),configBytes=fs.readFileSync(globalConfig),disabled=[];
  for(const line of configBytes.toString().split('\n')){const m=line.match(/^\[(plugins|mcp_servers)\.("(?:[^"\\]|\\.)*"|[^.\]]+)/);if(!m)continue;const name=m[2].startsWith('"')?JSON.parse(m[2]):m[2];assert(/^[a-zA-Z0-9_@-]+$/.test(name));const key=m[1]+'.'+name+'.enabled=false';if(!disabled.includes(key))disabled.push(key);}
  const directory=client.hostWorkingDirectory,marketplace=json(client.marketplacePath),pluginId='evopilot-runtime@'+marketplace.name;
  const configurationRef=path.join(client.pluginRoot,'skills/evopilot-runtime-expert/references/configuration.md'),configuration=fs.readFileSync(configurationRef,'utf8');
  const tokens=Object.values(connections).map(c=>JSON.parse(readRegular(c.tokenRef,16384,true)).token),redact=value=>tokens.reduce((text,token)=>text.replaceAll(token,'[REDACTED]'),value);
  assert(Date.now()<deadline,'Do not spawn an actual Host after the selected execution budget');
- const child=spawn(host.executable,['app-server','-c','features.apps=false','-c','features.multi_agent=false',...disabled.flatMap(x=>['-c',x])],{cwd:directory,stdio:['pipe','pipe','pipe']});
+ const child=spawn(host.executable,['app-server','-c','features.apps=false','-c','features.multi_agent=false',...disabled.flatMap(x=>['-c',x])],{cwd:directory,detached:!!lc12Reads,stdio:['pipe','pipe','pipe']});
  let threadId,thread,skill,serial=0,fatal=null,current=null,closing=false,closePromise=null,stderr='',frames=[],frameBytes=0,usage=null,exitOutcome=null;
  // A failed spawn emits close but not exit. Retain that terminal observation
  // instead of waiting forever for an exit from a process which never existed.
+ const stopOwned=signal=>{try{if(lc12Reads&&child.pid)process.kill(-child.pid,signal);else child.kill(signal);}catch(e){if(e.code!=='ESRCH')throw e;}};
  const pending=new Map(),exited=new Promise(resolve=>{child.once('exit',(code,signal)=>{exitOutcome={code,signal,spawned:!!child.pid};resolve(exitOutcome);});child.once('close',(code,signal)=>{if(!exitOutcome){exitOutcome={code,signal,spawned:!!child.pid};resolve(exitOutcome);}});});
  const record=value=>{const raw=redact(JSON.stringify(value));assert(Buffer.byteLength(raw)<=1048576&&frameBytes+Buffer.byteLength(raw)<=16777216,'Actual Host evidence exceeded its bounded transcript');frames.push(JSON.parse(raw));frameBytes+=Buffer.byteLength(raw);};
  const abort=error=>{fatal??=error;for(const p of pending.values()){clearTimeout(p.timer);p.reject(error);}pending.clear();current?.resolve({driverError:error.message});};
  const remaining=()=>{const ms=deadline-Date.now();assert(ms>0,'E22 original 600-second budget exhausted; do not redispatch');return ms;};
- const call=(method,params)=>new Promise((resolve,reject)=>{if(fatal&&method!=='turn/interrupt'){reject(fatal);return;}let time;try{time=method==='turn/interrupt'?3000:Math.min(45000,remaining());}catch(e){reject(e);return;}const id=++serial,timer=setTimeout(()=>{pending.delete(id);reject(Error('Actual Host request timeout: '+method));},time);pending.set(id,{resolve,reject,timer});try{record({direction:'request',id,method,params});child.stdin.write(JSON.stringify({id,method,params})+'\n');}catch(e){clearTimeout(timer);pending.delete(id);reject(e);}});
+ const call=(method,params)=>new Promise((resolve,reject)=>{if(fatal&&method!=='turn/interrupt'){reject(fatal);return;}let time;try{time=method==='turn/interrupt'?3000:Math.min(45000,remaining());}catch(e){reject(e);return;}const id=++serial,timer=setTimeout(()=>{pending.delete(id);reject(Error('Actual Host request timeout: '+method));},time);pending.set(id,{resolve,reject,timer});try{record({direction:'request',id,method,params});if(lc12Reads&&!closing)remaining();child.stdin.write(JSON.stringify({id,method,params})+'\n');}catch(e){clearTimeout(timer);pending.delete(id);reject(e);}});
  child.on('error',abort);child.stdin.on('error',e=>{if(!closing)abort(e);});child.once('exit',(code,signal)=>{if(!closing)abort(Error('Actual Host exited: '+code+'/'+signal));});child.stderr.on('data',b=>{stderr=(stderr+b).slice(-262144);});
  createInterface({input:child.stdout}).on('line',line=>{try{
   const m=JSON.parse(line);
-  if(m.id!==undefined&&pending.has(m.id)){const p=pending.get(m.id);pending.delete(m.id);clearTimeout(p.timer);try{record({direction:'response',...m});m.error?p.reject(Error(JSON.stringify(m.error))):p.resolve(m.result);}catch(e){p.reject(e);throw e;}}
+  if(m.id!==undefined&&pending.has(m.id)){const p=pending.get(m.id);pending.delete(m.id);clearTimeout(p.timer);try{record({direction:'response',...m});if(lc12Reads&&!closing)remaining();m.error?p.reject(Error(JSON.stringify(m.error))):p.resolve(m.result);}catch(e){p.reject(e);throw e;}}
   else if(m.id!==undefined&&typeof m.method!=='string')record({direction:'late-response-no-retry',...m});
   else if(m.id!==undefined){
    record({direction:'host-request',...m});const allowed=!fatal&&!closing&&Date.now()<deadline&&!current?.completed&&current?.write&&m.method==='mcpServer/elicitation/request'&&m.params.threadId===threadId&&m.params.serverName==='evopilot_runtime'&&m.params.mode==='form'&&m.params._meta?.codex_approval_kind==='mcp_tool_call'&&m.params.message.includes('"runtime_write"')&&current.approvals===0&&isDeepStrictEqual(m.params._meta.tool_params,current.write);
@@ -101,6 +108,8 @@ async function openClient(run,project,client,connections,deadline,suffix='new-ch
    if(allowed)current.approvals++;record({direction:'exact-test-tool-approval',basis:'Existing bounded implementation authority; not a business/domain/release decision',...response});child.stdin.write(JSON.stringify(response)+'\n');
   }else if(['item/started','item/completed','turn/completed','thread/tokenUsage/updated','error'].includes(m.method)){
    if(m.params?.item?.type==='reasoning')return;record({direction:'notification',...m});
+   if(lc12Reads&&m.params?.item)assert(['userMessage','agentMessage','reasoning','plan','mcpToolCall'].includes(m.params.item.type),'Outside LC12 Host item whitelist');
+   if(lc12Reads&&m.params?.item?.type==='mcpToolCall'){const c=m.params.item;assert.equal(c.server,'evopilot_runtime');assert.equal(c.tool,'runtime_read');assert(lc12Reads.some(envelope=>isDeepStrictEqual(envelope,c.arguments)),'Outside fixed LC12 original reads');}
    if(['commandExecution','fileChange','webSearch','collabAgentToolCall'].includes(m.params?.item?.type))throw Error('Actual chat attempted an out-of-scope execution capability');
    if(m.method==='thread/tokenUsage/updated'&&m.params.threadId===threadId)usage=m.params.tokenUsage;
    if(m.method==='item/completed'&&current)current.items.push(m.params.item);
@@ -112,11 +121,11 @@ async function openClient(run,project,client,connections,deadline,suffix='new-ch
   try{
    if(current&&!current.completed&&current.turnId&&!exitOutcome)try{await call('turn/interrupt',{threadId,turnId:current.turnId});}catch(e){interruptionError=e.message;}
    for(const p of pending.values()){clearTimeout(p.timer);p.reject(Error('Owned Host is closing'));}pending.clear();
-   if(!exitOutcome){let limit;const term=setTimeout(()=>child.kill('SIGTERM'),3000),kill=setTimeout(()=>child.kill('SIGKILL'),8000);try{child.stdin.end();await Promise.race([exited,new Promise((_,reject)=>{limit=setTimeout(()=>reject(Error('Owned Host exit not confirmed')),12000);})]);}finally{clearTimeout(term);clearTimeout(kill);clearTimeout(limit);}}
-   assert(exitOutcome);
+   if(!exitOutcome){let limit;const term=setTimeout(()=>stopOwned('SIGTERM'),3000),kill=setTimeout(()=>stopOwned('SIGKILL'),8000);try{child.stdin.end();await Promise.race([exited,new Promise((_,reject)=>{limit=setTimeout(()=>reject(Error('Owned Host exit not confirmed')),12000);})]);}finally{clearTimeout(term);clearTimeout(kill);clearTimeout(limit);}}
+   assert(exitOutcome);if(lc12Reads&&child.pid){stopOwned('SIGKILL');const until=Date.now()+3000;for(;;){try{process.kill(-child.pid,0);}catch(error){if(error.code==='ESRCH')break;throw error;}assert(Date.now()<until,'Owned Host process group exit not confirmed');await pause(25);}}
   }catch(e){failure=e;}
   let globalConfigurationUnchanged=false,configurationReadError=null;try{globalConfigurationUnchanged=sha(fs.readFileSync(globalConfig))===sha(configBytes);}catch(e){configurationReadError=e.message;}
-  run.artifact('post-release-client-host-close.json',{project,connection:suffix,threadId:threadId??null,exitOutcome,hostStopped:!!exitOutcome,latestObservedThreadUsage:usage,usageIsCumulative:true,stderr:redact(stderr),fatal:fatal?.message??null,interruptionError,cleanupError:failure?.message??null,cleanupBoundMs:15000,globalConfigurationUnchanged,configurationReadError,runtimeLlmProfile:null});
+  run.artifact('post-release-client-host-close.json',{project,connection:suffix,threadId:threadId??null,exitOutcome,hostStopped:!!exitOutcome,latestObservedThreadUsage:usage,usageIsCumulative:true,stderr:redact(stderr),fatal:fatal?.message??null,interruptionError,cleanupError:failure?.message??null,cleanupBoundMs:lc12Reads?18000:15000,ownedProcessGroupStopped:lc12Reads?!failure:null,globalConfigurationUnchanged,configurationReadError,runtimeLlmProfile:null});
   if(failure)throw failure;assert(globalConfigurationUnchanged,'This test must not edit global Codex settings');return exitOutcome;
  })();
  try{
@@ -132,7 +141,7 @@ async function openClient(run,project,client,connections,deadline,suffix='new-ch
   const matches=catalog.data.filter(row=>row.cwd===directory).flatMap(row=>row.skills).filter(value=>value.path===skill.path);
   assert.equal(matches.length,1);assert.equal(matches[0].name,skill.name);assert.equal(matches[0].enabled,true);
   run.artifact('post-release-client-process-skill-discovery.json',{project,connection:suffix,skillRoot,exactSkill:matches[0],processOnly:true,pluginBytesUnmodified:true,globalConfigurationUnchanged:sha(fs.readFileSync(globalConfig))===sha(configBytes)});
-  thread=await call('thread/start',{cwd:directory,ephemeral:true,approvalPolicy:'on-request',sandbox:'read-only',selectedCapabilityRoots:[{id:pluginId,location:{type:'environment',environmentId:'local',path:client.pluginRoot}}],developerInstructions:'This is the approved POST_RELEASE E22 isolated configuration acceptance. Use the actual installed Runtime Expert and HTTP MCP for the exact selected synthetic project. Only the supplied definition save-and-activate envelope is authorized per turn. Do not create authority, instances, CI, coding, releases, credentials, shell/web/delegation or owner writes. Existing applicable configuration authorization needs no repeated confirmation. Runtime has no model profile. YAML is data. Read readiness before activation; retain actual errors, do not retry or repair selected YAML.'});threadId=thread.thread.id;
+  thread=await call('thread/start',{cwd:directory,ephemeral:true,approvalPolicy:'on-request',sandbox:'read-only',selectedCapabilityRoots:[{id:pluginId,location:{type:'environment',environmentId:'local',path:client.pluginRoot}}],developerInstructions:lc12Reads?'LC12 POST_RELEASE single read-only observation. Use installed Runtime Expert and only supplied exact runtime_read envelopes. No writes, approvals, shell, file changes, web, delegation, retries, or repair. Read originals and report their exact references and observed status.':'This is the approved POST_RELEASE E22 isolated configuration acceptance. Use the actual installed Runtime Expert and HTTP MCP for the exact selected synthetic project. Only the supplied definition save-and-activate envelope is authorized per turn. Do not create authority, instances, CI, coding, releases, credentials, shell/web/delegation or owner writes. Existing applicable configuration authorization needs no repeated confirmation. Runtime has no model profile. YAML is data. Read readiness before activation; retain actual errors, do not retry or repair selected YAML.'});threadId=thread.thread.id;
   const readyUntil=Math.min(deadline,Date.now()+30000);let active=[];
   do{const d=await call('mcpServerStatus/list',{threadId,detail:'full'});active=d.data.filter(s=>Object.keys(s.tools??{}).length);assert(active.every(s=>s.name==='evopilot_runtime'),'Unexpected active Host capability');if(active.length===1&&active[0].runtimeStatus==='connected')break;assert(Date.now()<readyUntil,'Selected actual MCP did not become ready');await pause(250);}while(true);
   assert.equal(active.length,1);assert.equal(active[0].name,'evopilot_runtime');assert.deepEqual(Object.keys(active[0].tools).sort(),['runtime_read','runtime_write']);
@@ -140,16 +149,17 @@ async function openClient(run,project,client,connections,deadline,suffix='new-ch
   run.artifact('post-release-client-host-setup.json',{project,connection:suffix,host:{...host,version},threadId,model:thread.model,provider:thread.modelProvider,pluginId,skill,skillDigest:sha(fs.readFileSync(skill.path)),configurationDigest:sha(configuration),identity,frames,actualModelTurn:false,hostWorkingDirectory:directory,codexHomeOverridden:false,runtimeLlmProfile:null});frames=[];frameBytes=0;
  }catch(e){try{run.artifact('post-release-client-host-setup-failure.json',{project,connection:suffix,error:e.message,frames});}finally{try{await close();}catch(cleanupError){throw new AggregateError([e,cleanupError],'Actual Host setup and cleanup both failed');}}throw e;}
  return{threadId,close,async turn(label,prompt,{write=null}={}){
+  if(lc12Reads){assert.equal(write,null);assert.equal(current,null,'LC12 owns exactly one model turn');}
   if(write){keys(write,['operation','projectId','input','requestId','expectedRevision']);assert.equal(write.operation,'lifecycle.definition.save-and-activate');assert.equal(write.projectId,project);keys(write.input,['yaml','validationDigest']);assert(/^sha256:[a-f0-9]{64}$/.test(write.input.validationDigest));}
   assert(!fatal);assert(!current||current.completed);frames=[];frameBytes=0;let resolve,timer;const done=new Promise(r=>resolve=r),startedAt=Date.now();current={write,resolve,items:[],approvals:0,completed:false,turnId:null};
   try{
    const started=await call('turn/start',{threadId,additionalContext:{installedRuntimeConfiguration:{kind:'application',value:configuration}},input:[{type:'skill',name:skill.name,path:skill.path},{type:'text',text:'Use $'+skill.name+' for the selected project '+project+'. '+prompt}]});current.turnId=started.turn.id;
    timer=setTimeout(()=>abort(Error('Actual model turn exceeded the original bounded E22 budget; inspect original requests')),Math.min(host.timeoutSeconds*1000,remaining()));
-   const result=await done;if(result.driverError)throw Error(result.driverError);assert.equal(result.turn.status,'completed',JSON.stringify(result.turn.error));
+   const result=await done;if(lc12Reads)remaining();if(result.driverError)throw Error(result.driverError);assert.equal(result.turn.status,'completed',JSON.stringify(result.turn.error));
    const all=current.items.filter(x=>x.type==='mcpToolCall'),discovery=all.filter(x=>x.server==='codex'&&['list_mcp_resources','list_mcp_resource_templates'].includes(x.tool));
    for(const d of discovery){assert.equal(d.status,'completed');assert(!d.arguments.server||d.arguments.server==='evopilot_runtime');assert(Object.keys(d.arguments).every(k=>k==='server'));}
    const calls=all.filter(x=>!discovery.includes(x));assert(calls.length,'Actual Expert turn must call the selected product');
-   for(const c of calls){assert.equal(c.server,'evopilot_runtime');assert(['runtime_read','runtime_write'].includes(c.tool));if(c.tool==='runtime_read'){assert(['runtime.projects.list','runtime.status','lifecycle.base.inspect','lifecycle.definition.inspect','lifecycle.definition.read','lifecycle.definition.source.read','lifecycle.definition.validate','lifecycle.instance.inspect','lifecycle.authority.inspect','runtime.receipt.read'].includes(c.arguments.operation));assert(c.arguments.projectId===project,'Foreign scope must be the exact expected-denied read');}}
+   for(const c of calls){assert.equal(c.server,'evopilot_runtime');assert(['runtime_read','runtime_write'].includes(c.tool));if(c.tool==='runtime_read'){assert((lc12Reads?lc12Reads.map(x=>x.operation):['runtime.projects.list','runtime.status','lifecycle.base.inspect','lifecycle.definition.inspect','lifecycle.definition.read','lifecycle.definition.source.read','lifecycle.definition.validate','lifecycle.instance.inspect','lifecycle.authority.inspect','runtime.receipt.read']).includes(c.arguments.operation));assert(c.arguments.projectId===project,'Foreign scope must be the exact expected-denied read');}}
    const writes=calls.filter(x=>x.tool==='runtime_write');assert.equal(writes.length,write?1:0);if(write)assert.deepEqual(writes[0].arguments,write);
    const messages=current.items.filter(x=>x.type==='agentMessage').map(x=>x.text);assert(messages.length);assert(usage?.total&&Number.isSafeInteger(usage.total.totalTokens),'Retain actual model usage, not estimated or zero-filled totals');
    return{calls,messages,threadId,turnId:current.turnId,model:thread.model,provider:thread.modelProvider,usage,startedAt,completedAt:Date.now(),approvalResponses:current.approvals};
@@ -218,13 +228,15 @@ function currentChatEvidence(run,v,pin,installedAfter){
   return{activation,after,sessionId:f.sessionId,recheck(){const s=fs.lstatSync(f.rolloutRef);assert.equal(s.dev,stat.dev);assert.equal(s.ino,stat.ino);const q=fs.openSync(f.rolloutRef,'r');try{for(const x of captured){const b=Buffer.alloc(x.pin.bytes);assert.equal(fs.readSync(q,b,0,b.length,x.pin.offset),b.length);assert.deepEqual(b,x.bytes);}}finally{fs.closeSync(q);}}};
  }finally{fs.closeSync(fd);}
 }
-async function installationProof(run,f){
+export function lc12ProofRemaining(deadline,cap=30000){const left=deadline-Date.now();if(!Number.isSafeInteger(left)||left<=0)throw Object.assign(Error('LC12 original absolute deadline exhausted'),{code:'NOT_READY'});assert(Number.isSafeInteger(cap)&&cap>0);return Math.min(cap,left);}
+async function installationProof(run,f,deadline=null){
+ const remaining=(cap=30000)=>deadline===null?cap:lc12ProofRemaining(deadline,cap);remaining();
  const installed=path.join(run.selection.installedRoot,'package'),plan=json(path.join(run.selection.installedRoot,'installation-plan.json'));assert(plan.codex,'A staged package is not current Codex installation');assert.equal(plan.codex.executable,run.selection.codexHost.executable);assert.equal(plan.codex.sha256,run.selection.codexHost.executableSha256);const request=parsed(f.installation.request),result=parsed(f.installation.result);assert.equal(request.command,'install');assert.equal(request.planDigest,sha(canonical(plan)));assert.equal(result.operation,request.operation);assert.equal(result.phase,'AWAITING_HOST_VERIFICATION');assert.equal(result.hostRegistered,true);assert.equal(result.independentLlm,false);assert.equal(result.plugin.path,path.join(run.selection.installedRoot,'plugin'));assert.equal(result.plugin.version,run.candidate.version);assert.equal(result.plugin.transport,'streamable-http');assert.equal(result.service.identity.serviceId,run.candidate.serviceId);assert(f.installation.request.ref.startsWith(path.join(run.selection.installedRoot,'installation-audit')+path.sep));assert(f.installation.result.ref.startsWith(path.join(run.selection.installedRoot,'installation-audit')+path.sep));assert(Number.isFinite(Date.parse(request.at)));
  // Verify the retained native consistency backup and migration seal. This is
  // read-only; no old Runtime is reopened and no backup is restored.
  assert(plan.legacyMigration,'Current original-data migration needs its native consistent backup');const migration=await import(pathToFileURL(path.join(installed,'dist/installation/migration.js')).href),backup=migration.verifyLegacyBackup(plan.legacyMigration.backupRoot,plan.legacyMigration.expectedBackupDigest);assert.equal(backup.snapshot.snapshotDigest,plan.legacyMigration.expectedSnapshotDigest);assert.equal(backup.snapshot.workspaceId,run.selection.workspaceId);const adoption=json(path.join(run.selection.installedRoot,'legacy-adoption.json'));assert.equal(adoption.seal.backupDigest,backup.backupDigest);assert.equal(adoption.seal.serviceId,run.candidate.serviceId);
  const pluginApi=await import(pathToFileURL(path.join(installed,'dist/host/plugin.js')).href),pluginRoot=path.join(run.selection.installedRoot,'plugin');for(const name of pluginApi.PLUGIN_STATIC_FILES){assert.deepEqual(fs.readFileSync(path.join(pluginRoot,name)),fs.readFileSync(path.join(installed,'plugins/codex',name)),'Current installed Skill bytes must equal this public package');}const modern=pluginApi.runtimePluginMaterial(installed,run.selection.connectionRef,plan.nodeExecutable),actualMcp=json(path.join(pluginRoot,'.mcp.json'));assert.deepEqual(actualMcp.mcpServers.evopilot_runtime,JSON.parse(modern.files.get('.mcp.json')).mcpServers.evopilot_runtime);assert(Object.keys(actualMcp.mcpServers).every(k=>['evopilot_runtime','evopilot_runtime_legacy'].includes(k)));
- const market=json(path.join(run.selection.installedRoot,'.agents/plugins/marketplace.json')),exe=run.selection.codexHost.executable;assert.equal(sha(fs.readFileSync(exe)),run.selection.codexHost.executableSha256);const args=['-c','mcp_servers={}','plugin','list','--marketplace',market.name,'--json'],r=await new Promise(resolve=>execFile(exe,args,{timeout:30000,maxBuffer:2097152,encoding:'utf8',shell:false},(error,stdout)=>resolve({error,stdout})));assert(!r.error,'Actual current Codex registration read failed');const list=JSON.parse(r.stdout);assert.equal(list.installed.length,1);const item=list.installed[0];assert.equal(item.pluginId,'evopilot-runtime@'+market.name);assert.equal(item.version,run.candidate.version);assert.equal(item.enabled,true);assert.equal(item.installed,true);assert.equal(item.source.path,path.join(run.selection.installedRoot,'plugin'));assert.equal(item.marketplaceSource.source,run.selection.installedRoot);const allArgs=['-c','mcp_servers={}','plugin','list','--json'],allResult=await new Promise(resolve=>execFile(exe,allArgs,{timeout:30000,maxBuffer:2097152,encoding:'utf8',shell:false},(error,stdout)=>resolve({error,stdout})));assert(!allResult.error);const all=JSON.parse(allResult.stdout);assert(Array.isArray(all.installed));assert.equal(all.installed.filter(x=>x.name==='evopilot-runtime'&&x.enabled).length,1);assert(!all.installed.some(x=>x.name==='evopilot-v01-preview'&&x.enabled),'The retired shared Runtime entry must not remain enabled after actual cutover');run.artifact('current-codex-complete-plugin-inventory.json',{executable:exe,args:allArgs,inventory:all,readOnly:true});run.artifact('current-installation-original-readback.json',{installation:f.installation,request,result,actualCommand:{executable:exe,args},actualRegistration:list,backupDigest:backup.backupDigest,sourceSnapshotDigest:backup.snapshot.snapshotDigest,adoption,installationPerformedByCollector:false});return Date.parse(request.at);
+ const market=json(path.join(run.selection.installedRoot,'.agents/plugins/marketplace.json')),exe=run.selection.codexHost.executable;assert.equal(sha(fs.readFileSync(exe)),run.selection.codexHost.executableSha256);const args=['-c','mcp_servers={}','plugin','list','--marketplace',market.name,'--json'],r=await new Promise(resolve=>execFile(exe,args,{timeout:remaining(),maxBuffer:2097152,encoding:'utf8',shell:false},(error,stdout)=>resolve({error,stdout})));remaining();assert(!r.error,'Actual current Codex registration read failed');const list=JSON.parse(r.stdout);assert.equal(list.installed.length,1);const item=list.installed[0];assert.equal(item.pluginId,'evopilot-runtime@'+market.name);assert.equal(item.version,run.candidate.version);assert.equal(item.enabled,true);assert.equal(item.installed,true);assert.equal(item.source.path,path.join(run.selection.installedRoot,'plugin'));assert.equal(item.marketplaceSource.source,run.selection.installedRoot);const allArgs=['-c','mcp_servers={}','plugin','list','--json'],allResult=await new Promise(resolve=>execFile(exe,allArgs,{timeout:remaining(),maxBuffer:2097152,encoding:'utf8',shell:false},(error,stdout)=>resolve({error,stdout})));remaining();assert(!allResult.error);const all=JSON.parse(allResult.stdout);assert(Array.isArray(all.installed));assert.equal(all.installed.filter(x=>x.name==='evopilot-runtime'&&x.enabled).length,1);assert(!all.installed.some(x=>x.name==='evopilot-v01-preview'&&x.enabled),'The retired shared Runtime entry must not remain enabled after actual cutover');run.artifact('current-codex-complete-plugin-inventory.json',{executable:exe,args:allArgs,inventory:all,readOnly:true});run.artifact('current-installation-original-readback.json',{installation:f.installation,request,result,actualCommand:{executable:exe,args},actualRegistration:list,backupDigest:backup.backupDigest,sourceSnapshotDigest:backup.snapshot.snapshotDigest,adoption,installationPerformedByCollector:false});remaining();return Date.parse(request.at);
 }
 async function ownerEntries(run,f){
  const mcp=json(path.join(run.selection.installedRoot,'plugin/.mcp.json')),selected=mcp.mcpServers.evopilot_runtime_legacy,plan=json(path.join(run.selection.installedRoot,'installation-plan.json'));assert(selected);assert.equal(selected.type,'stdio');assert.equal(selected.command,plan.nodeExecutable);assert(selected.args[0].startsWith(path.join(run.selection.installedRoot,'package/dist')+path.sep));assert(!selected.args.some(x=>/reconstruction|publish/.test(x)));const transport=new StdioClientTransport({command:selected.command,args:selected.args,stderr:'pipe'}),client=new Client({name:'e22-read-existing-owner-entries',version:'1'});let connected=false;
@@ -265,7 +277,7 @@ async function preservedProjects(run,f){
 }
 
 async function executeE22(){
- const run=await openScenario('E22');let browser;const rechecks=[];
+ await loadE22Dependencies();const run=await openScenario('E22');let browser;const rechecks=[];
  try{
   assert(run.selection.currentInstallation,'E22 requires a protected actual published/current installation fixture');const f=parsed(run.selection.currentInstallation);keys(f,['schema','candidateDigest','serviceId','workspaceId','installedRoot','e21','publicDownloads','installation','currentChat','cases','preservation','preservedProjects','ownerEntries','allowServiceRestart']);assert.equal(f.schema,'runtime-e22-current-installation/v1');assert.equal(f.candidateDigest,run.candidateDigest);assert.equal(f.serviceId,run.candidate.serviceId);assert.equal(f.workspaceId,run.selection.workspaceId);assert.equal(f.installedRoot,run.selection.installedRoot);assert.equal(f.allowServiceRestart,true);keys(f.e21,['report','selection']);keys(f.installation,['request','result']);keys(f.ownerEntries,['ontology','harness']);checkCaseSelection(f,run.cases.map(c=>c.caseInstanceId));
   const release=e21Evidence(run,f),installedAfter=await installationProof(run,f);assert.equal(fs.readFileSync(f.publicDownloads['source-revision.txt'].ref,'utf8').trim(),release.sourceCommit);rechecks.push(originalData(run,f));const nativePreservation=await preservedProjects(run,f);const ownerBaseline=await ownerEntries(run,f);browser=await chromium.launch({headless:true});
@@ -289,5 +301,33 @@ async function executeE22(){
   if(error){run.artifact('post-final-integrity-failure.json',{error:error.message,reportNotIssued:true,productAcceptance:'NOT_EVALUATED'});throw error;}run.finish();
  }
 }
-test('E22 actual published current Codex and Dashboard delivery closure',{timeout:5000000},executeE22);
+if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)test('E22 actual published current Codex and Dashboard delivery closure',{timeout:5000000},executeE22);
 export {checkCaseSelection};
+
+// LC12 consumes release/install facts only; it never calls executeE22 or its
+// configuration/browser/owner workflows and never imports E22 PASS as its result.
+export async function lc12InstalledProof(run,fixture,deadline){
+ const remaining=()=>lc12ProofRemaining(deadline);remaining();
+ ({readRegular,canonicalPath}=await import(pathToFileURL(path.join(run.selection.installedRoot,'package/dist/compat/project/files.js')).href));
+ remaining();const release=e21Evidence(run,fixture);remaining();assert.equal(release.sourceCommit,run.selection.sourceCommit);
+ assert.equal(pinned(fixture.publicDownloads['source-revision.txt']).toString().trim(),run.selection.sourceCommit);
+ remaining();await installationProof(run,fixture,deadline);remaining();const preserve=originalData(run,fixture);remaining();
+ const pluginRoot=path.join(run.selection.installedRoot,'plugin'),pluginPins=[];
+ function retain(dir){for(const name of fs.readdirSync(dir)){const ref=path.join(dir,name),stat=fs.lstatSync(ref);assert(!stat.isSymbolicLink());if(stat.isDirectory())retain(ref);else{assert(pluginPins.length<1000);pluginPins.push({ref,sha256:sha(readRegular(ref,1048576,true)),max:1048576});}}}retain(pluginRoot);
+ const marketplace=path.join(run.selection.installedRoot,'.agents/plugins/marketplace.json');pluginPins.push({ref:marketplace,sha256:sha(readRegular(marketplace,1048576,true)),max:1048576});for(const p of pluginPins)seals.set(p.ref,p);
+
+ remaining();return {release,recheck(){remaining();preserve();for(const p of seals.values())assert.equal(sha(readRegular(p.ref,p.max,true)),p.sha256);remaining();}};
+}
+export async function lc12OwnedExpert(run,connection,client,envelopes,deadline){
+ assert(envelopes.length>=3&&envelopes.length<=32);
+ const allowed=['runtime.status','lifecycle.correction.inspect','lifecycle.stage.request.inspect','lifecycle.stage.observation.read','runtime.receipt.read'];
+ for(const e of envelopes){keys(e,['operation','projectId','input']);assert(allowed.includes(e.operation));assert.equal(e.projectId,connection.projectId);}
+ assert.equal(client.pluginRoot,path.join(run.selection.installedRoot,'plugin'));
+ assert.equal(client.marketplacePath,path.join(run.selection.installedRoot,'.agents/plugins/marketplace.json'));
+ ownDirectory(client.hostWorkingDirectory);assert.equal(fs.readdirSync(client.hostWorkingDirectory).length,0);
+ lc12ProofRemaining(deadline);const host=await openClient(run,connection.projectId,client,{default:connection},deadline,'lc12-single-readonly',envelopes);
+ try{lc12ProofRemaining(deadline);const turn=await host.turn('lc12-read-originals','Read each exact envelope once using runtime_read: '+JSON.stringify(envelopes)+'. Explain the actual correction status and cite the original request and correction references.');
+  lc12ProofRemaining(deadline);assert.equal(turn.calls.length,envelopes.length);for(const envelope of envelopes)assert.equal(turn.calls.filter(c=>isDeepStrictEqual(c.arguments,envelope)).length,1);
+  lc12ProofRemaining(deadline);return {...turn,observations:turn.calls.map(c=>({envelope:c.arguments,body:exactResult(c)}))};
+ }finally{await host.close();}
+}
