@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import {mkdtempSync,realpathSync,readFileSync,writeFileSync,existsSync,rmSync,chmodSync,mkdirSync,readdirSync,symlinkSync,lstatSync,cpSync,readlinkSync} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {tmpdir} from 'node:os';
@@ -18,7 +19,11 @@ import {lifecycle,yaml} from '../fixtures/lifecycle-v090.mjs';
 import {runInstaller,installerMain} from '../../dist/installation/installer.js';
 import {createRuntimeService as historicalFixture} from '../fixtures/historical-runtime-v020.mjs';
 import {createRuntimeService} from '../../dist/service.js';
-import {inspectLegacyWorkspace,createLegacyBackup,verifyLegacyBackup} from '../../dist/installation/migration.js';
+import {inspectLegacyWorkspace,createLegacyBackup,verifyLegacyBackup,rollbackLegacyWorkspace} from '../../dist/installation/migration.js';
+import {createManagedLegacyService} from '../../dist/compat/managed-service.js';
+import {workspaceMaintenanceFixture} from '../fixtures/workspace-maintenance-v090.mjs';
+import {inspectManagedWorkspace} from '../../dist/installation/workspace/snapshot.js';
+import {createManagedWorkspaceBackup,verifyManagedWorkspaceBackup} from '../../dist/installation/workspace/backup.js';
 import {forwardLegacyRuntime} from '../../dist/host/legacy-tools.js';
 import {digest} from '../../dist/server/errors.js';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
@@ -140,6 +145,69 @@ function legacyFixture(f){
  // header without opening a connection, as the migration protocol requires.
  return{options,scope,original,backup,db:join(options.workspaceRoot,'state/runtime/runtime.db'),schema(){return readFileSync(this.db).readUInt32BE(60);}};
 }
+
+// SYNTHETIC bounded source guards. The published old-package E17 journey is
+// collected separately; these tests confer no acceptance/release authority.
+async function rollbackFixture(t){
+ const f=workspaceMaintenanceFixture(t),{workspaceRoot,workspaceId}=f.selection,scope={visibility:'private',projectId:'synthetic'};
+ const original=JSON.parse(readFileSync(join(f.root,'pre-adoption/manifest.json'))),service=createManagedLegacyService(f.binding);
+ let newer;try{newer=service.execute({operation:'goal.create',scope,input:{id:'after-adoption',description:'Retain this pending new evidence'},requestId:'after-adoption',expectedRevision:1});}finally{service.close();}
+ const blob=Buffer.from('Synthetic additive evidence retained across old-format rollback'),sha=createHash('sha256').update(blob).digest('hex');
+ mkdirSync(join(workspaceRoot,'public/runtime'),{recursive:true,mode:0o700});const blobRef=join(workspaceRoot,'public/runtime',sha+'.raw');writeFileSync(blobRef,blob,{mode:0o600});
+ const snapshot=await inspectManagedWorkspace(f.selection,'rollback-inspect'),saved=await createManagedWorkspaceBackup(f.selection,'rollback-preserve',snapshot.snapshotDigest,f.backupRoot);
+ const request={schema:'runtime-legacy-rollback-plan/v1',requestId:'rollback',selection:f.selection,backupRoot:join(f.root,'pre-adoption'),expectedBackupDigest:original.backupDigest,expectedSourceSnapshotDigest:original.snapshot.snapshotDigest,preservationRoot:f.backupRoot,expectedPreservationBackupDigest:saved.backupDigest,expectedManagedSnapshotDigest:snapshot.snapshotDigest};
+ return{...f,request,original,saved,newer,blobRef,blob,db:join(workspaceRoot,'state/runtime/runtime.db'),oldBytes:readFileSync(join(request.backupRoot,'payload/state/runtime/runtime.db')),newBytes:readFileSync(join(workspaceRoot,'state/runtime/runtime.db')),serviceBytes:readFileSync(join(f.selection.serviceRoot,'data/service.sqlite')),scope,workspaceId};
+}
+test('synthetic legacy rollback restores exact old DB and preserves new evidence, service ledger and historical replay',async t=>{
+ const f=await rollbackFixture(t),result=await rollbackLegacyWorkspace(f.request);
+ assert.equal(result.status,'OLD_FORMAT_RESTORED');assert.equal(result.sourceSchemaVersion,f.original.snapshot.schemaVersion);assert.equal(result.managedSchemaVersion,9);
+ assert.deepEqual(readFileSync(f.db),f.oldBytes);assert.deepEqual(readFileSync(result.preservedDatabase),f.newBytes);assert.equal(lstatSync(result.preservedDatabase).nlink,1);assert.equal(lstatSync(f.db).nlink,1);
+ assert.deepEqual(readFileSync(join(f.request.preservationRoot,'workspace/state/runtime/runtime.db')),f.newBytes);assert.deepEqual(readFileSync(f.blobRef),f.blob);
+ assert.deepEqual(readFileSync(join(f.selection.serviceRoot,'data/service.sqlite')),f.serviceBytes);assert.deepEqual(result.restoredSnapshot.database,f.original.snapshot.database);assert.equal(result.restoredSnapshot.recordsDigest,f.original.snapshot.recordsDigest);
+ assert.notEqual(result.restoredSnapshot.snapshotDigest,f.original.snapshot.snapshotDigest,'Additive evidence must not be described as full historical snapshot equality');assert(result.additiveEntries.some(e=>e.path.endsWith('.raw')));
+ for(const flag of ['currentStateAttestation','serviceStarted','hostRegistered','businessWorkDispatched','authority'])assert.equal(result[flag],false);
+ assert.throws(()=>createManagedLegacyService(f.binding),{code:'MIGRATION_REQUIRED'});
+ const old=createRuntimeService({workspaceRoot:f.selection.workspaceRoot,workspaceId:f.workspaceId});old.initialize();
+ try{const original=old.execute({operation:'receipt.inspect',scope:f.scope,input:{requestId:'original-project'}});assert.equal(original.revision,1);assert.throws(()=>old.execute({operation:'receipt.inspect',scope:f.scope,input:{requestId:'after-adoption'}}));old.execute({operation:'goal.create',scope:f.scope,input:{id:'after-rollback',description:'Later independently requested synthetic write'},requestId:'after-rollback',expectedRevision:1});}finally{old.close();}
+ const later=readFileSync(f.db);assert.deepEqual(await rollbackLegacyWorkspace(f.request),result);assert.deepEqual(readFileSync(f.db),later,'Completed replay does not roll back subsequent work');assert.deepEqual(verifyManagedWorkspaceBackup(f.request.preservationRoot,f.saved.backupDigest),f.saved);
+});
+test('synthetic legacy rollback recovers injected interruptions immediately before and after link and rename',async t=>{
+ for(const operation of ['linkSync','renameSync'])for(const when of ['before','after'])await t.test(operation+' '+when,async t=>{
+  const f=await rollbackFixture(t),original=fs[operation];let injected=false;
+  fs[operation]=function(from,to,...args){const target=operation==='linkSync'?from===f.db:String(from).endsWith('/old.sqlite');if(target&&!injected){injected=true;if(when==='before')throw Object.assign(new Error('Synthetic interruption'),{code:'INJECTED_ROLLBACK'});const result=original.call(this,from,to,...args);throw Object.assign(new Error('Synthetic interruption after syscall'),{code:'INJECTED_ROLLBACK',result});}return original.call(this,from,to,...args);};syncBuiltinESMExports();
+  try{await assert.rejects(rollbackLegacyWorkspace(f.request),{code:'INJECTED_ROLLBACK'});}finally{fs[operation]=original;syncBuiltinESMExports();}
+  assert(injected);const control=f.selection.workspaceRoot+'.evopilot-legacy-rollback/rollback',preserved=join(control,'managed.sqlite');
+  assert.deepEqual(readFileSync(join(f.request.preservationRoot,'workspace/state/runtime/runtime.db')),f.newBytes);assert.deepEqual(readFileSync(join(f.selection.serviceRoot,'data/service.sqlite')),f.serviceBytes);
+  if(operation==='renameSync'&&when==='after'){assert.deepEqual(readFileSync(f.db),f.oldBytes);assert.deepEqual(readFileSync(preserved),f.newBytes);}
+  else{assert.deepEqual(readFileSync(f.db),f.newBytes);if(existsSync(preserved)){assert.equal(lstatSync(f.db).nlink,2);assert.equal(lstatSync(f.db).ino,lstatSync(preserved).ino);assert.throws(()=>createManagedLegacyService(f.binding),'Existing nlink guard remains strict');}}
+  const result=await rollbackLegacyWorkspace(f.request);assert.deepEqual(readFileSync(f.db),f.oldBytes);assert.deepEqual(readFileSync(result.preservedDatabase),f.newBytes);assert.equal(JSON.parse(readFileSync(join(control,'journal.json'))).phase,'VERIFIED');
+ });
+});
+test('synthetic legacy rollback rejects stale snapshots, foreign partials, active writers and corrupt anchors without publication',async t=>{
+ for(const change of ['snapshot','seal','backup','evidence','partial','writer','sidecar'])await t.test(change,async t=>{
+  const f=await rollbackFixture(t);let writer;
+  if(change==='snapshot')f.request.expectedManagedSnapshotDigest='0'.repeat(64);
+  if(change==='seal')f.request.selection.migrationDigest='0'.repeat(64);
+  if(change==='backup')writeFileSync(join(f.request.backupRoot,'payload/state/runtime/runtime.db'),'Synthetic corruption');
+  if(change==='evidence')writeFileSync(join(f.selection.projectRoot,'assets/asset.json'),'Changed current owner asset');
+  if(change==='partial'){const control=f.selection.workspaceRoot+'.evopilot-legacy-rollback/rollback';mkdirSync(control,{recursive:true,mode:0o700});writeFileSync(join(control,'unknown.txt'),'Do not erase',{mode:0o600});}
+  if(change==='writer')writer=createManagedLegacyService(f.binding);
+  if(change==='sidecar')writeFileSync(f.db+'-journal','Unknown sidecar',{mode:0o600});
+  try{await assert.rejects(rollbackLegacyWorkspace(f.request));assert.deepEqual(readFileSync(f.db),f.newBytes);assert.deepEqual(readFileSync(join(f.selection.serviceRoot,'data/service.sqlite')),f.serviceBytes);if(change==='partial')assert.equal(readFileSync(f.selection.workspaceRoot+'.evopilot-legacy-rollback/rollback/unknown.txt','utf8'),'Do not erase');}finally{writer?.close();}
+ });
+});
+test('synthetic legacy rollback refuses extra hard links and changed staged bytes while preserving the interrupted pair',async t=>{
+ for(const change of ['extra-link','stage','new-evidence'])await t.test(change,async t=>{
+  const f=await rollbackFixture(t),original=fs.linkSync;
+  fs.linkSync=function(from,to){const result=original(from,to);if(from===f.db)throw Object.assign(new Error('Synthetic interrupted pair'),{code:'INJECTED_ROLLBACK'});return result;};syncBuiltinESMExports();
+  try{await assert.rejects(rollbackLegacyWorkspace(f.request),{code:'INJECTED_ROLLBACK'});}finally{fs.linkSync=original;syncBuiltinESMExports();}
+  const control=f.selection.workspaceRoot+'.evopilot-legacy-rollback/rollback';
+  if(change==='extra-link')fs.linkSync(f.db,join(f.root,'foreign-link'));
+  if(change==='stage')writeFileSync(join(control,'old.sqlite'),'Unknown staged bytes');
+  if(change==='new-evidence')writeFileSync(join(f.selection.projectRoot,'new-evidence'),'New owner evidence',{mode:0o600});
+  await assert.rejects(rollbackLegacyWorkspace(f.request),{code:'LEGACY_ROLLBACK_CONFLICT'});assert.deepEqual(readFileSync(f.db),f.newBytes);assert.deepEqual(readFileSync(join(control,'managed.sqlite')),f.newBytes);assert.equal(lstatSync(f.db).nlink,change==='extra-link'?3:2);
+ });
+});
 test('migration is explicit: staging verifies selected backup but does not adopt or change original records',async()=>{
  const f=distributionFixture();try{
   const legacy=legacyFixture(f),bytes=readFileSync(legacy.db),result=await runInstaller(f.plan,'stage');assert.equal(result.phase,'STAGED');assert.deepEqual(readFileSync(legacy.db),bytes);assert.equal(legacy.schema(),1);

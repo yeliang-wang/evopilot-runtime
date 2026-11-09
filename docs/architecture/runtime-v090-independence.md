@@ -1297,10 +1297,25 @@ snapshot over newer evidence. Readiness writes preserve the managed schema.
 A new 0.8.x process rejects schema 9. This does not revoke an already-open old
 binary: the operator must stop and verify original writers before cutover. Active
 WAL sidecars reject original snapshot preparation; they are never deleted to make
-a live database look quiescent. No in-place schema downgrade or automatic restore
-is provided. Isolated rollback tests retain the entire newer managed directory
-separately and restore the verified old backup at its original canonical identity.
-Relocating a backup without the original lineage procedure is rejected.
+a live database look quiescent. The local operator API
+`rollbackLegacyWorkspace` in `dist/installation/migration.js` restores the exact
+original database bytes at the original canonical identity. It requires the
+original legacy backup and a verified complete current managed backup, with
+explicit digest anchors, stopped services and writer exclusion. It retains the
+schema-9 database separately before atomic replacement; it does not edit schema
+markers to make a new database appear old. Original non-database files must be
+unchanged, and additive evidence stays in place. The resulting whole-workspace
+digest can therefore differ from the original snapshot.
+
+This bounded operation preserves the independent service ledger and budgets,
+owner assets, credentials and selected external references. Only exact known
+interruption states can resume the same request; changed or foreign partials
+remain untouched. A completed retry returns its historical receipt with
+`currentStateAttestation:false`, without overwriting subsequent work. No service
+or Host is started, and the managed service must reject the restored old database.
+Relocated workspaces, active writers, sidecars, changed original non-database
+files and insufficient preservation evidence are rejected. Source fault tests
+do not replace E17's actual installed-package migration and rollback acceptance.
 
 This internal foundation grants no legacy HTTP mutation authority and does not
 enable a project definition or turn a historical UNKNOWN Run into success. Old

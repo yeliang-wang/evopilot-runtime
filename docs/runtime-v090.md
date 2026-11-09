@@ -149,6 +149,16 @@ Rollback first preserves the complete new installation and its evidence, then
 verifies the original installation/backup. It never overwrites new evidence with
 an old database or makes the older Base selectable in the new service.
 
+Legacy workspace format restoration has a separate local operator API,
+`rollbackLegacyWorkspace` in `dist/installation/migration.js`. It requires the
+exact pre-adoption backup and a complete verified current managed backup, stopped
+services and the original workspace identity. It retains the newer database and
+evidence before restoring the original database bytes. Added evidence remains;
+changed original non-database files block restoration. Independent service budgets
+and owner assets are not rolled back. The operation neither starts a service nor
+registers a Host; a completed retry returns historical evidence, not an attestation
+of current state. Actual E17 acceptance remains separate from source tests.
+
 ## Use the two Dashboard pages
 
 `/lifecycle` shows the SeeCode graph above the YAML editor. Select a node to edit

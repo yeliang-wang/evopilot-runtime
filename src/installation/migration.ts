@@ -3,7 +3,7 @@
  * read-only SQLite connection can create WAL sidecars. No owner authoring state,
  * credentials, external evidence paths or legacy processes are migrated here. */
 import {DatabaseSync} from 'node:sqlite';
-import {constants,closeSync,existsSync,fsyncSync,lstatSync,mkdirSync,mkdtempSync,openSync,readdirSync,readFileSync,realpathSync,rmSync,writeFileSync} from 'node:fs';
+import {constants,closeSync,existsSync,fstatSync,fsyncSync,linkSync,lstatSync,mkdirSync,mkdtempSync,openSync,readdirSync,readFileSync,readlinkSync,realpathSync,renameSync,rmSync,writeFileSync} from 'node:fs';
 import {dirname,join,sep} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
@@ -12,6 +12,9 @@ import {inspectBlobs,inspectRecords,privatePath,readIdentity,readRelocations,saf
 import {inspectNativeSnapshot} from '../native-snapshot.js';
 import {validateState} from '../state.js';
 import {acquireLegacyWriterLease,legacyDatabasePath,legacyWorkspace,migrationSeal,type LegacyMigrationSeal,type ManagedLegacyBinding} from '../compat/managed-store.js';
+import {mkdir,save,syncDirectory,verifyManagedWorkspaceBackup} from './workspace/backup.js';
+import {heldMaintenanceTransients,maintenanceLocation,preservationSnapshotMatches,separateRoots,withRestoringWorkspace,type WorkspaceSelection,type ManagedWorkspaceSnapshot} from './workspace/snapshot.js';
+import {hashMaintenanceFile,type MaintenanceEntry} from './workspace/stream.js';
 
 interface Entry {path:string;kind:'file'|'directory';bytes:number;sha256:string|null;}
 interface Table {name:string;rows:number;sha256:string;}
@@ -178,4 +181,156 @@ export function adoptLegacyWorkspace(request:AdoptLegacyRequest):{binding:Manage
     if(canonical(migrationSeal(db))!==canonical(seal))reject('MIGRATION_CORRUPT','Committed adoption readback differs');
     return result(seal);
   } finally {if(transaction)db!.exec('ROLLBACK');db?.close();lease.close();}
+}
+
+export interface LegacyRollbackRequest {
+  schema:'runtime-legacy-rollback-plan/v1';requestId:string;selection:WorkspaceSelection;
+  backupRoot:string;expectedBackupDigest:string;expectedSourceSnapshotDigest:string;
+  preservationRoot:string;expectedPreservationBackupDigest:string;expectedManagedSnapshotDigest:string;
+}
+export interface LegacyRollbackResult {
+  schema:'runtime-legacy-rollback-result/v1';requestId:string;requestDigest:string;
+  backupDigest:string;sourceSnapshotDigest:string;preservationBackupDigest:string;managedSnapshotDigest:string;
+  migrationDigest:string;sourceSchemaVersion:number;managedSchemaVersion:9;
+  restoredSnapshot:LegacySnapshot;additiveEntries:Entry[];preservedDatabase:string;preservedDatabaseSha256:string;
+  status:'OLD_FORMAT_RESTORED';completedAt:string;currentStateAttestation:false;
+  serviceStarted:false;hostRegistered:false;businessWorkDispatched:false;authority:false;resultDigest:string;
+}
+interface RollbackDatabase {dev:number;ino:number;bytes:number;sha256:string;}
+interface RollbackJournal {
+  schema:'runtime-legacy-rollback-journal/v1';requestDigest:string;
+  phase:'PREPARED'|'STAGED'|'PRESERVED'|'PUBLISHED'|'VERIFIED';
+  managed:RollbackDatabase;seal:LegacyMigrationSeal;lastError:string|null;result:LegacyRollbackResult|null;
+}
+function rollbackConflict():never {return reject('LEGACY_ROLLBACK_CONFLICT','Retain and inspect the changed or unknown rollback state',409);}
+const same=(a:unknown,b:unknown)=>largeDigest(a)===largeDigest(b);
+/** The only exception to ordinary nlink=1 reads is this protocol's exact pair.
+ * Never pass either linked path to an ordinary writer or weaken privatePath. */
+function rollbackDatabase(file:string,links:1|2):RollbackDatabase {
+  safeAncestors(dirname(file));const before=lstatSync(file);
+  if(!before.isFile()||before.uid!==process.getuid!()||(before.mode&0o777)!==0o600||before.nlink!==links||before.size>maxFileBytes)rollbackConflict();
+  const stable=(s:NonNullable<ReturnType<typeof lstatSync>>)=>s.dev===before.dev&&s.ino===before.ino&&s.size===before.size&&s.mtimeMs===before.mtimeMs&&s.ctimeMs===before.ctimeMs&&s.nlink===links&&s.uid===before.uid&&s.mode===before.mode;
+  const fd=openSync(file,constants.O_RDONLY|constants.O_NOFOLLOW);
+  try{if(!stable(fstatSync(fd)))rollbackConflict();const content=readFileSync(fd);if(content.length!==before.size||!stable(fstatSync(fd))||!stable(lstatSync(file)))rollbackConflict();return{dev:before.dev,ino:before.ino,bytes:content.length,sha256:sha(content)};}
+  finally{closeSync(fd);}
+}
+/** Check complete unaffected inventories, including unknown additions. The DB
+ * alone may have two names or old bytes during exact recovery. */
+function unchangedRollbackTree(root:string,expected:MaintenanceEntry[],excluded:string[]):void {
+  const pending=new Map(expected.filter(e=>!excluded.includes(e.path)).map(e=>[e.path,e]));let count=0;
+  function visit(relative:string):void {
+    const directory=join(root,relative);for(const name of readdirSync(directory)){
+      const key=relative?relative+'/'+name:name;if(excluded.includes(key))continue;
+      if(++count>expected.length)rollbackConflict();const entry=pending.get(key);if(!entry)rollbackConflict();pending.delete(key);
+      const file=join(root,key),st=lstatSync(file);if(st.uid!==process.getuid!())rollbackConflict();
+      if(entry.kind==='directory'){
+        if(!st.isDirectory()||(st.mode&0o777)!==entry.mode)rollbackConflict();visit(key);
+      }else if(entry.kind==='symlink'){
+        if(!st.isSymbolicLink()||readlinkSync(file)!==entry.target||!realpathSync(file).startsWith(root+sep))rollbackConflict();
+      }else{
+        if(!same(hashMaintenanceFile(file),{bytes:entry.bytes,sha256:entry.sha256,mode:entry.mode}))rollbackConflict();
+      }
+    }
+  }
+  visit('');if(pending.size)rollbackConflict();
+}
+function unchangedRollbackEvidence(snapshot:ManagedWorkspaceSnapshot):void {
+  const selection=snapshot.selection;
+  for(const role of ['project','workspace','service'] as const){
+    const root=selection[role==='project'?'projectRoot':role==='workspace'?'workspaceRoot':'serviceRoot'];
+    unchangedRollbackTree(root,snapshot.roots[role],role==='project'?[]:[...heldMaintenanceTransients(snapshot,role),...(role==='workspace'?[databaseRelative]:[])]);
+  }
+  for(const ref of snapshot.references)if(!same(hashMaintenanceFile(ref.path),{bytes:ref.bytes,sha256:ref.sha256,mode:ref.mode}))rollbackConflict();
+}
+/** Original non-DB bytes must remain compatible; additive evidence stays live.
+ * This is intentionally not a general file/owner/budget rollback operation. */
+function legacySubset(original:LegacySnapshot,current:ManagedWorkspaceSnapshot):void {
+  const entries=new Map(current.roots.workspace.map(e=>[e.path,e]));
+  for(const old of original.entries){
+    if(old.path===databaseRelative)continue;const now=entries.get(old.path);
+    if(!now||now.kind!==old.kind||now.bytes!==old.bytes||(old.kind==='file'&&now.sha256!==old.sha256))reject('LEGACY_ROLLBACK_ASSET_CHANGED','An original non-database Runtime entry changed; no asset will be rolled back',409);
+  }
+}
+/** Explicit stopped operator restoration at the original location only. A
+ * completed retry reports its historical receipt, never current-state approval.
+ * The new service ledger/budgets and all owner/evidence files remain untouched. */
+export async function rollbackLegacyWorkspace(value:LegacyRollbackRequest,signal?:AbortSignal):Promise<LegacyRollbackResult> {
+  const request=structuredClone(value);
+  exact(record(request),['schema','requestId','selection','backupRoot','expectedBackupDigest','expectedSourceSnapshotDigest','preservationRoot','expectedPreservationBackupDigest','expectedManagedSnapshotDigest']);
+  if(request.schema!=='runtime-legacy-rollback-plan/v1')rollbackConflict();slug(request.requestId);
+  for(const h of [request.expectedBackupDigest,request.expectedSourceSnapshotDigest,request.expectedPreservationBackupDigest,request.expectedManagedSnapshotDigest])if(typeof h!=='string'||!/^[a-f0-9]{64}$/.test(h))rollbackConflict();
+  const {selection,backupRoot,preservationRoot,requestId}=request,{workspaceRoot,workspaceId}=selection;
+  const control=workspaceRoot+'.evopilot-legacy-rollback',operation=join(control,requestId),journalRef=join(operation,'journal.json'),stage=join(operation,'old.sqlite'),preserved=join(operation,'managed.sqlite'),live=legacyDatabasePath(workspaceRoot);
+  separateRoots([selection.projectRoot,workspaceRoot,selection.serviceRoot,backupRoot,preservationRoot,control]);maintenanceLocation(control,true);
+  const requestDigest=largeDigest(request),original=verifyLegacyBackup(backupRoot,request.expectedBackupDigest),managed=verifyManagedWorkspaceBackup(preservationRoot,request.expectedPreservationBackupDigest),snapshot=managed.snapshot;
+  if(original.snapshot.workspaceRoot!==workspaceRoot||original.snapshot.workspaceId!==workspaceId||original.snapshot.snapshotDigest!==request.expectedSourceSnapshotDigest||snapshot.snapshotDigest!==request.expectedManagedSnapshotDigest||!same(snapshot.selection,selection))rollbackConflict();
+  const oldEntry=original.snapshot.entries.find(e=>e.path===databaseRelative),managedEntry=snapshot.roots.workspace.find(e=>e.path===databaseRelative);
+  if(oldEntry?.kind!=='file'||managedEntry?.kind!=='file'||![1,2,3,4,5,6,7,8].includes(original.snapshot.schemaVersion))rollbackConflict();
+  const oldHash=oldEntry.sha256,managedHash=managedEntry.sha256;
+  legacySubset(original.snapshot,snapshot);
+  const sealMatches=(seal:LegacyMigrationSeal)=>seal.workspaceRoot===workspaceRoot&&seal.workspaceId===workspaceId&&seal.serviceId===selection.serviceId&&seal.migrationDigest===selection.migrationDigest&&seal.backupRoot===backupRoot&&seal.backupDigest===request.expectedBackupDigest&&seal.sourceSnapshotDigest===request.expectedSourceSnapshotDigest&&seal.sourceSchemaVersion===original.snapshot.schemaVersion;
+  const load=():RollbackJournal|null=>{
+    if(!existsSync(operation))return null;privatePath(operation,true);
+    if(readdirSync(operation).some(name=>!['journal.json','old.sqlite','managed.sqlite'].includes(name))||!existsSync(journalRef))rollbackConflict();
+    const raw=record(JSON.parse(bytes(journalRef).toString())),{journalDigest,...body}=raw;
+    exact(raw,['schema','requestDigest','phase','managed','seal','lastError','result','journalDigest']);
+    const journal=body as unknown as RollbackJournal;
+    if(journalDigest!==largeDigest(body)||journal.schema!=='runtime-legacy-rollback-journal/v1'||journal.requestDigest!==requestDigest||!['PREPARED','STAGED','PRESERVED','PUBLISHED','VERIFIED'].includes(journal.phase)||!sealMatches(journal.seal)||journal.managed.sha256!==managedHash||journal.managed.bytes!==managedEntry.bytes)rollbackConflict();
+    if(journal.phase==='VERIFIED'){
+      if(!journal.result)rollbackConflict();const {resultDigest,...result}=journal.result;
+      if(resultDigest!==largeDigest(result)||result.requestDigest!==requestDigest||result.status!=='OLD_FORMAT_RESTORED'||result.currentStateAttestation!==false||result.authority!==false||result.serviceStarted!==false||result.hostRegistered!==false||result.businessWorkDispatched!==false||result.preservedDatabase!==preserved||!same(rollbackDatabase(preserved,1),journal.managed))rollbackConflict();
+    }else if(journal.result!==null)rollbackConflict();
+    return journal;
+  };
+  const previous=load();if(previous?.phase==='VERIFIED')return previous.result!;
+  let journal:RollbackJournal|undefined;
+  const persist=()=>{if(!journal)rollbackConflict();save(journalRef,{...journal,journalDigest:largeDigest(journal)});};
+  return withRestoringWorkspace(selection,requestId,()=>{},capture=>{
+    journal=load()??undefined;if(journal?.phase==='VERIFIED')return journal.result!;
+    try{
+      signal?.throwIfAborted();verifyLegacyBackup(backupRoot,request.expectedBackupDigest);verifyManagedWorkspaceBackup(preservationRoot,request.expectedPreservationBackupDigest);noSidecars(workspaceRoot);
+      if(!journal){
+        if(!preservationSnapshotMatches(capture(),snapshot))rollbackConflict();const seal=copiedSeal(workspaceRoot);
+        if(!seal||!sealMatches(seal))rollbackConflict();const current=rollbackDatabase(live,1);
+        if(current.sha256!==managedHash)rollbackConflict();
+        // Validate the original in scratch before retaining any publication state.
+        const scratch=mkdtempSync(join(realpathSync(tmpdir()),'runtime-rollback-validate-'));let db:DatabaseSync|undefined;
+        try{
+          const file=join(scratch,'old.sqlite');retain(file,bytes(join(backupRoot,'payload',databaseRelative)));db=new DatabaseSync(file,{readOnly:true,allowExtension:false});
+          if(migrationSeal(db)||Number(db.prepare('PRAGMA user_version').get()?.user_version)!==original.snapshot.schemaVersion||!same(tables(db),original.snapshot.database)||inspectRecords(db,validateState).recordsDigest!==original.snapshot.recordsDigest||(inspectNativeSnapshot(db,workspaceRoot)?.snapshot.recordsDigest??null)!==original.snapshot.nativeRecordsDigest||largeDigest(readRelocations(db,readIdentity(workspaceRoot,workspaceId),'runtime'))!==original.snapshot.lineageDigest)rollbackConflict();
+        }finally{db?.close();rmSync(scratch,{recursive:true,force:true});}
+        mkdir(control);if(lstatSync(control).dev!==current.dev)rollbackConflict();mkdirSync(operation,{mode:0o700});syncDirectory(control);
+        journal={schema:'runtime-legacy-rollback-journal/v1',requestDigest,phase:'PREPARED',managed:current,seal,lastError:null,result:null};persist();
+      }
+      unchangedRollbackEvidence(snapshot);signal?.throwIfAborted();
+      const linked=existsSync(preserved)&&lstatSync(live).ino===lstatSync(preserved).ino&&lstatSync(live).dev===lstatSync(preserved).dev;
+      const current=rollbackDatabase(live,linked?2:1),retained=existsSync(preserved)?rollbackDatabase(preserved,linked?2:1):null;
+      const published=current.sha256===oldHash&&current.bytes===oldEntry.bytes;
+      if(published){
+        if(existsSync(stage)||!retained||!same(retained,journal.managed))rollbackConflict();
+      }else{
+        if(!same(current,journal.managed)||retained&&!same(retained,current)||['PUBLISHED','VERIFIED'].includes(journal.phase))rollbackConflict();
+        if(!existsSync(stage)){
+          if(retained||journal.phase!=='PREPARED')rollbackConflict();retain(stage,bytes(join(backupRoot,'payload',databaseRelative)));
+        }
+        const staged=rollbackDatabase(stage,1);if(staged.sha256!==oldHash||staged.bytes!==oldEntry.bytes||staged.dev!==current.dev)rollbackConflict();
+        journal.phase='STAGED';journal.lastError=null;persist();signal?.throwIfAborted();
+        if(!retained){linkSync(live,preserved);syncDirectory(operation);}
+        if(!same(rollbackDatabase(live,2),journal.managed)||!same(rollbackDatabase(preserved,2),journal.managed))rollbackConflict();
+        journal.phase='PRESERVED';persist();signal?.throwIfAborted();
+        unchangedRollbackEvidence(snapshot);
+        if(!same(rollbackDatabase(live,2),journal.managed)||!same(rollbackDatabase(preserved,2),journal.managed)||!same(rollbackDatabase(stage,1),staged))rollbackConflict();
+        renameSync(stage,live);
+      }
+      syncDirectory(dirname(live));syncDirectory(operation);
+      journal.phase='PUBLISHED';persist();signal?.throwIfAborted();
+      if(!same(rollbackDatabase(preserved,1),journal.managed)||rollbackDatabase(live,1).sha256!==oldHash)rollbackConflict();
+      unchangedRollbackEvidence(snapshot);const restoredSnapshot=inspectLegacyWorkspace(workspaceRoot,workspaceId);
+      if(restoredSnapshot.schemaVersion!==original.snapshot.schemaVersion||!same(restoredSnapshot.database,original.snapshot.database)||restoredSnapshot.recordsDigest!==original.snapshot.recordsDigest||restoredSnapshot.nativeRecordsDigest!==original.snapshot.nativeRecordsDigest||restoredSnapshot.lineageDigest!==original.snapshot.lineageDigest)rollbackConflict();
+      verifyLegacyBackup(backupRoot,request.expectedBackupDigest);verifyManagedWorkspaceBackup(preservationRoot,request.expectedPreservationBackupDigest);
+      const oldPaths=new Set(original.snapshot.entries.map(e=>e.path)),additiveEntries=restoredSnapshot.entries.filter(e=>!oldPaths.has(e.path));
+      const body={schema:'runtime-legacy-rollback-result/v1' as const,requestId,requestDigest,backupDigest:request.expectedBackupDigest,sourceSnapshotDigest:request.expectedSourceSnapshotDigest,preservationBackupDigest:request.expectedPreservationBackupDigest,managedSnapshotDigest:request.expectedManagedSnapshotDigest,migrationDigest:journal.seal.migrationDigest,sourceSchemaVersion:original.snapshot.schemaVersion,managedSchemaVersion:9 as const,restoredSnapshot,additiveEntries,preservedDatabase:preserved,preservedDatabaseSha256:managedHash,status:'OLD_FORMAT_RESTORED' as const,completedAt:new Date().toISOString(),currentStateAttestation:false as const,serviceStarted:false as const,hostRegistered:false as const,businessWorkDispatched:false as const,authority:false as const};
+      const result={...body,resultDigest:largeDigest(body)};journal={...journal,phase:'VERIFIED',lastError:null,result};persist();return result;
+    }catch(error){if(journal&&journal.phase!=='VERIFIED'){journal.lastError=error&&typeof error==='object'&&'code'in error&&typeof error.code==='string'?error.code:'LEGACY_ROLLBACK_INTERRUPTED';persist();}throw error;}
+  },signal);
 }
