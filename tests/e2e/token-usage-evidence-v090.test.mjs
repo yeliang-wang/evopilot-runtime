@@ -132,3 +132,26 @@ test('source, archive and original 664 acceptance cannot be replaced by UT evide
   const newCommit=f.commit();f.input.sourceCommit=newCommit;assert.throws(f.audit,/Source revision/);
   const matrixRef=join(f.source,'governance/parameter-matrix-v090.json'),matrix=JSON.parse(fs.readFileSync(matrixRef));matrix.caseInstances.pop();f.put(matrixRef,matrix);f.input.sourceCommit=f.commit();assert.throws(f.audit,/governance is not valid/);
 });
+
+test('usage collector import does not read selection or register an acceptance run',()=>{
+ const module=join(repository,'tests/acceptance/v090/usage.test.mjs');
+ const output=execFileSync(process.execPath,['--input-type=module','-e','const m=await import(process.argv[1]); if(typeof m.executeUsageAcceptance!=="function") throw Error("missing callable entry"); process.stdout.write("import-only");',new URL('file://'+module).href],{encoding:'utf8',env:{...process.env,EVOPILOT_V090_USAGE_SELECTION:'/missing/must-not-read.json'},timeout:5000});
+ assert.equal(output,'import-only');
+});
+
+test('UT03 installed driver assertions exercise native cumulative ledger semantics',async()=>{
+ const {collectUsageReplay}=await import('../acceptance/v090/usage.test.mjs');
+ const {deriveDeltas}=await import('../../dist/usage/ledger.js');
+ const source={id:'replay-source',parentThreadId:null,baseline:{input:0,output:0,total:0,cachedInput:0,cacheWriteInput:0,reasoningOutput:0}};
+ const records=[],bindings=[{sourceId:source.id,afterSequence:0,throughSequence:null}];let bound=false;
+ const report=()=>{const deltas=deriveDeltas(source,records,bindings),totals=deltas.map(d=>d.metrics.total);return{
+  counts:{total:{recorded:7+totals.reduce((n,v)=>n+(v??0),0),unknownRecords:2+totals.filter(v=>v===null).length}},
+  sources:[{id:source.id,records:records.length}],issues:deltas.flatMap(d=>d.issues.map(code=>({code,records:1})))
+ };};
+ const result=await collectUsageReplay({report,source:async()=>source,bind:async s=>{assert.equal(s,source);bound=true;},append:(s,cumulative,last,context,observedAt)=>{
+  assert(bound);assert.equal(s,source);assert.equal(context,true);records.push({sourceId:s.id,sequence:records.length+1,cumulative,last,observedAt});
+ },waitFor:async(s,count)=>{assert.equal(s,source);assert.equal(records.length,count);return report();}});
+ assert.equal(result.recordedTotal,220);assert.equal(result.syntheticSource,true);
+ assert(Date.parse(records[3].observedAt)<Date.parse(records[2].observedAt),'The delayed event actually predates its predecessor');
+ assert.equal(report().counts.total.recorded,227);assert.equal(report().counts.total.unknownRecords,3);
+});

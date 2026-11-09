@@ -16,8 +16,29 @@ const metrics=(input,output,cachedInput=0,reasoningOutput=0)=>({input,output,tot
 const external=m=>Object.fromEntries(Object.entries({input_tokens:m.input,output_tokens:m.output,total_tokens:m.total,cached_input_tokens:m.cachedInput,cache_write_input_tokens:m.cacheWriteInput,reasoning_output_tokens:m.reasoningOutput}).filter(([,v])=>v!==null));
 const exact=(value,keys)=>assert.deepEqual(Object.keys(value).sort(),keys.sort());
 
-test('fixed installed token-usage cases retain independent candidate-bound evidence',async()=>{
- const selectedRef=process.env.EVOPILOT_V090_USAGE_SELECTION;
+export async function collectUsageReplay({report,source,bind,append,waitFor}){
+ const before=await report(),s=await source('replay');await bind(s);
+ const at=Date.now(),events=[
+  {cumulative:metrics(100,10),total:110,age:0},
+  {cumulative:metrics(100,10),total:110,age:0},
+  {cumulative:metrics(150,15),total:165,age:0},
+  {cumulative:metrics(120,12),total:165,age:60000},
+  {cumulative:metrics(200,20),total:220,age:0}
+ ];
+ let result;
+ for(const [index,event] of events.entries()){
+  append(s,event.cumulative,event.cumulative,true,new Date(at-event.age).toISOString());
+  result=await waitFor(s,index+1);
+  assert.equal((result.counts.total.recorded??0)-(before.counts.total.recorded??0),event.total,'Replay or late counters must not duplicate/subtract cumulative consumption');
+  assert.equal(result.sources.find(v=>v.id===s.id)?.records,index+1,'All original observations remain visible');
+ }
+ assert.equal(result.counts.total.unknownRecords,before.counts.total.unknownRecords+1,'The delayed lower counter stays unknown rather than subtracting usage');
+ assert(result.issues.some(v=>v.code==='RESET_OR_CORRECTION_total'));
+ return{originalObservations:5,recordedTotal:220,replayedCumulativeAdded:0,lateLowerCounter:'UNKNOWN',historyRetained:true,syntheticSource:true};
+}
+/** The callable entry performs the same installed checks as direct execution.
+ * Importing this module does not read a selection or start acceptance work. */
+export async function executeUsageAcceptance(selectedRef=process.env.EVOPILOT_V090_USAGE_SELECTION){
  assert(selectedRef,'Select a protected isolated usage campaign explicitly');
  assert(path.isAbsolute(selectedRef)&&fs.realpathSync(selectedRef)===selectedRef);
  const stat=fs.lstatSync(selectedRef);assert(stat.isFile()&&stat.nlink===1&&stat.uid===process.getuid()&&(stat.mode&0o077)===0&&stat.size<=131072);
@@ -73,9 +94,9 @@ test('fixed installed token-usage cases retain independent candidate-bound evide
  const initialInstance=structuredClone(instance),query={targetVersion:selection.targetVersion,instanceId:instance.id},report=()=>read('usage.report.read',query);
  const reportDelta=(before,after,key='total')=>(after.counts[key].recorded??0)-(before.counts[key].recorded??0);
  async function waitFor(source,count){const end=Date.now()+60000;let found;do{const r=await report();found=r.sources.find(s=>s.id===source.id);if(found?.records===count)return r;await new Promise(resolve=>setTimeout(resolve,500));}while(Date.now()<end);assert.fail('Installed worker did not collect expected original records for '+source.id);}
- function append(source,cumulative,last=cumulative,context=true){
+ function append(source,cumulative,last=cumulative,context=true,observedAt=new Date().toISOString()){
   const lines=[];if(context)lines.push({type:'turn_context',payload:{turn_id:'controlled-turn',model:'controlled-model'}});
-  lines.push({type:'event_msg',timestamp:new Date().toISOString(),payload:{type:'token_count',info:{total_token_usage:external(cumulative),last_token_usage:external(last)},rate_limits:{secret:'CONTROLLED_PRIVATE_RATE_LIMIT'}}});
+  lines.push({type:'event_msg',timestamp:observedAt,payload:{type:'token_count',info:{total_token_usage:external(cumulative),last_token_usage:external(last)},rate_limits:{secret:'CONTROLLED_PRIVATE_RATE_LIMIT'}}});
   const offset=fs.statSync(source.path).size,bytes=lines.map(v=>JSON.stringify(v)+'\n').join('');
   fs.appendFileSync(source.path,bytes);artifact('controlled-original-source-events',{sourceId:source.id,offset,bytes,sha256:sha(bytes),syntheticSource:true});return fs.statSync(source.path).size;
  }
@@ -91,6 +112,7 @@ test('fixed installed token-usage cases retain independent candidate-bound evide
  const bind=(s,overrides={})=>mutate('usage.attribution.bind',binding(s,overrides));
  const rejectBinding=async(s,overrides,code)=>{const r=await request('usage.attribution.bind',binding(s,overrides),true);assert.notEqual(r.status,200);assert.equal(r.body.error.code,code);};
  const implementations={
+  UT03:()=>collectUsageReplay({report,source,bind,append,waitFor}),
   async UT01(){const before=await report(),s=await source('inclusive');await bind(s);append(s,metrics(100,20,80,10));const r=await waitFor(s,1);assert.equal(reportDelta(before,r),120);assert.equal(reportDelta(before,r,'cachedInput'),80);assert.equal(reportDelta(before,r,'reasoningOutput'),10);return{inclusiveTotal:120,cachedSubset:80,reasoningSubset:10};},
   async UT02(){const before=await report(),s=await source('unknown',{baseline:unknown()});await bind(s);append(s,unknown());const r=await waitFor(s,1);assert.equal(reportDelta(before,r),0);assert.equal(r.counts.total.unknownRecords,before.counts.total.unknownRecords+1);assert.equal(r.completeVersionTotal,false);assert.equal(r.coverage,'REGISTERED_SOURCES_ONLY');return{unknownPreserved:true,coverageLimited:true};},
   async UT04(){const before=await report(),s=await source('reset');await bind(s);append(s,metrics(100,10));await waitFor(s,1);append(s,metrics(20,2));let r=await waitFor(s,2);assert.equal(reportDelta(before,r),110);assert(r.issues.some(v=>v.code==='RESET_OR_CORRECTION_total'));await mutate('usage.source.revoke',{sourceId:s.id});const next=await source('epoch',{sourcePath:s.path,epoch:'two',predecessorId:s.id,initialOffset:fs.statSync(s.path).size});await bind(next,{attemptId:'declared-reset'});append(next,metrics(30,3));r=await waitFor(next,1);assert.equal(reportDelta(before,r),143);return{undeclaredResetUnknown:true,explicitNextEpoch:33,oldHistoryRetained:true};},
@@ -120,4 +142,5 @@ test('fixed installed token-usage cases retain independent candidate-bound evide
  }
  assert.equal(results.filter(r=>r.status==='FAIL').length,0,'A selected case failed; retain evidence and inspect before retry');
  assert.equal(results.length,ids.length,'Selected cases lack their required live driver; no skip or passing credit');
-});
+}
+if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)test('fixed installed token-usage cases retain independent candidate-bound evidence',()=>executeUsageAcceptance());

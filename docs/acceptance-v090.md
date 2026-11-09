@@ -437,10 +437,15 @@ the output root must not already exist. `FINAL_CANDIDATE` also requires the exac
 clean source commit. Installed-source inspection and local grant creation apply
 only to controlled files created in this isolated campaign.
 
-The implemented branches are UT01, UT02, UT04–UT06, UT09–UT12, UT17, UT18,
+The implemented branches are UT01–UT06, UT09–UT12, UT17, UT18,
 UT20 and UT21. They retain controlled Codex-format counter events, native grant
 and HTTP receipts, exact assertions and immutable snapshot readbacks. These
-fixtures are expressly synthetic, not actual model work. UT10 requires an actual
+fixtures are expressly synthetic, not actual model work. UT03 appends replayed
+cumulative counters and a delayed lower counter through the installed adapter:
+replay adds zero, the lower counter remains unknown, and subsequent growth
+continues from the original high-water mark. Importing this module does not
+start a campaign; `executeUsageAcceptance` retains the same installed checks.
+UT10 requires an actual
 project extension in the selected instance; UT12 requires an actually running
 implementation stage. Cases needing complete lifecycle transitions, actual Host
 usage/Expert dialogue, multi-instance recovery or current-host delivery remain
@@ -760,3 +765,20 @@ prerequisites retain all five NOT_READY rows and a failing command outcome.
 
 LC12 只在发布及当前安装完成后执行五组新的只读观察，不借用其他场景的 PASS。
 当前连接、进程和安装字节必须一致；缺少真实前提不计分，源码检查也不代表部署已验收。
+
+LC18 uses a protected `lc18` selection for source preparation, FAIL→PASS and
+PASS→FAIL history, and absence of business redispatch. The environment-state
+check covers the selected execution workspace's source preparation: a reused
+qualification cannot turn an unprepared consumer into a prepared one. It does
+not claim to establish readiness of an external database or remote service.
+Complete managed outer executions supply the history; child fixture failures
+cannot substitute for those original outcomes.
+
+CI evidence follows its actual native shapes: the retained run has `requestId`
+and `runId`; the observation and verified archive additionally bind
+`inputDigest`. The collector preserves original deadlines, full event history
+and all four vector rows. It does not dispatch business work or create grants.
+Missing current prerequisites remain NOT_READY, not a source-test PASS.
+
+LC18 核验当前执行工作区的准备状态和完整外层执行历史。复用 PASS 不会准备环境，
+也不能覆盖先前失败；四个向量仍须用真实安装和原件完成正式验收。
