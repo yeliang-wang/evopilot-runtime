@@ -1,9 +1,11 @@
-import { canonical, exact, record, reject, string } from '../server/errors.js';
+import { canonical, exact, record, reject, string, ServiceError, evidenceValueDigest } from '../server/errors.js';
 import { authorize, type Principal } from '../server/security.js';
 import { RuntimeStore, type Receipt } from '../server/store.js';
 import { valueDigest } from './base.js';
 import { containsInlineSecret } from './compiler.js';
 import type { StageProgress, StageRequest } from './execution.js';
+import { readExtensionEvidence } from '../adapters/extension-stages.js';
+import { readVerificationFeedbackForRequest } from '../adapters/stage-feedback.js';
 
 export const CORRECTION_READS = ['lifecycle.correction.inspect', 'lifecycle.correction.admission'] as const;
 export const CORRECTION_WRITES = ['lifecycle.correction.propose'] as const;
@@ -78,6 +80,49 @@ export function createCorrectionService(store: RuntimeStore, deps: CorrectionDep
       deadlineAt: r.deadlineAt, phase: p.phase, terminal: p.terminal, reason: p.reason,
       observationRef: p.observationRef, observationDigest: p.observation ? valueDigest(p.observation) : null };
   }
+  /** Existing fixed readers authenticate original-stage records only. They do
+   * not discover a repair round, classify a failure or certify input closure. */
+  function originalNativeEvidence(actor: Principal, projectId: string, id: string) {
+    const { request: r, progress: p } = deps.original(actor, projectId, id);
+    const base = { originalRequestId: r.id, originalRequestDigest: r.digest,
+      purpose: 'ORIGINAL_STAGE_VALIDATION' as const, repairProof: false as const,
+      missingRepairBindings: ['FAILURE_BOUND_MINIMAL_VERIFICATION', 'COMPLETE_BEFORE_AFTER_INPUT_CLOSURE',
+        'PUBLISHED_FAILURE_CLASSIFICATION', 'COMPLETE_CUMULATIVE_REPAIR_ROUNDS'] };
+    const summarize = (owner: string, receipt: unknown) => {
+      const raw = record(receipt), report = record(raw.result ?? {}), counts: Record<string, number> = {};
+      // Preserve native FAIL/ERROR/UNKNOWN/SKIPPED separately. No status is
+      // reinterpreted as deterministic, transient, repaired or current PASS.
+      if (Array.isArray(report.criteria)) for (const value of report.criteria) {
+        const status = string(record(value).status); counts[status] = (counts[status] ?? 0) + 1;
+      }
+      return { owner, nativeRequestId: raw.requestId, receiptDigest: evidenceValueDigest(raw),
+        reportDigest: report.reportDigest ?? null, receiptStatus: raw.status ?? null,
+        executionStatus: report.executionStatus ?? null, qualityStatus: report.qualityStatus ?? report.status ?? null,
+        criterionStatuses: counts };
+    };
+    try {
+      if (r.plan.adapterId === 'runtime-native-extension-stage-v1') {
+        const original = readExtensionEvidence(store, r);
+        if (!original.evidence || !original.action || !original.receipt) return { ...base, status: 'UNAVAILABLE', reason: 'ORIGINAL_NATIVE_EVIDENCE_MISSING' };
+        const evidence = record(original.evidence), result = record(evidence.result);
+        if (evidence.receiptTerminal !== true || !p.terminal) return { ...base, status: 'UNAVAILABLE', reason: 'ORIGINAL_NATIVE_RESULT_NOT_TERMINAL' };
+        const phase = result.status === 'PASS' ? 'COMPLETE' : result.status === 'FAIL' ? 'FAILED' : null;
+        if (!phase || p.phase !== phase || p.observation?.outcome.receiptRef !== 'runtime:extension/' + r.id ||
+          !p.observation.outcome.checks.length || p.observation.outcome.checks.some(c => c.evidenceRef !== original.evidenceRef || c.status !== (phase === 'COMPLETE' ? 'PASS' : 'FAIL')))
+          reject('CORRECTION_NATIVE_EVIDENCE_MISMATCH', 'Original stage outcome does not reference this native result', 503);
+        return { ...base, status: 'AVAILABLE', evidence: { kind: 'extension-evidence', id: original.evidenceRef },
+          owners: [summarize(string(record(r.plan.parameters).kind), original.receipt)] };
+      }
+      if (r.plan.adapterId === 'runtime-ci-owner-stage-v2' && r.stageId === 'verification') {
+        const event = readVerificationFeedbackForRequest(store, actor, r);
+        return { ...base, status: 'AVAILABLE', evidence: { kind: 'stage-feedback-source', id: event.id },
+          owners: (['ontology', 'harness'] as const).map(owner => summarize(owner, event.results[owner])) };
+      }
+      return { ...base, status: 'UNAVAILABLE', reason: 'ORIGINAL_NATIVE_READER_UNAVAILABLE' };
+    } catch (error) {
+      return { ...base, status: 'UNAVAILABLE', reason: error instanceof ServiceError ? error.code : 'ORIGINAL_NATIVE_EVIDENCE_UNKNOWN' };
+    }
+  }
   function retained(projectId: string, ref: unknown): Proposal {
     const id = string(ref, 128);
     if (!/^correction:sha256:[a-f0-9]{64}$/.test(id)) reject('INVALID_CORRECTION', 'Use an exact retained correction reference');
@@ -96,7 +141,9 @@ export function createCorrectionService(store: RuntimeStore, deps: CorrectionDep
     const current = facts(actor, projectId, string(input.stageRequestId));
     const proposal = input.correctionRef === undefined ? null : retained(projectId, input.correctionRef);
     if (proposal && proposal.input.stageRequestId !== current.originalRequestId) reject('CORRECTION_SCOPE', 'Correction belongs to a different original request', 409);
-    const response = { facts: current, proposal, proposalCurrent: proposal ? proposal.factsDigest === valueDigest(current) : null,
+    const nativeEvidence = originalNativeEvidence(actor, projectId, current.originalRequestId);
+    if (nativeEvidence.originalRequestDigest !== current.originalRequestDigest || nativeEvidence.originalRequestId !== current.originalRequestId) reject('CORRECTION_FACTS_CHANGED', 'Original request changed during protected evidence readback', 409);
+    const response = { facts: current, nativeEvidence, proposal, proposalCurrent: proposal ? proposal.factsDigest === valueDigest(current) : null,
       projectRevision: store.revision(projectId), executionAuthorized: false, releaseAuthorized: false, automaticRedispatch: false };
     if (operation === 'lifecycle.correction.inspect') return response;
     authorize(actor, projectId, 'execution.request');

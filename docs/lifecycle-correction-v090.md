@@ -13,6 +13,16 @@ original stage request. It verifies the request and the immutable observation
 envelope before presenting the failure. Mutable progress cannot substitute
 another outcome, phase or reason.
 
+The same read returns `nativeEvidence` for supported original extension and
+verification requests. It rechecks protected action, receipt and terminal-outcome
+links through the existing scoped readers, then summarizes the original native
+criterion statuses. FAIL, ERROR, UNKNOWN and SKIPPED remain distinct. Missing,
+detached or changed records return unavailable evidence. Even an original PASS
+has `repairProof: false`: it does not bind a later minimal verification to the
+failure, establish complete before/after inputs, provide published failure
+classification or prove cumulative repair rounds. These missing bindings remain
+explicit; readback neither launches an owner validation nor grants a retry.
+
 `lifecycle.correction.propose` retains a hypothesis, minimal verification and
 repository-relative change paths. It does not verify the hypothesis, run code,
 approve a domain model or rewrite the original request. Stable mutation IDs

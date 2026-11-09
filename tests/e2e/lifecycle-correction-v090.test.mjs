@@ -12,22 +12,38 @@ import { valueDigest } from '../../dist/lifecycle/base.js';
 import { RuntimeStore } from '../../dist/server/store.js';
 import { createCorrectionService } from '../../dist/lifecycle/correction.js';
 import { runtimeToolDefinitions } from '../../dist/server/mcp.js';
+import { evidenceValueDigest } from '../../dist/server/errors.js';
+import { ownerRequestDigest } from '../../dist/adapters/published-owners.js';
+import { nativeSha256 } from '../../vendor/compatibility/v1/native.mjs';
 
-async function fixture(tamper, phase='FAILED', expired=false, direct=false) {
+async function fixture(tamper, phase='FAILED', expired=false, direct=false, native) {
   const dir=mkdtempSync(join(realpathSync(tmpdir()),'runtime-correction-')), root=join(dir,'state');
   const tokens={editor:randomBytes(32).toString('hex'),reader:randomBytes(32).toString('hex'),outsider:randomBytes(32).toString('hex')};
   const actors=Object.entries(tokens).map(([id,token])=>({id,tokenDigest:tokenDigest(token),revision:1,expiresAt:'2030-01-01T00:00:00Z',projects:[id==='outsider'?'other':'alpha'],permissions:id==='editor'?['read','draft.write','execution.request']:['read']}));
   initializeCredentials(root,'synthetic',actors);
-  const plan={adapterId:'synthetic-test',adapterDigest:valueDigest('adapter'),action:'fixture',bindingDigest:valueDigest('binding'),parameters:{synthetic:true}};
+  const scope={visibility:'private',projectId:'alpha'},reference={product:'harness',id:'synthetic-original-only',version:'1.0.0',digest:valueDigest('synthetic-published-reference')},criteria=(native?.statuses??[]).map((status,index)=>({criterionId:'synthetic-rule-'+index,variantId:'synthetic-case',status,evidenceDigest:valueDigest('synthetic-evidence-'+index)}));
+  const parameters={kind:'harness',owner:{ref:'binding:alpha/harness',registrationDigest:valueDigest('registration'),scope,reference,criteria:criteria.map(({criterionId,variantId})=>({criterionId,variantId}))},toolchainLockDigest:valueDigest('toolchain'),effectiveConfigDigest:valueDigest('effective-config')};
+  const plan=native?{adapterId:'runtime-native-extension-stage-v1',adapterDigest:evidenceValueDigest({id:'runtime-native-extension-stage-v1',actions:['runtime.check.ontology','runtime.check.harness','runtime.check.artifact'],input:'runtime-extension-observation/v1',recovery:'inspect-original-only'}),action:'runtime.check.harness',bindingDigest:valueDigest(parameters),parameters}:{adapterId:'synthetic-test',adapterDigest:valueDigest('adapter'),action:'fixture',bindingDigest:valueDigest('binding'),parameters:{synthetic:true}};
   const body={schema:'runtime-stage-request/v1',id:'failed-request',workspaceId:'synthetic',projectId:'alpha',instanceId:'instance-one',stageId:'verification',pinsDigest:valueDigest('pins'),inputDigest:valueDigest('input'),bindingStamp:valueDigest('binding'),authorityRef:'synthetic-authority',releaseAuthorityRef:null,initiatedBy:{id:'editor',revision:1},plan,planDigest:valueDigest(plan),requestedAt:new Date(Date.now()-60000).toISOString(),deadlineAt:new Date(Date.now()+(expired?-1000:60000)).toISOString()};
   const original={...body,digest:valueDigest(body)};
   const observation={requestId:body.id,inputDigest:body.inputDigest,adapterDigest:plan.adapterDigest,phase,handle:null,outcome:{requestId:body.id,inputDigest:body.inputDigest,status:phase,receiptRef:'synthetic:failed',expiresAt:body.deadlineAt,checks:[]}};
+  const extra=[];
+  if(native){
+    const context={workspaceId:'synthetic',scope,projectCandidateDigest:valueDigest('candidate'),claimId:valueDigest({stageRequestDigest:original.digest}),inputDigest:original.inputDigest,effectiveConfigDigest:parameters.effectiveConfigDigest,sourceScopeDigest:valueDigest('source'),requirementSetDigest:valueDigest('requirements')},observed={schema:'evopilot-observation/v1',origin:'execution-result',values:{synthetic:true}};
+    const request={operation:'native.package.validate',scope,input:{id:reference.id,version:reference.version,context,observation:observed},requestId:'extension-native-'+valueDigest({requestDigest:original.digest}).slice(7,51),expectedRevision:0},actionBody={request,requestDigest:ownerRequestDigest('harness',request),context,observationDigest:nativeSha256(observed)},action={...actionBody,digest:evidenceValueDigest(actionBody)};
+    const reportBody={reference,context,toolchainLockDigest:parameters.toolchainLockDigest,effectiveConfigDigest:parameters.effectiveConfigDigest,observationDigest:action.observationDigest,qualityStatus:phase==='COMPLETE'?'PASS':'FAIL',executionStatus:'SUCCEEDED',criteria},report={...reportBody,reportDigest:nativeSha256(reportBody)},receipt={requestId:request.requestId,operation:request.operation,scope,requestDigest:nativeSha256({operation:request.operation,scope,input:request.input}),status:'SUCCEEDED',result:report};
+    const evidence={schema:'runtime-native-extension-evidence/v1',requestDigest:original.digest,planDigest:original.planDigest,candidateDigest:null,source:{commit:'a'.repeat(40)},actionDigest:action.digest,receiptRef:evidenceValueDigest(receipt),receiptTerminal:true,result:{owner:'harness',status:phase==='COMPLETE'?'PASS':'FAIL',receiptDigest:nativeSha256(receipt),reportDigest:report.reportDigest},executionAuthorized:false,releaseAuthorized:false},ref=evidenceValueDigest(evidence);
+    observation.handle={owner:'harness',requestId:request.requestId};observation.outcome.receiptRef='runtime:extension/'+original.id;observation.outcome.checks=[{id:'synthetic-check',status:phase==='COMPLETE'?'PASS':'FAIL',evidenceRef:native.detach?'sha256:'+'0'.repeat(64):ref}];
+    extra.push({kind:'extension-native-action',id:original.id,value:action},{kind:'extension-native-receipt',id:original.id,value:receipt},{kind:'extension-evidence',id:ref,value:evidence},{kind:'extension-evidence-pointer',id:original.id,value:{ref}});
+    if(native.missing)extra.splice(extra.findIndex(o=>o.kind===native.missing),1);
+    if(native.tamper)native.tamper(extra);
+  }
   const envelope={schema:'runtime-stage-observation/v1',requestId:body.id,observation,reason:'SYNTHETIC_DEFECT',observedAt:new Date().toISOString()},observationRef=valueDigest(envelope);
-  const progress={requestId:body.id,phase,terminal:['FAILED','COMPLETE'].includes(phase),handle:null,observation,observationRef,reason:envelope.reason,observedAt:envelope.observedAt};
+  const progress={requestId:body.id,phase,terminal:['FAILED','COMPLETE'].includes(phase),handle:observation.handle,observation,observationRef,reason:envelope.reason,observedAt:envelope.observedAt};
   tamper?.(progress);
   let server,directStore,directService;
   const seed=store=>{
-    if(!store.object('alpha','stage-request',body.id)) store.mutate(actors[0],{projectId:'alpha',operation:'synthetic.seed',requestId:'seed',expectedRevision:0,input:{synthetic:true},permission:'draft.write'},()=>({objects:[{kind:'stage-request',id:body.id,value:original},{kind:'stage-progress',id:body.id,value:progress},{kind:'stage-observation',id:observationRef,value:envelope}],value:{synthetic:true},event:{type:'synthetic-seed',data:{}}}));
+    if(!store.object('alpha','stage-request',body.id)) store.mutate(actors[0],{projectId:'alpha',operation:'synthetic.seed',requestId:'seed',expectedRevision:0,input:{synthetic:true},permission:'draft.write'},()=>({objects:[{kind:'stage-request',id:body.id,value:original},{kind:'stage-progress',id:body.id,value:progress},{kind:'stage-observation',id:observationRef,value:envelope},...extra],value:{synthetic:true},event:{type:'synthetic-seed',data:{}}}));
   };
   const open=async()=>{
     if(direct){directStore=new RuntimeStore(root,'synthetic');seed(directStore);directService=createCorrectionService(directStore,{original:()=>({request:original,progress}),stageAdmission:async()=>({allowed:false,reasons:['SYNTHETIC_ONLY']})});return;}
@@ -108,4 +124,27 @@ test('completed and expired requests return read-only next actions, not repair i
    assert.equal(result.result.stageAdmission,null);
   }finally{await f.close();}
  }
+});
+
+test('protected original native evidence preserves criterion outcomes without conferring repair meaning',async()=>{
+ const f=await fixture(undefined,'FAILED',false,false,{statuses:['PASS','FAIL','ERROR','UNKNOWN','SKIPPED']});try{
+  const before=(await f.request('runtime.status')).result.revision;
+  const inspected=await f.request('lifecycle.correction.inspect',{stageRequestId:'failed-request'},'reader');assert.equal(inspected.status,200,JSON.stringify(inspected));
+  const original=inspected.result.nativeEvidence;assert.equal(original.status,'AVAILABLE');assert.equal(original.purpose,'ORIGINAL_STAGE_VALIDATION');assert.equal(original.repairProof,false);assert.equal(original.originalRequestDigest,f.original.digest);assert.deepEqual(original.owners[0].criterionStatuses,{PASS:1,FAIL:1,ERROR:1,UNKNOWN:1,SKIPPED:1});assert.equal(original.owners[0].qualityStatus,'FAIL');assert.equal(original.missingRepairBindings.length,4);assert.equal(Object.hasOwn(original,'failureClass'),false);assert.equal(Object.hasOwn(original,'rounds'),false);
+  await f.restart();assert.deepEqual((await f.request('lifecycle.correction.inspect',{stageRequestId:'failed-request'},'reader')).result.nativeEvidence,original);assert.equal((await f.request('runtime.status')).result.revision,before);
+  assert.equal((await f.request('lifecycle.correction.inspect',{stageRequestId:'failed-request',nativeEvidence:original},'reader')).error.code,'INVALID_FIELDS');assert.equal((await f.request('lifecycle.correction.inspect',{stageRequestId:'failed-request'},'outsider')).status,403);
+ }finally{await f.close();}
+});
+
+test('an original native PASS remains original stage validation and never becomes repair approval',async()=>{
+ const f=await fixture(undefined,'COMPLETE',false,false,{statuses:['PASS']});try{
+  const inspected=await f.request('lifecycle.correction.inspect',{stageRequestId:'failed-request'},'reader');assert.equal(inspected.result.nativeEvidence.status,'AVAILABLE');assert.equal(inspected.result.nativeEvidence.owners[0].qualityStatus,'PASS');assert.equal(inspected.result.nativeEvidence.repairProof,false);
+  const result=await f.request('lifecycle.correction.admission',{stageRequestId:'failed-request'});assert.equal(result.result.allowed,false);assert.equal(result.result.nextAction,'STAGE_ALREADY_COMPLETE');assert.equal(result.result.executionAuthorized,false);
+ }finally{await f.close();}
+});
+
+for(const native of [{statuses:['FAIL'],missing:'extension-native-action'},{statuses:['FAIL'],missing:'extension-native-receipt'},{statuses:['FAIL'],detach:true},{statuses:['FAIL'],tamper:objects=>{objects.find(o=>o.kind==='extension-native-receipt').value.result.criteria[0].status='PASS';}}])test('missing or detached native records cannot establish protected repair evidence '+JSON.stringify({missing:native.missing,detach:native.detach,tamper:!!native.tamper}),async()=>{
+ const f=await fixture(undefined,'FAILED',false,false,native);try{
+  const read=await f.request('lifecycle.correction.inspect',{stageRequestId:'failed-request'});assert.equal(read.status,200,JSON.stringify(read));assert.equal(read.result.nativeEvidence.status,'UNAVAILABLE');assert.equal(read.result.nativeEvidence.repairProof,false);assert.match(read.result.nativeEvidence.reason,/^(CORRUPT_EXTENSION|CORRECTION_NATIVE_EVIDENCE_MISMATCH)$/);assert.equal(read.result.executionAuthorized,false);assert.equal((await f.request('runtime.status')).result.revision,1);
+ }finally{await f.close();}
 });
