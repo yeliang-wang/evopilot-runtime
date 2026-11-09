@@ -710,3 +710,16 @@ removes a binding, creates an approval or manufactures a fixture.
 
 LC09 分别核验真实执行、有效复用、原选定注册缺少必需政策绑定的情况。缺失绑定
 与政策全局不存在是不同事实；三组观察完整留痕，缺少真实前提仍为 NOT_READY。
+
+LC10 uses a protected `lc10` selection for permission, project, expiry, owner
+and approval boundaries. Each negative retains an authenticated original and
+the positive controls needed to isolate its cause. An invalid credential cannot
+stand in for a missing permission, a nonexistent reference cannot prove project
+isolation, and configuration drift cannot stand in for expiry. Owner mismatch
+uses the selected installation's actual configuration and the original native
+action. The approval vector reads a valid existing plan that has never received
+a grant. The collector does not create or revoke authority to manufacture these
+conditions. All five rows are retained; missing prerequisites remain NOT_READY.
+
+LC10 的拒绝必须对应真实权限、项目、有效期、所有者或批准边界。源码回归只验证
+采集机制，正式计分仍需实际安装中的完整观察。
