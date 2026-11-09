@@ -193,3 +193,18 @@ test('LC01 rejects unverified manifests and wrong installed planner bytes before
   assert.throws(()=>verifyLc01InstalledBytes(root,sha(missing)),/missing installed public module/);
  }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+test('LC entry rejects a byte-identical external copy before relative helper selection',async()=>{
+ const {assertCorrectionEntryLocation}=await import('../acceptance/v090/correction.test.mjs');
+ const fs=await import('node:fs'),{fileURLToPath}=await import('node:url');
+ const source=realpathSync(fileURLToPath(new URL('../../',import.meta.url))),entry=join(source,'tests/acceptance/v090/correction.test.mjs');
+ const root=realpathSync(mkdtempSync(join(tmpdir(),'lc-entry-provenance-'))),copy=join(root,'correction.test.mjs');
+ try{
+  fs.copyFileSync(entry,copy);fs.writeFileSync(join(root,'preflight.mjs'),'throw Error("must not import foreign helper");\n');
+  assert.deepEqual(fs.readFileSync(copy),fs.readFileSync(entry));
+  assertCorrectionEntryLocation(source,entry);
+  assert.throws(()=>assertCorrectionEntryLocation(source,copy),/exact committed correction entry/);
+  const link=join(root,'linked-entry.mjs');fs.symlinkSync(entry,link);
+  assert.throws(()=>assertCorrectionEntryLocation(source,link),/exact committed correction entry/);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});

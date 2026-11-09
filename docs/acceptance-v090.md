@@ -172,6 +172,35 @@ E17's historical-format migration and all-entry coverage are separate cases;
 passing EX10 does not close them. Use the standalone archive's exact bytes and
 file modes for the installer bootstrap, rather than an unverified packing tree.
 
+E17.journey and E17.CV01 select a private, SHA-256-pinned
+`initializationMigration: {ref, sha256}` fixture. CV01 covers all six actual
+configuration producers: HTTP API, HTTP MCP, CLI, Expert, Dashboard YAML and
+Dashboard graph properties. Each uses a separately prepared exact authority
+reference and creates its own unstarted instance; the collector does not invent
+decisions or dispatch business stages.
+
+The historical-format journey binds the fixed official v0.8.3 archive, a canonical
+isolated legacy copy and original public readbacks containing literal PENDING,
+NOT_RUN and retained pins. It also binds owner/decision files, the exact new
+installation plan, original backup and complete current preservation backup.
+Its explicit `allowServiceControl: true` permits the isolated installer to start
+for adoption and then stop before managed inspection and rollback. Merely staging
+files does not perform adoption. Unknown stop results retain the original state
+and fail without retry. The public rollback restores exact old database bytes,
+retains new receipts separately and keeps additive evidence; whole-workspace
+snapshot equality is not claimed. These inputs and source guards do not establish
+that the actual installed E17 journey has passed.
+
+E01.variant.04 and E02.variant.03 use a separate singleton
+`stageAdmission: {ref, sha256}` fixture and a preprovisioned `principals.monitor`
+with only `read` permission on the same project and service. The eight positive
+stage requests must come from an exact current-source/candidate original journey,
+with native, Host and provider facts independently read back. The collector then
+issues 24 fresh invalid-input, insufficient-permission and missing-prerequisite
+requests. It verifies unchanged native events/attempts and provider run/job
+inventories. It neither creates decisions nor substitutes an old PASS label for
+current proof; the separate CV03 resource-boundary matrix remains required.
+
 E19 uses a separate synthetic project with 51 or more native-authorized PENDING
 instances, an empty-project reader and a dedicated initially valid reader whose
 access is removed by the isolated test operator. Its collector writes 1,000
@@ -524,3 +553,14 @@ The original catalog and usage addendum retain 688 required cases (678 PRE, 10 P
 原目录与用量补充方案的 688 项要求保持不变。LC01–LC21 新增 21 项，Runtime 合计 709 项；HO01–HO03 单独记账。原始执行回执不可改写；跨候选复用只能在已发布 Harness 政策兼容性得到验证后，形成新的当前 `PASS_REUSED` 资格，不能冒充当前候选重新执行。
 
 See `governance/lifecycle-correction-v090.json` and the correction ADR. These are implementation obligations, not a statement that release acceptance has passed.
+
+The LC01 singleton uses the correction collector's protected `lc01: {ref, sha256}`
+selection. Its immutable descriptor is separate from expected bindings, avoiding
+a self-referential fixture hash. The collector verifies the installed module
+closure before importing product code, then observes source, candidate, toolchain,
+fixture, collector, platform and actual authenticated permission bindings. Seven
+controlled faults change only an expected binding; each must prevent the callback.
+The positive callback performs one authenticated status read. Observations,
+original responses and artifact pins use the correction report format consumed
+by release auditing. A singleton PASS still reports 1 of 20 PRE cases and an
+incomplete scenario; it grants no release authority or full-catalog completion.
