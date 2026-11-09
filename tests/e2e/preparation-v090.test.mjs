@@ -72,7 +72,7 @@ async function fixture({plan=false,extensions=[],extensionSlot='after-plan',miss
       }
       await state.beforeBaseOutcome?.(r);return{requestId:r.id,inputDigest:r.inputDigest,adapterDigest:r.plan.adapterDigest,phase:'COMPLETE',handle:null,outcome};
     }},select=id=>id==='scope'?scope:id==='plan'?adapter:id.startsWith('project.')?(data.extensions.find(e=>e.id===id)?.actionRef==='runtime.review.scope'?scopeReview:nativeExtension):syntheticBase;
-    return{prepare:(i,s,...a)=>select(s).prepare(i,s,...a),dispatch:(r,...a)=>{activeRequest=r.id;return select(r.stageId).dispatch(r,...a);},inspect:(r,...a)=>select(r.stageId).inspect(r,...a),advance:(r,...a)=>{activeRequest=r.id;return select(r.stageId).advance(r,...a);}};
+    return{prepare:(i,s,...a)=>select(s).prepare(i,s,...a),dispatch:(r,...a)=>{activeRequest=r.id;return select(r.stageId).dispatch(r,...a);},inspect:(r,...a)=>select(r.stageId).inspect(r,...a),reconcileAdvance:(r,...a)=>select(r.stageId).reconcileAdvance(r,...a),advance:(r,...a)=>{activeRequest=r.id;return select(r.stageId).advance(r,...a);}};
   },validator,undefined,store=>registeredExtensionReview(store,path,reviewConnections()));await start();
   async function request(operation,input={},write=false,actor='fixture',meta){
     if(write&&!meta){const status=await request('runtime.status',{},false,actor);meta={requestId:'prep-'+(++sequence),expectedRevision:status.result.revision};}

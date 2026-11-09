@@ -1,0 +1,374 @@
+{
+  "schema": "runtime-lifecycle-correction-addendum/v1",
+  "id": "v090-lifecycle-correction",
+  "owner": "runtime",
+  "targetVersion": "0.9.0",
+  "status": "IMPLEMENTATION_APPROVED",
+  "baseStages": [
+    "scope",
+    "plan",
+    "implementation",
+    "candidate",
+    "verification",
+    "release-decision",
+    "publication",
+    "closure"
+  ],
+  "acceptance": {
+    "originalRequiredInstances": 688,
+    "originalPreRelease": 678,
+    "originalPostRelease": 10,
+    "additionalPreRelease": 20,
+    "additionalPostRelease": 1,
+    "combinedRequiredInstances": 709,
+    "combinedPreRelease": 698,
+    "combinedPostRelease": 11,
+    "collector": "tests/acceptance/v090/correction.test.mjs",
+    "compositeRule": "Every declared vector is required; one composite case counts once. Entry presence is not PASS.",
+    "cases": [
+      {
+        "id": "LC01",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "Reject mismatched source, candidate, toolchain, fixtures, collector, platform or permissions before dispatch",
+        "vectors": [
+          "source",
+          "candidate",
+          "toolchain",
+          "fixture",
+          "collector",
+          "platform",
+          "permission"
+        ]
+      },
+      {
+        "id": "LC02",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "Every fixed case has a real callable phase-correct entry; PRE never requires POST output",
+        "vectors": [
+          "missing-entry",
+          "uncallable-entry",
+          "pre-post-cycle",
+          "valid-mapping"
+        ]
+      },
+      {
+        "id": "LC03",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "Failure identity retains phase, executor, original request, baseline and facts separately from hypothesis",
+        "vectors": [
+          "same-text-different-baseline",
+          "facts-vs-hypothesis",
+          "unknown"
+        ]
+      },
+      {
+        "id": "LC04",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "A minimal verification distinguishes preparation errors from product errors without certifying a hypothesis",
+        "vectors": [
+          "preparation-defect",
+          "product-defect",
+          "unproven"
+        ]
+      },
+      {
+        "id": "LC05",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "Retry inherits bounded authority and rejects unchanged deterministic failures and two no-progress repair rounds",
+        "vectors": [
+          "transient-bounded",
+          "unchanged-deterministic",
+          "two-no-progress"
+        ]
+      },
+      {
+        "id": "LC06",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "Actual GitHub response loss reconciles the original accepted job without a second dispatch",
+        "vectors": [
+          "accepted-response-lost",
+          "same-job-reconciled"
+        ]
+      },
+      {
+        "id": "LC07",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "Actual GitLab revision conflict restores exact reviewed bindings rather than blindly refreshing",
+        "vectors": [
+          "stale-revision",
+          "exact-restoration"
+        ]
+      },
+      {
+        "id": "LC08",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "Installed service and Host reentry retain identity, original request and correction records",
+        "vectors": [
+          "service-restart",
+          "host-reentry",
+          "original-records"
+        ]
+      },
+      {
+        "id": "LC09",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "Current evidence qualification distinguishes actual execution from authorized reuse",
+        "vectors": [
+          "executed",
+          "reused",
+          "missing-owner-policy"
+        ]
+      },
+      {
+        "id": "LC10",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "Permission, project, expiry, owner and approval boundaries remain enforced",
+        "vectors": [
+          "permission",
+          "project",
+          "expiry",
+          "owner",
+          "approval"
+        ]
+      },
+      {
+        "id": "LC11",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "Installed Codex Expert completes HTTP MCP correction with zero Runtime model calls",
+        "vectors": [
+          "installed-host",
+          "http-mcp",
+          "no-runtime-llm"
+        ]
+      },
+      {
+        "id": "LC12",
+        "phase": "POST_RELEASE",
+        "required": true,
+        "expected": "Current installed service, Expert, MCP and CLI read back correction and immutable history",
+        "vectors": [
+          "service",
+          "expert",
+          "mcp",
+          "cli",
+          "history"
+        ]
+      },
+      {
+        "id": "LC13",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "Independent branches continue; failed prerequisites block dependants; global invalidations stop affected execution",
+        "vectors": [
+          "A-to-B",
+          "serial-C1-to-C2",
+          "independent-D",
+          "A-failure",
+          "D-failure",
+          "batch-next-RC",
+          "candidate-invalid",
+          "shared-environment-invalid",
+          "authority-expired",
+          "budget-exhausted"
+        ]
+      },
+      {
+        "id": "LC14",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "Unrelated candidate change permits qualification, direct/transitive changes require execution, reuse traces original run",
+        "vectors": [
+          "unrelated",
+          "direct",
+          "transitive",
+          "A-B-C-original-A"
+        ]
+      },
+      {
+        "id": "LC15",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "Input changes invalidate qualification; unknown dynamic/external dependencies fall back conservatively",
+        "vectors": [
+          "build-output",
+          "generated-output",
+          "toolchain",
+          "lock",
+          "environment",
+          "assertion",
+          "fixture",
+          "collector",
+          "prestate",
+          "policy",
+          "ttl",
+          "dynamic-unknown",
+          "external-unknown",
+          "identical-control"
+        ]
+      },
+      {
+        "id": "LC16",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "Required differential set is complete and cannot silently reuse incomplete or invalid outcomes",
+        "vectors": [
+          "FAIL",
+          "NEW",
+          "NOT_RUN",
+          "CANCELLED",
+          "UNKNOWN",
+          "SKIPPED",
+          "EXPIRED",
+          "AFFECTED",
+          "UNKNOWN_IMPACT",
+          "FINAL_MUST_RUN",
+          "UNAFFECTED_VALID_PASS"
+        ]
+      },
+      {
+        "id": "LC17",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "Original execution is immutable and reused labels cannot be substituted for source evidence",
+        "vectors": [
+          "candidate-relabel",
+          "label-only-chain",
+          "raw-tamper",
+          "restart-byte-identity"
+        ]
+      },
+      {
+        "id": "LC18",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "A reused PASS cannot establish environment state or erase flaky history",
+        "vectors": [
+          "state-not-prepared",
+          "FAIL-PASS",
+          "PASS-FAIL",
+          "no-business-redispatch"
+        ]
+      },
+      {
+        "id": "LC19",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "Request, directory, Host, instance and restart cannot reset budgets; deadline permits observation only",
+        "vectors": [
+          "request",
+          "directory",
+          "host",
+          "instance",
+          "restart",
+          "deadline"
+        ]
+      },
+      {
+        "id": "LC20",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "Six-case dependency fixture compares selective and full execution for known edits and unknown graph",
+        "vectors": [
+          "unrelated",
+          "direct",
+          "transitive",
+          "missing-edge-fallback"
+        ]
+      },
+      {
+        "id": "LC21",
+        "phase": "PRE_RELEASE",
+        "required": true,
+        "expected": "Owner repository tool adapters report protocol failures, actual failure and success without false PASS or invented costs",
+        "vectors": [
+          "cli-protocol-mismatch",
+          "command-fail",
+          "valid-output",
+          "unknown-cost"
+        ]
+      }
+    ]
+  },
+  "handoff": {
+    "targetChat": "EvoPilot-ontology v0.9.0 Preview",
+    "separateFromRuntimeAcceptance": true,
+    "cases": [
+      {
+        "id": "HO01",
+        "expected": "Exact target chat verifies delivered installed Runtime identity and connection"
+      },
+      {
+        "id": "HO02",
+        "expected": "Transfer exact Ontology source, pending patches, failures and valid grants without reviving expired budgets"
+      },
+      {
+        "id": "HO03",
+        "expected": "Perform actual subsequent Ontology correction through installed Runtime, including branch handling, differential plan and evidence"
+      }
+    ]
+  },
+  "requiredBehavior": [
+    "Phase-correct preflight before costly dispatch; execution bindings and fixture readiness must be real.",
+    "Append-only facts and hypotheses; no Runtime LLM or arbitrary execution endpoint.",
+    "Use existing stage request/reconcile/advance; UNKNOWN never implies redispatch.",
+    "Independent authorized branches continue after unrelated failure; dependent branches remain blocked; serial stateful groups stay indivisible.",
+    "Global candidate, environment integrity, authority or resource invalidity halts affected work.",
+    "Collect faults on fixed RC, batch isolated repairs, targeted regressions then freeze next RC.",
+    "Differential execution includes failures, new and unrun cases, affected or uncertain inputs, invalid evidence and fixed final must-run checks.",
+    "PASS_REUSED is a new current qualification, never a rewritten raw execution or a stage-status override.",
+    "Reuse requires original executed evidence, complete dependency closure, published Harness policy, validity and current assessment; unknown input fails closed.",
+    "Reuse never prepares live state or hides initial failures/flaky history.",
+    "Retries preserve cumulative authority, deadline and attempts across request, directory, Host and instance changes; two no-progress repairs stop that path.",
+    "Final candidate identity, package install/start/public entry/resources/key integration and affected upgrade/recovery actually execute.",
+    "Actual usage only; absent costs remain unknown; no new token quota or cost estimator."
+  ],
+  "compatibility": {
+    "adr": "docs/architecture/runtime-v090-correction.md",
+    "rawStageEnumUnchanged": true,
+    "legacyQualification": "Unknown qualification schema rejected; old receipts retained",
+    "rollback": "New evidence remains archived; restore verified pre-upgrade state for old binary, never open newer data with old binary",
+    "ownerPolicy": "Harness owns quality semantics; check published contract before reuse activation; insufficient contract blocks formal reuse rather than inventing compatibility"
+  },
+  "tools": {
+    "development": [
+      "typescript-eslint",
+      "fast-check"
+    ],
+    "boundedPilots": [
+      "dependency-cruiser",
+      "StrykerJS"
+    ],
+    "ci": [
+      "pinned-actionlint"
+    ],
+    "deferred": [
+      "SemgrepCE",
+      "Nx",
+      "Temporal",
+      "LangGraph",
+      "Dagger",
+      "wholesale-external-skills"
+    ],
+    "note": "Version and package identity must be bound before introduction; reports do not replace product or standard acceptance."
+  },
+  "exclusions": [
+    "No ninth lifecycle stage or new orchestration engine",
+    "No additional Dashboard page or monitor edit/execute/approval controls",
+    "No Ontology product fixes in Runtime chat before delivery handoff",
+    "No automatic business asset or L3 changes",
+    "No unreviewed Harness source/version change",
+    "No resetting expired windows or unlimited retries",
+    "No release authority inferred from implementation approval"
+  ]
+}

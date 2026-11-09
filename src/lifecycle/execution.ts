@@ -5,7 +5,7 @@ import { RuntimeStore, type Receipt } from '../server/store.js';
 import { valueDigest } from './base.js';
 import { containsInlineSecret, type EffectiveDefinition } from './compiler.js';
 import { validateBindings, type DefinitionBindingProvider } from './bindings.js';
-import { inspectInstance, requestStage, recordStageOutcome, resolveAuthority, stageAdmission, stageBudget, type AuthorityResolver, type ExecutionAuthority, type LifecycleInstance, type ReleaseAuthority, type StageOutcome } from './instance.js';
+import { inspectInstance, requestStage, recordStageOutcome, resolveAuthority, stageAdmission, stageBudget, type AuthorityResolver, type ExecutionAuthority, type LifecycleInstance, type ReleaseAuthority, type StageOutcome, type RecoveryLineageService } from './instance.js';
 import { readImplementationEvidence } from '../adapters/implementation-stages.js';
 import { readReleaseMaterial } from '../adapters/release-stages.js';
 import { readPublicationEvidence } from '../adapters/publication-stage.js';
@@ -29,6 +29,31 @@ export interface StageRequest {
 export type StagePhase='DISPATCHING'|'WAITING_AGENT'|'CI_PENDING'|'CI_RUNNING'|'RUNNING'|'UNKNOWN'|'COMPLETE'|'FAILED';
 export interface StageObservation { requestId:string; inputDigest:string; adapterDigest:string; phase:Exclude<StagePhase,'DISPATCHING'>; handle:Record<string,unknown>|null; outcome:StageOutcome; }
 export interface StageProgress { requestId:string; phase:StagePhase; terminal:boolean; handle:Record<string,unknown>|null; observation:StageObservation|null; observationRef:string|null; reason:string|null; observedAt:string; }
+export interface StageRepairInputs {
+  sourceDigest:string; candidateDigest:string|null; toolchainDigest:string;
+  /** Complete semantic dependency/input closure, including generated/build,
+   * tests, assertions, locks, config, environment, fixtures, collector/prestate.
+   * An incomplete/dynamic unknown closure cannot produce verified repair facts. */
+  dependencyClosureDigest:string;
+}
+export interface StageRepairSubject {
+  schema:'runtime-stage-repair-subject/v1'; workspaceId:string; projectId:string;
+  instanceId:string; stageId:string; pinsDigest:string; authorityDigest:string;
+  candidateDigest:string|null; history:{request:StageRequest;progress:StageProgress}[];
+  preparedPlan:StagePlan;
+}
+export interface StageRepairFacts {
+  schema:'runtime-stage-repair-facts/v1'; subjectDigest:string;
+  failureClass:'DETERMINISTIC'|'TRANSIENT'|'UNKNOWN';
+  before:StageRepairInputs; after:StageRepairInputs;
+  /** Complete cumulative actual repair/verification rounds, not proposals. */
+  rounds:{evidenceRef:string;beforeFactsDigest:string;afterFactsDigest:string}[];
+  evidenceRef:string; expiresAt:string;
+}
+interface StageRepairAdmission {
+  schema:'runtime-stage-repair-admission/v1'; requestId:string; requestDigest:string;
+  subjectDigest:string; facts:StageRepairFacts; factsDigest:string; digest:string;
+}
 /** Fixed trusted adapters only. prepare and inspect must be read-only. dispatch
  * must call permit immediately before each authorized external side effect.
  * No API/YAML field can provide this implementation or a client PASS. */
@@ -39,6 +64,17 @@ export interface StageAdapter {
   /** Explicit continuation of the same retained plan, not a retry of dispatch.
    * Each remaining side effect still needs its own durable action/permit. */
   advance?(request:StageRequest,instance:LifecycleInstance,progress:StageProgress,permit:()=>Promise<Principal>,signal:AbortSignal):Promise<StageObservation>;
+  /** Optional native recovery of this exact original request. Read-only owner
+   * receipt lookup, with no permit callback: it may not dispatch or repeat an
+   * action. Runtime persists the verified observation before permitting any
+   * remaining continuation. An unresolved UNKNOWN never enters advance. */
+  reconcileAdvance?(request:StageRequest,instance:LifecycleInstance,progress:StageProgress,actor:Principal,signal:AbortSignal):Promise<StageObservation>;
+  /** Trusted native owner read. Independently verify original failure inputs,
+   * prepared current semantic inputs and complete actual repair-round history.
+   * Never infer these facts from proposal text, timestamps or a changed plan
+   * digest. Missing evidence/contract returns null. No native adapter is assumed
+   * to support this optional boundary; it cannot be configured through YAML. */
+  verifyRepair?(subject:StageRepairSubject,actor:Principal,signal:AbortSignal):Promise<StageRepairFacts|null>;
 }
 export interface StageServices {
   releaseAuthority:(instance:LifecycleInstance,actor:Principal)=>ReleaseAuthority|undefined;
@@ -46,7 +82,7 @@ export interface StageServices {
   extensionReviews?:ExtensionReviewService;
 }
 export interface ExecutionDependencies {
-  bindings?:DefinitionBindingProvider; authorities?:AuthorityResolver;
+  bindings?:DefinitionBindingProvider; authorities?:AuthorityResolver; recovery?:RecoveryLineageService;
   verifyAuthority?:(grant:ExecutionAuthority,definition:EffectiveDefinition,actor:Principal)=>void;
   releaseAuthority?:(instance:LifecycleInstance,actor:Principal)=>ReleaseAuthority|undefined;
   principal:(id:string)=>Principal|null; adapter?:StageAdapter;
@@ -90,6 +126,76 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     const p=store.object(r.projectId,'stage-progress',r.id) as StageProgress|null;
     if(!p||p.requestId!==r.id)reject('CORRUPT_STAGE_REQUEST','Stage progress is missing or mismatched',503);return copy(p);
   }
+  function stageRequests(saved:LifecycleInstance,stageId:string,excluding?:string):StageRequest[]{
+    const selected:StageRequest[]=[];
+    for(const id of saved.requestIds){
+      if(id===excluding)continue;
+      const raw=store.object(saved.pins.projectId,'stage-request',id);
+      // Only selected-stage history is relevant here. Its complete count and
+      // exact request contract remain mandatory; unrelated owner records are
+      // not reinterpreted as current executor requests.
+      if(raw&&typeof raw==='object'&&'stageId' in raw&&raw.stageId===stageId)selected.push(request(saved.pins.projectId,id));
+    }
+    if(selected.length!==saved.stages[stageId].attempts-(excluding?1:0))reject('REPAIR_HISTORY_REQUIRED','Complete retained same-stage attempt history is required',409);
+    return selected;
+  }
+  function repairHistory(saved:LifecycleInstance,stageId:string,authorityRef:string,excluding?:string):StageRepairSubject['history']{
+    const history=stageRequests(saved,stageId,excluding).map(r=>({request:r,progress:progress(r)}));
+    if(!history.length)reject('REPAIR_HISTORY_REQUIRED','Complete retained same-stage attempt history is required',409);
+    for(const {request:r,progress:p} of history){
+      exact(record(p),['requestId','phase','terminal','handle','observation','observationRef','reason','observedAt']);
+      if(r.instanceId!==saved.id||r.pinsDigest!==saved.pinsDigest||r.authorityRef!==authorityRef||p.phase!=='FAILED'||!p.observation||!p.observationRef)reject('REPAIR_HISTORY_REQUIRED','Only exact confirmed failures within the original instance/grant can be retried',409);
+      if(p.terminal!==true||p.observation.phase!==p.phase||p.observation.outcome.status!=='FAILED'||canonical(p.handle)!==canonical(p.observation.handle)||!Number.isFinite(Date.parse(p.observedAt))||!Number.isFinite(Date.parse(r.deadlineAt)))reject('CORRUPT_STAGE_OBSERVATION','Failure progress, outcome and original observation disagree',503);
+      validateObservation(r,p,p.observation);
+      const observation=store.object(r.projectId,'stage-observation',p.observationRef);
+      if(!observation)reject('REPAIR_HISTORY_REQUIRED','Original immutable failure observation is required',409);
+      const envelope=record(observation);exact(envelope,['schema','requestId','observation','reason','observedAt']);
+      if(envelope.schema!=='runtime-stage-observation/v1'||envelope.requestId!==r.id||valueDigest(envelope)!==p.observationRef||canonical(envelope.observation)!==canonical(p.observation)||envelope.reason!==p.reason||envelope.observedAt!==p.observedAt)reject('CORRUPT_STAGE_OBSERVATION','Mutable failure progress differs from the exact immutable observation envelope',503);
+    }
+    return history;
+  }
+  function repairSubject(saved:LifecycleInstance,stageId:string,plan:StagePlan,history:StageRepairSubject['history']):StageRepairSubject{
+    return copy({schema:'runtime-stage-repair-subject/v1',workspaceId:store.workspaceId,projectId:saved.pins.projectId,instanceId:saved.id,stageId,pinsDigest:saved.pinsDigest,authorityDigest:saved.pins.authorityDigest,candidateDigest:saved.candidateDigest,history,preparedPlan:plan});
+  }
+  function repairAdmission(r:StageRequest):StageRepairAdmission{
+    const raw=store.object(r.projectId,'lifecycle-recovery-admission',r.id);
+    if(!raw)reject('REPAIR_ADMISSION_REQUIRED','Retry has no retained trusted repair admission',409);
+    const v=record(raw);exact(v,['schema','requestId','requestDigest','subjectDigest','facts','factsDigest','digest']);
+    const {digest,...body}=v;
+    if(v.schema!=='runtime-stage-repair-admission/v1'||v.requestId!==r.id||v.requestDigest!==r.digest||valueDigest(body)!==digest||valueDigest(v.facts)!==v.factsDigest||record(v.facts).subjectDigest!==v.subjectDigest)reject('CORRUPT_REPAIR_ADMISSION','Retained repair admission changed',503);
+    return copy(v as unknown as StageRepairAdmission);
+  }
+  function validateRepair(facts:StageRepairFacts,subject:StageRepairSubject):void{
+    exact(record(facts),['schema','subjectDigest','failureClass','before','after','rounds','evidenceRef','expiresAt']);safeData(facts);
+    if(facts.schema!=='runtime-stage-repair-facts/v1'||facts.subjectDigest!==valueDigest(subject))reject('REPAIR_FACTS_MISMATCH','Trusted repair facts must cover the exact original failures and prepared plan',409);
+    if(!['DETERMINISTIC','TRANSIENT','UNKNOWN'].includes(facts.failureClass))reject('INVALID_REPAIR_FACTS','Unsupported failure classification');
+    for(const inputs of [facts.before,facts.after]){
+      exact(record(inputs),['sourceDigest','candidateDigest','toolchainDigest','dependencyClosureDigest']);
+      hash(inputs.sourceDigest);hash(inputs.toolchainDigest);hash(inputs.dependencyClosureDigest);if(inputs.candidateDigest!==null)hash(inputs.candidateDigest);
+      if(inputs.candidateDigest!==subject.candidateDigest)reject('REPAIR_CANDIDATE_CHANGED','Repair must preserve the immutable instance candidate',409);
+    }
+    string(facts.evidenceRef,512);
+    if(!Number.isFinite(Date.parse(facts.expiresAt))||Date.parse(facts.expiresAt)<=Date.now())reject('REPAIR_EVIDENCE_EXPIRED','Current trusted repair evidence is required',409);
+    if(!Array.isArray(facts.rounds)||facts.rounds.length>4096)reject('INVALID_REPAIR_FACTS','Bounded actual repair history required');
+    const rounds=new Set<string>();
+    for(const round of facts.rounds){exact(record(round),['evidenceRef','beforeFactsDigest','afterFactsDigest']);string(round.evidenceRef,512);hash(round.beforeFactsDigest);hash(round.afterFactsDigest);if(rounds.has(round.evidenceRef))reject('INVALID_REPAIR_FACTS','A repair round cannot be counted twice');rounds.add(round.evidenceRef);}
+    if(facts.failureClass==='UNKNOWN')reject('REPAIR_FAILURE_UNKNOWN','Unknown failures require original observation or verified classification',409);
+    if(facts.failureClass==='DETERMINISTIC'&&valueDigest(facts.before)===valueDigest(facts.after))reject('UNCHANGED_DETERMINISTIC_FAILURE','A new request or plan timestamp cannot repair identical semantic inputs',409);
+    if(facts.failureClass==='DETERMINISTIC'&&!facts.rounds.length)reject('REPAIR_VERIFICATION_REQUIRED','Deterministic repair requires an actual completed minimal verification',409);
+    if(facts.rounds.length>=2&&facts.rounds.slice(-2).every(r=>r.beforeFactsDigest===r.afterFactsDigest))reject('TWO_NO_PROGRESS_ROUNDS','Two completed repair rounds made no observed progress',409);
+    // Later retries cannot relabel the preceding inputs or erase earlier rounds.
+    for(const item of subject.history.slice(1)){
+      const prior=repairAdmission(item.request);
+      if(canonical(facts.rounds.slice(0,prior.facts.rounds.length))!==canonical(prior.facts.rounds))reject('REPAIR_HISTORY_CHANGED','Cumulative repair history cannot be reset by a new request',409);
+    }
+    if(subject.history.length>1&&valueDigest(repairAdmission(subject.history.at(-1)!.request).facts.after)!==valueDigest(facts.before))reject('REPAIR_HISTORY_CHANGED','Original failed semantic inputs differ from their retained admission',409);
+  }
+  async function verifyRepair(subject:StageRepairSubject,actor:Principal,signal:AbortSignal):Promise<StageRepairFacts>{
+    if(!deps.adapter?.verifyRepair)reject('REPAIR_VERIFIER_UNAVAILABLE','This native adapter cannot independently verify repair; a proposal does not authorize retry',409);
+    const facts=await deps.adapter.verifyRepair(subject,actor,signal);signal.throwIfAborted();
+    if(!facts)reject('REPAIR_EVIDENCE_REQUIRED','Original failure and complete prepared repair facts could not be verified',409);
+    const checked=copy(facts);validateRepair(checked,subject);return checked;
+  }
   function fixedInstance(r:StageRequest):LifecycleInstance{
     const saved=instance(r.projectId,r.instanceId),stage=saved.stages[r.stageId];
     if(saved.pinsDigest!==r.pinsDigest||!stage||stage.requestId!==r.id||stage.inputDigest!==r.inputDigest)reject('STAGE_REQUEST_MISMATCH','Original request does not match the immutable instance attempt',409);return saved;
@@ -113,13 +219,26 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     const release=stageId==='publication'?deps.releaseAuthority?.(saved,actor):undefined;
     return{authority,checked,release,context:{authority,bindingsCurrent:checked.ready,releaseAuthority:release}};
   }
-  async function permit(r:StageRequest,signal?:AbortSignal):Promise<Principal>{
+  // observationOnly is internal advance preflight, never an adapter capability.
+  // Every callback supplied to dispatch/advance uses the strict default.
+  async function permit(r:StageRequest,signal?:AbortSignal,observationOnly=false):Promise<Principal>{
     signal?.throwIfAborted();
     if(closed)reject('STOPPING','Service is stopping',503);
     if(Date.parse(r.deadlineAt)<=Date.now())reject('EXECUTION_DEADLINE','This original request exhausted its dispatch time budget',409);
     const saved=fixedInstance(r),actor=actorFor(r),current=await admission(saved,r.stageId,actor,signal);
     signal?.throwIfAborted();
     if(!current.checked.ready||current.checked.stamp!==r.bindingStamp||valueDigest(current.authority)!==saved.pins.authorityDigest||current.authority.evidenceRef!==r.authorityRef||(current.release?.decisionRef??null)!==r.releaseAuthorityRef)reject('EXECUTION_BINDING_CHANGED','Current execution pins or authority differ from the retained request',409);
+    if(!observationOnly&&progress(r).phase==='UNKNOWN')reject('RECONCILE_ORIGINAL_REQUEST','Unknown outcomes allow only observation of the original request',409);
+    if(saved.stages[r.stageId].attempts>1){
+      const retained=repairAdmission(r),history=repairHistory(saved,r.stageId,r.authorityRef,r.id),subject=repairSubject(saved,r.stageId,r.plan,history);
+      if(retained.subjectDigest!==valueDigest(subject))reject('REPAIR_FACTS_MISMATCH','Retained repair does not match this original request history',409);
+      validateRepair(retained.facts,subject);
+      const observed=await bounded(s=>verifyRepair(subject,actor,s),signal??new AbortController().signal,Math.max(1,Math.min(5000,Date.parse(r.deadlineAt)-Date.now())));
+      const stable=(f:StageRepairFacts)=>{const {expiresAt,...content}=f;return valueDigest(content);};
+      if(stable(observed)!==stable(retained.facts))reject('REPAIR_FACTS_CHANGED','Semantic repair facts changed after admission',409);
+      validateRepair(retained.facts,subject);
+    }
+    const lineage=deps.recovery?.admission(saved,current.authority,r.stageId,actor,r.id);if(lineage&&!lineage.allowed)reject('EXECUTION_RECOVERY_BLOCKED',lineage.reasons.join('; '),409);
     const fresh=actorFor(r);deps.verifyAuthority?.(current.authority,saved.definition,fresh);deps.verifyProjectReviewState?.(saved,fresh);
     if(closed||Date.parse(r.deadlineAt)<=Date.now())reject('EXECUTION_DEADLINE','This original request cannot dispatch now',409);return fresh;
   }
@@ -155,11 +274,23 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     const controller=new AbortController();
     const promise=Promise.resolve().then(async()=>{
       try{
-        const saved=fixedInstance(r);
+        let saved=fixedInstance(r);
         const observed=await bounded(async signal=>{
           let observation:StageObservation;
-          if(mode==='dispatch'){await permit(r);observation=await deps.adapter!.dispatch(r,saved,()=>permit(r),signal);}
-          else if(mode==='advance'){await permit(r);if(!deps.adapter!.advance)reject('STAGE_ADVANCE_UNAVAILABLE','This adapter has no explicitly requested continuation');observation=await deps.adapter!.advance(r,saved,progress(r),()=>permit(r),signal);}
+          if(mode==='dispatch'){await permit(r,signal);observation=await deps.adapter!.dispatch(r,saved,()=>permit(r,signal),signal);}
+          else if(mode==='advance'){
+            const prior=progress(r);
+            if(prior.phase==='UNKNOWN'){
+              if(!deps.adapter!.reconcileAdvance)reject('RECONCILE_ORIGINAL_REQUEST','This adapter has no read-only original-receipt recovery',409);
+              const reconciled=await deps.adapter!.reconcileAdvance(r,saved,prior,system(r.projectId),signal);
+              await deps.verifyProjectReviews?.(fixedInstance(r),system(r.projectId),signal);signal.throwIfAborted();
+              recordObservation(r,reconciled);
+              if(['UNKNOWN','COMPLETE','FAILED'].includes(reconciled.phase))return reconciled;
+              saved=fixedInstance(r);
+            }
+            await permit(r,signal);if(!deps.adapter!.advance)reject('STAGE_ADVANCE_UNAVAILABLE','This adapter has no explicitly requested continuation');
+            observation=await deps.adapter!.advance(r,saved,progress(r),()=>permit(r,signal),signal);
+          }
           else observation=await deps.adapter!.inspect(r,saved,progress(r),system(r.projectId),signal);
           await deps.verifyProjectReviews?.(fixedInstance(r),system(r.projectId),signal);signal.throwIfAborted();return observation;
         // Multi-request provider protocols include current permit checks and
@@ -206,7 +337,45 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
       return{observationRef:ref,evidence,historical:true};
     }
     if(operation!=='lifecycle.stage.request.inspect')reject('UNKNOWN_OPERATION','Unsupported execution read',404);exact(input,['stageRequestId']);
-    const r=request(projectId,string(input.stageRequestId));return{request:r,progress:progress(r),workerError:workerError?.projectId===projectId&&workerError.requestId===r.id?workerError.code:null,projectRevision:store.revision(projectId),automaticRedispatch:false};
+    const r=request(projectId,string(input.stageRequestId));return{request:r,progress:progress(r),repairAdmission:store.object(projectId,'lifecycle-recovery-admission',r.id)?repairAdmission(r):null,workerError:workerError?.projectId===projectId&&workerError.requestId===r.id?workerError.code:null,projectRevision:store.revision(projectId),automaticRedispatch:false};
+  }
+  async function prepareAdmission(saved:LifecycleInstance,stageId:string,actor:Principal){
+    const projectId=saved.pins.projectId,node=saved.definition.nodes.find(n=>n.id===stageId)!;
+    // Fresh admission and the multi-read provider preparation share one bounded
+    // response window. They do not create a receipt, attempt or external action.
+    // The original instance/authority cutoff always wins over transport limits;
+    // a late read-only promise cannot proceed to prepare or commit after abort.
+    const previous=stageRequests(saved,stageId);
+    const preparationDeadline=Math.min(Date.parse(saved.createdAt)+saved.pins.budget.timeoutSeconds*1000,Date.parse(saved.pins.authorityExpiresAt),previous.length?Date.parse(previous[0].deadlineAt):Infinity),preparationRemaining=preparationDeadline-Date.now();
+    if(!Number.isFinite(preparationRemaining))reject('EXECUTION_DEADLINE','Original execution admission has an invalid deadline',409);
+    // An already expired request still reads native admission so its existing
+    // AUTHORITY_EXPIRED or STAGE_BLOCKED reasons remain authoritative. This
+    // bounded diagnostic path can never proceed to prepare or persistence.
+    const admissionWindow=preparationRemaining<=0?18000:Math.min(18000,preparationRemaining);
+    const {current,admitted,plan,repair,effectiveDeadline}=await bounded(async signal=>{
+      const current=await admission(saved,stageId,actor,signal);signal.throwIfAborted();
+      const admitted=stageAdmission(saved,stageId,current.context);
+      if(!admitted.allowed)reject('STAGE_BLOCKED',admitted.reasons.join('; '),409);
+      const history=saved.stages[stageId].attempts>0?repairHistory(saved,stageId,current.authority.evidenceRef):null;
+      const lineage=deps.recovery?.admission(saved,current.authority,stageId,actor);
+      if(lineage&&!lineage.allowed)reject('STAGE_BLOCKED',lineage.reasons.join('; '),409);
+      const effectiveDeadline=Math.min(preparationDeadline,Date.parse(current.authority.expiresAt),lineage?Date.parse(lineage.deadlineAt):Infinity);
+      const remaining=effectiveDeadline-Date.now();
+      if(!Number.isFinite(remaining)||remaining<=0)reject('EXECUTION_DEADLINE','Original execution admission has expired',409);
+      const plan=copy(await bounded(preparing=>deps.adapter!.prepare(saved,stageId,actor,preparing),signal,Math.min(15000,remaining)));
+      signal.throwIfAborted();
+      exact(record(plan),['adapterId','adapterDigest','action','bindingDigest','parameters']);slug(plan.adapterId);hash(plan.adapterDigest);hash(plan.bindingDigest);record(plan.parameters);safeData(plan);
+      if(plan.action!==(node.source==='base'?'base.'+node.id:node.action!.actionRef))reject('ACTION_MISMATCH','Adapter action does not match the fixed Base/extension action',409);
+      let repair:{subject:StageRepairSubject;facts:StageRepairFacts}|null=null;
+      if(saved.stages[stageId].attempts>0){
+        if(saved.stages[stageId].status!=='FAILED')reject('REPAIR_HISTORY_REQUIRED','A new attempt requires the exact retained failed stage',409);
+        const subject=repairSubject(saved,stageId,plan,history!);
+        const facts=await bounded(s=>verifyRepair(subject,actor,s),signal,Math.max(1,Math.min(5000,effectiveDeadline-Date.now())));
+        signal.throwIfAborted();repair={subject,facts};
+      }
+      return{current,admitted,plan,repair,effectiveDeadline};
+    },new AbortController().signal,admissionWindow);
+    return{current,admitted,plan,repair,preparationDeadline:effectiveDeadline};
   }
   async function write(actor:Principal,projectId:string,operation:string,input:Record<string,unknown>,requestId:string,expectedRevision:number,reauthorize:()=>Principal):Promise<Receipt>{
     if(closed)reject('STOPPING','Service is stopping',503);
@@ -218,6 +387,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     if(continuing){
       const r=request(projectId,string(input.stageRequestId)),p=progress(r);
       if(actor.id!==r.initiatedBy.id||actor.revision!==r.initiatedBy.revision)reject('AUTHORITY_CHANGED','Only the original current execution principal may continue this request',403);
+      if(p.phase==='UNKNOWN'&&!deps.adapter?.reconcileAdvance)reject('RECONCILE_ORIGINAL_REQUEST','Unknown outcomes permit only original request observation',409);
       if(!deps.adapter?.advance)reject('STAGE_ADVANCE_UNAVAILABLE','This adapter has no explicitly requested continuation',409);
       const id=key(projectId,r.id);
       if(active.has(id)||advancing.has(id)||occupied()>=4)reject('EXECUTOR_BUSY','Wait for the retained original observation; do not create a replacement stage',429);
@@ -228,7 +398,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
         if(!p.terminal){
           const remaining=Date.parse(r.deadlineAt)-Date.now();
           if(remaining<=0)reject('EXECUTION_DEADLINE','This original request exhausted its dispatch time budget',409);
-          await bounded(signal=>permit(r,signal),reservation.controller.signal,Math.min(18000,remaining));
+          await bounded(signal=>permit(r,signal,p.phase==='UNKNOWN'),reservation.controller.signal,Math.min(18000,remaining));
         }
         if(closed||reservation.controller.signal.aborted)reject('STOPPING','Service is stopping',503);
         if(advancing.get(id)!==reservation||active.has(id))reject('EXECUTOR_BUSY','Original continuation reservation changed',429);
@@ -252,45 +422,46 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     const saved=instance(projectId,slug(input.instanceId)),stageId=string(input.stageId),node=saved.definition.nodes.find(n=>n.id===stageId);
     if(!node)reject('UNKNOWN_STAGE','Stage does not belong to this immutable instance');
     if(stageId==='publication')authorize(actor,projectId,'release.request');
-    // Fresh admission and the multi-read provider preparation share one bounded
-    // response window. They do not create a receipt, attempt or external action.
-    // The original instance/authority cutoff always wins over transport limits;
-    // a late read-only promise cannot proceed to prepare or commit after abort.
-    const preparationDeadline=Math.min(Date.parse(saved.createdAt)+saved.pins.budget.timeoutSeconds*1000,Date.parse(saved.pins.authorityExpiresAt)),preparationRemaining=preparationDeadline-Date.now();
-    if(!Number.isFinite(preparationRemaining))reject('EXECUTION_DEADLINE','Original execution admission has an invalid deadline',409);
-    // An already expired request still reads native admission so its existing
-    // AUTHORITY_EXPIRED or STAGE_BLOCKED reasons remain authoritative. This
-    // bounded diagnostic path can never proceed to prepare or persistence.
-    const admissionWindow=preparationRemaining<=0?18000:Math.min(18000,preparationRemaining);
-    const {current,admitted,plan}=await bounded(async signal=>{
-      const current=await admission(saved,stageId,actor,signal);signal.throwIfAborted();
-      const admitted=stageAdmission(saved,stageId,current.context);
-      if(!admitted.allowed)reject('STAGE_BLOCKED',admitted.reasons.join('; '),409);
-      const remaining=Math.min(preparationDeadline,Date.parse(current.authority.expiresAt))-Date.now();
-      if(!Number.isFinite(remaining)||remaining<=0)reject('EXECUTION_DEADLINE','Original execution admission has expired',409);
-      const plan=await bounded(preparing=>deps.adapter!.prepare(saved,stageId,actor,preparing),signal,Math.min(15000,remaining));
-      signal.throwIfAborted();return{current,admitted,plan};
-    },new AbortController().signal,admissionWindow);
-    exact(record(plan),['adapterId','adapterDigest','action','bindingDigest','parameters']);slug(plan.adapterId);hash(plan.adapterDigest);hash(plan.bindingDigest);record(plan.parameters);safeData(plan);
-    if(plan.action!==(node.source==='base'?'base.'+node.id:node.action!.actionRef))reject('ACTION_MISMATCH','Adapter action does not match the fixed Base/extension action',409);
+    const {current,admitted,plan,repair,preparationDeadline}=await prepareAdmission(saved,stageId,actor);
     const planned=copy(plan),now=Date.now(),limit=stageBudget(saved,node);
-    const content:Omit<StageRequest,'digest'>={schema:'runtime-stage-request/v1',id:randomUUID(),workspaceId:store.workspaceId,projectId,instanceId:saved.id,stageId,pinsDigest:saved.pinsDigest,inputDigest:admitted.inputDigest,bindingStamp:current.checked.stamp!,authorityRef:current.authority.evidenceRef,releaseAuthorityRef:current.release?.decisionRef??null,initiatedBy:{id:actor.id,revision:actor.revision},plan:planned,planDigest:valueDigest(planned),requestedAt:new Date(now).toISOString(),deadlineAt:new Date(Math.min(now+limit.timeoutSeconds*1000,Date.parse(saved.createdAt)+saved.pins.budget.timeoutSeconds*1000,Date.parse(current.authority.expiresAt))).toISOString()};
+    const content:Omit<StageRequest,'digest'>={schema:'runtime-stage-request/v1',id:randomUUID(),workspaceId:store.workspaceId,projectId,instanceId:saved.id,stageId,pinsDigest:saved.pinsDigest,inputDigest:admitted.inputDigest,bindingStamp:current.checked.stamp!,authorityRef:current.authority.evidenceRef,releaseAuthorityRef:current.release?.decisionRef??null,initiatedBy:{id:actor.id,revision:actor.revision},plan:planned,planDigest:valueDigest(planned),requestedAt:new Date(now).toISOString(),deadlineAt:new Date(Math.min(now+limit.timeoutSeconds*1000,preparationDeadline,Date.parse(current.authority.expiresAt))).toISOString()};
     const r=copy({...content,digest:valueDigest(content)});
+    const repairBody=repair?{schema:'runtime-stage-repair-admission/v1' as const,requestId:r.id,requestDigest:r.digest,subjectDigest:valueDigest(repair.subject),facts:repair.facts,factsDigest:valueDigest(repair.facts)}:null;
+    const retainedRepair:StageRepairAdmission|null=repairBody?copy({...repairBody,digest:valueDigest(repairBody)}):null;
     const result=store.mutate(actor,mutation,()=>{
       if(closed)reject('STOPPING','Service is stopping',503);
       if(occupied()>=4)reject('EXECUTOR_BUSY','The bounded service worker is busy',429);
       const fresh=reauthorize();authorize(fresh,projectId,'execution.request');if(stageId==='publication')authorize(fresh,projectId,'release.request');
       deps.verifyAuthority?.(current.authority,saved.definition,fresh);deps.verifyProjectReviewState?.(saved,fresh);
       if(!current.checked.expiresAt||Date.parse(current.checked.expiresAt)<=Date.now()||Date.parse(r.deadlineAt)<=Date.now())reject('EXECUTION_DEADLINE','Execution admission expired before request commit',409);
+      if(repair)validateRepair(repair.facts,repair.subject);
       if(stageId==='publication'&&deps.releaseAuthority?.(saved,fresh)?.decisionRef!==r.releaseAuthorityRef)reject('AUTHORITY_CHANGED','Release authority changed before request commit',409);
+      const recoveryObjects=deps.recovery?.claim(saved,current.authority,r,fresh)??[];
       const next=requestStage(saved,stageId,r.id,current.context),p:StageProgress={requestId:r.id,phase:'DISPATCHING',terminal:false,handle:null,observation:null,observationRef:null,reason:null,observedAt:r.requestedAt};
-      return{objects:[{kind:'lifecycle-instance',id:saved.id,value:next},{kind:'stage-request',id:r.id,value:r},{kind:'stage-progress',id:r.id,value:p}],value:{stageRequestId:r.id,instanceId:saved.id,stageId,inputDigest:r.inputDigest,status:'REQUEST_RETAINED',automaticRedispatch:false},event:{type:'stage-requested',data:{instanceId:saved.id,stageId,stageRequestId:r.id,inputDigest:r.inputDigest,planDigest:r.planDigest,initiatedBy:actor.id}}};
+      return{objects:[{kind:'lifecycle-instance',id:saved.id,value:next},{kind:'stage-request',id:r.id,value:r},{kind:'stage-progress',id:r.id,value:p},...recoveryObjects,...(retainedRepair?[{kind:'lifecycle-recovery-admission',id:r.id,value:retainedRepair}]:[])],value:{stageRequestId:r.id,instanceId:saved.id,stageId,inputDigest:r.inputDigest,status:'REQUEST_RETAINED',automaticRedispatch:false},event:{type:'stage-requested',data:{instanceId:saved.id,stageId,stageRequestId:r.id,inputDigest:r.inputDigest,planDigest:r.planDigest,initiatedBy:actor.id}}};
     },reauthorize);
     // The transaction, receipt and audit are durable before this promise can
     // perform an external action. Replays/restarts never enter this branch.
     start(r,'dispatch');return result;
   }
-  return{read,write,async authorizeOriginal(actor:Principal,projectId:string,id:string):Promise<Principal>{
+  return{read,write,async correctionAdmission(actor:Principal,projectId:string,id:string){
+    authorize(actor,projectId,'execution.request');const original=request(projectId,id);
+    if(original.stageId==='publication')authorize(actor,projectId,'release.request');
+    const base={originalRequestId:id,originalRequestDigest:original.digest,executionAuthorized:false as const};
+    try{
+      if(closed)reject('STOPPING','Service is stopping',503);
+      if(!deps.adapter)reject('EXECUTOR_UNAVAILABLE','No fixed stage adapter is configured',409);
+      const saved=fixedInstance(original),p=progress(original);
+      if(p.phase==='UNKNOWN'||!p.terminal)return{...base,allowed:false,reasons:['RECONCILE_ORIGINAL_REQUEST']};
+      if(p.phase!=='FAILED')return{...base,allowed:false,reasons:['STAGE_ALREADY_COMPLETE']};
+      const prepared=await prepareAdmission(saved,original.stageId,actor);
+      const fresh=actorFor(original);deps.verifyAuthority?.(prepared.current.authority,saved.definition,fresh);deps.verifyProjectReviewState?.(saved,fresh);
+      if(!prepared.repair)reject('REPAIR_EVIDENCE_REQUIRED','Exact trusted repair assessment required',409);
+      if(Date.parse(prepared.repair.facts.expiresAt)<=Date.now()||prepared.preparationDeadline<=Date.now())reject('REPAIR_EVIDENCE_EXPIRED','Prepared repair evidence expired',409);
+      fixedInstance(original);
+      return{...base,allowed:true,reasons:[],subjectDigest:valueDigest(prepared.repair.subject),facts:prepared.repair.facts,deadlineAt:new Date(prepared.preparationDeadline).toISOString()};
+    }catch(error){return{...base,allowed:false,reasons:[error instanceof ServiceError?error.code:'REPAIR_EVIDENCE_UNKNOWN']};}
+  },async authorizeOriginal(actor:Principal,projectId:string,id:string):Promise<Principal>{
     authorize(actor,projectId,'execution.request');const r=request(projectId,id);
     if(actor.id!==r.initiatedBy.id||actor.revision!==r.initiatedBy.revision)reject('AUTHORITY_CHANGED','Only the original current principal may claim this task',403);
     if(progress(r).terminal)reject('STAGE_TERMINAL','Original stage has already ended',409);return permit(r);

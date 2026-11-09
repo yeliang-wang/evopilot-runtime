@@ -20,6 +20,10 @@ export interface DashboardEventPage {
 // Only fixed adapters can produce these original evidence records. No public
 // mutation accepts an object kind or arbitrary evidence payload.
 const LARGE_EVIDENCE_KINDS=new Set(['plan-stage-native-receipt','stage-native-receipt','stage-evaluation-run','owner-feedback-event','owner-feedback-inbox','publication-harness-receipt','closure-harness-receipt','release-stage-material','closure-evidence','closure-harness-input','closure-harness-action','extension-native-action','extension-native-receipt']);
+// These additive records require correction-aware readers. Ordinary service
+// state stays at version 1; the first committed feature write raises the same
+// database transaction to version 2 so an older constructor refuses to open it.
+const CORRECTION_STATE_KINDS=new Set(['lifecycle-correction-proposal','lifecycle-recovery-admission','lifecycle-recovery-ledger','lifecycle-evidence-qualification','ci-acceptance-capture']);
 
 /** Owns one local writer. The OS releases the separate SQLite exclusive lock after process death. */
 export class RuntimeStore {
@@ -40,9 +44,9 @@ export class RuntimeStore {
       for (const suffix of ['-wal','-shm','-journal']) if (existsSync(path + suffix)) privateFile(path + suffix);
       database = new DatabaseSync(path); this.db = database;
       const version = Number(database.prepare('PRAGMA user_version').get()!.user_version);
-      if (![0, 1].includes(version)) reject('INCOMPATIBLE_STATE', 'Unsupported service state schema', 409);
+      if (![0, 1, 2].includes(version)) reject('INCOMPATIBLE_STATE', 'Unsupported service state schema', 409);
       if (version === 0 && Number(database.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table'").get()!.n) !== 0) reject('INCOMPATIBLE_STATE', 'Existing unrecognized database will not be adopted', 409);
-      if (version === 1) {
+      if (version !== 0) {
         const tables=database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(r=>String(r.name));
         if (tables.join(',') !== 'audit,events,objects,project_revisions,receipts,service_meta') reject('CORRUPT_STATE','Required service tables are missing or unexpected',503);
         if(database.prepare('PRAGMA quick_check').get()!.quick_check !== 'ok')reject('CORRUPT_STATE','Service database integrity check failed',503);
@@ -61,7 +65,8 @@ export class RuntimeStore {
       if (meta.workspace_id !== workspaceId || typeof meta.service_id !== 'string' || typeof meta.cursor_key !== 'string' || !/^[a-f0-9]{64}$/.test(meta.cursor_key)) reject('WRONG_WORKSPACE', 'State identity does not match the requested workspace', 409);
       this.serviceId = meta.service_id; this.cursorKey = Buffer.from(meta.cursor_key, 'hex');
       this.verifyLedger();
-      database.exec('PRAGMA user_version=1; COMMIT;');
+      if (version === 0) database.exec('PRAGMA user_version=1;');
+      database.exec('COMMIT;');
     } catch (e) { database?.close(); this.lock.close(); throw e; }
   }
   private guard(): void { if (this.closed) reject('CLOSED', 'Service store is closed', 503); }
@@ -168,6 +173,7 @@ export class RuntimeStore {
         slug(item.kind); string(item.id);
         this.db.prepare('INSERT INTO objects VALUES(?,?,?,?) ON CONFLICT(project_id,kind,id) DO UPDATE SET data=excluded.data').run(request.projectId,item.kind,item.id,LARGE_EVIDENCE_KINDS.has(item.kind)?canonicalEvidence(item.value):canonical(item.value));
       }
+      if (result.objects?.some(item=>CORRECTION_STATE_KINDS.has(item.kind))) this.db.exec('PRAGMA user_version=2;');
       if (reauthorize) {
         const current = reauthorize(); authorize(current, request.projectId, request.permission);
         if (current.id !== principal.id || current.revision !== principal.revision) reject('AUTHORITY_CHANGED', 'Authority changed during this request', 409);

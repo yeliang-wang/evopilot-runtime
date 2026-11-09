@@ -1,3 +1,4 @@
+import { createCorrectionService, CORRECTION_READS, CORRECTION_WRITES } from '../lifecycle/correction.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -9,7 +10,7 @@ import { createDefinitionService, DEFINITION_READS } from '../lifecycle/service.
 import type { DefinitionBindingProvider } from '../lifecycle/bindings.js';
 import type { AuthorityResolver } from '../lifecycle/instance.js';
 import { createAuthorityService, AUTHORITY_READS, AUTHORITY_WRITES, type AuthorityPolicyProvider } from '../adapters/authority.js';
-import { createExecutionService, EXECUTION_READS, EXECUTION_WRITES, type StageAdapter, type StageServices } from '../lifecycle/execution.js';
+import { createExecutionService, EXECUTION_READS, EXECUTION_WRITES, type StageAdapter, type StageServices, type StageRequest, type StageProgress } from '../lifecycle/execution.js';
 import { createPreparationService, PREPARATION_READS, PREPARATION_WRITES, type PreparationValidator } from '../lifecycle/preparation.js';
 import { createAgentService, AGENT_READS, AGENT_WRITES } from '../lifecycle/agent.js';
 import { createImplementationReviewService, IMPLEMENTATION_REVIEW_READS, IMPLEMENTATION_REVIEW_WRITES, type ImplementationReviewBindings } from '../lifecycle/implementation-review.js';
@@ -52,14 +53,15 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
   try{
     const preparations=createPreparationService(store,trustedPreparation);
     const authorities=createAuthorityService(store,trustedPolicy,id=>currentPrincipal(options.stateRoot,options.workspaceId,id),preparations.verify);
-    const definitions=createDefinitionService(store,trustedBindings,trustedAuthorities??authorities.resolveExecution,trustedAuthorities?undefined:authorities.verifyExecution,authorities.resolveRelease,history);
+    const definitions=createDefinitionService(store,trustedBindings,trustedAuthorities??authorities.resolveExecution,trustedAuthorities?undefined:authorities.verifyExecution,authorities.resolveRelease,history,trustedAuthorities?undefined:authorities.recovery);
     const extensionReviews=createExtensionReviewService(store,trustedExtensionReview?.(store),id=>currentPrincipal(options.stateRoot,options.workspaceId,id));
     initialServices={preparations,authorities,definitions,extensionReviews};
   }catch(error){closeStore([error]);throw error;}
   const {preparations,authorities,definitions,extensionReviews}=initialServices;
   let execution:ReturnType<typeof createExecutionService>;
-  try{execution=createExecutionService(store,{bindings:trustedBindings,authorities:trustedAuthorities??authorities.resolveExecution,verifyAuthority:trustedAuthorities?undefined:authorities.verifyExecution,releaseAuthority:authorities.resolveRelease,principal:id=>currentPrincipal(options.stateRoot,options.workspaceId,id),verifyProjectReviews:extensionReviews.verifyPassed,verifyProjectReviewState:extensionReviews.verifyCurrentDecisions,adapter:typeof trustedExecutor==='function'?trustedExecutor(store,{releaseAuthority:authorities.resolveRelease,authorityPolicy:trustedPolicy,extensionReviews}):trustedExecutor});}
+  try{execution=createExecutionService(store,{bindings:trustedBindings,authorities:trustedAuthorities??authorities.resolveExecution,verifyAuthority:trustedAuthorities?undefined:authorities.verifyExecution,recovery:trustedAuthorities?undefined:authorities.recovery,releaseAuthority:authorities.resolveRelease,principal:id=>currentPrincipal(options.stateRoot,options.workspaceId,id),verifyProjectReviews:extensionReviews.verifyPassed,verifyProjectReviewState:extensionReviews.verifyCurrentDecisions,adapter:typeof trustedExecutor==='function'?trustedExecutor(store,{releaseAuthority:authorities.resolveRelease,authorityPolicy:trustedPolicy,extensionReviews}):trustedExecutor});}
   catch(e){closeStore([e]);throw e;}
+  const corrections=createCorrectionService(store,{original:(actor,projectId,stageRequestId)=>execution.read(actor,projectId,'lifecycle.stage.request.inspect',{stageRequestId}) as {request:StageRequest;progress:StageProgress},stageAdmission:(actor,projectId,instanceId,stageId)=>definitions.read(actor,projectId,'lifecycle.stage.admission',{instanceId,stageId}),repairAdmission:(actor,projectId,stageRequestId)=>execution.correctionAdmission(actor,projectId,stageRequestId)});
   const agents=createAgentService(store,(actor,projectId,id)=>execution.authorizeOriginal(actor,projectId,id));
   const implementationReviews=createImplementationReviewService(store,trustedImplementationReview,id=>currentPrincipal(options.stateRoot,options.workspaceId,id));
   let legacy:ReturnType<typeof createLegacyGateway>|undefined;
@@ -94,10 +96,11 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     if(WRITE_OPERATIONS.includes(operation as typeof WRITE_OPERATIONS[number])){
       exact(envelope,['operation','projectId','input','requestId','expectedRevision']);if(!Number.isSafeInteger(envelope.expectedRevision)||Number(envelope.expectedRevision)<0)reject('INVALID_REVISION','Expected a nonnegative revision');
       if(USAGE_WRITES.includes(operation as typeof USAGE_WRITES[number]))return usage.write(actor,projectId,operation,input,string(envelope.requestId),Number(envelope.expectedRevision),reauthenticate);
-      const service=EXTENSION_REVIEW_WRITES.includes(operation as typeof EXTENSION_REVIEW_WRITES[number])?extensionReviews:IMPLEMENTATION_REVIEW_WRITES.includes(operation as typeof IMPLEMENTATION_REVIEW_WRITES[number])?implementationReviews:AGENT_WRITES.includes(operation as typeof AGENT_WRITES[number])?agents:PREPARATION_WRITES.includes(operation as typeof PREPARATION_WRITES[number])?preparations:AUTHORITY_WRITES.includes(operation as typeof AUTHORITY_WRITES[number])?authorities:EXECUTION_WRITES.includes(operation as typeof EXECUTION_WRITES[number])?execution:definitions;
+      const service=CORRECTION_WRITES.includes(operation as typeof CORRECTION_WRITES[number])?corrections:EXTENSION_REVIEW_WRITES.includes(operation as typeof EXTENSION_REVIEW_WRITES[number])?extensionReviews:IMPLEMENTATION_REVIEW_WRITES.includes(operation as typeof IMPLEMENTATION_REVIEW_WRITES[number])?implementationReviews:AGENT_WRITES.includes(operation as typeof AGENT_WRITES[number])?agents:PREPARATION_WRITES.includes(operation as typeof PREPARATION_WRITES[number])?preparations:AUTHORITY_WRITES.includes(operation as typeof AUTHORITY_WRITES[number])?authorities:EXECUTION_WRITES.includes(operation as typeof EXECUTION_WRITES[number])?execution:definitions;
       return service.write(actor,projectId,operation,input,string(envelope.requestId),Number(envelope.expectedRevision),reauthenticate);
     }
     exact(envelope,['operation','projectId','input']);
+    if(CORRECTION_READS.includes(operation as typeof CORRECTION_READS[number]))return corrections.read(actor,projectId,operation,input);
     if(USAGE_READS.includes(operation as typeof USAGE_READS[number]))return usage.read(actor,projectId,operation,input);
     if(DEFINITION_READS.includes(operation as typeof DEFINITION_READS[number]))return definitions.read(actor,projectId,operation,input);
     if(AUTHORITY_READS.includes(operation as typeof AUTHORITY_READS[number]))return authorities.read(actor,projectId,operation,input);

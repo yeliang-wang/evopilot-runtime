@@ -2,11 +2,11 @@
   "schema": "evopilot-evolution-target/v1",
   "id": "runtime-v090-independent-lifecycle",
   "targetVersion": "0.9.0",
-  "roadmapDigest": "f45df8309e17e63b5f8c8baeb575da6728098dc2a1fcf42cd007825ef1fbde8a",
+  "roadmapDigest": "2c793158b3109dcbb43a277ef4c6a839984cac8420bea120df0682d869bcadb8",
   "acceptanceDigest": "612f78eefdeae8af3f8170656cc6d31a7208ea91b7415a86ba49f2720091b023",
   "sourceBaseline": "cbf46c713f5448a4feacf7990be09913c3fa4cf6",
-  "approvedPlanDigest": "6b7effbfbd3be312b50bcffef3cffc29b7d3ae2aa5b85cadccf8d86885cbadb3",
-  "status": "IMPLEMENTATION_AUTHORIZED_M0_M5_WITH_USAGE_ADDENDUM",
+  "approvedPlanDigest": "aa69c9a0a448540d076704d3fad974303630abe089e1961ea02e6311cf1e839a",
+  "status": "IMPLEMENTATION_AUTHORIZED_M0_M5_WITH_USAGE_AND_CORRECTION_ADDENDA",
   "milestones": [
     "M0",
     "M1",
@@ -34,9 +34,13 @@
         "governance/lifecycle-contract-v090.json",
         "governance/parameter-matrix-v090.json",
         "governance/environment-contract-v090.json",
-        "governance/token-usage-v090.json"
+        "governance/token-usage-v090.json",
+        "governance/lifecycle-correction-v090.json",
+        "docs/architecture/runtime-v090-correction.md"
       ],
-      "purpose": "Formalize the approved architecture/Roadmap/Target and audit-complete acceptance; prepare environments and exact parameter bindings."
+      "purpose": "Formalize the approved architecture/Roadmap/Target and audit-complete acceptance; prepare environments and exact parameter bindings.",
+      "correctionAddendum": "governance/lifecycle-correction-v090.json",
+      "productAcceptance": "NOT_EVALUATED"
     },
     "M1": {
       "purpose": "Independent local strict TypeScript service foundation: one writer, protected authentication/scope, bounded HTTP/MCP read transport, durable state and recovery. No release, daily cutover or business Run implied.",
@@ -89,7 +93,13 @@
         "tests/fixtures/service-v090-worker.mjs",
         "src/lifecycle/base-upgrade.ts",
         "tests/e2e/base-upgrade-v090.test.mjs",
-        "tests/fixtures/base-upgrade-v090.mjs"
+        "tests/fixtures/base-upgrade-v090.mjs",
+        "src/lifecycle/correction.ts",
+        "src/lifecycle/correction-contract.ts",
+        "src/lifecycle/correction-planner.ts",
+        "src/lifecycle/evidence-qualification.ts",
+        "tests/e2e/lifecycle-correction-v090.test.mjs",
+        "tests/e2e/lifecycle-correction-planner-v090.test.mjs"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",
@@ -100,7 +110,8 @@
         "M1 transactional/HTTP/CLI regression evidence",
         "M1 actual Codex scoped HTTP read evidence"
       ],
-      "productAcceptance": "NOT_EVALUATED"
+      "productAcceptance": "NOT_EVALUATED",
+      "correctionAddendum": "governance/lifecycle-correction-v090.json"
     },
     "M3": {
       "purpose": "Implement the approved independent Runtime Expert/HTTP plugin, controlled installer, thin same-service stdio bridge and historical Host owner routes, protected configuration, published 0.8.3 owner API consumers and governed GitHub/GitLab/external Codex execution. Historical Host owner routes delegate to published owner APIs under separately scoped operator configuration; Runtime HTTP consumers never obtain owner authoring authority. No owner product evolution, daily cutover or product Release is conferred by this binding. Original EX10 requires explicit stopped-service migration into a new installation, complete preserved history and separate old-installation rollback; no pending-request resumption, automatic startup, Host registration or daily cutover is implied.",
@@ -374,7 +385,11 @@
         "tests/e2e/token-usage-v090.test.mjs",
         "tests/e2e/token-usage-host-v090.test.mjs",
         "src/installation/service-upgrade.ts",
-        "tests/e2e/service-upgrade-v090.test.mjs"
+        "tests/e2e/service-upgrade-v090.test.mjs",
+        "src/lifecycle/correction.ts",
+        "src/lifecycle/correction-contract.ts",
+        "src/lifecycle/correction-planner.ts",
+        "plugins/codex/skills/evopilot-runtime-expert/references/correction.md"
       ],
       "prerequisiteBindings": [
         "governance/lifecycle-contract-v090.json",
@@ -393,7 +408,8 @@
       "tokenUsageAddendum": {
         "contract": "governance/token-usage-v090.json",
         "boundary": "Runtime-only deterministic telemetry. No owner/parent statistics, model engine, budget/scoring gate, new Dashboard or lifecycle outcome changes."
-      }
+      },
+      "correctionAddendum": "governance/lifecycle-correction-v090.json"
     },
     "M4": {
       "purpose": "Implement only the accepted two-page React/TSX Dashboard: SeeCode graph plus comment-preserving YAML editor with same-entry draft/save-and-activate, and a separate read-only current instance monitor. Same authenticated Runtime gates, no execution/release controls or owner authoring.",
@@ -534,7 +550,19 @@
         "tests/e2e/release-gate-v090.test.mjs",
         "scripts/package-base-qualification.mjs",
         "tests/fixtures/base-upgrade-v090/qualification-profile.json",
-        "tests/e2e/release-gate.test.mjs"
+        "tests/e2e/release-gate.test.mjs",
+        "tests/acceptance/v090/correction.test.mjs",
+        "tests/acceptance/v090/preflight.mjs",
+        "docs/lifecycle-correction-v090.md",
+        "tests/e2e/lifecycle-correction-v090.test.mjs",
+        "tests/e2e/lifecycle-correction-planner-v090.test.mjs",
+        "tests/e2e/evidence-qualification-v090.test.mjs",
+        "eslint.correction.config.mjs",
+        "tests/e2e/lifecycle-correction-properties-v090.test.mjs",
+        "dependency-cruiser.correction.config.cjs",
+        "stryker.correction.config.mjs",
+        "tsconfig.correction-pilot.json",
+        "scripts/correction-tooling.mjs"
       ],
       "prerequisiteBindings": [
         "governance/acceptance-v090.json",
@@ -578,7 +606,8 @@
           "UT24"
         ],
         "originalRequiredInstances": 664,
-        "combinedRequiredInstances": 688
+        "combinedRequiredInstances": 709,
+        "correctionContract": "governance/lifecycle-correction-v090.json"
       },
       "completeCollectorBinding": {
         "basis": "All original E01–E22 fixed requirements already belong to the accepted plan. This packet completes exact implementation paths, not acceptance or release authority.",
@@ -596,7 +625,8 @@
           "No owner-source evolution",
           "No daily cutover or product publication from this implementation packet"
         ]
-      }
+      },
+      "correctionAddendum": "governance/lifecycle-correction-v090.json"
     }
   },
   "beforeProductImplementation": [
@@ -611,8 +641,9 @@
   "implementationBindings": {
     "governance/lifecycle-contract-v090.json": "5b18d80a73ec6ce249254aef2f78318aaac3c797d9b39d113993a4a66de966a1",
     "governance/parameter-matrix-v090.json": "27e01ab86483a5adf379f15c8987a4ba40017b222a5b31b699a5246143d43367",
-    "governance/environment-contract-v090.json": "c7f281b5a0e27444786bb655e50a479c3a0bb108f9d4248bbb9ae022ff9ab46a",
-    "governance/token-usage-v090.json": "644e7a3c4360f37db1184023e86fda71268cb6f34cef1179a33420a4b74d75e1"
+    "governance/environment-contract-v090.json": "3ccebae5661b192d7684a89bb6fe75901ae2ef20fb354af29d78f0390d509696",
+    "governance/token-usage-v090.json": "644e7a3c4360f37db1184023e86fda71268cb6f34cef1179a33420a4b74d75e1",
+    "governance/lifecycle-correction-v090.json": "46798eacfaac0e73fdaee91ca160dc5c2587e4acf834f0fef9867617df1ec365"
   },
   "approvedAddenda": [
     {
@@ -628,6 +659,22 @@
       "implementationRequired": true,
       "originalAcceptanceUnchanged": true,
       "additionalRequiredInstances": 24,
+      "releaseAuthorityUnchanged": true
+    },
+    {
+      "id": "v090-lifecycle-correction",
+      "contract": "governance/lifecycle-correction-v090.json",
+      "contractDigest": "46798eacfaac0e73fdaee91ca160dc5c2587e4acf834f0fef9867617df1ec365",
+      "milestones": [
+        "M0",
+        "M2",
+        "M3",
+        "M5",
+        "M6"
+      ],
+      "implementationRequired": true,
+      "originalAcceptanceUnchanged": true,
+      "additionalRequiredInstances": 21,
       "releaseAuthorityUnchanged": true
     }
   ]

@@ -64,9 +64,19 @@ const expected = {
   "dependencies": {}
 };
 Object.assign(expected.scripts, {"roadmap:gate": "node scripts/roadmap.mjs --gate", "roadmap:check": "node scripts/roadmap.mjs --check", "roadmap:release": "node scripts/roadmap.mjs --release", "test:governance": "node --test tests/governance.test.mjs"});
+Object.assign(expected.scripts, {
+  'lint:correction': 'eslint --config eslint.correction.config.mjs src/lifecycle/correction.ts src/lifecycle/correction-contract.ts src/lifecycle/correction-planner.ts src/lifecycle/evidence-qualification.ts --max-warnings 0',
+  'test:correction:properties': 'node --test tests/e2e/lifecycle-correction-properties-v090.test.mjs',
+  'pilot:correction:graph': 'node scripts/correction-tooling.mjs graph',
+  'pilot:correction:mutation': 'node scripts/correction-tooling.mjs mutation',
+  'lint:workflows': 'node scripts/correction-tooling.mjs actionlint',
+});
 Object.assign(expected.devDependencies, {
   '@playwright/test': '1.64.1', '@types/react': '19.3.0', '@types/react-dom': '19.3.0', vite: '8.3.5',
   '@types/yauzl': '3.4.0',
+  eslint: '10.14.0', '@eslint/js': '10.0.1', 'typescript-eslint': '8.72.1',
+  'fast-check': '4.10.2', 'dependency-cruiser': '18.7.2',
+  '@stryker-mutator/core': '10.1.1', '@stryker-mutator/tap-runner': '10.1.1',
 });
 Object.assign(expected.dependencies, {
   '@modelcontextprotocol/sdk': '1.32.2', yaml: '2.9.1', react: '19.3.1', 'react-dom': '19.3.1',

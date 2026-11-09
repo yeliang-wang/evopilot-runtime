@@ -5,7 +5,7 @@ import { isCurrentBase, loadPublisherBase, requireCurrentBase, valueDigest } fro
 import { compileHistoricalRevision, compileLifecycle, containsInlineSecret, type Compilation, type Issue } from './compiler.js';
 import { baseTransition, verifyHistoricalRecord, type BaseTransition, type VerifiedServiceUpgrade } from './base-upgrade.js';
 import { validateBindings, type DefinitionBindingProvider, type BindingValidation } from './bindings.js';
-import { pinInstance, inspectInstance, stageAdmission, resolveAuthority, type LifecycleInstance, type AuthorityResolver, type ExecutionAuthority, type ReleaseAuthority } from './instance.js';
+import { pinInstance, inspectInstance, stageAdmission, resolveAuthority, type LifecycleInstance, type AuthorityResolver, type ExecutionAuthority, type ReleaseAuthority, type RecoveryLineageService } from './instance.js';
 import type { EffectiveDefinition } from './compiler.js';
 
 export const DEFINITION_READS=['lifecycle.base.inspect','lifecycle.definition.inspect','lifecycle.definition.read','lifecycle.definition.source.read','lifecycle.definition.validate','lifecycle.instance.inspect','lifecycle.stage.admission'] as const;
@@ -15,7 +15,7 @@ export interface DefinitionValidation { compilation:Compilation; bindings:Bindin
 function yamlInput(value:unknown):string{if(typeof value!=='string'||Buffer.byteLength(value)>262144)reject('YAML_LIMIT','YAML must be at most 256 KiB',413);if(containsInlineSecret(value))reject('INLINE_SECRET','Use protected credential references; inline secrets cannot be stored');return value;}
 const ref=(value:unknown):string=>{const v=string(value,128);if(!/^sha256:[a-f0-9]{64}$/.test(v))reject('INVALID_REFERENCE','An exact revision digest is required');return v;};
 
-export function createDefinitionService(store:RuntimeStore,bindings?:DefinitionBindingProvider,authorities?:AuthorityResolver,verifyAuthority?:(grant:ExecutionAuthority,definition:EffectiveDefinition,actor:Principal)=>void,releaseAuthority?:(instance:LifecycleInstance,actor:Principal)=>ReleaseAuthority|undefined,history?:VerifiedServiceUpgrade|null){
+export function createDefinitionService(store:RuntimeStore,bindings?:DefinitionBindingProvider,authorities?:AuthorityResolver,verifyAuthority?:(grant:ExecutionAuthority,definition:EffectiveDefinition,actor:Principal)=>void,releaseAuthority?:(instance:LifecycleInstance,actor:Principal)=>ReleaseAuthority|undefined,history?:VerifiedServiceUpgrade|null,recovery?:RecoveryLineageService){
   function revision(projectId:string,id:string):Revision{
     const stored=store.object(projectId,'definition-revision',ref(id)) as Revision|null;
     if(!stored)reject('NOT_FOUND','Definition revision not found',404);
@@ -61,7 +61,7 @@ export function createDefinitionService(store:RuntimeStore,bindings?:DefinitionB
     authorize(actor,projectId,'read');
     if(operation==='lifecycle.instance.inspect'){
       exact(input,['instanceId']);const saved=instance(projectId,string(input.instanceId));
-      return{instance:saved,projectRevision:store.revision(projectId)};
+      return{instance:saved,...(recovery?{recovery:recovery.inspect(saved)}:{}),projectRevision:store.revision(projectId)};
     }
     if(operation==='lifecycle.stage.admission'){
       exact(input,['instanceId','stageId']);authorize(actor,projectId,'execution.request');
@@ -74,7 +74,8 @@ export function createDefinitionService(store:RuntimeStore,bindings?:DefinitionB
       verifyAuthority?.(authority,saved.definition,actor);
       const stageId=string(input.stageId);
       if(stageId==='publication')authorize(actor,projectId,'release.request');
-      return{...stageAdmission(saved,stageId,{authority,bindingsCurrent:checked.ready,releaseAuthority:stageId==='publication'?releaseAuthority?.(saved,actor):undefined}),executionDispatched:false};
+      const admitted=stageAdmission(saved,stageId,{authority,bindingsCurrent:checked.ready,releaseAuthority:stageId==='publication'?releaseAuthority?.(saved,actor):undefined}),lineage=recovery?.admission(saved,authority,stageId,actor);
+      return{...admitted,allowed:admitted.allowed&&(lineage?.allowed??true),reasons:[...admitted.reasons,...(lineage?.reasons??[])],...(lineage?{recovery:lineage}:{}),executionDispatched:false};
     }
     if(operation==='lifecycle.base.inspect'){
       exact(input,[]);const {pin,base}=loadPublisherBase();return{pin,fields:base.fields,stages:base.stages,slots:base.slots,actions:base.actions.map(a=>({...a,digest:valueDigest(a)})),projectMutationAllowed:false};
@@ -115,7 +116,9 @@ export function createDefinitionService(store:RuntimeStore,bindings?:DefinitionB
         if(Date.parse(checked.expiresAt!)<=Date.now())reject('BINDINGS_NOT_CURRENT','Reference evidence expired before commit',409);
         verifyAuthority?.(authority,selected.compilation.effective!,reauthorize());
         const created=pinInstance(id,definitionRevisionId,selected.compilation.effective!,authority);
-        return{objects:[{kind:'lifecycle-instance',id,value:created},{kind:'instance-authority',id,value:{evidenceRef:authorityRef}}],value:{instanceId:id,pinsDigest:created.pinsDigest,definitionRevisionId,status:'PENDING',executionDispatched:false,releaseAuthorized:false},event:{type:'lifecycle-instance-created',data:{instanceId:id,pinsDigest:created.pinsDigest,definitionRevisionId,authorityRef,executionDispatched:false}}};
+        if(!recovery&&authority.recoveryRootRef)reject('RECOVERY_BINDING_UNAVAILABLE','Only native reviewed authority can link recovery instances',409);
+        const recoveryObjects=recovery?.create(created,authority,reauthorize())??[];
+        return{objects:[{kind:'lifecycle-instance',id,value:created},{kind:'instance-authority',id,value:{evidenceRef:authorityRef}},...recoveryObjects],value:{instanceId:id,pinsDigest:created.pinsDigest,definitionRevisionId,status:'PENDING',executionDispatched:false,releaseAuthorized:false},event:{type:'lifecycle-instance-created',data:{instanceId:id,pinsDigest:created.pinsDigest,definitionRevisionId,authorityRef,executionDispatched:false}}};
       },reauthorize);
     }
     const activating=operation!=='lifecycle.draft.save';

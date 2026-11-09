@@ -147,5 +147,13 @@ Codex 使用准确实例和授权请求阶段动作。Runtime 在受管副作用
 
 Runtime、Ontology、Harness 独立演进和发布；父 EvoPilot 仅提供导航，本目标不新增父产品
 SemVer。源码检查、开发探测或服务已运行，均不能替代原有 655 项发布前和 9 项交付后验收。
-已接受的用量补充方案另加 23 项发布前和 1 项交付后验收，合计 688 项：发布前 678 项、
+已接受的用量补充方案另加 23 项发布前和 1 项交付后验收，原目录加用量为 688 项：发布前 678 项、
 交付后 10 项。
+
+## Lifecycle correction acceptance addition
+
+The original catalog and usage addendum retain 688 required cases (678 PRE, 10 POST). LC01–LC21 add 20 PRE and one POST (LC12), giving **709 required Runtime cases (698 PRE, 11 POST)**. HO01–HO03 are separate post-delivery handoff checks. Each LC composite requires all its declared vectors; missing or unknown evidence cannot count as PASS.
+
+原目录与用量补充方案的 688 项要求保持不变。LC01–LC21 新增 21 项，Runtime 合计 709 项；HO01–HO03 单独记账。原始执行回执不可改写；跨候选复用只能在已发布 Harness 政策兼容性得到验证后，形成新的当前 `PASS_REUSED` 资格，不能冒充当前候选重新执行。
+
+See `governance/lifecycle-correction-v090.json` and the correction ADR. These are implementation obligations, not a statement that release acceptance has passed.

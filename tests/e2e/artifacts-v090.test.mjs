@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { crc32, deflateRawSync } from 'node:zlib';
-import { readArtifactArchive, verifyCiArtifact, validateCandidateInput, ciSourceDigest, ciBuildDigest } from '../../dist/adapters/artifacts.js';
+import { createHash } from 'node:crypto';
+import { readArtifactArchive, verifyCiArtifact, validateCandidateInput, ciSourceDigest, ciBuildDigest, inspectCiAcceptanceReport, CI_ACCEPTANCE_REPORT_PATH } from '../../dist/adapters/artifacts.js';
 import { byteDigest, valueDigest } from '../../dist/lifecycle/base.js';
 import { platformReader, ciInputs, validateRunRequest } from '../../dist/adapters/platforms.js';
 
@@ -62,6 +63,53 @@ test('failed/unknown CI evidence remains nonpassing and verification cannot repl
   assert.equal((await verifyCiArtifact({...f.archive(),runStatus:'FAILED'},f.request,['required.check'],signal())).status,'FAILED');
   const verify=fixture('verification');assert.equal((await verifyCiArtifact(verify.archive(),verify.request,['required.check'],signal())).candidateDigest,verify.request.candidateDigest);
   await assert.rejects(()=>verifyCiArtifact(verify.archive(r=>r.candidate=f.result.candidate),verify.request,['required.check'],signal()),{code:'CI_CANDIDATE_MUTATION'});
+});
+// Synthetic report bytes exercise capture integrity, not actual acceptance or
+// collector semantic approval. All source and provider facts below are fixtures.
+async function acceptanceFixture({provider='github',mutateReport=()=>{},mutateProof=()=>{},mutateFiles=()=>{}}={}){
+  const f=fixture(),workflow=Buffer.from('fixed'),collector=Buffer.from('synthetic collector'),entries=[{name:'evidence/workflow.txt',bytes:workflow},{name:'evidence/collector.txt',bytes:collector}],pin=e=>({path:e.name,digest:byteDigest(e.bytes),bytes:e.bytes.length});
+  const candidate={...f.result.candidate,sourceDigest:ciSourceDigest(f.request,provider,'42')};
+  const report={schema:'runtime-ci-acceptance-report/v1',requestId:f.request.requestId,inputDigest:f.request.inputDigest,sourceCommit:f.request.commit,workflowDigest:f.request.workflowDigest,candidateDigest:valueDigest(candidate),requirementsDigest:byteDigest('requirements'),producerJobId:'71',workflow:{sourcePath:'.github/workflows/test.yml',file:pin(entries[0])},collector:{sourcePath:'tests/collector.mjs',file:pin(entries[1])},cases:['PASS','FAIL','NOT_RUN','CANCELLED','UNKNOWN','SKIPPED'].map((outcome,i)=>{const entry={name:'evidence/case-'+i+'.json',bytes:Buffer.from(' {"synthetic":true,"outcome":"'+outcome+'"}\r\n')};entries.push(entry);return{caseId:'CASE.'+i,outcome,rawReceipt:pin(entry)};})};
+  mutateReport(report);entries.push({name:CI_ACCEPTANCE_REPORT_PATH,bytes:Buffer.from(JSON.stringify(report))});mutateFiles(entries);
+  const archive={...f.archive(r=>{r.provider=provider;r.candidate=candidate;r.checks[0].evidence.push(...entries.map(pin));},entries),provider,jobId:provider==='gitlab'?'71':null,artifactId:provider==='gitlab'?'71':'99'};
+  const jobs=[{jobId:'71',provider,repositoryId:'42',projectId:'alpha',runId:'23',commit:f.request.commit,status:'PASSED',providerStatus:'success',runnerId:'1'}];
+  const proof={run:{requestId:f.request.requestId,inputDigest:f.request.inputDigest,provider,repositoryId:'42',commit:f.request.commit,runId:'23',jobs},workflowPath:'.github/workflows/test.yml',requirementsDigest:byteDigest('requirements'),sourceTree:{commit:f.request.commit,provider,repositoryId:'42',projectId:'alpha',bindingDigest:f.request.bindingDigest,contentRead:false,sourceApproved:false,entries:[{path:'.github/workflows/test.yml',type:'blob',mode:'100644',objectId:createHash('sha1').update(Buffer.from('blob '+workflow.length+'\0')).update(workflow).digest('hex')},{path:'tests/collector.mjs',type:'blob',mode:'100644',objectId:createHash('sha1').update(Buffer.from('blob '+collector.length+'\0')).update(collector).digest('hex')}]}};
+  proof.sourceTree.inventoryDigest=valueDigest(proof.sourceTree.entries);mutateProof(proof);
+  const verified=await verifyCiArtifact(archive,f.request,['required.check'],signal());
+  return{archive,request:f.request,verified,proof,capture:()=>inspectCiAcceptanceReport(archive,f.request,verified,proof,signal())};
+}
+test('optional acceptance report absence leaves existing runtime-ci artifacts valid and explicitly unavailable',async()=>{
+  const f=fixture(),archive=f.archive(),verified=await verifyCiArtifact(archive,f.request,['required.check'],signal());
+  const captured=await inspectCiAcceptanceReport(archive,f.request,verified,{run:{jobs:[]},workflowPath:'.github/workflows/test.yml',requirementsDigest:byteDigest('requirements')},signal());
+  assert.equal(verified.status,'PASSED');assert.equal(captured.status,'ABSENT');assert.deepEqual(captured.cases,[]);assert.deepEqual(captured.reasons,['REPORT_ABSENT']);
+});
+test('original CI capture preserves six raw outcomes and exact raw-byte references without asserting approval',async()=>{
+  for(const provider of ['github','gitlab']){
+    const f=await acceptanceFixture({provider}),captured=await f.capture(),files=await readArtifactArchive(f.archive.bytes,signal());
+    assert.equal(captured.status,'OBSERVED');assert.equal(captured.producerBinding,'MATCHED_ORIGINAL_JOB');assert.equal(captured.producerJobId,'71');assert.equal(captured.workflowSource,'COMMITTED_BYTES_MATCHED');assert.equal(captured.collectorSource,'COMMITTED_BYTES_MATCHED');assert.equal(captured.collectorSemanticApproval,'UNKNOWN');assert.equal(captured.caseCatalog,'UNKNOWN');
+    assert.deepEqual(captured.cases.map(c=>c.observedOutcome),['PASS','FAIL','NOT_RUN','CANCELLED','UNKNOWN','SKIPPED']);
+    for(const c of captured.cases){assert.equal(byteDigest(files.get(c.rawReceipt.path)),c.rawReceipt.digest);assert(files.get(c.rawReceipt.path).toString().endsWith('\r\n'));assert.equal(c.rawReceipt.rawText,undefined);}
+  }
+});
+test('foreign acceptance identities, reused labels, duplicate cases and invalid raw receipts stay nonqualifying',async()=>{
+  for(const mutateReport of [r=>r.requestId='foreign',r=>r.sourceCommit='b'.repeat(40),r=>r.candidateDigest=byteDigest('foreign'),r=>r.requirementsDigest=byteDigest('other'),r=>r.cases[0].outcome='PASS_REUSED',r=>r.cases.push(r.cases[0]),r=>r.cases[0].rawReceipt.digest=byteDigest('drift'),r=>r.cases[0].rawReceipt.path='evidence/absent.json',r=>r.cases[1].rawReceipt=r.cases[0].rawReceipt]){
+    const f=await acceptanceFixture({mutateReport}),captured=await f.capture();assert.equal(captured.status,'INVALID');assert.deepEqual(captured.cases,[]);assert(captured.report.digest);
+  }
+});
+test('self-consistent changed raw bytes cannot use a stale per-case receipt pin',async()=>{
+  const f=await acceptanceFixture({mutateFiles:entries=>{entries.find(e=>e.name==='evidence/case-0.json').bytes=Buffer.from('changed after report capture');}});
+  assert.equal((await f.capture()).status,'INVALID');
+});
+test('GitHub multiple-job or foreign-job claims never establish an uploader identity',async()=>{
+  for(const mutateProof of [p=>p.run.jobs.push({...p.run.jobs[0],jobId:'72'}),p=>p.run.jobs[0].jobId='72',p=>p.run.runId='24']){
+    const f=await acceptanceFixture({mutateProof}),captured=await f.capture();assert.equal(captured.status,'OBSERVED');assert.equal(captured.producerBinding,'UNVERIFIED');assert.equal(captured.producerJobId,null);assert(captured.reasons.includes('PRODUCER_JOB_UNVERIFIED'));
+  }
+});
+test('collector/report hashes never replace protected committed source pins or semantic approval',async()=>{
+  for(const mutateProof of [p=>delete p.sourceTree,p=>p.sourceTree.entries[1].objectId='f'.repeat(40),p=>p.sourceTree.sourceApproved=true,p=>p.workflowPath='different.yml']){
+    const f=await acceptanceFixture({mutateProof}),captured=await f.capture();assert.equal(captured.status,'OBSERVED');assert(captured.workflowSource==='UNVERIFIED'||captured.collectorSource==='UNVERIFIED');assert.equal(captured.collectorSemanticApproval,'UNKNOWN');
+  }
+  const f=await acceptanceFixture({mutateFiles:entries=>{entries.find(e=>e.name===CI_ACCEPTANCE_REPORT_PATH).bytes=Buffer.from('{');}});assert.equal((await f.capture()).status,'INVALID');
 });
 test('verification requires original candidate input and exact consumed-artifact inventory',async()=>{
   const f=fixture('verification'),missing={...f.request};delete missing.candidateInput;

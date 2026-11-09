@@ -187,7 +187,7 @@ export function createNativeExtensionStageAdapter(store:RuntimeStore,configPath:
     const candidateInput=candidate(store,i,s.node,s.binding,resolved.commit),artifactInput=await artifacts(i,s,resolved,candidateInput,signal);
     const p:Parameters={node:s.node,kind:s.kind,resources:s.resources,resourceDigest:valueDigest(s.resources),preparationRef:i.pins.targetRef,preparationDigest:s.packet.digest,preparationFactsDigest:valueDigest(s.facts),predecessors:s.predecessors,binding:s.binding,source:resolved,sourceTree:tree,candidateDigest:i.candidateDigest,candidateInput,artifactInput,owner:pin,effectiveConfigDigest,toolchainLockDigest:connections.toolchainLockDigest,toolchainManifestDigest:connections.toolchainManifestDigest??null};signal.throwIfAborted();
     return{adapterId:ID,adapterDigest:ADAPTER_DIGEST,action:String(s.node.action!.actionRef),bindingDigest:valueDigest(p),parameters:p as unknown as Record<string,unknown>};
-  },inspect,dispatch:execute,advance:async(r,i,_progress,permit,signal)=>execute(r,i,permit,signal)};
+  },inspect,reconcileAdvance:inspect,dispatch:execute,advance:async(r,i,_progress,permit,signal)=>execute(r,i,permit,signal)};
 }
 
 // Shared fixed context verifiers; exported only for publisher-owned adapters.

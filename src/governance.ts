@@ -97,6 +97,31 @@ export interface GovernanceRequest {
   files?: string[];
 }
 
+/** Freeze the additive denominator without converting any declaration to PASS. */
+export function validateCorrectionAddendum(value: unknown): void {
+  const addendum = object(value), acceptance = object(addendum.acceptance);
+  if (addendum.schema !== 'runtime-lifecycle-correction-addendum/v1' || addendum.id !== 'v090-lifecycle-correction' || addendum.owner !== 'runtime' || addendum.targetVersion !== '0.9.0') fail('Wrong correction addendum');
+  sameIds(list(addendum.baseStages).map(text), ['scope','plan','implementation','candidate','verification','release-decision','publication','closure'], 'Correction must preserve Base stages');
+  const counts = { originalRequiredInstances:688, originalPreRelease:678, originalPostRelease:10, additionalPreRelease:20, additionalPostRelease:1, combinedRequiredInstances:709, combinedPreRelease:698, combinedPostRelease:11 };
+  for (const [key, expected] of Object.entries(counts)) if (acceptance[key] !== expected) fail('Correction denominator changed: ' + key);
+  if (acceptance.collector !== 'tests/acceptance/v090/correction.test.mjs') fail('Correction collector binding differs');
+  const cases = list(acceptance.cases).map(object);
+  sameIds(ids(cases), numbered('LC',21), 'Missing correction acceptance instances');
+  for (const c of cases) {
+    if (c.required !== true || c.phase !== (c.id === 'LC12' ? 'POST_RELEASE' : 'PRE_RELEASE')) fail('Correction acceptance phase/requirement differs');
+    text(c.expected);
+    const vectors = list(c.vectors).map(text);
+    if (!vectors.length || new Set(vectors).size !== vectors.length) fail('Missing or duplicate correction vectors');
+  }
+  const handoff = object(addendum.handoff);
+  if (handoff.separateFromRuntimeAcceptance !== true || handoff.targetChat !== 'EvoPilot-ontology v0.9.0 Preview') fail('Wrong handoff scope');
+  sameIds(ids(handoff.cases), numbered('HO',3), 'Missing separate handoff acceptance');
+  if (!list(addendum.requiredBehavior).length || !list(addendum.exclusions).length) fail('Correction boundaries must remain explicit');
+  const compatibility = object(addendum.compatibility);
+  if (compatibility.rawStageEnumUnchanged !== true) fail('Correction cannot rewrite raw stage outcomes');
+  text(compatibility.ownerPolicy); text(compatibility.rollback);
+}
+
 export function evaluateGovernance(root: string, request: GovernanceRequest): GateResult {
   try {
     const roadmap = readBoundedJson(resolve(root, 'governance/roadmap.json'));
@@ -110,11 +135,17 @@ export function evaluateGovernance(root: string, request: GovernanceRequest): Ga
     validateAcceptanceCatalog(acceptance.value);
     const usage=readBoundedJson(resolve(root,'governance/token-usage-v090.json'));validateTokenUsageAddendum(usage.value);
     const usageDigest=governanceDigest(usage.bytes);
+    const correction=readBoundedJson(resolve(root,'governance/lifecycle-correction-v090.json'));
+    validateCorrectionAddendum(correction.value);
+    const correctionDigest=governanceDigest(correction.bytes);
     for(const owner of [roadmap.value,target.value]){
-      const entries=list(owner===roadmap.value?owner.addenda:owner.approvedAddenda).map(object);sameIds(ids(entries),['v090-token-usage'],'Usage addendum must remain declared');
-      const a=entries[0];if(a.contract!=='governance/token-usage-v090.json'||a.contractDigest!==usageDigest||a.implementationRequired!==true||a.originalAcceptanceUnchanged!==true||a.additionalRequiredInstances!==24||a.releaseAuthorityUnchanged!==true)fail('Usage addendum binding drift');
+      const entries=list(owner===roadmap.value?owner.addenda:owner.approvedAddenda).map(object);sameIds(ids(entries),['v090-token-usage','v090-lifecycle-correction'],'Approved addenda must remain declared');
+      const a=entries.find(e=>e.id==='v090-token-usage')!;if(a.contract!=='governance/token-usage-v090.json'||a.contractDigest!==usageDigest||a.implementationRequired!==true||a.originalAcceptanceUnchanged!==true||a.additionalRequiredInstances!==24||a.releaseAuthorityUnchanged!==true)fail('Usage addendum binding drift');
+      const c=entries.find(e=>e.id==='v090-lifecycle-correction')!;
+      if(c.contract!=='governance/lifecycle-correction-v090.json'||c.contractDigest!==correctionDigest||c.implementationRequired!==true||c.originalAcceptanceUnchanged!==true||c.additionalRequiredInstances!==21||c.releaseAuthorityUnchanged!==true)fail('Correction addendum binding drift');
     }
     if(object(target.value.implementationBindings)['governance/token-usage-v090.json']!==usageDigest)fail('Usage implementation binding missing');
+    if(object(target.value.implementationBindings)['governance/lifecycle-correction-v090.json']!==correctionDigest)fail('Correction implementation binding missing');
     if (target.value.implementationBindings) {
       for (const [path, digest] of Object.entries(object(target.value.implementationBindings))) {
         if (!/^governance\/[a-z0-9-]+\.json$/.test(path)) fail('Unsafe implementation binding path');
@@ -156,6 +187,7 @@ export function evaluateGovernance(root: string, request: GovernanceRequest): Ga
     const authority = readBoundedJson(request.authorization).value;
     if (authority.schema !== 'runtime-evolution-authorization/v1' || authority.decision !== 'IMPLEMENT' || authority.targetId !== target.value.id || authority.targetDigest !== governanceDigest(target.bytes) || authority.approvedPlanDigest !== target.value.approvedPlanDigest) fail('Authorization binding mismatch');
     if(authority.addendumDigest!==usageDigest)fail('User-requested usage addendum authorization binding differs');
+    if(authority.correctionAddendumDigest!==correctionDigest)fail('Reviewed correction authorization binding differs');
     if (!list(authority.implementationMilestones).includes(match[1])) return result('BLOCKED', 'Milestone is not covered by this implementation binding.');
     if (!request.files?.length) return result('BLOCKED', 'Exact proposed file paths are required.');
     const permitted = list(object(packet).paths).map(text);

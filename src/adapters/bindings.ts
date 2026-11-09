@@ -343,6 +343,11 @@ export async function openRegisteredBindings(configPath:string,workspaceId:strin
       async prepare(instance,stage,actor,signal){return(await current(signal,stage,instance)).prepare(instance,stage,actor,signal);},
       async dispatch(request,instance,permit,signal){return(await current(signal,request.stageId,instance)).dispatch(request,instance,permit,signal);},
       async inspect(request,instance,progress,actor,signal){return(await current(signal,request.stageId,instance)).inspect(request,instance,progress,actor,signal);},
+      async reconcileAdvance(request,instance,progress,actor,signal){
+        const adapter=await current(signal,request.stageId,instance);
+        if(!adapter.reconcileAdvance)reject('RECONCILE_ORIGINAL_REQUEST','Selected native adapter has no read-only original-receipt recovery',409);
+        return adapter.reconcileAdvance(request,instance,progress,actor,signal);
+      },
       async advance(request,instance,progress,permit,signal){return(await current(signal,request.stageId,instance)).advance!(request,instance,progress,permit,signal);},
     };
   },close(){if(!closed){closed=true;disconnect();}}};

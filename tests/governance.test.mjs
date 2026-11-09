@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validateAcceptanceCatalog, validateTokenUsageAddendum, evaluateGovernance, governanceDigest } from '../dist/governance.js';
+import { validateAcceptanceCatalog, validateTokenUsageAddendum, validateCorrectionAddendum, evaluateGovernance, governanceDigest } from '../dist/governance.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const catalog = JSON.parse(readFileSync(join(root,'governance/acceptance-v090.json')));
@@ -34,12 +34,12 @@ test('scope gate rejects drift, unbound milestones, unapproved files and release
   const dir = mkdtempSync(join(tmpdir(),'runtime-governance-'));
   try {
     mkdirSync(join(dir,'governance'));
-    for (const name of ['roadmap.json','target-v090.json','acceptance-v090.json','lifecycle-contract-v090.json','parameter-matrix-v090.json','environment-contract-v090.json','token-usage-v090.json']) writeFileSync(join(dir,'governance',name),readFileSync(join(root,'governance',name)));
+    for (const name of ['roadmap.json','target-v090.json','acceptance-v090.json','lifecycle-contract-v090.json','parameter-matrix-v090.json','environment-contract-v090.json','token-usage-v090.json','lifecycle-correction-v090.json']) writeFileSync(join(dir,'governance',name),readFileSync(join(root,'governance',name)));
     writeFileSync(join(dir,'package-lock.json'),readFileSync(join(root,'package-lock.json')));
     const targetBytes=readFileSync(join(dir,'governance/target-v090.json'));
     const target=JSON.parse(targetBytes);
     const authorization=join(dir,'synthetic-test-authorization.json');
-    writeFileSync(authorization,JSON.stringify({schema:'runtime-evolution-authorization/v1',decision:'IMPLEMENT',targetId:target.id,targetDigest:governanceDigest(targetBytes),approvedPlanDigest:target.approvedPlanDigest,addendumDigest:target.approvedAddenda[0].contractDigest,implementationMilestones:['M0']}));
+    writeFileSync(authorization,JSON.stringify({schema:'runtime-evolution-authorization/v1',decision:'IMPLEMENT',targetId:target.id,targetDigest:governanceDigest(targetBytes),approvedPlanDigest:target.approvedPlanDigest,addendumDigest:target.approvedAddenda[0].contractDigest,correctionAddendumDigest:target.approvedAddenda.find(a=>a.id==='v090-lifecycle-correction').contractDigest,implementationMilestones:['M0']}));
     const request={mode:'gate',intent:'runtime-v0.9/M0: verify formal governance',authorization,files:['src/governance.ts']};
     assert.equal(evaluateGovernance(dir,{mode:'check'}).status,'VALID');
     assert.equal(evaluateGovernance(dir,request).status,'ALIGNED');
@@ -59,3 +59,15 @@ test('scope gate rejects drift, unbound milestones, unapproved files and release
     assert.equal(evaluateGovernance(dir,request).status,'DEVIATION');
   } finally { rmSync(dir,{recursive:true,force:true}); }
 });
+
+ test('correction coverage remains additive, phase-correct and separate from handoff', () => {
+  const original=JSON.parse(readFileSync(join(root,'governance/lifecycle-correction-v090.json')));
+  validateCorrectionAddendum(original);
+  for(const mutate of [
+    a=>a.acceptance.cases.pop(),a=>a.acceptance.cases[0].vectors=[],
+    a=>a.acceptance.cases.find(c=>c.id==='LC12').phase='PRE_RELEASE',
+    a=>a.acceptance.cases[0].required=false,a=>a.acceptance.combinedRequiredInstances=700,
+    a=>a.acceptance.originalRequiredInstances=664,a=>a.handoff.separateFromRuntimeAcceptance=false,
+    a=>a.handoff.targetChat='another chat',a=>a.compatibility.rawStageEnumUnchanged=false,
+  ]) {const changed=structuredClone(original);mutate(changed);assert.throws(()=>validateCorrectionAddendum(changed));}
+ });

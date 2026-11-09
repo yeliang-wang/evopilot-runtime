@@ -3,7 +3,7 @@
 The fixed catalog contains 64 requirement groups, 22 scenarios and 664 instances
 (655 before release, 9 after delivery). Development regressions are separate.
 The approved Runtime-only usage addendum adds UT01–UT24 independently: 23 before
-release and one after delivery. The combined obligation is **688 instances:
+release and one after delivery. The original catalog plus usage obligation is **688 instances:
 678 pre-release and 10 post-release**. It does not replace any original scenario.
 The E03 collector, `tests/acceptance/v090/e03.test.mjs`, executes the 332
 required-field HTTP instances, 48 fixed HTTP/MCP/CLI stage-entry instances and
@@ -358,7 +358,7 @@ synthetic Host fixture into a real Host observation. The result remains
 `productAcceptance: NOT_EVALUATED`, `releaseAuthorized: false`; final review must
 inspect the actual execution provenance and independent original acceptance.
 
-新增统计验收固定为 UT01–UT24，与原 664 项分别记账，总计 688 项。统计采集器通过
+新增统计验收固定为 UT01–UT24，与原 664 项分别记账，原目录加用量为 688 项。统计采集器通过
 精确安装包的 CLI／HTTP 运行，不直接写库。受控计数输入明确标为合成格式样本，不能
 冒充真实 Codex 用量；真实 Host、八阶段完成、恢复及当前安装仍需要各自执行证据。
 选择部分用例只产生部分报告。记录摘要一致仅证明字节完整，不能授予产品验收或发布权限。
@@ -457,3 +457,11 @@ E07/E12 的命名连接仅选择现有受保护身份，不增加权限。监控
 帧、主动取消的过时只读请求分别留证；取消不计为成功响应。写入和页面使用的最终校验
 仍必须保留完整原始响应。UNKNOWN 必须来自真实实例；游标窗口测试通过原生草稿事件
 越过窗口后核对真实 reset，不直接写库或伪造事件。撤权与发布后安装验收继续独立要求。
+
+## Lifecycle correction acceptance addition
+
+The original catalog and usage addendum retain 688 required cases (678 PRE, 10 POST). LC01–LC21 add 20 PRE and one POST (LC12), giving **709 required Runtime cases (698 PRE, 11 POST)**. HO01–HO03 are separate post-delivery handoff checks. Each LC composite requires all its declared vectors; missing or unknown evidence cannot count as PASS.
+
+原目录与用量补充方案的 688 项要求保持不变。LC01–LC21 新增 21 项，Runtime 合计 709 项；HO01–HO03 单独记账。原始执行回执不可改写；跨候选复用只能在已发布 Harness 政策兼容性得到验证后，形成新的当前 `PASS_REUSED` 资格，不能冒充当前候选重新执行。
+
+See `governance/lifecycle-correction-v090.json` and the correction ADR. These are implementation obligations, not a statement that release acceptance has passed.

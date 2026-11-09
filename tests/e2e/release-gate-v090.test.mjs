@@ -27,7 +27,7 @@ function fixture(t,changeGovernance){
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));fs.mkdirSync(source);fs.mkdirSync(evidence,{mode:0o700});
  const put=(file,value)=>{fs.mkdirSync(dirname(file),{recursive:true});const bytes=Buffer.isBuffer(value)?value:Buffer.from(typeof value==='string'?value:JSON.stringify(value,null,2)+'\n');fs.writeFileSync(file,bytes,{mode:0o600});return{ref:file,sha256:sha(bytes)};};
  for(const file of ['package.json','package-lock.json',...fs.readdirSync(join(repository,'governance')).filter(n=>n.endsWith('.json')).map(n=>'governance/'+n)])put(join(source,file),fs.readFileSync(join(repository,file)));
- for(const name of ['support.mjs','browser.mjs','maintenance.mjs','execution.mjs','usage.test.mjs',...Array.from({length:22},(_,i)=>'e'+String(i+1).padStart(2,'0')+'.test.mjs')])put(join(source,'tests/acceptance/v090',name),'// Synthetic collector identity only.\n');
+ for(const name of ['support.mjs','preflight.mjs','browser.mjs','maintenance.mjs','execution.mjs','usage.test.mjs','correction.test.mjs',...Array.from({length:22},(_,i)=>'e'+String(i+1).padStart(2,'0')+'.test.mjs')])put(join(source,'tests/acceptance/v090',name),'// Synthetic collector identity only.\n');
  changeGovernance?.({source,put});
  const git=args=>execFileSync('/usr/bin/git',['-c','core.fsmonitor=false','-C',source,...args],{env:{...process.env,GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1'},stdio:['ignore','pipe','pipe']}).toString();
  git(['init','--quiet']);git(['add','.']);git(['-c','user.name=Synthetic fixture','-c','user.email=synthetic@example.invalid','-c','commit.gpgsign=false','commit','--quiet','-m','Synthetic release gate fixture']);const sourceCommit=git(['rev-parse','HEAD']).trim();
@@ -48,7 +48,7 @@ function fixture(t,changeGovernance){
  const candidate={manifestDigest:sha(manifest),archiveDigest:sha(archive),version:'0.9.0',serviceId:'synthetic',workspaceId:'synthetic',projectId:'synthetic'},candidateDigest='sha256:'+sha(manifest),matrixBytes=fs.readFileSync(join(source,'governance/parameter-matrix-v090.json')),matrix=JSON.parse(matrixBytes);
  const reports=[];
  function report(scenario,ids,usage=false){
-  const dir=join(evidence,scenario),collectorNames=usage?['usage.test.mjs']:['support.mjs',scenario.toLowerCase()+'.test.mjs',...(['E01','E02','E04','E05','E06','E07','E12','E13','E16','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(['E01','E02','E13'].includes(scenario)?['execution.mjs']:[])];
+  const dir=join(evidence,scenario),collectorNames=usage?['usage.test.mjs']:['support.mjs','preflight.mjs',scenario.toLowerCase()+'.test.mjs',...(['E01','E02','E04','E05','E06','E07','E12','E13','E16','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(['E01','E02','E13'].includes(scenario)?['execution.mjs']:[])];
   const selection={scenario,qualification:'FINAL_CANDIDATE',candidate,candidateDigest,collectorPins:Object.fromEntries(collectorNames.map(n=>[n,sha(fs.readFileSync(join(source,'tests/acceptance/v090',n)))])),selectedCaseIds:ids,...(usage?{sourceCommit,addendumDigest:sha(fs.readFileSync(join(source,'governance/token-usage-v090.json')))}:{matrixDigest:sha(matrixBytes)})};
   const selectionRef=put(join(dir,'selection.json'),selection);
   const records=id=>{const n=id??'setup',request=put(join(dir,n+'-request.json'),{caseInstanceId:id,synthetic:true,request:'Integrity fixture'}),response=put(join(dir,n+'-response.json'),{caseInstanceId:id,synthetic:true,response:'Not actual acceptance'});return{caseInstanceId:id,request:n+'-request.json',requestDigest:request.sha256,response:n+'-response.json',fileDigest:response.sha256};};
@@ -58,15 +58,29 @@ function fixture(t,changeGovernance){
  }
  for(let i=1;i<=20;i++){const scenario='E'+String(i).padStart(2,'0');reports.push({scenario,report:report(scenario,matrix.caseInstances.filter(c=>c.scenario===scenario).map(c=>c.caseInstanceId))});}
  const usageReport=report('UT',Array.from({length:23},(_,i)=>'UT'+String(i+1).padStart(2,'0')),true);
+ const correctionCases=JSON.parse(fs.readFileSync(join(source,'governance/lifecycle-correction-v090.json'))).acceptance.cases.filter(c=>c.phase==='PRE_RELEASE'),correctionDir=join(evidence,'LC');
+ const correctionSelection={scenario:'LC',sourceCommit,phase:'PRE_RELEASE',addendumDigest:sha(fs.readFileSync(join(source,'governance/lifecycle-correction-v090.json'))),qualification:'FINAL_CANDIDATE',candidate,candidateDigest,collectorPins:{'correction.test.mjs':sha(fs.readFileSync(join(source,'tests/acceptance/v090/correction.test.mjs')))},selectedCaseIds:correctionCases.map(c=>c.id)};
+ const correctionSelectionRef=put(join(correctionDir,'selection.json'),correctionSelection);
+ const correctionRecord=(caseInstanceId,vectorId)=>{const artifact=(caseInstanceId??'setup')+'-'+(vectorId??'setup')+'.raw.json',ref=put(join(correctionDir,artifact),{synthetic:true,message:'Raw integrity test fixture; not actual execution or acceptance',caseInstanceId,vectorId});return{caseInstanceId,vectorId,artifact,fileDigest:ref.sha256};};
+ const observed={phase:'PRE_RELEASE',status:'PASS',qualification:'FINAL_CANDIDATE',candidateDigest,assertions:{synthetic:'Integrity fixture only'}};
+ const correctionResults=correctionCases.map(c=>{const r={caseInstanceId:c.id,...observed,vectors:c.vectors.map(vectorId=>({vectorId,...observed,evidence:[correctionRecord(c.id,vectorId)]}))};put(join(correctionDir,c.id+'.json'),r);return r;});
+ const correctionReport=put(join(correctionDir,'REPORT.json'),{schema:'runtime-correction-acceptance-report/v1',scenario:'LC',sourceCommit,phase:'PRE_RELEASE',candidate,candidateDigest,selectionDigest:correctionSelectionRef.sha256,qualification:'FINAL_CANDIDATE',scenarioDenominator:20,fullDenominator:709,selected:20,executed:20,passed:20,failed:0,unexecutedCaseIds:[],scenarioStatus:'OBSERVED_PASS',productAcceptance:'NOT_EVALUATED',releaseAuthorized:false,setupEvidence:[correctionRecord(null,null)],results:correctionResults});
  const releaseNotes=put(join(evidence,'release-notes.md'),'# Synthetic Runtime Preview\n\nUnit-test notes only; no actual release or acceptance.\n');
- const input={schema:'runtime-release-preflight-input/v1',candidate:{schema:'runtime-release-candidate-input/v1',repository:repo.full_name,sourceCommit,files,sourceCi},scope:{workspaceId:'synthetic',projectId:'synthetic'},reports,usageReport,releaseNotes};
+ const input={schema:'runtime-release-preflight-input/v1',candidate:{schema:'runtime-release-candidate-input/v1',repository:repo.full_name,sourceCommit,files,sourceCi},scope:{workspaceId:'synthetic',projectId:'synthetic'},reports,usageReport,correctionReport,releaseNotes};
  const prepare=()=>prepareRuntimeRelease(source,input,signal());
  function decision(review){
   const subject={owner:'runtime',operation:'release.publish',workspaceId:'synthetic',scope:{visibility:'private',projectId:'synthetic'},reviewDigest:review.reviewDigest,decision:'APPROVE'};
   const original=put(join(evidence,'synthetic-decision-source.json'),{synthetic:true,message:'Not a human approval; unit-test source only.'});
   return put(join(evidence,'synthetic-decision.json'),{schema:'evopilot-decision-evidence/v1',subject,source:{reference:pathToFileURL(original.ref).href+'#sha256='+original.sha256,description:'Synthetic source, not real authority'}});
  }
- return{root,source,evidence,input,put,prepare,decision,candidate:()=>inspectRuntimeReleaseCandidate(source,input.candidate,signal())};
+ // Re-pin synthetic aggregate and case files so negative tests reach semantic checks.
+ function rewriteCorrection(change){
+  const report=JSON.parse(fs.readFileSync(input.correctionReport.ref)),selection=JSON.parse(fs.readFileSync(join(correctionDir,'selection.json')));
+  change(report,selection);report.selectionDigest=put(join(correctionDir,'selection.json'),selection).sha256;
+  for(const result of report.results)put(join(correctionDir,result.caseInstanceId+'.json'),result);
+  input.correctionReport=put(input.correctionReport.ref,report);
+ }
+ return{root,source,evidence,input,put,prepare,decision,rewriteCorrection,correctionCases,candidate:()=>inspectRuntimeReleaseCandidate(source,input.candidate,signal())};
 }
 const syntheticAuthentication=request=>({schema:'runtime-release-authentication/v1',challenge:request.challenge,subject:request.subject,reviewDigest:request.review.reviewDigest,candidateDigest:request.review.publication.candidateDigest,sourceCommit:request.review.publication.sourceCommit,decisionEvidenceDigest:request.decisionEvidenceDigest,decisionSourceDigest:request.decisionSourceDigest,sourceCiRecordsDigest:request.sourceCiRecordsDigest,decision:'APPROVE',humanIdentity:{kind:'human',id:'synthetic-test-identity-not-an-actual-human'},decisionAuthentication:'AUTHENTICATED_HUMAN_DECISION',sourceCiAuthentication:'AUTHENTICATED_PROVIDER_READS',acceptanceAuthentication:'REVIEWED_ORIGINAL_EXECUTION',authenticatedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString()});
 
@@ -75,11 +89,12 @@ test('E20 lower layer has no acceptance self-dependency and only the exact indep
  const r=await f.candidate();assert.equal(r.repository,'yeliang-wang/evopilot-runtime');assert.equal(r.tag,'v0.9.0');assert.equal(r.prerelease,true);assert.equal(r.latest,false);assert.deepEqual(Object.keys(r.files).sort(),[...RUNTIME_RELEASE_ASSETS].sort());assert.equal(r.releaseAuthorized,false);assert.equal(r.productAcceptance,'NOT_EVALUATED');assert(!JSON.stringify(r).includes(f.root));
  await assert.rejects(f.prepare);
 });
-test('full preflight combines 655 plus 23 without claiming the ten post-release cases or human authority',async t=>{
- const f=fixture(t),r=await f.prepare();assert.equal(r.acceptance.passedPreRelease,678);assert.equal(r.acceptance.requiredPreRelease,678);assert.equal(r.acceptance.combinedRequired,688);assert.deepEqual(r.acceptance.postRelease,{required:10,passed:0,status:'NOT_EVALUATED',scenarios:['E21','E22','UT24']});assert.equal(r.releaseAuthorized,false);assert.equal(r.executionAuthenticity,'TRUSTED_REVIEW_REQUIRED');assert.equal(r.privacy.privateEvidenceUploadAllowed,false);assert(!JSON.stringify(r).includes(f.root));assert.equal((await f.prepare()).reviewDigest,r.reviewDigest);
+test('full preflight requires original 678 plus 20 LC without claiming eleven post-release cases or human authority',async t=>{
+ const f=fixture(t),r=await f.prepare();assert.equal(r.acceptance.passedPreRelease,698);assert.equal(r.acceptance.requiredPreRelease,698);assert.equal(r.acceptance.combinedRequired,709);assert.deepEqual(r.acceptance.postRelease,{required:11,passed:0,status:'NOT_EVALUATED',scenarios:['E21','E22','UT24','LC12']});assert.equal(r.releaseAuthorized,false);assert.equal(r.executionAuthenticity,'TRUSTED_REVIEW_REQUIRED');assert.equal(r.privacy.privateEvidenceUploadAllowed,false);assert(!JSON.stringify(r).includes(f.root));assert.equal((await f.prepare()).reviewDigest,r.reviewDigest);
+ assert.equal(r.acceptance.correction.required,20);assert.equal(r.acceptance.correction.passed,20);assert.equal(r.acceptance.correction.requiredVectors,f.correctionCases.reduce((n,c)=>n+c.vectors.length,0));assert.equal(r.acceptance.correction.executionAuthenticity,'NOT_ESTABLISHED_BY_FILE_HASHES');assert.equal(r.acceptance.correction.releaseAuthorized,false);
  assert.deepEqual(r.publication.releaseNotes,{sha256:f.input.releaseNotes.sha256,bytes:fs.statSync(f.input.releaseNotes.ref).size,mediaType:'text/markdown; charset=utf-8'});assert.equal(Object.keys(r.publication.files).length,6);
  const target=JSON.parse(fs.readFileSync(join(f.source,'governance/target-v090.json')));
- assert.deepEqual(r.governance,{status:'VALID',targetId:target.id,targetVersion:'0.9.0',roadmapDigest:sha(fs.readFileSync(join(f.source,'governance/roadmap.json'))),targetDigest:sha(fs.readFileSync(join(f.source,'governance/target-v090.json'))),approvedPlanDigest:target.approvedPlanDigest,acceptanceDigest:target.acceptanceDigest,usageAddendumDigest:sha(fs.readFileSync(join(f.source,'governance/token-usage-v090.json')))});
+ assert.deepEqual(r.governance,{status:'VALID',targetId:target.id,targetVersion:'0.9.0',roadmapDigest:sha(fs.readFileSync(join(f.source,'governance/roadmap.json'))),targetDigest:sha(fs.readFileSync(join(f.source,'governance/target-v090.json'))),approvedPlanDigest:target.approvedPlanDigest,acceptanceDigest:target.acceptanceDigest,usageAddendumDigest:sha(fs.readFileSync(join(f.source,'governance/token-usage-v090.json'))),correctionAddendumDigest:sha(fs.readFileSync(join(f.source,'governance/lifecycle-correction-v090.json')))});
  assert.equal(verifyRuntimeReleaseGovernanceCurrent(f.source,f.input.candidate.sourceCommit,r.governance),undefined);
  assert.throws(()=>verifyRuntimeReleaseGovernanceCurrent(f.source,f.input.candidate.sourceCommit,{...r.governance,targetDigest:'0'.repeat(64)}),/Reviewed release governance changed/);
  await assert.rejects(()=>prepareRuntimeRelease(f.source,{...f.input,postRelease:{passed:10}},signal()),/Unexpected input/);
@@ -112,7 +127,7 @@ test('foreign components, different CI bytes, duplicate evidence roles and alter
 });
 test('partial original or usage evidence cannot borrow the other denominator or the E20 source result',async t=>{
  const f=fixture(t),last=f.input.reports.pop();await assert.rejects(f.prepare);f.input.reports.push(last);
- const ref=f.input.usageReport,bytes=fs.readFileSync(ref.ref),report=JSON.parse(bytes);report.passed=22;f.input.usageReport=f.put(ref.ref,report);await assert.rejects(f.prepare);fs.writeFileSync(ref.ref,bytes);f.input.usageReport=ref;assert.equal((await f.prepare()).acceptance.passedPreRelease,678);
+ const ref=f.input.usageReport,bytes=fs.readFileSync(ref.ref),report=JSON.parse(bytes);report.passed=22;f.input.usageReport=f.put(ref.ref,report);await assert.rejects(f.prepare);fs.writeFileSync(ref.ref,bytes);f.input.usageReport=ref;assert.equal((await f.prepare()).acceptance.passedPreRelease,698);
 });
 test('decision hashes and implementation approval never replace an exact real-authenticator interface',async t=>{
  const f=fixture(t),review=await f.prepare(),decision=f.decision(review),verify=auth=>verifyRuntimeReleaseDecision(f.source,f.input,review.reviewDigest,decision,auth,signal());
@@ -124,7 +139,7 @@ test('decision hashes and implementation approval never replace an exact real-au
 test('an exact synthetic authenticator exercises only bounded publication and does not authorize install, migration or post-release PASS',async t=>{
  const f=fixture(t),review=await f.prepare(),decision=f.decision(review);let called=false;
  const r=await verifyRuntimeReleaseDecision(f.source,f.input,review.reviewDigest,decision,async request=>{called=true;assert.equal(request.subject.operation,'release.publish');assert.equal(request.decisionEvidence.ref,decision.ref);return syntheticAuthentication(request);},signal());
- assert(called);assert.equal(r.releaseAuthorized,true);assert.deepEqual(r.governance,review.governance);assert.equal(r.authorizedOperation,'github.preview.publish');assert.equal(r.installationAuthorized,false);assert.equal(r.migrationAuthorized,false);assert.equal(r.overallCompletion,'NOT_COMPLETE');assert.equal(r.postRelease.passed,0);assert.equal(r.postRelease.required,10);assert(!JSON.stringify(r).includes(f.root));
+ assert(called);assert.equal(r.releaseAuthorized,true);assert.deepEqual(r.governance,review.governance);assert.equal(r.authorizedOperation,'github.preview.publish');assert.equal(r.installationAuthorized,false);assert.equal(r.migrationAuthorized,false);assert.equal(r.overallCompletion,'NOT_COMPLETE');assert.equal(r.postRelease.passed,0);assert.equal(r.postRelease.required,11);assert(!JSON.stringify(r).includes(f.root));
 });
 test('post-authentication drift and authenticator exceptions cannot escape final revalidation or expose private error text',async t=>{
  const f=fixture(t),review=await f.prepare(),decision=f.decision(review),verify=auth=>verifyRuntimeReleaseDecision(f.source,f.input,review.reviewDigest,decision,auth,signal());
@@ -132,4 +147,48 @@ test('post-authentication drift and authenticator exceptions cannot escape final
  const requestFile=join(f.evidence,'UT','UT01-request.json'),before=fs.readFileSync(requestFile);
  await assert.rejects(()=>verify(async request=>{fs.appendFileSync(requestFile,' ');return syntheticAuthentication(request);}));fs.writeFileSync(requestFile,before);
  const controller=new AbortController();await assert.rejects(()=>verifyRuntimeReleaseDecision(f.source,f.input,review.reviewDigest,decision,async()=>{controller.abort();return new Promise(()=>{});},controller.signal),/authentication failed/);
+});
+
+test('original 678 cannot bypass mandatory LC evidence or count POST/coordination work as PRE',async t=>{
+ const f=fixture(t),original=structuredClone(f.input),missing={...f.input};delete missing.correctionReport;
+ await assert.rejects(()=>prepareRuntimeRelease(f.source,missing,signal()),/Unexpected input/);
+ f.input.correctionReport=f.input.usageReport;await assert.rejects(f.prepare,/Unexpected input|Correction report/);Object.assign(f.input,original);
+ const baseline=JSON.parse(fs.readFileSync(f.input.correctionReport.ref));
+ for(const change of [r=>r.results.pop(),r=>r.results.push(r.results[0]),r=>r.results[0].caseInstanceId='LC12',r=>r.results[0].caseInstanceId='HO01',r=>r.phase='POST_RELEASE',r=>r.results[0].phase='POST_RELEASE',r=>r.fullDenominator=688,r=>r.scenarioDenominator=21,r=>r.passed=19]){
+  f.rewriteCorrection(change);await assert.rejects(f.prepare,/Correction|correction|Every declared/);f.input.correctionReport=f.put(f.input.correctionReport.ref,baseline);
+ }
+ assert.equal((await f.prepare()).acceptance.passedPreRelease,698);
+});
+
+test('every LC vector requires original raw PASS evidence; composite labels and reuse cannot substitute',async t=>{
+ const f=fixture(t),baseline=JSON.parse(fs.readFileSync(f.input.correctionReport.ref));
+ for(const change of [
+  r=>r.results[0].vectors.pop(),r=>r.results[0].vectors.push(r.results[0].vectors[0]),r=>r.results[0].vectors[0].vectorId='unregistered',
+  r=>r.results[0].vectors[0].phase='POST_RELEASE',r=>r.results[0].vectors[0].status='FAIL',r=>r.results[0].vectors[0].status='SKIPPED',r=>r.results[0].status='PASS_REUSED',r=>r.results[0].vectors[0].qualification='PASS_REUSED',
+  r=>r.results[0].vectors[0].assertions={},r=>r.results[0].vectors[0].evidence=[],
+  r=>r.results[0].vectors[0].evidence[0].caseInstanceId='LC02',r=>r.results[0].vectors[0].evidence[0].vectorId='candidate',
+  r=>r.results[0].vectors[1].evidence[0].artifact=r.results[0].vectors[0].evidence[0].artifact,
+ ]){
+  f.rewriteCorrection(change);await assert.rejects(f.prepare,/correction|Correction|Every declared/);f.input.correctionReport=f.put(f.input.correctionReport.ref,baseline);
+ }
+ f.rewriteCorrection(()=>{});assert.equal((await f.prepare()).acceptance.correction.passed,20);
+});
+
+test('LC source, candidate, obligations, phase and committed collector pins remain exact',async t=>{
+ const f=fixture(t),baseline=JSON.parse(fs.readFileSync(f.input.correctionReport.ref)),selectionRef=join(f.evidence,'LC','selection.json'),baselineSelection=JSON.parse(fs.readFileSync(selectionRef));
+ for(const change of [
+  r=>r.sourceCommit='0'.repeat(40),r=>r.candidateDigest='sha256:'+'0'.repeat(64),r=>r.candidate.manifestDigest='0'.repeat(64),r=>r.results[0].candidateDigest='sha256:'+'0'.repeat(64),r=>r.results[0].vectors[0].candidateDigest='sha256:'+'0'.repeat(64),
+  (_r,s)=>s.addendumDigest='0'.repeat(64),(_r,s)=>s.sourceCommit='0'.repeat(40),(_r,s)=>s.phase='POST_RELEASE',(_r,s)=>s.selectedCaseIds[0]='LC12',(_r,s)=>s.collectorPins['correction.test.mjs']='0'.repeat(64),
+ ]){
+  f.rewriteCorrection(change);await assert.rejects(f.prepare,/Correction|correction|Selected LC/);f.put(selectionRef,baselineSelection);f.input.correctionReport=f.put(f.input.correctionReport.ref,baseline);
+ }
+ f.rewriteCorrection(()=>{});assert.equal((await f.prepare()).acceptance.correction.passed,20);
+});
+
+test('LC original case, raw evidence bytes and file ownership are rechecked after authentication',async t=>{
+ const f=fixture(t),review=await f.prepare(),decision=f.decision(review),raw=join(f.evidence,'LC','LC01-source.raw.json'),before=fs.readFileSync(raw),caseRef=join(f.evidence,'LC','LC01.json'),caseBytes=fs.readFileSync(caseRef);
+ fs.appendFileSync(raw,' ');await assert.rejects(f.prepare,/Original correction evidence bytes changed/);fs.writeFileSync(raw,before);
+ fs.chmodSync(raw,0o644);await assert.rejects(f.prepare,/private and owned/);fs.chmodSync(raw,0o600);
+ const changedCase=JSON.parse(caseBytes);changedCase.status='FAIL';f.put(caseRef,changedCase);await assert.rejects(f.prepare,/Original correction case differs/);fs.writeFileSync(caseRef,caseBytes);
+ await assert.rejects(()=>verifyRuntimeReleaseDecision(f.source,f.input,review.reviewDigest,decision,async request=>{fs.appendFileSync(raw,' ');return syntheticAuthentication(request);},signal()),/Original correction evidence bytes changed/);
 });

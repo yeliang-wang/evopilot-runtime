@@ -97,6 +97,13 @@ function worker(f,mode) { return spawn(process.execPath,[...(mode==='hold'?['--e
 function rawStatus(url,headers) { return new Promise((resolve,reject)=>{
   const req=httpRequest(url,{headers},res=>{res.resume();res.once('end',()=>resolve(res.statusCode));});req.once('error',reject);req.end();
 }); }
+function serviceSchema(root) {
+  const db=new DatabaseSync(join(root,'service.sqlite'),{readOnly:true});
+  try{return Number(db.prepare('PRAGMA user_version').get().user_version);}finally{db.close();}
+}
+function correctionChange(kind='lifecycle-correction-proposal') {
+  return{value:{retained:true},objects:[{kind,id:'synthetic-correction',value:{synthetic:true}}],event:{type:'fixture-written',data:{kind}}};
+}
 
 test('oversized fixed and unfinished chunked requests receive explicit rejection before dispatch and do not poison the service',async()=>{
   const f=fixture(),server=await startRuntimeServer({stateRoot:f.root,workspaceId:'test'});
@@ -149,6 +156,58 @@ test('failed callback and revoked transaction authority leave no partial object,
     assert.equal(s.revision('alpha'),0);assert.equal(s.object('alpha','fixture','one'),null);assert.equal(s.events(f.actor,'alpha').events.length,0);
     assert.throws(()=>s.receipt(f.actor,'alpha','one'),{code:'NOT_FOUND'});
   } finally{s.close();f.cleanup();}
+});
+
+// Schema-guard regressions with synthetic feature payloads. These do not prove
+// an installed older binary's rejection or the real upgrade/rollback journey.
+for(const kind of ['lifecycle-correction-proposal','lifecycle-recovery-admission','lifecycle-recovery-ledger','lifecycle-evidence-qualification','ci-acceptance-capture'])test('first '+kind+' commit upgrades only its service state and preserves original history through restart',()=>{
+  const f=fixture();let s=new RuntimeStore(f.root,'test');
+  try{
+    assert.equal(serviceSchema(f.root),1);
+    const original=s.mutate(f.actor,mutation(),()=>change()),before=s.events(f.actor,'alpha');
+    s.close();s=new RuntimeStore(f.root,'test');assert.equal(serviceSchema(f.root),1);
+    const saved=s.mutate(f.actor,mutation('feature',1),()=>correctionChange(kind),()=>{
+      // A concurrent reader sees the committed old schema until the entire
+      // feature object, audit, event and receipt transaction has committed.
+      assert.equal(serviceSchema(f.root),1);return f.actor;
+    });
+    assert.equal(serviceSchema(f.root),2);
+    assert.deepEqual(s.receipt(f.actor,'alpha','one'),original);
+    assert.deepEqual(s.events(f.actor,'alpha').events.slice(0,before.events.length),before.events);
+    assert.deepEqual(s.object('alpha','fixture','one'),{value:1});
+    s.close();s=new RuntimeStore(f.root,'test');assert.equal(serviceSchema(f.root),2);
+    assert.deepEqual(s.mutate(f.actor,mutation('feature',1),()=>{throw Error('must not execute replay');}),saved);
+    assert.deepEqual(s.object('alpha',kind,'synthetic-correction'),{synthetic:true});
+    s.mutate(f.actor,mutation('ordinary-after-feature',2),()=>change(2));assert.equal(serviceSchema(f.root),2);
+    s.close();s=new RuntimeStore(f.root,'test');assert.equal(serviceSchema(f.root),2);
+    assert.deepEqual(s.receipt(f.actor,'alpha','one'),original);assert.equal(s.revision('alpha'),3);
+  }finally{s.close();f.cleanup();}
+});
+
+test('failed correction CAS, serialization and post-write authorization roll back objects and schema upgrade together',()=>{
+  const f=fixture();let s=new RuntimeStore(f.root,'test');
+  try{
+    assert.throws(()=>s.mutate(f.actor,mutation('stale-feature',1),()=>{assert.fail('stale CAS cannot reach feature callback');}),{code:'REVISION_CONFLICT'});
+    assert.throws(()=>s.mutate(f.actor,mutation('callback-feature'),()=>{throw Error('before feature');}),/before feature/);
+    assert.throws(()=>s.mutate(f.actor,mutation('serialization-feature'),()=>({...correctionChange(),objects:[...correctionChange().objects,{kind:'fixture',id:'oversized',value:'x'.repeat(300000)}]})),{code:'INPUT_LIMIT'});
+    assert.throws(()=>s.mutate(f.actor,mutation('revoked-feature'),()=>correctionChange(),()=>{
+      assert.equal(serviceSchema(f.root),1);return{...f.actor,permissions:['read'],revision:2};
+    }),{code:'FORBIDDEN'});
+    assert.equal(serviceSchema(f.root),1);assert.equal(s.revision('alpha'),0);
+    assert.equal(s.object('alpha','lifecycle-correction-proposal','synthetic-correction'),null);
+    assert.equal(s.events(f.actor,'alpha').events.length,0);
+    for(const id of ['stale-feature','callback-feature','serialization-feature','revoked-feature'])assert.throws(()=>s.receipt(f.actor,'alpha',id),{code:'NOT_FOUND'});
+    s.close();s=new RuntimeStore(f.root,'test');assert.equal(serviceSchema(f.root),1);assert.equal(s.revision('alpha'),0);
+  }finally{s.close();f.cleanup();}
+});
+
+test('schema2 reopening retains full ledger integrity checks',()=>{
+  const f=fixture(),s=new RuntimeStore(f.root,'test');
+  try{
+    s.mutate(f.actor,mutation(),()=>correctionChange());s.close();assert.equal(serviceSchema(f.root),2);
+    const db=new DatabaseSync(join(f.root,'service.sqlite'));try{db.exec('DROP TABLE audit;');}finally{db.close();}
+    assert.throws(()=>new RuntimeStore(f.root,'test'),{code:'CORRUPT_STATE'});assert.equal(serviceSchema(f.root),2);
+  }finally{s.close();f.cleanup();}
 });
 
 for(const phase of ['before','after'])test('OS crash '+phase+' commit recovers transaction and single-writer lock without redispatch',async()=>{

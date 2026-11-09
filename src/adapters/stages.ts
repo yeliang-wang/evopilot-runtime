@@ -14,7 +14,7 @@ import { nativeSha256, validateNativeReference, type NativeReference, type Nativ
 import { configuredPlatform, readIntegrationConfiguration, type IntegrationConfiguration, type PlatformRegistration } from './config.js';
 import { validateResourceDefinition, type BindingConnections } from './bindings.js';
 import { ciSourceRef, type PlatformArtifactArchive, type PlatformClient, type PlatformRunObservation, type PlatformRunRequest } from './platforms.js';
-import { MAX_ARCHIVE_BYTES, ciSourceDigest, readArtifactArchive, verifyCiArtifact, validateCandidateInput, type CandidateInput, type VerifiedCiArtifact } from './artifacts.js';
+import { MAX_ARCHIVE_BYTES, ciSourceDigest, readArtifactArchive, verifyCiArtifact, validateCandidateInput, inspectCiAcceptanceReport, unavailableCiAcceptanceReport, type CiAcceptanceReportCapture, type CandidateInput, type VerifiedCiArtifact } from './artifacts.js';
 import { ownerRequestDigest, type Owner, type OwnerRequest, type PublishedOwnerAdapter } from './published-owners.js';
 import type {SourceTreeObservation} from './source-tree.js';
 import type {NativeSourceScope} from '../native-types.js';
@@ -114,6 +114,20 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
     const temporary=join(root,randomUUID()+'.pending'),fd=openSync(temporary,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
     try{writeFileSync(fd,archive.bytes);fsyncSync(fd);}finally{closeSync(fd);}
     renameSync(temporary,path);const directory=openSync(root,constants.O_RDONLY);try{fsyncSync(directory);}finally{closeSync(directory);}
+  }
+  function retainAcceptanceCapture(r:StageRequest,p:CiPlan,ci:PlatformRunRequest,run:PlatformRunObservation,report:CiAcceptanceReportCapture,verified:VerifiedCiArtifact|null):void{
+    // This path receives observations only from the registered client for the
+    // protected original request. It is not an evidence-import operation.
+    const jobs=run.jobs.map(j=>({jobId:j.jobId,status:j.status,providerStatus:j.providerStatus,runnerId:j.runnerId})).sort((a,b)=>a.jobId.localeCompare(b.jobId));
+    // Fixed provider clients admit GitHub attempt 1 only, and reject GitLab
+    // retried jobs. GitLab has no corresponding numeric run-attempt field.
+    const providerAttempt=p.binding.provider==='github'?{kind:'GITHUB_RUN_ATTEMPT',runId:run.runId,number:run.runId===null?null:1}:{kind:'GITLAB_ORIGINAL_PIPELINE_JOBS',pipelineId:run.runId,jobIds:jobs.map(j=>j.jobId),retriedJobsRejected:true};
+    const body={schema:'runtime-ci-acceptance-capture/v1',workspaceId:r.workspaceId,projectId:r.projectId,instanceId:r.instanceId,stageRequestId:r.id,stageRequestDigest:r.digest,planDigest:r.planDigest,pinsDigest:r.pinsDigest,authorityRef:r.authorityRef,
+      origin:{kind:'REGISTERED_CI_OBSERVATION',provider:p.binding.provider,repositoryId:p.binding.repositoryId,bindingDigest:ci.bindingDigest,ciRequestId:ci.requestId,ciRequestDigest:valueDigest(ci),inputDigest:ci.inputDigest,sourceCommit:ci.commit,workflowDigest:ci.workflowDigest,sourceTreeDigest:p.sourceTree?.treeDigest??null,sourceApproved:false,runId:run.runId,runStatus:run.status,providerAttempt,jobsDigest:valueDigest(jobs),jobCount:jobs.length,archive:verified?.sourceArchive??null,resultDigest:verified?.resultDigest??null},
+      report,history:'UNKNOWN',inputClosure:'UNKNOWN',qualification:'UNAVAILABLE',reuseAuthorized:false,executionAuthorized:false,releaseAuthorized:false};
+    // Content-addressed observations preserve UNKNOWN/failure and later results
+    // separately. Repeated reads do not overwrite history or invent a new run.
+    const digest=valueDigest(body);retain(r.projectId,'ci-acceptance-capture',r.id+':'+digest.slice(7),{...body,digest},true);
   }
   function configuration(actor:Principal,projectId:string):Readonly<IntegrationConfiguration>{authorize(actor,projectId,'read');return readIntegrationConfiguration(configPath,store.workspaceId);}
   function targetVersion(instance:LifecycleInstance):string|null{
@@ -231,11 +245,15 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
   async function inspect(r:StageRequest,instance:LifecycleInstance,_progress:StageProgress,actor:Principal,signal:AbortSignal):Promise<StageObservation>{
     const {p,config,client,ci}=plan(r,instance,actor),known=store.object(r.projectId,'ci-stage-run',r.id) as {runId:string}|null;
     const run=await client.run(actor,ci,known?.runId??null,signal);pinRun(r,run);
-    if(run.status==='PENDING'||run.status==='RUNNING')return observation(r,p,ci,run.status==='PENDING'?'CI_PENDING':'CI_RUNNING');
-    if(run.status==='UNKNOWN'||!run.runId)return observation(r,p,ci,'UNKNOWN');
-    if(run.status==='FAILED')return observation(r,p,ci,'FAILED');
+    if(run.status==='PENDING'||run.status==='RUNNING'){retainAcceptanceCapture(r,p,ci,run,unavailableCiAcceptanceReport('RUN_'+run.status),null);return observation(r,p,ci,run.status==='PENDING'?'CI_PENDING':'CI_RUNNING');}
+    if(run.status==='UNKNOWN'||!run.runId){retainAcceptanceCapture(r,p,ci,run,unavailableCiAcceptanceReport('RUN_UNKNOWN'),null);return observation(r,p,ci,'UNKNOWN');}
+    // Preserve the original failure without requiring a new download or
+    // classifying its cause. Case coverage/history remain explicitly unknown.
+    if(run.status==='FAILED'){retainAcceptanceCapture(r,p,ci,run,unavailableCiAcceptanceReport('FAILED_RUN_REPORT_UNAVAILABLE'),null);return observation(r,p,ci,'FAILED');}
     const archive=await client.artifact(actor,ci,run.runId,signal),verified=await verifyCiArtifact(archive,ci,p.expectedChecks,signal);archiveBytes(archive);
     retain(r.projectId,'ci-stage-artifact',r.id,verified,true);
+    const captured=await inspectCiAcceptanceReport(archive,ci,verified,{run,workflowPath:p.binding.workflowPath??p.binding.pipelinePath!,requirementsDigest:instance.pins.requirementsDigest,...(p.sourceTree?{sourceTree:p.sourceTree}:{})},signal);
+    signal.throwIfAborted();retainAcceptanceCapture(r,p,ci,run,captured,verified);
     const version=targetVersion(instance);
     if(version&&verified.candidate&&verified.candidate.version!==version){
       const evidence={schema:'runtime-ci-target-mismatch/v1',requestId:r.id,inputDigest:r.inputDigest,preparationRef:instance.pins.targetRef,expectedVersion:version,actualVersion:verified.candidate.version,artifact:verified},ref=valueDigest(evidence);retain(r.projectId,'ci-stage-evidence',ref,evidence,true);
@@ -286,13 +304,13 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
     }
     return inspect(r,instance,progress,actor,signal);
   }
-  return{prepare,inspect,advance,async dispatch(r,instance,permit,signal){
+  return{prepare,inspect,reconcileAdvance:inspect,advance,async dispatch(r,instance,permit,signal){
     const actor=await permit(),{p,client,ci}=plan(r,instance,actor);
     await currentSource(p,instance,actor,signal);signal.throwIfAborted();
     // The execution core persisted the original StageRequest before entering
     // here. Platform clients independently refuse replacement/ref redispatch.
     const run=await client.dispatch(ci,async requested=>{if(!same(requested,ci))reject('CI_REQUEST_MISMATCH','CI permit cannot change its original request');return permit();},signal);pinRun(r,run);
-    if(run.status==='PENDING'||run.status==='RUNNING'||run.status==='UNKNOWN')return observation(r,p,ci,run.status==='PENDING'?'CI_PENDING':run.status==='RUNNING'?'CI_RUNNING':'UNKNOWN');
+    if(run.status==='PENDING'||run.status==='RUNNING'||run.status==='UNKNOWN'){retainAcceptanceCapture(r,p,ci,run,unavailableCiAcceptanceReport('RUN_'+run.status),null);return observation(r,p,ci,run.status==='PENDING'?'CI_PENDING':run.status==='RUNNING'?'CI_RUNNING':'UNKNOWN');}
     return inspect(r,instance,{requestId:r.id,phase:'RUNNING',terminal:false,handle:null,observation:null,observationRef:null,reason:null,observedAt:new Date().toISOString()},actor,signal);
   }};
 }

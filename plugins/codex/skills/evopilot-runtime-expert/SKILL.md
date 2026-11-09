@@ -37,6 +37,10 @@ credentials, start a second Agent loop or infer authority from an Agent result.
 - For an unknown outcome, interruption, outage or upgrade, follow
   [recovery](references/recovery.md). Inspect original requests; do not reset
   attempt counts, deadlines, budgets or request IDs.
+- For a failed check or a proposed minimal repair, follow
+  [correction](references/correction.md). Separate observed facts from the
+  hypothesis, and preserve independent authorized work without advancing a
+  failed required gate.
 - For recorded token consumption by version, stage or task, follow
   [usage](references/usage.md). Use native reports, disclose coverage and unknown
   counts, and keep statistics independent of lifecycle and release decisions.

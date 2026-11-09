@@ -19,7 +19,7 @@ import { createCiStageAdapter } from '../../dist/adapters/stages.js';
 import {ownerRequestDigest} from '../../dist/adapters/published-owners.js';
 import {completedPreparationSource,readCiPreparationEvidence,resolvePreparationLineage} from '../../dist/adapters/ci-preparation.js';
 import {readVerificationFeedback} from '../../dist/adapters/stage-feedback.js';
-import { ciSourceDigest, ciBuildDigest } from '../../dist/adapters/artifacts.js';
+import { ciSourceDigest, ciBuildDigest, readArtifactArchive, CI_ACCEPTANCE_REPORT_PATH } from '../../dist/adapters/artifacts.js';
 import { nativeSha256, NATIVE_CONTRACT_DIGEST } from '../../vendor/compatibility/v1/native.mjs';
 import { lifecycle, yaml, syntheticBindings, syntheticSourceTree,extension } from '../fixtures/lifecycle-v090.mjs';
 function zip(entries){
@@ -94,7 +94,13 @@ async function fixture({targetVersion,publicAssets=false,preparing=false,prepara
       const result={schema:'runtime-ci/v1',requestId:ci.requestId,inputDigest:ci.inputDigest,provider:'github',repositoryId:'42',runId:controls.runId,sourceCommit:ci.commit,workflowDigest:ci.workflowDigest,stageId:ci.stageId,candidateDigest:ci.candidateDigest,checks:request.plan.parameters.expectedChecks.map(id=>({id,status:'PASS',evidence:[{path,digest:byteDigest(values),bytes:Buffer.byteLength(values)}]}))};
       if(ci.preparationInput)result.preparationOutput={schema:'runtime-ci-preparation-output/v1',inputDigest:valueDigest(ci.preparationInput),source:{commit:controls.preparedCommits[ci.stageId]??controls.preparedCommit,change:{kind:'pull-request',id:'2'},artifacts:[{path:'generated.ts',bytes:15,digest:byteDigest('prepared source')}]}};
       if(ci.stageId==='candidate')result.candidate={schema:'runtime-candidate/v1',profile:'candidate-verification',version:'1.0.0-rc.1',sourceDigest:ciSourceDigest(ci,'github','42'),buildDigest:ciBuildDigest(ci,controls.runId),artifacts:[{name:'software.tgz',digest:byteDigest(content),bytes:Buffer.byteLength(content)}]};
-      if(ci.candidateInput)result.candidateConsumption={inputDigest:valueDigest(ci.candidateInput),artifacts:ci.candidateInput.manifest.artifacts};const bytes=zip([['runtime-result.json',JSON.stringify(result)],[path,values],...(ci.stageId==='candidate'?[['artifacts/software.tgz',content]]:[]),...(ci.candidateInput?[['candidate/software.tgz',content]]:[]),...(ci.preparationInput?[['prepared-source/generated.ts','prepared source']]:[])]);
+      const acceptance=[];
+      if(controls.acceptanceReport){
+        const pin=(path,bytes)=>({path,digest:byteDigest(bytes),bytes:Buffer.byteLength(bytes)}),raw=' {"synthetic":true,"outcome":"'+(controls.caseOutcome??'PASS')+'"}\r\n',workflow=JSON.stringify('workflow'),collector='synthetic collector';
+        const report={schema:'runtime-ci-acceptance-report/v1',requestId:ci.requestId,inputDigest:ci.inputDigest,sourceCommit:ci.commit,workflowDigest:ci.workflowDigest,candidateDigest:result.candidate?valueDigest(result.candidate):ci.candidateDigest,requirementsDigest:instance.pins.requirementsDigest,producerJobId:'71',workflow:{sourcePath:binding.workflowPath,file:pin('evidence/workflow.txt',workflow)},collector:{sourcePath:'tests/collector.mjs',file:pin('evidence/collector.txt',collector)},cases:[{caseId:'SYNTHETIC.CASE',outcome:controls.caseOutcome??'PASS',rawReceipt:pin('evidence/case.json',raw)}]};
+        acceptance.push([CI_ACCEPTANCE_REPORT_PATH,controls.invalidAcceptanceReport?'{':JSON.stringify(report)],['evidence/workflow.txt',workflow],['evidence/collector.txt',collector],['evidence/case.json',raw]);result.checks[0].evidence.push(...acceptance.map(([name,bytes])=>pin(name,bytes)));
+      }
+      if(ci.candidateInput)result.candidateConsumption={inputDigest:valueDigest(ci.candidateInput),artifacts:ci.candidateInput.manifest.artifacts};const bytes=zip([['runtime-result.json',JSON.stringify(result)],[path,values],...(ci.stageId==='candidate'?[['artifacts/software.tgz',content]]:[]),...(ci.candidateInput?[['candidate/software.tgz',content]]:[]),...(ci.preparationInput?[['prepared-source/generated.ts','prepared source']]:[]),...acceptance]);
       return{provider:'github',repositoryId:'42',requestId:ci.requestId,inputDigest:ci.inputDigest,bindingDigest:ci.bindingDigest,commit:ci.commit,runId:controls.runId,runStatus:controls.status,artifactId:'99',jobId:null,name:'runtime-ci',archiveDigest:byteDigest(bytes),archiveBytes:bytes.length,bytes,evidenceRef:'https://github.com/synthetic/project/actions/runs/'+controls.runId};
     }};
   function run(ci){return{schema:'runtime-ci-observation/v1',requestId:ci.requestId,inputDigest:ci.inputDigest,provider:'github',repositoryId:'42',ref:'evopilot-runtime/'+ci.requestId,commit:ci.commit,runId:controls.runId,status:controls.status,jobs:[],evidenceRef:'synthetic:ci',observedAt:'2026-01-01T00:00:00Z',factsDigest:valueDigest('synthetic'),artifactsVerified:false,lifecycleAcceptance:false};}
@@ -136,7 +142,29 @@ test('failed native quality cannot be replaced by CI success or a complete artif
   const f=await fixture();try{await f.prepare();await f.dispatch();f.controls.ownerFail='harness';const o=await f.advance();assert.equal(o.phase,'FAILED');assert.equal(o.outcome.candidate,undefined);assert(o.outcome.checks.every(c=>c.status==='FAIL'));}finally{f.cleanup();}
 });
 test('a known failed CI run stays failed even when it has no usable artifact',async()=>{
-  const f=await fixture();try{await f.prepare();f.controls.status='FAILED';const o=await f.dispatch();assert.equal(o.phase,'FAILED');assert.equal(f.calls.filter(x=>x.operation==='ci.artifact'||x.operation==='native.package.validate').length,0);}finally{f.cleanup();}
+  const f=await fixture();try{await f.prepare();f.controls.status='FAILED';const o=await f.dispatch();assert.equal(o.phase,'FAILED');assert.equal(f.calls.filter(x=>x.operation==='ci.artifact'||x.operation==='native.package.validate').length,0);const [capture]=f.store.objectsPage('alpha','ci-acceptance-capture').map(r=>r.value);assert.equal(capture.origin.runStatus,'FAILED');assert.equal(capture.report.status,'UNAVAILABLE');assert.equal(capture.history,'UNKNOWN');assert.equal(capture.qualification,'UNAVAILABLE');}finally{f.cleanup();}
+});
+test('optional case capture keeps original ZIP references and all authority flags closed across restart',async()=>{
+  const f=await fixture();try{
+    f.controls.acceptanceReport=true;f.controls.caseOutcome='CANCELLED';await f.prepare();await f.dispatch();
+    const captured=f.store.objectsPage('alpha','ci-acceptance-capture').map(r=>r.value);assert.equal(captured.length,1);const c=captured[0];
+    assert.equal(c.schema,'runtime-ci-acceptance-capture/v1');assert.equal(c.stageRequestDigest,f.request.digest);assert.equal(c.stageRequestId,f.request.id);assert.notEqual(c.origin.ciRequestId,c.stageRequestId);assert.deepEqual(c.origin.providerAttempt,{kind:'GITHUB_RUN_ATTEMPT',runId:'23',number:1});assert.equal(c.origin.sourceApproved,false);assert.equal(c.report.status,'OBSERVED');assert.equal(c.report.cases[0].observedOutcome,'CANCELLED');assert.equal(c.report.collectorSemanticApproval,'UNKNOWN');
+    assert.equal(c.history,'UNKNOWN');assert.equal(c.inputClosure,'UNKNOWN');assert.equal(c.qualification,'UNAVAILABLE');for(const key of ['reuseAuthorized','executionAuthorized','releaseAuthorized'])assert.equal(c[key],false);
+    const archive=readFileSync(join(f.store.root,'stage-ci-artifacts',c.origin.archive.archiveDigest.slice(7)+'.zip')),files=await readArtifactArchive(archive,f.signal()),raw=c.report.cases[0].rawReceipt;
+    assert.equal(byteDigest(files.get(raw.path)),raw.digest);assert(files.get(raw.path).toString().endsWith('\r\n'));assert.equal(c.report.rawText,undefined);
+    f.restart();await f.inspect();assert.deepEqual(f.store.objectsPage('alpha','ci-acceptance-capture').map(r=>r.value),captured);assert.equal(f.calls.filter(x=>x.operation==='ci.dispatch').length,1);assert.equal(f.calls.filter(x=>x.operation==='native.package.validate').length,0);
+  }finally{f.cleanup();}
+});
+test('missing and malformed optional reports leave the existing stage flow intact and cannot create eligible evidence',async()=>{
+  for(const invalid of [false,true]){const f=await fixture();try{
+    f.controls.acceptanceReport=invalid;f.controls.invalidAcceptanceReport=invalid;await f.prepare();await f.dispatch();const [c]=f.store.objectsPage('alpha','ci-acceptance-capture').map(r=>r.value);assert.equal(c.report.status,invalid?'INVALID':'ABSENT');assert.deepEqual(c.report.cases,[]);assert.equal(c.qualification,'UNAVAILABLE');assert.equal((await f.advance()).phase,'COMPLETE');
+  }finally{f.cleanup();}}
+});
+test('unknown CI observations remain separately retained when a later report arrives',async()=>{
+  const f=await fixture();try{
+    f.controls.status='UNKNOWN';await f.prepare();assert.equal((await f.dispatch()).phase,'UNKNOWN');f.controls.status='PASSED';f.controls.acceptanceReport=true;await f.inspect();
+    const captures=f.store.objectsPage('alpha','ci-acceptance-capture').map(r=>r.value);assert.equal(captures.length,2);assert(captures.some(c=>c.origin.runStatus==='UNKNOWN'&&c.report.status==='UNAVAILABLE'));assert(captures.some(c=>c.report.status==='OBSERVED'));assert(captures.every(c=>c.history==='UNKNOWN'&&c.reuseAuthorized===false));
+  }finally{f.cleanup();}
 });
 test('an owner execution failure receipt is a failure, not a manufactured quality PASS',async()=>{
   const f=await fixture();try{

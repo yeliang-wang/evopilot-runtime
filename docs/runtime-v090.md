@@ -202,5 +202,13 @@ Runtime, Ontology and Harness evolve and release independently. The parent
 EvoPilot provides navigation; it receives no new product SemVer from this target.
 Source checks, development probes and a running service do not replace all
 655 pre-release and nine post-delivery acceptance instances. The approved usage
-addendum adds 23 pre-release and one post-delivery case: 688 in total, with 678
+addendum adds 23 pre-release and one post-delivery case: 688 before the correction addendum, with 678
 before release and 10 after delivery.
+
+## Lifecycle correction acceptance addition
+
+The original catalog and usage addendum retain 688 required cases (678 PRE, 10 POST). LC01–LC21 add 20 PRE and one POST (LC12), giving **709 required Runtime cases (698 PRE, 11 POST)**. HO01–HO03 are separate post-delivery handoff checks. Each LC composite requires all its declared vectors; missing or unknown evidence cannot count as PASS.
+
+原目录与用量补充方案的 688 项要求保持不变。LC01–LC21 新增 21 项，Runtime 合计 709 项；HO01–HO03 单独记账。原始执行回执不可改写；跨候选复用只能在已发布 Harness 政策兼容性得到验证后，形成新的当前 `PASS_REUSED` 资格，不能冒充当前候选重新执行。
+
+See `governance/lifecycle-correction-v090.json` and the correction ADR. These are implementation obligations, not a statement that release acceptance has passed.

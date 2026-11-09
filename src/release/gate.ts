@@ -8,7 +8,7 @@ import {verifyDecisionEvidence,type DecisionSubject} from '../../vendor/compatib
 import {canonical} from '../server/errors.js';
 import {evaluateGovernance} from '../governance.js';
 import {inspectSourceCiRecords} from './source-ci.js';
-import {inspectAcceptanceEvidence} from './evidence.js';
+import {inspectAcceptanceEvidence,inspectCorrectionAcceptanceEvidence} from './evidence.js';
 import {inspectUsageAcceptanceEvidence} from './usage-evidence.js';
 
 export const RUNTIME_RELEASE_REPOSITORY='yeliang-wang/evopilot-runtime' as const;
@@ -23,11 +23,11 @@ export interface RuntimeReleaseCandidateInput {
 export interface RuntimeReleasePreflightInput {
  schema:'runtime-release-preflight-input/v1';candidate:RuntimeReleaseCandidateInput;
  scope:{workspaceId:string;projectId:string;};
- reports:{scenario:string;report:ReleaseFileReference;}[];usageReport:ReleaseFileReference;releaseNotes:ReleaseFileReference;
+ reports:{scenario:string;report:ReleaseFileReference;}[];usageReport:ReleaseFileReference;correctionReport:ReleaseFileReference;releaseNotes:ReleaseFileReference;
 }
 export interface RuntimeReleaseGovernance {
  status:'VALID';targetId:'runtime-v090-independent-lifecycle';targetVersion:'0.9.0';
- roadmapDigest:string;targetDigest:string;approvedPlanDigest:string;acceptanceDigest:string;usageAddendumDigest:string;
+ roadmapDigest:string;targetDigest:string;approvedPlanDigest:string;acceptanceDigest:string;usageAddendumDigest:string;correctionAddendumDigest:string;
 }
 type Obj=Record<string,unknown>;
 const fail=(message:string):never=>{throw Error('RELEASE_GATE: '+message);};
@@ -64,7 +64,7 @@ function governance(repositoryRoot:string):RuntimeReleaseGovernance {
  requireValue(check.status==='VALID'&&check.releaseAuthorized===false,'Current approved Roadmap/Target governance is not valid');
  const roadmapBytes=read(join(repositoryRoot,'governance/roadmap.json'),2097152,false),targetBytes=read(join(repositoryRoot,'governance/target-v090.json'),2097152,false),target=parse(targetBytes);
  requireValue(target.id==='runtime-v090-independent-lifecycle'&&target.targetVersion==='0.9.0'&&target.roadmapDigest===sha(roadmapBytes),'Current release Target identity or Roadmap binding differs');
- return{status:'VALID',targetId:'runtime-v090-independent-lifecycle',targetVersion:'0.9.0',roadmapDigest:sha(roadmapBytes),targetDigest:sha(targetBytes),approvedPlanDigest:hash(target.approvedPlanDigest),acceptanceDigest:hash(target.acceptanceDigest),usageAddendumDigest:sha(read(join(repositoryRoot,'governance/token-usage-v090.json'),2097152,false))};
+ return{status:'VALID',targetId:'runtime-v090-independent-lifecycle',targetVersion:'0.9.0',roadmapDigest:sha(roadmapBytes),targetDigest:sha(targetBytes),approvedPlanDigest:hash(target.approvedPlanDigest),acceptanceDigest:hash(target.acceptanceDigest),usageAddendumDigest:sha(read(join(repositoryRoot,'governance/token-usage-v090.json'),2097152,false)),correctionAddendumDigest:sha(read(join(repositoryRoot,'governance/lifecycle-correction-v090.json'),2097152,false))};
 }
 /** Read-only recheck of the governance already covered by the exact reviewed
  * release. This function never authenticates a decision or grants authority. */
@@ -88,11 +88,11 @@ export async function inspectRuntimeReleaseCandidate(repositoryRoot:string,raw:R
  return{schema:'runtime-release-candidate-inspection/v1' as const,repository:RUNTIME_RELEASE_REPOSITORY,version:'0.9.0' as const,tag:'v0.9.0' as const,title:'EvoPilot Runtime 0.9.0 Preview' as const,prerelease:true as const,latest:false as const,sourceCommit:input.sourceCommit,candidateDigest:'sha256:'+ci.manifestDigest,archiveDigest:ci.archiveDigest,files:Object.fromEntries(RUNTIME_RELEASE_ASSETS.map(name=>[name,{sha256:filePins[name],bytes:files[name].length}])),sourceCi:{...ci,recordPins:Object.fromEntries(Object.entries(ciBytes).map(([name,bytes])=>[name,sha(bytes)]))},recordIntegrity:'VERIFIED' as const,productAcceptance:'NOT_EVALUATED' as const,releaseAuthorized:false as const};
 }
 
-/** Full final preflight. All original 655 and additive 23 pre-release cases are
+/** Full final preflight. All original 655, usage 23 and correction 20 pre-release cases are
  * independently audited. Private paths and raw evidence never enter the review
  * object or the six-file publication allowlist. No network or write occurs. */
 export async function prepareRuntimeRelease(repositoryRoot:string,raw:RuntimeReleasePreflightInput,signal:AbortSignal) {
- const input=structuredClone(raw);exact(input,['schema','candidate','scope','reports','usageReport','releaseNotes']);requireValue(input.schema==='runtime-release-preflight-input/v1','Wrong preflight schema');exact(input.scope,['workspaceId','projectId']);slug(input.scope.workspaceId);slug(input.scope.projectId);
+ const input=structuredClone(raw);exact(input,['schema','candidate','scope','reports','usageReport','correctionReport','releaseNotes']);requireValue(input.schema==='runtime-release-preflight-input/v1','Wrong preflight schema');exact(input.scope,['workspaceId','projectId']);slug(input.scope.workspaceId);slug(input.scope.projectId);
  const governed=governance(repositoryRoot);
  // Markdown is text; its original bytes, including line endings, are reviewed.
  // Do not normalize it or add the private file to the six public attachments.
@@ -104,10 +104,11 @@ export async function prepareRuntimeRelease(repositoryRoot:string,raw:RuntimeRel
  const common={sourceCommit:input.candidate.sourceCommit,manifest:files['distribution-manifest.json'],archive:files['evopilot-runtime-0.9.0-darwin-arm64.tar.gz'],sourceRevision:files['source-revision.txt']};
  const original=inspectAcceptanceEvidence(repositoryRoot,{schema:'runtime-release-evidence-input/v1',...common,reports:input.reports});signal.throwIfAborted();
  const usage=inspectUsageAcceptanceEvidence(repositoryRoot,{schema:'runtime-usage-evidence-input/v1',...common,report:input.usageReport});signal.throwIfAborted();
- for(const audit of [original,usage])requireValue(audit.sourceCommit===candidate.sourceCommit&&audit.candidateDigest===candidate.candidateDigest&&audit.archiveDigest===candidate.archiveDigest&&audit.failed===0&&audit.skipped===0&&audit.releaseAuthorized===false,'Acceptance scope differs from candidate');
- requireValue(original.required===655&&original.passed===655&&original.postReleaseRemaining===9&&usage.required===23&&usage.passed===23&&usage.usagePostReleaseRemaining===1,'Fixed pre/post denominator differs');
+ const correction=inspectCorrectionAcceptanceEvidence(repositoryRoot,{schema:'runtime-correction-evidence-input/v1',...common,report:input.correctionReport});signal.throwIfAborted();
+ for(const audit of [original,usage,correction])requireValue(audit.sourceCommit===candidate.sourceCommit&&audit.candidateDigest===candidate.candidateDigest&&audit.archiveDigest===candidate.archiveDigest&&audit.failed===0&&audit.skipped===0&&audit.releaseAuthorized===false,'Acceptance scope differs from candidate');
+ requireValue(original.required===655&&original.passed===655&&original.postReleaseRemaining===9&&usage.required===23&&usage.passed===23&&usage.usagePostReleaseRemaining===1&&correction.required===20&&correction.passed===20&&correction.correctionPostReleaseRemaining===1&&correction.combinedRequired===709&&correction.addendumDigest===governed.correctionAddendumDigest,'Fixed pre/post denominator differs');
  verifyRuntimeReleaseGovernanceCurrent(repositoryRoot,candidate.sourceCommit,governed);
- const review={schema:'runtime-release-review/v1' as const,scope:input.scope,governance:governed,publication:{repository:candidate.repository,version:candidate.version,tag:candidate.tag,title:candidate.title,prerelease:candidate.prerelease,latest:candidate.latest,sourceCommit:candidate.sourceCommit,candidateDigest:candidate.candidateDigest,archiveDigest:candidate.archiveDigest,files:candidate.files,releaseNotes},sourceCi:candidate.sourceCi,acceptance:{original,usage,requiredPreRelease:678 as const,passedPreRelease:678 as const,combinedRequired:688 as const,postRelease:{required:10 as const,passed:0 as const,status:'NOT_EVALUATED' as const,scenarios:['E21','E22','UT24']}},privacy:{publicAssets:[...RUNTIME_RELEASE_ASSETS],privateEvidenceUploadAllowed:false as const},recordIntegrity:'VERIFIED' as const,executionAuthenticity:'TRUSTED_REVIEW_REQUIRED' as const,productAcceptance:'NOT_EVALUATED' as const,releaseAuthorized:false as const};
+ const review={schema:'runtime-release-review/v1' as const,scope:input.scope,governance:governed,publication:{repository:candidate.repository,version:candidate.version,tag:candidate.tag,title:candidate.title,prerelease:candidate.prerelease,latest:candidate.latest,sourceCommit:candidate.sourceCommit,candidateDigest:candidate.candidateDigest,archiveDigest:candidate.archiveDigest,files:candidate.files,releaseNotes},sourceCi:candidate.sourceCi,acceptance:{original,usage,correction,requiredPreRelease:698 as const,passedPreRelease:698 as const,combinedRequired:709 as const,postRelease:{required:11 as const,passed:0 as const,status:'NOT_EVALUATED' as const,scenarios:['E21','E22','UT24','LC12']}},privacy:{publicAssets:[...RUNTIME_RELEASE_ASSETS],privateEvidenceUploadAllowed:false as const},recordIntegrity:'VERIFIED' as const,executionAuthenticity:'TRUSTED_REVIEW_REQUIRED' as const,productAcceptance:'NOT_EVALUATED' as const,releaseAuthorized:false as const};
  return{...review,reviewDigest:digest(review)};
 }
 export type RuntimeReleaseReview=Awaited<ReturnType<typeof prepareRuntimeRelease>>;

@@ -119,7 +119,7 @@ function databases(selection:WorkspaceSelection,roots:ManagedWorkspaceSnapshot['
         // RuntimeStore validates its complete receipt/audit/event ledger only
         // on this disposable copy, never on the original selected state.
         const store=new RuntimeStore(directory,selection.workspaceId);
-        try{if(inventory.schemaVersion!==1||store.serviceId!==selection.serviceId)fail('MAINTENANCE_IDENTITY');}finally{store.close();}
+        try{if(![1,2].includes(inventory.schemaVersion)||store.serviceId!==selection.serviceId)fail('MAINTENANCE_IDENTITY');}finally{store.close();}
       }
       result.push(inventory);
     }

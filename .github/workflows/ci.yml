@@ -19,9 +19,22 @@ jobs:
       - name: Verify the declared source-test platform
         run: node --input-type=module -e 'import assert from "node:assert/strict"; assert.equal(process.platform, "darwin"); assert.equal(process.arch, "arm64"); assert.equal(process.version, "v24.14.0");'
       - run: npm ci --ignore-scripts
-      - run: npm run build
-      - run: npm run check
-      - run: npm test
+      - id: build
+        run: npm run build
+      # A failed independent check remains a failed job, while other checks can
+      # still report useful evidence. Candidate packaging requires overall success.
+      - name: Check scoped correction code
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: npm run lint:correction
+      - name: Validate workflows with pinned actionlint
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: npm run lint:workflows
+      - name: Verify source contracts
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: npm run check
+      - name: Run source regressions including generated properties
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: npm test
 
       - name: Pack exact candidate (not a Release)
         shell: bash

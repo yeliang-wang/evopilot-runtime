@@ -2,6 +2,8 @@ import { canonical, exact, record, reject, ServiceError, slug, string } from '..
 import { isCurrentBase, requireCurrentBase, valueDigest, type BasePin } from './base.js';
 import { atPath, compileLifecycle, type EffectiveDefinition, type EffectiveNode } from './compiler.js';
 import type { Principal } from '../server/security.js';
+import type { StoredObject } from '../server/store.js';
+import type { StageRequest } from './execution.js';
 
 export interface Budget { timeoutSeconds:number; maxAttempts:number; maxConcurrency:number; maxLoops:number; }
 /** Obtained from a trusted authority adapter, never directly from API/YAML data. */
@@ -9,6 +11,15 @@ export interface ExecutionAuthority {
   projectId:string; instanceId:string; definitionRevisionId:string; semanticDigest:string;
   goalRef:string; targetRef:string; loopRef:string; requirementsDigest:string;
   budget:Budget; evidenceRef:string; revision:string; expiresAt:string;
+  recoveryRootRef?:string; recoveryRootDigest?:string;
+}
+/** Native reviewed authority integration only. Legacy/injected grants do not
+ * acquire a fabricated original recovery root. No method dispatches work. */
+export interface RecoveryLineageService {
+  create(instance:LifecycleInstance,authority:ExecutionAuthority,actor:Principal):StoredObject[];
+  admission(instance:LifecycleInstance,authority:ExecutionAuthority,stageId:string,actor:Principal,requestId?:string):{allowed:boolean;reasons:string[];deadlineAt:string;rootRef:string|null;stageAttempts:number};
+  claim(instance:LifecycleInstance,authority:ExecutionAuthority,request:StageRequest,actor:Principal):StoredObject[];
+  inspect(instance:LifecycleInstance):unknown;
 }
 export type AuthorityResolver=(authorityRef:string,definition:EffectiveDefinition,actor:Principal,signal:AbortSignal)=>Promise<ExecutionAuthority|null>;
 export async function resolveAuthority(provider:AuthorityResolver|undefined,authorityRef:string,definition:EffectiveDefinition,actor:Principal):Promise<ExecutionAuthority>{
@@ -69,10 +80,11 @@ function budget(value:unknown):Budget{
   return v as unknown as Budget;
 }
 function validateAuthority(a:ExecutionAuthority):void{
-  const v=record(a);exact(v,['projectId','instanceId','definitionRevisionId','semanticDigest','goalRef','targetRef','loopRef','requirementsDigest','budget','evidenceRef','revision','expiresAt']);
+  const v=record(a);exact(v,['projectId','instanceId','definitionRevisionId','semanticDigest','goalRef','targetRef','loopRef','requirementsDigest','budget','evidenceRef','revision','expiresAt'],['recoveryRootRef','recoveryRootDigest']);
   slug(a.projectId);slug(a.instanceId);for(const k of ['definitionRevisionId','semanticDigest','requirementsDigest'])if(!hash(v[k]))reject('INVALID_AUTHORITY','Authority must pin exact content');
   for(const s of [a.goalRef,a.targetRef,a.loopRef,a.evidenceRef,a.revision])string(s,512);
   if(!Number.isFinite(Date.parse(a.expiresAt)))reject('INVALID_AUTHORITY','Authority needs an exact expiry');budget(a.budget);
+  if(a.recoveryRootRef!==undefined||a.recoveryRootDigest!==undefined){if(typeof a.recoveryRootRef!=='string'||!/^recovery-root:sha256:[a-f0-9]{64}$/.test(a.recoveryRootRef)||!hash(a.recoveryRootDigest))reject('INVALID_AUTHORITY','Recovery authority requires the exact native root reference and digest');}
 }
 function verify(instance:LifecycleInstance):void{
   if(instance.schema!=='runtime-lifecycle-instance/v1'||valueDigest(instance.pins)!==instance.pinsDigest||valueDigest(instance.definition.semantic)!==instance.pins.semanticDigest||instance.definition.semanticDigest!==instance.pins.semanticDigest||valueDigest(instance.definition.nodes)!==instance.pins.graphDigest||requiredChecksDigest(instance.definition)!==instance.pins.requirementsDigest||canonical(instance.definition.base)!==canonical(instance.pins.base)||instance.definition.projectId!==instance.pins.projectId)reject('CORRUPT_INSTANCE','Instance pins or required obligations changed',503);

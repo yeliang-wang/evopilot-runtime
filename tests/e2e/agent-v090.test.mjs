@@ -15,16 +15,17 @@ import {ServiceError} from '../../dist/server/errors.js';
 import {valueDigest,byteDigest} from '../../dist/lifecycle/base.js';
 import {compileLifecycle} from '../../dist/lifecycle/compiler.js';
 import {pinInstance,requiredChecksDigest,requestStage,recordStageOutcome} from '../../dist/lifecycle/instance.js';
+import {readAgentHandoff,createAgentService} from '../../dist/lifecycle/agent.js';
 import {createCodexStageAdapter} from '../../dist/adapters/external-agent.js';
 import {lifecycleBindingExample} from '../fixtures/adapters-v090.mjs';
 import {yaml,syntheticBindings} from '../fixtures/lifecycle-v090.mjs';
 import {NATIVE_CONTRACT_DIGEST} from '../../vendor/compatibility/v1/native.mjs';
 
-async function fixture(){
+async function fixture(options={}){
   const dir=mkdtempSync(join(realpathSync(tmpdir()),'runtime-agent-')),root=join(dir,'state'),workspaceId='synthetic-agent',projectId='alpha',path=join(dir,'integrations.json'),expiresAt='2030-01-01T00:00:00Z';
   const pin=owner=>({product:owner,id:'synthetic-'+owner,version:'1.0.0',specVersion:'v1',visibility:'private',digest:valueDigest(owner),standardDigest:valueDigest(owner+'-standard'),standardLockDigest:valueDigest(owner+'-lock'),producer:{product:owner,version:'0.3.0'},contractDigest:NATIVE_CONTRACT_DIGEST});
   const platform={ref:'binding:alpha/platform',workspaceId,projectId,provider:'github',host:'https://github.com',repository:'synthetic/agent',repositoryId:'42',defaultBranch:'main',credentialRef:'credential:alpha/platform',revision:1,expiresAt,workflowPath:'.github/workflows/test.yml',runner:'ubuntu-latest'},credential={ref:platform.credentialRef,workspaceId,projectId,provider:platform.provider,host:platform.host,tokenFile:join(dir,'unused'),revision:1,expiresAt},ownerRegistrations=['ontology','harness'].map(owner=>({ref:'binding:alpha/'+owner,owner,packageRoot:dir,workspaceRoot:dir,workspaceId,projects:[projectId]}));
-  const{configuration:config,data}=lifecycleBindingExample({root:dir,workspaceId,projectId,platform,credential,ownerRegistrations,references:{ontology:pin('ontology'),harness:pin('harness')},assessmentId:'synthetic'});data.config.plan.budget.timeoutSeconds=120;writeFileSync(path,JSON.stringify(config),{mode:0o600});
+  const{configuration:config,data}=lifecycleBindingExample({root:dir,workspaceId,projectId,platform,credential,ownerRegistrations,references:{ontology:pin('ontology'),harness:pin('harness')},assessmentId:'synthetic'});data.config.plan.budget.timeoutSeconds=120;if(options.maxAttempts!==undefined)data.config.plan.budget.maxAttempts=options.maxAttempts;writeFileSync(path,JSON.stringify(config),{mode:0o600});
   const definition=compileLifecycle(yaml(data),projectId).effective,definitionRevisionId=valueDigest('synthetic-agent-definition');
   const prepInput={definitionRevisionId,goalRef:'synthetic:agent-goal',loopRef:'synthetic:agent-loop',target:{id:'agent-target',version:'0.9.0-preview.1',title:'Synthetic bounded coding target',scope:['One bounded synthetic source output'],exclusions:['Production','Release']},source:{provider:'github',repositoryId:'42',commit:'a'.repeat(40)},compatibility:'unchanged',documents:{...Object.fromEntries(['plan','impact','verification','rollback'].map(k=>[k,{path:join(dir,k+'.md'),digest:valueDigest(k)}])),migration:null},verification:{requirementsDigest:requiredChecksDigest(definition),checks:definition.nodes.flatMap(n=>n.checks.map(checkId=>({stageId:n.id,checkId,source:'owner-receipt',procedure:'Synthetic rule validation'})))}};
   const prepBody={schema:'runtime-preparation/v1',workspaceId,projectId,semanticDigest:definition.semanticDigest,input:prepInput},packet={...prepBody,digest:valueDigest(prepBody)},targetRef='preparation:'+packet.digest;
@@ -52,7 +53,7 @@ async function fixture(){
   async function claim(h){const r=await request('lifecycle.agent.claim',claimInput(h),true);assert.equal(r.status,200,JSON.stringify(r));return r;}
   const reportInput=(h,c,state='WORKING',previousReportDigest=null)=>({stageRequestId:h.stageRequestId,claimDigest:c.body.result.result.claimDigest,previousReportDigest,state,summary:'Synthetic Host observation',result:null,measurement:null});
   function result(){const content='export const answer = 42;\n';writeFileSync(join(dir,'result.mjs'),content,{mode:0o600});return{commit:'b'.repeat(40),change:{kind:'pull-request',id:'1'},artifacts:[{path:'result.mjs',digest:byteDigest(content),bytes:Buffer.byteLength(content)}]};}
-  return{dir,root,config,path,controls,tokens,request,wait,handoff,claimInput,claim,reportInput,result,get server(){return server;},async restart(){await server.close();await start();},async cleanup(){await server.close();rmSync(dir,{recursive:true,force:true});}};
+  return{dir,root,config,path,controls,tokens,authority,actor,request,wait,handoff,claimInput,claim,reportInput,result,get server(){return server;},async restart(){await server.close();await start();},async cleanup(){await server.close();rmSync(dir,{recursive:true,force:true});}};
 }
 
 test('handoff pins reviewed work and waits without launching an Agent; restart cannot create a new claim',async()=>{
@@ -137,4 +138,26 @@ test('expired original task cannot resume coding or renew budget; late output re
     const read=await f.request('lifecycle.agent.report.read',{stageRequestId:h.stageRequestId});assert.equal(read.body.result.report.late,true);assert.equal(read.body.result.independentlyVerified,false);assert.equal((await f.request('lifecycle.stage.advance',{stageRequestId:h.stageRequestId},true)).body.error.code,'EXECUTION_DEADLINE');
     assert.equal((await f.request('lifecycle.agent.handoff.read',{stageRequestId:h.stageRequestId})).body.result.claim.deadlineAt,h.deadlineAt);
   }finally{Date.now=now;await f.cleanup();}
+});
+
+test('historical handoff and report remain readable after a new attempt without reopening old writes',async()=>{
+ const f=await fixture({maxAttempts:2});let store;
+ try {
+  const h=await f.handoff(),claim=await f.claim(h);
+  assert.equal((await f.request('lifecycle.agent.report',f.reportInput(h,claim,'FAILED'),true)).status,200);
+  await f.wait(h.stageRequestId,'FAILED');
+  const original=await f.request('lifecycle.agent.handoff.read',{stageRequestId:h.stageRequestId});
+  await f.server.close();store=new RuntimeStore(f.root,'synthetic-agent');
+  const saved=store.object('alpha','lifecycle-instance',h.instanceId);
+  // Fixture authority already pins maxAttempts; do not fabricate a new grant.
+  assert(saved.pins.budget.maxAttempts>=2,'Historical retry fixture needs existing two-attempt authority');
+  const next=requestStage(saved,'implementation','synthetic-next-attempt',{authority:f.authority,bindingsCurrent:true});
+  store.mutate(f.actor,{projectId:'alpha',operation:'synthetic.next-attempt',requestId:'synthetic-history-transition',expectedRevision:store.revision('alpha'),input:{synthetic:true},permission:'read'},()=>({objects:[{kind:'lifecycle-instance',id:saved.id,value:next}],value:{synthetic:true},event:{type:'synthetic-history-transition',data:{}}}));
+  let permits=0;const agent=createAgentService(store,async()=>{permits++;throw new Error('Old attempt must not reach permit');});
+  const read=agent.read(f.actor,'alpha','lifecycle.agent.handoff.read',{stageRequestId:h.stageRequestId});
+  assert.deepEqual(read.handoff,original.body.result.handoff);assert.deepEqual(read.latestReport,original.body.result.latestReport);
+  assert.throws(()=>readAgentHandoff(store,'alpha',h.stageRequestId),{code:'CORRUPT_AGENT_EVIDENCE'});
+  await assert.rejects(agent.write(f.actor,'alpha','lifecycle.agent.report',f.reportInput(h,claim,'WORKING'),'old-report-rewrite',store.revision('alpha'),()=>f.actor),{code:'CORRUPT_AGENT_EVIDENCE'});
+  assert.equal(permits,0);
+ }finally{store?.close();await f.cleanup();}
 });

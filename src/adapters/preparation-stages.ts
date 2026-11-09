@@ -120,7 +120,7 @@ export function createPlanStageAdapter(store:RuntimeStore,configPath:string,conn
     }
     signal.throwIfAborted();const p:PlanParameters={preparationRef:instance.pins.targetRef,preparationDigest:packet.digest,factsDigest:valueDigest(facts),scopeRequestId:prior.requestId,scopeEvidenceDigest:prior.digest,expectedChecks:instance.definition.nodes.find(n=>n.id==='plan')!.checks,owners:pins,effectiveConfigDigest,toolchainLockDigest:connections.toolchainLockDigest,toolchainManifestDigest:connections.toolchainManifestDigest??null};
     return{adapterId:PLAN_ID,adapterDigest:PLAN_DIGEST,action:'base.plan',bindingDigest:valueDigest(p),parameters:p as unknown as Record<string,unknown>};
-  },dispatch:execute,inspect,advance:async(r,instance,_progress,permit,signal)=>execute(r,instance,permit,signal)};
+  },dispatch:execute,inspect,reconcileAdvance:inspect,advance:async(r,instance,_progress,permit,signal)=>execute(r,instance,permit,signal)};
 }
 function platform(config:Readonly<IntegrationConfiguration>,definition:EffectiveDefinition,actor:Principal):PlatformRegistration{
   const d=record(atPath(definition.semantic,'config.implementation')),matches=config.platforms.filter(p=>p.projectId===definition.projectId&&['provider','host','repository','repositoryId','defaultBranch','credentialRef'].every(k=>(p as unknown as Record<string,unknown>)[k]===d[k]));

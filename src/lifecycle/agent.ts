@@ -30,12 +30,12 @@ const same=(a:unknown,b:unknown)=>canonical(a)===canonical(b);
 function intact<T>(value:unknown,schema:string):T{
   const r=record(value),{digest,...body}=r;if(r.schema!==schema||digest!==valueDigest(body))reject('CORRUPT_AGENT_EVIDENCE','Original Agent evidence changed',503);return r as T;
 }
-export function readAgentHandoff(store:RuntimeStore,projectId:string,id:string):{handoff:AgentHandoff;request:StageRequest;instance:LifecycleInstance}{
+export function readAgentHandoff(store:RuntimeStore,projectId:string,id:string,mode:'current'|'historical'='current'):{handoff:AgentHandoff;request:StageRequest;instance:LifecycleInstance}{
   const raw=store.object(projectId,'agent-handoff',id),original=store.object(projectId,'stage-request',id);
   if(!raw||!original)reject('AGENT_HANDOFF_UNAVAILABLE','No dispatched original Agent handoff exists',409);
   const h=intact<AgentHandoff>(raw,'runtime-agent-handoff/v1'),r=intact<StageRequest>(original,'runtime-stage-request/v1');
   const saved=store.object(projectId,'lifecycle-instance',h.instanceId);if(!saved)reject('CORRUPT_AGENT_EVIDENCE','Original Agent instance is missing',503);const instance=inspectInstance(saved as LifecycleInstance);
-  if(h.workspaceId!==store.workspaceId||h.projectId!==projectId||h.stageRequestId!==id||h.requestDigest!==r.digest||h.planDigest!==r.planDigest||h.inputDigest!==r.inputDigest||h.authorityRef!==r.authorityRef||h.deadlineAt!==r.deadlineAt||r.projectId!==projectId||r.workspaceId!==store.workspaceId||r.stageId!=='implementation'||r.instanceId!==h.instanceId||r.pinsDigest!==instance.pinsDigest||instance.stages.implementation.requestId!==id||instance.stages.implementation.inputDigest!==r.inputDigest||r.plan.adapterId!==AGENT_ADAPTER_ID||r.plan.adapterDigest!==AGENT_ADAPTER_DIGEST||r.planDigest!==valueDigest(r.plan)||!same(h.capabilities,AGENT_CAPABILITIES))reject('CORRUPT_AGENT_EVIDENCE','Handoff does not match the exact original implementation request',503);
+  if(h.workspaceId!==store.workspaceId||h.projectId!==projectId||h.stageRequestId!==id||h.requestDigest!==r.digest||h.planDigest!==r.planDigest||h.inputDigest!==r.inputDigest||h.authorityRef!==r.authorityRef||h.deadlineAt!==r.deadlineAt||r.projectId!==projectId||r.workspaceId!==store.workspaceId||r.stageId!=='implementation'||r.instanceId!==h.instanceId||r.pinsDigest!==instance.pinsDigest||!instance.requestIds.includes(id)||(mode!=='historical'&&(instance.stages.implementation.requestId!==id||instance.stages.implementation.inputDigest!==r.inputDigest))||r.plan.adapterId!==AGENT_ADAPTER_ID||r.plan.adapterDigest!==AGENT_ADAPTER_DIGEST||r.planDigest!==valueDigest(r.plan)||!same(h.capabilities,AGENT_CAPABILITIES))reject('CORRUPT_AGENT_EVIDENCE','Handoff does not match the exact original implementation request',503);
   return{handoff:h,request:r,instance};
 }
 export function readAgentClaim(store:RuntimeStore,projectId:string,id:string):AgentClaim|null{
@@ -77,7 +77,7 @@ function output(h:AgentHandoff,value:unknown):Record<string,unknown>{
 }
 export function createAgentService(store:RuntimeStore,permit:OriginalAgentPermit){
   function read(actor:Principal,projectId:string,operation:string,input:Record<string,unknown>):unknown{
-    authorize(actor,projectId,'read');exact(input,['stageRequestId'],operation==='lifecycle.agent.report.read'?['reportDigest']:[]);const id=string(input.stageRequestId),{handoff}=readAgentHandoff(store,projectId,id),claim=readAgentClaim(store,projectId,id),latest=readAgentReport(store,projectId,id);
+    authorize(actor,projectId,'read');exact(input,['stageRequestId'],operation==='lifecycle.agent.report.read'?['reportDigest']:[]);const id=string(input.stageRequestId),{handoff}=readAgentHandoff(store,projectId,id,'historical'),claim=readAgentClaim(store,projectId,id),latest=readAgentReport(store,projectId,id);
     if(operation==='lifecycle.agent.handoff.read')return{handoff,claim,latestReport:latest,executionAuthorityMustBeCurrent:true,hostSessionAttested:false,softwareReleaseAuthorized:false};
     if(operation!=='lifecycle.agent.report.read')reject('UNKNOWN_OPERATION','Unsupported Agent read',404);
     const report=input.reportDigest===undefined?latest:intact<AgentReport>(store.object(projectId,'agent-report',hash(input.reportDigest))??reject('NOT_FOUND','Agent report not found',404),'runtime-agent-report/v1');

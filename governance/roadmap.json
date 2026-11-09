@@ -31,15 +31,15 @@
     {
       "id": "M5",
       "work": "准确发行候选全链路、兼容/迁移回退、独立CI及双语文档",
-      "exit": "62组发布前要求、E01–E20全部通过，N14核对分母；准备准确Release与安装审阅对象；准确候选EX01–EX12全通过（含EX10升级/回退）；六项最小闭环变体全部有准确候选证据；UT01–UT23新增工程验收通过，不能用原664项替代"
+      "exit": "62组发布前要求、E01–E20全部通过，N14核对分母；准备准确Release与安装审阅对象；准确候选EX01–EX12全通过（含EX10升级/回退）；六项最小闭环变体全部有准确候选证据；UT01–UT23新增工程验收通过，不能用原664项替代 LC01–LC11 and LC13–LC21 are also mandatory; total PRE 698. Actual versus qualified-reused evidence must be distinguished."
     },
     {
       "id": "M6",
       "work": "适用授权后Runtime GitHub发布、当前Codex安装部署与最终复盘",
-      "exit": "P03–P04/E21–E22通过；64组无剩余必需缺口；父站只更新导航不新发父产品版本；服务、同插件Skill及HTTP连接三项真实回读，不以仅写入配置替代安装验收；UT24当前安装用量采集和报告回读通过"
+      "exit": "P03–P04/E21–E22通过；64组无剩余必需缺口；父站只更新导航不新发父产品版本；服务、同插件Skill及HTTP连接三项真实回读，不以仅写入配置替代安装验收；UT24当前安装用量采集和报告回读通过 LC12 is also mandatory; total POST 11. Subsequent HO01–HO03 are a separate handoff, not Runtime product cases."
     }
   ],
-  "direction": "Independent deterministic lifecycle service; external Codex; publisher Base; two-page Dashboard; shared same-entry definition admission. User-requested Runtime-only token usage ledger and Base-stage reports are included in this v0.9 release.",
+  "direction": "Independent deterministic lifecycle service; external Codex; publisher Base; two-page Dashboard; shared same-entry definition admission. User-requested Runtime-only token usage ledger and Base-stage reports are included in this v0.9 release. Includes bounded lifecycle correction, independent branch continuation and versioned cross-candidate evidence qualification under published Harness policy.",
   "exclusions": [
     "第三个及更多 Dashboard 管理页面",
     "Dashboard中业务运行的启动/暂停/重试、业务审批/发布或配置凭据管理；已有编辑页的项目定义启用在范围内",
@@ -85,6 +85,22 @@
       "implementationRequired": true,
       "originalAcceptanceUnchanged": true,
       "additionalRequiredInstances": 24,
+      "releaseAuthorityUnchanged": true
+    },
+    {
+      "id": "v090-lifecycle-correction",
+      "contract": "governance/lifecycle-correction-v090.json",
+      "contractDigest": "46798eacfaac0e73fdaee91ca160dc5c2587e4acf834f0fef9867617df1ec365",
+      "milestones": [
+        "M0",
+        "M2",
+        "M3",
+        "M5",
+        "M6"
+      ],
+      "implementationRequired": true,
+      "originalAcceptanceUnchanged": true,
+      "additionalRequiredInstances": 21,
       "releaseAuthorityUnchanged": true
     }
   ]

@@ -58,7 +58,10 @@ and immutable input contracts are checked at the service boundary.
 | `lifecycle.definition.activate` | `revisionId`, `validationDigest` | `definition.activate`; enables an existing exact revision |
 | `lifecycle.definition.save-and-activate` | `yaml`, `validationDigest` | Both draft and activation permissions; atomic same-entry activation |
 | `lifecycle.instance.create` | `instanceId`, `definitionRevisionId`, `authorityRef` | `execution.request`; exact active revision and current separate authority required; does not dispatch a stage |
-| `lifecycle.instance.inspect` | `instanceId` | Pinned instance and current project revision |
+| `lifecycle.instance.inspect` | `instanceId` | Pinned instance, current project revision and native recovery linkage when available |
+| `lifecycle.correction.inspect` | `stageRequestId`, optional `correctionRef` | Original verified observation and separately retained hypothesis |
+| `lifecycle.correction.propose` | `stageRequestId`, `hypothesis`, `minimalVerification`, `proposedChanges` | `draft.write`; immutable proposal, no execution or release authority |
+| `lifecycle.correction.admission` | `stageRequestId`, optional `correctionRef` | `execution.request`; read-only repair eligibility, original request and remaining gates |
 | `lifecycle.stage.admission` | `instanceId`, `stageId` | `execution.request`, also `release.request` for publication; reads current admission without dispatch |
 
 The authoritative definitions are in [definition service](../src/lifecycle/service.ts)

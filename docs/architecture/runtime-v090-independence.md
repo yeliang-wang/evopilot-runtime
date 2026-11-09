@@ -1678,3 +1678,7 @@ instances, including actual installed Codex capture and publication/closure
 reporting. The combined release obligation is 688 instances: 678 before release
 and 10 after release. This addition is implementation scope, not completed
 functionality or evidence that any acceptance instance has passed.
+
+## Approved lifecycle correction addendum (2026-11-09)
+
+[The correction ADR](runtime-v090-correction.md) and `governance/lifecycle-correction-v090.json` add bounded correction, independent branch continuation and versioned evidence applicability. Original 688 acceptance cases remain unchanged; 21 additive cases make 709 (698 PRE, 11 POST). Three separate handoff cases target the exact `EvoPilot-ontology v0.9.0 Preview` chat after installed Runtime delivery. No new owner version or release decision is inferred.

@@ -1,6 +1,7 @@
 // Candidate-bound acceptance infrastructure. No fixture binding provider, store
 // mutation, implicit service startup or acceptance inference from source tests.
 import assert from 'node:assert/strict';
+import {preflightCallableRegistry} from './preflight.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -55,7 +56,7 @@ function permissionFaultPlan(selection,scenario,current,named,caseIds){
  assert.equal(f.steps.at(-1).action,'restore');return{fixture:f,baseline,targetId:target.id,states,index:0};
 }
 
-export async function openScenario(scenario){
+export async function openScenario(scenario,callableRegistration){
  const selectionRef=process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;
  assert(selectionRef,'Set EVOPILOT_V090_ACCEPTANCE_SELECTION to a protected, explicit isolated candidate selection');
  const selection=JSON.parse(readRegular(selectionRef,131072,true));
@@ -98,6 +99,15 @@ export async function openScenario(scenario){
  assert(Array.isArray(selectedIds)&&selectedIds.length&&new Set(selectedIds).size===selectedIds.length);
  assert(selectedIds.every(id=>all.some(c=>c.caseInstanceId===id)),'The selection may not create or replace a frozen case');
  const cases=all.filter(c=>selectedIds.includes(c.caseInstanceId));
+ // Trusted module callbacks are registered before any output creation, service
+ // call, Host launch or scenario setup. Selection JSON cannot supply functions.
+ let callableEntries=null,callablePreflight=null;
+ if(callableRegistration){
+  keys(callableRegistration,['phase','register']);assert.equal(typeof callableRegistration.register,'function');
+  callableEntries=new Map(callableRegistration.register(structuredClone(all)));
+  callablePreflight=preflightCallableRegistry({catalog:all,entries:callableEntries,selectedCaseIds:selectedIds,phase:callableRegistration.phase});
+ }
+
  const current=inspectInstalledServiceSelection(selection.installedRoot);
  const plan=json(path.join(selection.installedRoot,'installation-plan.json'));
  assert.equal(plan.distribution.manifestDigest,selection.expectedManifestDigest);
@@ -137,7 +147,7 @@ export async function openScenario(scenario){
  // Candidate identity is the immutable package, not a particular test service
  // or Workspace. Different scenario installations must share this identity.
  const candidateDigest='sha256:'+selection.expectedManifestDigest;
- const collectorPins=Object.fromEntries(['support.mjs',scenario.toLowerCase()+'.test.mjs',...(['E01','E02','E04','E05','E06','E07','E12','E13','E16','E17','E19','E22'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(['E01','E02','E13'].includes(scenario)?['execution.mjs']:[]),...(scenario==='E21'?['../../../scripts/release-gate.mjs']:[])].map(name=>[name,sha(fs.readFileSync(new URL(name,import.meta.url)))]));
+ const collectorPins=Object.fromEntries(['support.mjs','preflight.mjs',scenario.toLowerCase()+'.test.mjs',...(['E01','E02','E04','E05','E06','E07','E12','E13','E16','E17','E19','E22'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(['E01','E02','E13'].includes(scenario)?['execution.mjs']:[]),...(scenario==='E21'?['../../../scripts/release-gate.mjs']:[])].map(name=>[name,sha(fs.readFileSync(new URL(name,import.meta.url)))]));
  write('selection.json',{scenario,qualification:selection.qualification,candidate,candidateDigest,collectorPins,matrixDigest:sha(matrixBytes),selectedCaseIds:selectedIds,scenarioDenominator:all.length,fullDenominator:matrix.count,sourceQualification:'SEPARATE_E20_OBLIGATION',...(selection.caseCampaign?{caseCampaign:selection.caseCampaign}:{}),...(selection.principals?{principalConnections:selection.principals}:{}),...(selection.maintenance?{maintenance:selection.maintenance}:{}),...(selection.legacyCompatibility?{legacyCompatibility:selection.legacyCompatibility}:{}),...(selection.serviceUpgrade?{serviceUpgrade:selection.serviceUpgrade}:{}),...(selection.performanceConfiguration?{performanceConfiguration:selection.performanceConfiguration}:{}),...(selection.ciAuthority?{ciAuthority:selection.ciAuthority}:{}),...(selection.interruptionFixture?{interruptionFixture:selection.interruptionFixture}:{}),...(selection.multiClient?{multiClient:selection.multiClient}:{}),...(selection.releaseQualification?{releaseQualification:selection.releaseQualification}:{}),...(selection.publicReleaseReadback?{publicReleaseReadback:selection.publicReleaseReadback}:{}),...(selection.currentInstallation?{currentInstallation:selection.currentInstallation}:{}),...(selection.permissionRevocation?{permissionRevocation:selection.permissionRevocation}:{}),...(selection.lifecycleVariants?{lifecycleVariants:selection.lifecycleVariants}:{}),...(selection.extensionExecution?{extensionExecution:selection.extensionExecution}:{})});
  let sequence=0,currentCase=null,uncertain=false,hostSequence=0;
  const evidence=[],results=[];
@@ -389,8 +399,13 @@ export async function openScenario(scenario){
  async function read(operation,input={}){const r=await request(operation,input);assert.equal(r.status,200,JSON.stringify(r.body));return r.body.result;}
  async function source(revisionId){let offset=0;const chunks=[];for(;;){const page=await read('lifecycle.definition.source.read',{revisionId,offset});assert.equal(page.revisionId,revisionId);chunks.push(Buffer.from(page.data,'base64'));if(page.nextOffset===null)return Buffer.concat(chunks).toString('utf8');assert(page.nextOffset>offset);offset=page.nextOffset;}}
  const status=await read('runtime.status');assert.equal(status.serviceId,connection.serviceId);assert.equal(status.workspaceId,selection.workspaceId);assert.equal(status.version,manifest.version);
- return{selection,candidate,candidateDigest,cases,all,request,principalRequest,principal,permissionFault,restorePermissionFault,permissionFixture:permissionSelection?.fixture??null,assertNoCredentialExposure,read,source,protocol,artifact,imageArtifact,traceArtifact,browserCode,openExpert,configurationEntry,serviceOrigin:connection.origin,
+ return{selection,candidate,candidateDigest,cases,all,callablePreflight,request,principalRequest,principal,permissionFault,restorePermissionFault,permissionFixture:permissionSelection?.fixture??null,assertNoCredentialExposure,read,source,protocol,artifact,imageArtifact,traceArtifact,browserCode,openExpert,configurationEntry,serviceOrigin:connection.origin,
   requestId:(caseId,suffix)=>scenario.toLowerCase()+'-'+sha(selection.runId+'|'+caseId+'|'+suffix).slice(0,48),
+  async collectRegistered(c){
+   assert(callableEntries,'Explicit trusted callable registry required');
+   assert(cases.some(selected=>selected.caseInstanceId===c.caseInstanceId),'Case must belong to the selected campaign');
+   const fn=callableEntries.get(c.caseInstanceId);assert.equal(typeof fn,'function');return this.collect(c,fn);
+  },
   async collect(c,fn){currentCase=c.caseInstanceId;const first=evidence.length;
    try{const assertions=await fn();if(permissionSelection&&permissionSelection.fixture.caseIds.includes(c.caseInstanceId))assert.equal(permissionSelection.index,permissionSelection.fixture.steps.findLastIndex(s=>s.caseId===c.caseInstanceId)+1,'A complete case needs every exact revocation/restoration step');results.push({caseInstanceId:c.caseInstanceId,status:'PASS',candidateDigest,qualification:selection.qualification,assertions,evidence:evidence.slice(first)});}
    catch(error){results.push({caseInstanceId:c.caseInstanceId,status:'FAILED',candidateDigest,qualification:selection.qualification,error:{name:error.name,message:error.message,code:error.code??null},evidence:evidence.slice(first)});throw error;}

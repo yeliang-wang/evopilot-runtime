@@ -17,6 +17,21 @@ const removeSources=f=>{for(const root of roots(f))fs.renameSync(root,root+'.ret
 const backup=async f=>{const snapshot=await inspectManagedWorkspace(f.selection,'inspect');return createManagedWorkspaceBackup(f.selection,'backup',snapshot.snapshotDigest,f.backupRoot);};
 const request=(f,saved,id='restore')=>restoreManagedWorkspaceBackup(f.backupRoot,saved.backupDigest,id);
 
+test('correction-state snapshot and restore preserve schema2 and original records without startup',async t=>{
+  const f=fixture(t),root=join(f.selection.serviceRoot,'data'),store=new RuntimeStore(root,'synthetic');
+  const actor={id:'synthetic',projects:['synthetic'],permissions:['read'],revision:1,expiresAt:'2030-01-01T00:00:00Z'};
+  const proposal={schema:'synthetic-correction-fixture/v1',hypothesis:'Snapshot bytes only; no approved execution'};
+  try{store.mutate(actor,{projectId:'synthetic',operation:'synthetic.correction',requestId:'correction',expectedRevision:1,input:{synthetic:true},permission:'read'},()=>({objects:[{kind:'lifecycle-correction-proposal',id:'synthetic-proposal',value:proposal}],value:{synthetic:true},event:{type:'synthetic-correction',data:{}}}));}finally{store.close();}
+  const saved=await backup(f);removeSources(f);
+  const result=await request(f,saved);assert.equal(result.status,'VERIFIED');assert.equal(result.serviceStarted,false);
+  const restored=new RuntimeStore(root,'synthetic');try {
+    assert.deepEqual(restored.object('synthetic','lifecycle-correction-proposal','synthetic-proposal'),proposal);
+    assert.deepEqual(restored.object('synthetic','pending-fixture','original'),{pending:true});
+    assert.equal(restored.revision('synthetic'),2);
+  }finally{restored.close();}
+  assert.equal((await inspectManagedWorkspace(f.selection,'restored-correction')).snapshotDigest,saved.snapshot.snapshotDigest);
+});
+
 test('original missing locations recover all selected data, immutable adoption and pending evidence without dispatch or startup',async t=>{
   const f=fixture(t),saved=await backup(f),referenceInode=fs.statSync(f.reference).ino;removeSources(f);
   const result=await request(f,saved);assert.equal(result.status,'VERIFIED');assert.equal(result.serviceStarted,false);assert.equal(result.businessWorkDispatched,false);assert.equal(result.authority,false);

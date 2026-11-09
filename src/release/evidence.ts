@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {lstatSync,readFileSync,realpathSync} from 'node:fs';
-import {dirname,isAbsolute,join,resolve} from 'node:path';
+import {closeSync,constants,fstatSync,openSync,readFileSync,realpathSync} from 'node:fs';
+import {basename,dirname,isAbsolute,join,resolve} from 'node:path';
 import {isDeepStrictEqual} from 'node:util';
 import {evaluateGovernance} from '../governance.js';
 
@@ -10,6 +10,9 @@ export interface AcceptanceEvidenceRequest {
   schema:'runtime-release-evidence-input/v1';sourceCommit:string;
   manifest:FileReference;archive:FileReference;sourceRevision:FileReference;
   reports:{scenario:string;report:FileReference}[];
+}
+export interface CorrectionAcceptanceEvidenceRequest extends Omit<AcceptanceEvidenceRequest,'schema'|'reports'> {
+  schema:'runtime-correction-evidence-input/v1';report:FileReference;
 }
 export interface E20PrerequisiteEvidenceRequest extends Omit<AcceptanceEvidenceRequest,'schema'> {
   schema:'runtime-e20-prerequisite-evidence-input/v1';
@@ -25,10 +28,15 @@ const exact=(value:ObjectValue,keys:string[]):void=>requireValue(isDeepStrictEqu
 const digest=(value:unknown):string=>{const d=string(value);requireValue(/^[a-f0-9]{64}$/.test(d),'Invalid SHA256');return d;};
 function read(path:string,maximum:number,privateFile=true):Buffer {
   requireValue(isAbsolute(path)&&resolve(path)===path&&realpathSync(path)===path,'Use canonical evidence paths without symlinks');
-  const stat=lstatSync(path);
-  requireValue(stat.isFile()&&!stat.isSymbolicLink()&&stat.nlink===1&&stat.size<=maximum,'Invalid bounded evidence file');
-  if(privateFile)requireValue((stat.mode&0o077)===0&&stat.uid===process.getuid?.(),'Evidence must be private and owned by this user');
-  return readFileSync(path);
+  const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW);
+  try{
+    const before=fstatSync(fd);
+    requireValue(before.isFile()&&before.nlink===1&&before.size<=maximum,'Invalid bounded evidence file');
+    if(privateFile)requireValue((before.mode&0o077)===0&&before.uid===process.getuid?.(),'Evidence must be private and owned by this user');
+    const bytes=readFileSync(fd),after=fstatSync(fd);
+    requireValue(bytes.length===before.size&&after.size===before.size&&after.mtimeMs===before.mtimeMs&&after.ctimeMs===before.ctimeMs,'Evidence changed during the audit');
+    return bytes;
+  }finally{closeSync(fd);}
 }
 function pinned(value:unknown,maximum:number):Buffer {
   const ref=object(value);exact(ref,['ref','sha256']);const bytes=read(string(ref.ref),maximum);
@@ -37,11 +45,9 @@ function pinned(value:unknown,maximum:number):Buffer {
 const parse=(bytes:Buffer):ObjectValue=>object(JSON.parse(bytes.toString('utf8')) as unknown);
 const numbered=(prefix:string,count:number):string[]=>Array.from({length:count},(_,i)=>prefix+String(i+1).padStart(2,'0'));
 
-// The only two inventories are fixed here. No caller can omit a case, choose a
-// scenario range or turn a prerequisite audit into the complete release audit.
-function inspectFixedEvidence(repositoryRoot:string,input:AcceptanceEvidenceRequest|E20PrerequisiteEvidenceRequest,scope:'FULL'|'PRE_E20') {
-  exact(object(input),['schema','sourceCommit','manifest','archive','sourceRevision','reports']);
-  requireValue(input.schema===(scope==='FULL'?'runtime-release-evidence-input/v1':'runtime-e20-prerequisite-evidence-input/v1')&&/^[a-f0-9]{40}$/.test(input.sourceCommit),'Wrong source input');
+/** Shared exact-source and distribution binding for both original and additive audits. */
+function inspectEvidenceCandidate(repositoryRoot:string,input:Pick<AcceptanceEvidenceRequest,'sourceCommit'|'manifest'|'archive'|'sourceRevision'>) {
+  requireValue(/^[a-f0-9]{40}$/.test(input.sourceCommit),'Wrong source input');
   requireValue(isAbsolute(repositoryRoot)&&realpathSync(repositoryRoot)===repositoryRoot,'Use the exact source checkout');
   const env={PATH:'/usr/bin:/bin',LC_ALL:'C',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_OPTIONAL_LOCKS:'0'};
   const git=(args:string[]):Buffer=>execFileSync('/usr/bin/git',['-c','core.fsmonitor=false','-C',repositoryRoot,...args],{env,timeout:15000,maxBuffer:4194304,stdio:['ignore','pipe','pipe']});
@@ -55,6 +61,14 @@ function inspectFixedEvidence(repositoryRoot:string,input:AcceptanceEvidenceRequ
   requireValue(manifest.schema==='runtime-standalone-distribution/v1'&&manifest.version==='0.9.0','A final independent 0.9.0 distribution is required');
   const archive=pinned(input.archive,268435456);requireValue(sha(archive)===digest(manifest.archiveDigest),'Original archive differs from the distribution inventory');
   requireValue(pinned(input.sourceRevision,128).toString()===input.sourceCommit+'\n','Source revision differs from the selected candidate');
+  return{git,manifestBytes,manifest,candidateDigest,archive};
+}
+
+// The original inventories stay fixed; additive audits never replace these cases.
+function inspectFixedEvidence(repositoryRoot:string,input:AcceptanceEvidenceRequest|E20PrerequisiteEvidenceRequest,scope:'FULL'|'PRE_E20') {
+  exact(object(input),['schema','sourceCommit','manifest','archive','sourceRevision','reports']);
+  requireValue(input.schema===(scope==='FULL'?'runtime-release-evidence-input/v1':'runtime-e20-prerequisite-evidence-input/v1'),'Wrong source input');
+  const {git,manifestBytes,manifest,candidateDigest,archive}=inspectEvidenceCandidate(repositoryRoot,input);
   const matrixBytes=read(join(repositoryRoot,'governance/parameter-matrix-v090.json'),2097152,false),matrix=parse(matrixBytes),matrixDigest=sha(matrixBytes);
   const cases=array(matrix.caseInstances).map(object),allPreRelease=cases.filter(c=>c.phase==='PRE_RELEASE');
   requireValue(cases.length===664&&allPreRelease.length===655&&cases.every(c=>c.required===true),'Fixed acceptance denominator changed');
@@ -89,7 +103,7 @@ function inspectFixedEvidence(repositoryRoot:string,input:AcceptanceEvidenceRequ
     const selection=parse(selectionBytes);
     requireValue(selection.scenario===scenario&&selection.matrixDigest===matrixDigest&&selection.qualification==='FINAL_CANDIDATE'&&selection.candidateDigest===candidateDigest&&isDeepStrictEqual(selection.candidate,report.candidate),'Selection differs from the report or frozen cases');
     requireValue(isDeepStrictEqual(array(selection.selectedCaseIds).map(string).sort(),expected),'Selected case list is incomplete or duplicated');
-    const collectorPins=object(selection.collectorPins),collectorNames=['support.mjs',scenario.toLowerCase()+'.test.mjs',...(['E01','E02','E04','E05','E06','E07','E12','E13','E16','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(['E01','E02','E13'].includes(scenario)?['execution.mjs']:[])];exact(collectorPins,collectorNames);
+    const collectorPins=object(selection.collectorPins),collectorNames=['support.mjs','preflight.mjs',scenario.toLowerCase()+'.test.mjs',...(['E01','E02','E04','E05','E06','E07','E12','E13','E16','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(['E01','E02','E13'].includes(scenario)?['execution.mjs']:[])];exact(collectorPins,collectorNames);
     for(const name of collectorNames){
       const relative='tests/acceptance/v090/'+name,committed=git(['show',input.sourceCommit+':'+relative]);
       requireValue(sha(committed)===digest(collectorPins[name])&&sha(read(join(repositoryRoot,relative),4194304,false))===sha(committed),'Collector differs from the tested source');
@@ -121,4 +135,73 @@ export function inspectAcceptanceEvidence(repositoryRoot:string,input:Acceptance
  * release authority. The full 655-case audit is still mandatory afterwards. */
 export function inspectE20PrerequisiteEvidence(repositoryRoot:string,input:E20PrerequisiteEvidenceRequest) {
   return{schema:'runtime-e20-prerequisite-evidence-audit/v1' as const,...inspectFixedEvidence(repositoryRoot,input,'PRE_E20'),required:652,passed:652,fullPreReleaseRequired:655,remainingE20:3,remainingE20CaseIds:['E20.journey','E20.EX12','E20.CV07'],executionAuthenticity:'NOT_ESTABLISHED_BY_FILE_HASHES' as const,fullReleaseAuditRequired:true as const,remainingChecks:['Complete the three fixed E20 cases, then independently audit all 655 pre-release cases','Independent source CI and original execution authenticity review','Additive usage acceptance, exact release decision and post-release delivery']};
+}
+
+/** Audit every LC PRE case and its declared vectors. Only original executed
+ * FINAL_CANDIDATE/PASS records are supported. PASS_REUSED needs a separately
+ * implemented owner-policy/qualification verifier and fails closed here.
+ * Byte integrity does not prove execution authenticity or grant release authority. */
+export function inspectCorrectionAcceptanceEvidence(repositoryRoot:string,input:CorrectionAcceptanceEvidenceRequest) {
+  exact(object(input),['schema','sourceCommit','manifest','archive','sourceRevision','report']);
+  requireValue(input.schema==='runtime-correction-evidence-input/v1','Wrong correction evidence schema');
+  const {git,manifestBytes,manifest,candidateDigest,archive}=inspectEvidenceCandidate(repositoryRoot,input);
+  const addendumBytes=read(join(repositoryRoot,'governance/lifecycle-correction-v090.json'),2097152,false),addendumDigest=sha(addendumBytes);
+  const acceptance=object(parse(addendumBytes).acceptance),cases=array(acceptance.cases).map(object);
+  // Governance validates the addendum, including all fixed counts and LC12 POST.
+  const requiredIds=numbered('LC',21).filter(id=>id!=='LC12');
+  const required=cases.filter(c=>c.phase==='PRE_RELEASE');
+  requireValue(isDeepStrictEqual(required.map(c=>c.id).sort(),requiredIds),'Fixed LC pre-release obligations changed');
+  const reportBytes=pinned(input.report,33554432),report=parse(reportBytes),root=dirname(input.report.ref);
+  exact(report,['schema','scenario','sourceCommit','phase','candidate','candidateDigest','selectionDigest','qualification','scenarioDenominator','fullDenominator','selected','executed','passed','failed','unexecutedCaseIds','scenarioStatus','productAcceptance','releaseAuthorized','setupEvidence','results']);
+  requireValue(report.schema==='runtime-correction-acceptance-report/v1'&&report.scenario==='LC'&&report.phase==='PRE_RELEASE'&&report.sourceCommit===input.sourceCommit&&report.qualification==='FINAL_CANDIDATE'&&report.candidateDigest===candidateDigest,'Correction report is not original execution for this final source/candidate and phase');
+  const candidate=object(report.candidate);exact(candidate,['manifestDigest','archiveDigest','version','serviceId','workspaceId','projectId']);
+  requireValue(candidate.version==='0.9.0'&&candidate.manifestDigest===sha(manifestBytes)&&candidate.archiveDigest===manifest.archiveDigest,'Correction report candidate identity changed');
+  for(const key of ['serviceId','workspaceId','projectId'])string(candidate[key]);
+  requireValue(report.fullDenominator===709&&report.scenarioDenominator===20&&report.selected===20&&report.executed===20&&report.passed===20&&report.failed===0&&report.scenarioStatus==='OBSERVED_PASS'&&array(report.unexecutedCaseIds).length===0,'Partial, failed, skipped or stale correction report');
+  requireValue(report.productAcceptance==='NOT_EVALUATED'&&report.releaseAuthorized===false,'A correction collector cannot declare completion or release authority');
+  const selectionBytes=read(join(root,'selection.json'),1048576);requireValue(sha(selectionBytes)===digest(report.selectionDigest),'Original correction selection changed');
+  const selection=parse(selectionBytes);
+  exact(selection,['scenario','sourceCommit','phase','addendumDigest','qualification','candidate','candidateDigest','collectorPins','selectedCaseIds']);
+  requireValue(selection.scenario==='LC'&&selection.phase==='PRE_RELEASE'&&selection.sourceCommit===input.sourceCommit&&selection.addendumDigest===addendumDigest&&selection.qualification==='FINAL_CANDIDATE'&&selection.candidateDigest===candidateDigest&&isDeepStrictEqual(selection.candidate,candidate),'Correction selection differs from source, phase, report or obligations');
+  requireValue(isDeepStrictEqual(array(selection.selectedCaseIds).map(string).sort(),requiredIds),'Selected LC list is incomplete, duplicated or foreign');
+  const pins=object(selection.collectorPins);exact(pins,['correction.test.mjs']);
+  const collector=string(acceptance.collector),committed=git(['show',input.sourceCommit+':'+collector]);
+  requireValue(sha(committed)===digest(pins['correction.test.mjs'])&&sha(read(join(repositoryRoot,collector),4194304,false))===sha(committed),'Correction collector differs from the qualified source');
+
+  let evidenceFiles=0,evidenceBytes=0,observedVectors=0;
+  const ownedLeaves=new Set<string>(),reservedLeaves=new Set(['selection.json','report.json',basename(input.report.ref),...requiredIds.map(id=>id+'.json')].map(name=>name.toLowerCase()));
+  function evidence(value:unknown,caseId:string|null,vectorId:string|null):void {
+    const item=object(value);
+    requireValue(item.caseInstanceId===caseId&&item.vectorId===vectorId,'Correction evidence belongs to another case or vector');
+    const file=(name:unknown,expected:unknown):void=>{
+      const leaf=string(name),identity=leaf.toLowerCase();
+      requireValue(/^[A-Za-z0-9_.-]+$/.test(leaf)&&leaf!=='.'&&leaf!=='..'&&!reservedLeaves.has(identity),'Correction evidence must be a raw owned leaf');
+      requireValue(!ownedLeaves.has(identity),'One raw evidence file cannot stand in for multiple correction observations');ownedLeaves.add(identity);
+      const bytes=read(join(root,leaf),16777216);evidenceBytes+=bytes.length;
+      requireValue(++evidenceFiles<=10000&&evidenceBytes<=268435456,'Correction evidence exceeds audit bounds');
+      requireValue(sha(bytes)===digest(expected),'Original correction evidence bytes changed');
+    };
+    if(Object.hasOwn(item,'artifact')){exact(item,['caseInstanceId','vectorId','artifact','fileDigest']);file(item.artifact,item.fileDigest);}
+    else{exact(item,['caseInstanceId','vectorId','request','requestDigest','response','fileDigest']);file(item.request,item.requestDigest);file(item.response,item.fileDigest);}
+  }
+  const results=array(report.results).map(object);
+  requireValue(isDeepStrictEqual(results.map(r=>r.caseInstanceId).sort(),requiredIds),'Correction results are missing, duplicated or foreign');
+  for(const result of results){
+    exact(result,['caseInstanceId','phase','status','qualification','candidateDigest','assertions','vectors']);
+    const id=string(result.caseInstanceId),expected=required.find(c=>c.id===id)!;
+    const executed=(record:ObjectValue):void=>requireValue(record.phase==='PRE_RELEASE'&&record.status==='PASS'&&record.qualification==='FINAL_CANDIDATE'&&record.candidateDigest===candidateDigest&&Object.keys(object(record.assertions)).length>0,'Correction requires raw executed PASS with assertions for the final candidate and PRE phase; reuse is unsupported');
+    executed(result);
+    requireValue(isDeepStrictEqual(parse(read(join(root,id+'.json'),16777216)),result),'Original correction case differs from the aggregate report');
+    const vectors=array(result.vectors).map(object),expectedVectors=array(expected.vectors).map(string).sort();
+    requireValue(isDeepStrictEqual(vectors.map(v=>v.vectorId).sort(),expectedVectors),'Every declared correction vector is required exactly once');
+    for(const vector of vectors){
+      exact(vector,['vectorId','phase','status','qualification','candidateDigest','assertions','evidence']);executed(vector);
+      const items=array(vector.evidence);requireValue(items.length>0,'A correction vector PASS label without raw evidence is insufficient');
+      for(const item of items)evidence(item,id,string(vector.vectorId));
+      observedVectors++;
+    }
+  }
+  const setup=array(report.setupEvidence);requireValue(setup.length>0,'Correction installed service setup evidence is missing');
+  for(const item of setup)evidence(item,null,null);
+  return{schema:'runtime-correction-evidence-audit/v1' as const,sourceCommit:input.sourceCommit,candidateDigest,archiveDigest:sha(archive),addendumDigest,reportDigest:sha(reportBytes),required:20,passed:20,failed:0,skipped:0,requiredVectors:observedVectors,passedVectors:observedVectors,originalRequired:688,originalAcceptanceIndependentlyRequired:true as const,combinedRequired:709,correctionPostReleaseRemaining:1,evidenceFiles,evidenceBytes,recordIntegrity:'VERIFIED' as const,executionAuthenticity:'NOT_ESTABLISHED_BY_FILE_HASHES' as const,productAcceptance:'NOT_EVALUATED' as const,releaseAuthorized:false as const,remainingChecks:['Original 688 acceptance obligations remain independently required','Review actual execution and Host provenance, not passing labels','Independent source CI and exact release decision','LC12 downloaded release and installed current Host acceptance','HO01–HO03 remain separate post-delivery coordination obligations']};
 }

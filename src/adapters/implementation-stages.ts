@@ -71,10 +71,12 @@ export function createImplementationStageAdapters(store:RuntimeStore,configPath:
     }
     return{...base,adapterDigest:AGENT_ADAPTER_DIGEST,phase:child.phase,outcome:{...child.outcome,requestId:r.id,inputDigest:r.inputDigest,receiptRef:'runtime:implementation-stage/'+r.id,checks}};
   }
-  const implementation:StageAdapter={prepare:codex.prepare,dispatch:codex.dispatch,async inspect(r,instance,progress,actor,signal){
+  async function inspect(r:StageRequest,instance:LifecycleInstance,progress:StageProgress,actor:Principal,signal:AbortSignal):Promise<StageObservation>{
     const base=await codex.inspect(r,instance,progress,actor,signal),d=derivation(store,r);if(!d)return base;
     return translated(r,base,d,await ci.inspect(d.request,instance,progress,actor,signal));
-  },async advance(r,instance,progress,permit,signal){
+  }
+  // Reuse only the original Agent/derived CI receipt read path; no permit or dispatch.
+  const implementation:StageAdapter={prepare:codex.prepare,dispatch:codex.dispatch,inspect,reconcileAdvance:inspect,async advance(r,instance,progress,permit,signal){
     let actor=await permit();const base=await codex.inspect(r,instance,progress,actor,signal),report=readAgentReport(store,r.projectId,r.id);if(report?.state!=='SUBMITTED')return base;
     const approved=await reviews.resolve(actor,r.projectId,r.id);signal.throwIfAborted();let d=derivation(store,r);
     if(d){

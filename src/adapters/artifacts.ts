@@ -1,10 +1,12 @@
 import { crc32 } from 'node:zlib';
+import { createHash } from 'node:crypto';
 import { fromBufferPromise, type ZipFile } from 'yauzl';
 import { canonical, exact, record, reject, ServiceError, string } from '../server/errors.js';
 import { byteDigest, valueDigest } from '../lifecycle/base.js';
 import { candidateDigest, type CandidateManifest } from '../lifecycle/instance.js';
 import { containsInlineSecret } from '../lifecycle/compiler.js';
-import type { PlatformArtifactArchive, PlatformRunRequest } from './platforms.js';
+import type { PlatformArtifactArchive, PlatformRunObservation, PlatformRunRequest } from './platforms.js';
+import type { SourceTreeObservation } from './source-tree.js';
 import {validatePreparationInput,validatePreparationOutput,type CiPreparationOutput} from './ci-preparation.js';
 
 export const MAX_ARCHIVE_BYTES=128*1024*1024;
@@ -70,6 +72,69 @@ export interface VerifiedCiArtifact {
   ownerEvaluationsVerified:false; lifecycleAcceptance:false;
   sourceArchive:CandidateArchiveIdentity;
   preparationOutput?:CiPreparationOutput;
+}
+/** Optional private evidence, never a required runtime-ci/v1 field. The fixed
+ * reader is called only after registered-provider capture and archive retention.
+ * Its integrity findings do not authenticate arbitrary caller-supplied bytes. */
+export const CI_ACCEPTANCE_REPORT_PATH='evidence/acceptance-report.json';
+export interface CiAcceptanceReportCapture {
+  status:'ABSENT'|'INVALID'|'OBSERVED'|'UNAVAILABLE'; reasons:string[];
+  report:CiEvidenceFile|null;
+  producerJobId:string|null;
+  producerBinding:'MATCHED_ORIGINAL_JOB'|'UNVERIFIED';
+  workflowSource:'COMMITTED_BYTES_MATCHED'|'UNVERIFIED';
+  collectorSource:'COMMITTED_BYTES_MATCHED'|'UNVERIFIED';
+  collectorSemanticApproval:'UNKNOWN'; caseCatalog:'UNKNOWN';
+  cases:{caseId:string;observedOutcome:'PASS'|'FAIL'|'NOT_RUN'|'CANCELLED'|'UNKNOWN'|'SKIPPED';rawReceipt:CiEvidenceFile}[];
+}
+export function unavailableCiAcceptanceReport(reason:string):CiAcceptanceReportCapture{
+  return{status:'UNAVAILABLE',reasons:[reason],report:null,producerJobId:null,producerBinding:'UNVERIFIED',workflowSource:'UNVERIFIED',collectorSource:'UNVERIFIED',collectorSemanticApproval:'UNKNOWN',caseCatalog:'UNKNOWN',cases:[]};
+}
+/** Retain references to original ZIP bytes, never a rewritten receipt or an
+ * OriginalEvidenceExecution. A matched committed blob is not semantic approval. */
+export async function inspectCiAcceptanceReport(archive:PlatformArtifactArchive,request:PlatformRunRequest,verified:VerifiedCiArtifact,proof:{run:PlatformRunObservation;workflowPath:string;requirementsDigest:string;sourceTree?:SourceTreeObservation},signal:AbortSignal):Promise<CiAcceptanceReportCapture>{
+  if(verified.requestId!==request.requestId||verified.inputDigest!==request.inputDigest||verified.runId!==archive.runId||verified.archiveDigest!==archive.archiveDigest||archive.archiveDigest!==byteDigest(archive.bytes))reject('CI_CAPTURE_ORIGIN_CHANGED','Acceptance capture requires the exact verified original archive',409);
+  const files=await readArtifactArchive(archive.bytes,signal),bytes=files.get(CI_ACCEPTANCE_REPORT_PATH),capture=unavailableCiAcceptanceReport('REPORT_ABSENT');
+  capture.status='ABSENT';if(!bytes)return capture;
+  capture.report={path:CI_ACCEPTANCE_REPORT_PATH,digest:byteDigest(bytes),bytes:bytes.length};capture.status='INVALID';capture.reasons=[];
+  const declared=new Map(verified.checks.flatMap(c=>c.evidence).map(f=>[f.path,f]));
+  const file=(value:unknown):CiEvidenceFile=>{
+    const f=record(value);exact(f,['path','digest','bytes']);const path=artifactPath(f.path),raw=files.get(path),expected=declared.get(path);
+    if(path===CI_ACCEPTANCE_REPORT_PATH||!raw||!expected||raw.length!==f.bytes||raw.length>131072||raw.length===0||hash(f.digest)!==byteDigest(raw)||expected.digest!==f.digest||expected.bytes!==f.bytes)reject('CI_CAPTURE_FILE_INVALID','Acceptance raw evidence must match a bounded declared original file',409);
+    return{path,digest:String(f.digest),bytes:raw.length};
+  };
+  try{
+    const reportPin=declared.get(CI_ACCEPTANCE_REPORT_PATH);
+    if(!reportPin||reportPin.digest!==capture.report.digest||reportPin.bytes!==bytes.length||bytes.length<1||bytes.length>131072)reject('CI_CAPTURE_REPORT_INVALID','Optional acceptance report must be bounded declared check evidence',409);
+    const r=record(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)));
+    exact(r,['schema','requestId','inputDigest','sourceCommit','workflowDigest','candidateDigest','requirementsDigest','producerJobId','workflow','collector','cases']);
+    if(r.schema!=='runtime-ci-acceptance-report/v1'||r.requestId!==request.requestId||r.inputDigest!==request.inputDigest||r.sourceCommit!==request.commit||r.workflowDigest!==request.workflowDigest||r.candidateDigest!==verified.candidateDigest||r.requirementsDigest!==proof.requirementsDigest)reject('CI_CAPTURE_REPORT_MISMATCH','Acceptance report differs from original request/source/candidate requirements',409);
+    if(!/^[1-9][0-9]{0,19}$/.test(string(r.producerJobId,20)))reject('CI_CAPTURE_REPORT_INVALID','Exact producer job identifier required',409);
+    if(!Array.isArray(r.cases)||!r.cases.length||r.cases.length>64)reject('CI_CAPTURE_REPORT_INVALID','A bounded nonempty observed case set is required',409);
+    const ids=new Set<string>(),paths=new Set<string>();
+    const cases=r.cases.map(raw=>{
+      const c=record(raw);exact(c,['caseId','outcome','rawReceipt']);const caseId=string(c.caseId,256);
+      if(!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(caseId)||ids.has(caseId)||!['PASS','FAIL','NOT_RUN','CANCELLED','UNKNOWN','SKIPPED'].includes(String(c.outcome)))reject('CI_CAPTURE_REPORT_INVALID','Duplicate case or unsupported raw outcome',409);
+      ids.add(caseId);const rawReceipt=file(c.rawReceipt);if(paths.has(rawReceipt.path))reject('CI_CAPTURE_REPORT_INVALID','Each observed case requires its distinct original receipt',409);paths.add(rawReceipt.path);
+      return{caseId,observedOutcome:c.outcome as CiAcceptanceReportCapture['cases'][number]['observedOutcome'],rawReceipt};
+    });
+    // The report may identify a file, but the expected Git object comes only
+    // from the original protected plan's authenticated source inventory.
+    const tree=proof.sourceTree,treeValid=!!tree&&tree.commit===request.commit&&tree.provider===archive.provider&&tree.repositoryId===archive.repositoryId&&tree.projectId===request.projectId&&tree.bindingDigest===request.bindingDigest&&tree.inventoryDigest===valueDigest(tree.entries)&&tree.contentRead===false&&tree.sourceApproved===false;
+    const source=(value:unknown,workflow:boolean):boolean=>{
+      const s=record(value);exact(s,['sourcePath','file']);const sourcePath=artifactPath(s.sourcePath),pin=file(s.file),raw=files.get(pin.path)!;
+      if(paths.has(pin.path))reject('CI_CAPTURE_REPORT_INVALID','Collector proof cannot replace a case receipt',409);paths.add(pin.path);
+      const entry=treeValid?tree!.entries.find(e=>e.path===sourcePath):undefined;
+      return !!entry&&entry.type==='blob'&&['100644','100755'].includes(entry.mode)&&entry.objectId===createHash('sha1').update(Buffer.from('blob '+raw.length+'\0')).update(raw).digest('hex')&&(!workflow||sourcePath===proof.workflowPath&&pin.digest===request.workflowDigest);
+    };
+    const workflow=source(r.workflow,true),collector=source(r.collector,false),run=proof.run;
+    const sameRun=run.requestId===request.requestId&&run.inputDigest===request.inputDigest&&run.provider===archive.provider&&run.repositoryId===archive.repositoryId&&run.commit===request.commit&&run.runId===archive.runId;
+    const matching=run.jobs.filter(j=>j.jobId===r.producerJobId&&j.provider===archive.provider&&j.repositoryId===archive.repositoryId&&j.projectId===request.projectId&&j.runId===archive.runId&&j.commit===request.commit);
+    const producer=sameRun&&matching.length===1&&(archive.provider==='github'?archive.jobId===null&&run.jobs.length===1:archive.jobId===r.producerJobId&&archive.artifactId===r.producerJobId);
+    return{status:'OBSERVED',reasons:[...(!producer?['PRODUCER_JOB_UNVERIFIED']:[]),...(!workflow?['WORKFLOW_SOURCE_UNVERIFIED']:[]),...(!collector?['COLLECTOR_SOURCE_UNVERIFIED']:[]),'COLLECTOR_SEMANTIC_APPROVAL_UNKNOWN','CASE_CATALOG_UNKNOWN'],report:capture.report,producerJobId:producer?String(r.producerJobId):null,producerBinding:producer?'MATCHED_ORIGINAL_JOB':'UNVERIFIED',workflowSource:workflow?'COMMITTED_BYTES_MATCHED':'UNVERIFIED',collectorSource:collector?'COMMITTED_BYTES_MATCHED':'UNVERIFIED',collectorSemanticApproval:'UNKNOWN',caseCatalog:'UNKNOWN',cases};
+  }catch(error){
+    signal.throwIfAborted();capture.reasons=[error instanceof ServiceError&&error.code.startsWith('CI_CAPTURE_')?error.code:'CI_CAPTURE_REPORT_INVALID'];return capture;
+  }
 }
 export const ciSourceDigest=(request:PlatformRunRequest,provider:string,repositoryId:string):string=>valueDigest({provider,repositoryId,commit:request.commit});
 export const ciBuildDigest=(request:PlatformRunRequest,runId:string):string=>valueDigest({requestId:request.requestId,inputDigest:request.inputDigest,bindingDigest:request.bindingDigest,workflowDigest:request.workflowDigest,runId});

@@ -19,7 +19,7 @@ No cost estimation, budget control, scoring or additional Dashboard is included.
 
 The original 64 groups / 22 scenarios / 664 instances remain required. The
 addendum contributes UT01–UT24: 23 pre-release and one current-installation check,
-for 688 total instances (678 pre-release, 10 post-release). These additional
+for 688 original-plus-usage instances (678 pre-release, 10 post-release). These additional
 engineering checks do not turn statistics into a consuming-project quality gate.
 
 This document distinguishes existing behavior, historical repair, proposed work and deferred targets. A roadmap entry is not an implementation, acceptance result or release decision. Exact verification and project-specific evidence remain private and candidate-bound.
@@ -159,3 +159,7 @@ results remain NOT_EVALUATED until actual evidence exists. No owner source or
 daily installation mutation is authorized by a scope check. Use the installed
 Runtime Expert/public planning workflow; absent retired orchestrator skills are
 not restored. Strict TypeScript remains required for new core logic.
+
+## Approved lifecycle correction addendum (2026-11-09)
+
+[The correction ADR](architecture/runtime-v090-correction.md) and `governance/lifecycle-correction-v090.json` add bounded correction, independent branch continuation and versioned evidence applicability. Original 688 acceptance cases remain unchanged; 21 additive cases make 709 (698 PRE, 11 POST). Three separate handoff cases target the exact `EvoPilot-ontology v0.9.0 Preview` chat after installed Runtime delivery. No new owner version or release decision is inferred.

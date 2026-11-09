@@ -2,7 +2,7 @@
 // protected policy, evidence files and HTTP/MCP/CLI. No real release authority.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync, readFileSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
@@ -17,7 +17,7 @@ import { serviceMain } from '../../dist/server/cli.js';
 import { RuntimeStore } from '../../dist/server/store.js';
 import { valueDigest, byteDigest } from '../../dist/lifecycle/base.js';
 import { evidenceValueDigest } from '../../dist/server/errors.js';
-import { requestStage, recordStageOutcome, stageAdmission } from '../../dist/lifecycle/instance.js';
+import { requestStage, recordStageOutcome, stageAdmission, pinInstance, requiredChecksDigest } from '../../dist/lifecycle/instance.js';
 import { createAuthorityService, registeredAuthorityPolicy } from '../../dist/adapters/authority.js';
 import { createReleaseStageAdapter } from '../../dist/adapters/release-stages.js';
 import { ciSourceDigest } from '../../dist/adapters/artifacts.js';
@@ -37,7 +37,7 @@ function fixture(){
   const configPath=join(dir,'integrations.json'),saveConfig=()=>writeFileSync(configPath,JSON.stringify(config),{mode:0o600});saveConfig();
   const bindings=syntheticBindings(),policy=registeredAuthorityPolicy(configPath,'synthetic');
   const f={dir,root,tokens,principals,data,config,configPath,saveConfig,bindings,policy,revision:0,sequence:0,options:{stateRoot:root,workspaceId:'synthetic'},cleanup:()=>rmSync(dir,{recursive:true,force:true})};
-  f.open=async()=>f.server=await startRuntimeServer(f.options,bindings.provider,undefined,policy,f.executor);
+  f.open=async()=>f.server=await startRuntimeServer(f.options,bindings.provider,f.authorities,policy,f.executor,f.preparation);
   return f;
 }
 async function request(f,operation,input={},actor='owner',meta={}){
@@ -50,7 +50,7 @@ async function activate(f){
   const activated=await write(f,'lifecycle.definition.save-and-activate',{yaml:source,validationDigest:preview.result.validationDigest},'owner');
   assert.equal(activated.result.result.status,'ACTIVE');f.definitionRevisionId=activated.result.result.activeRevisionId;
 }
-function executionSubject(f,id='one'){return{instanceId:id,definitionRevisionId:f.definitionRevisionId,goalRef:'synthetic:goal/one',targetRef:'synthetic:target/one',loopRef:'synthetic:loop/one',budget:{...f.data.config.plan.budget},expiresAt:new Date(Date.now()+3600000).toISOString()};}
+function executionSubject(f,id='one'){return{instanceId:id,definitionRevisionId:f.definitionRevisionId,goalRef:'synthetic:goal/'+id,targetRef:'synthetic:target/one',loopRef:'synthetic:loop/'+id,budget:{...f.data.config.plan.budget},expiresAt:new Date(Date.now()+3600000).toISOString()};}
 function evidence(f,review,decision='APPROVE',mutate=v=>v){
   const serial=++f.sequence,source=join(f.dir,'synthetic-source-'+serial+'.txt');
   writeFileSync(source,'Synthetic decision fixture only; not a user approval. '+serial,{mode:0o600});
@@ -166,29 +166,34 @@ async function syntheticVerification(f,g,collect=true){
   await f.server.close();const store=new RuntimeStore(f.root,'synthetic');
   try{
     const actor=currentPrincipal(f.root,'synthetic','executor'),svc=createAuthorityService(store,f.policy,id=>currentPrincipal(f.root,'synthetic',id));
-    let instance=store.object('alpha','lifecycle-instance','one');const authority=await svc.resolveExecution(g.ref,instance.definition,actor,new AbortController().signal),objects=[],binding=f.config.platforms[0],commit='b'.repeat(40);let candidateInput;
+    let instance=store.object('alpha','lifecycle-instance','one');const authority=await svc.resolveExecution(g.ref,instance.definition,actor,new AbortController().signal),binding=f.config.platforms[0],commit='b'.repeat(40);let candidateInput;
     for(const stage of ['scope','plan','implementation','candidate','verification']){
+      const prior=instance,objects=[],admitted=svc.recovery.admission(prior,authority,stage,actor);assert.equal(admitted.allowed,true);
       instance=requestStage(instance,stage,'synthetic-'+stage,{authority,bindingsCurrent:true});
-      const plan={adapterId:'synthetic-ci',adapterDigest:valueDigest('synthetic-ci'),action:'base.'+stage,bindingDigest:valueDigest(binding),parameters:{binding,commit,...(candidateInput?{candidateInput}:{})}},body={schema:'runtime-stage-request/v1',id:'synthetic-'+stage,workspaceId:'synthetic',projectId:'alpha',instanceId:'one',stageId:stage,pinsDigest:instance.pinsDigest,inputDigest:instance.stages[stage].inputDigest,bindingStamp:valueDigest('synthetic'),authorityRef:g.ref,releaseAuthorityRef:null,initiatedBy:{id:actor.id,revision:actor.revision},plan,planDigest:valueDigest(plan),requestedAt:new Date().toISOString(),deadlineAt:g.input.subject.expiresAt},original={...body,digest:valueDigest(body)};
+      const plan={adapterId:'synthetic-ci',adapterDigest:valueDigest('synthetic-ci'),action:'base.'+stage,bindingDigest:valueDigest(binding),parameters:{binding,commit,...(candidateInput?{candidateInput}:{})}},body={schema:'runtime-stage-request/v1',id:'synthetic-'+stage,workspaceId:'synthetic',projectId:'alpha',instanceId:'one',stageId:stage,pinsDigest:instance.pinsDigest,inputDigest:instance.stages[stage].inputDigest,bindingStamp:valueDigest('synthetic'),authorityRef:g.ref,releaseAuthorityRef:null,initiatedBy:{id:actor.id,revision:actor.revision},plan,planDigest:valueDigest(plan),requestedAt:new Date().toISOString(),deadlineAt:admitted.deadlineAt},original={...body,digest:valueDigest(body)};
       const outcome={requestId:original.id,inputDigest:original.inputDigest,receiptRef:'synthetic:receipt/'+stage,status:'COMPLETE',expiresAt:original.deadlineAt,checks:instance.definition.nodes.find(n=>n.id===stage).checks.map(id=>({id,status:'PASS',evidenceRef:'synthetic:check/'+id})),...(stage==='candidate'?{candidate:{schema:'runtime-candidate/v1',version:'test-rc',profile:'candidate-verification',sourceDigest:ciSourceDigest({commit},'github','42'),buildDigest:valueDigest('synthetic-build'),artifacts:[{name:'synthetic.tgz',digest:valueDigest('synthetic-bytes'),bytes:64}]}}:{})};
       instance=recordStageOutcome(instance,stage,outcome);
       const observation={requestId:original.id,inputDigest:original.inputDigest,adapterDigest:plan.adapterDigest,phase:'COMPLETE',handle:{synthetic:true},outcome};
-      objects.push({kind:'stage-request',id:original.id,value:original},{kind:'stage-progress',id:original.id,value:{requestId:original.id,phase:'COMPLETE',terminal:true,handle:observation.handle,observation,observationRef:valueDigest(observation),reason:null,observedAt:new Date().toISOString()}});
+      const envelope={schema:'runtime-stage-observation/v1',requestId:original.id,observation,reason:null,observedAt:new Date().toISOString()};
+      objects.push({kind:'stage-request',id:original.id,value:original},{kind:'stage-observation',id:valueDigest(envelope),value:envelope},{kind:'stage-progress',id:original.id,value:{requestId:original.id,phase:'COMPLETE',terminal:true,handle:observation.handle,observation,observationRef:valueDigest(envelope),reason:null,observedAt:envelope.observedAt}});
       if(stage==='candidate'){
         candidateInput={schema:'runtime-ci-candidate-input/v1',manifest:instance.candidate,archive:{provider:'github',repositoryId:'42',runId:'10',artifactId:'11',jobId:null,archiveDigest:valueDigest('synthetic-archive'),archiveBytes:64}};
         const proof={schema:'runtime-candidate-source-evidence/v1',requestId:original.id,requestDigest:original.digest,pinsDigest:instance.pinsDigest,outcomeDigest:instance.stages.candidate.outcomeDigest,input:candidateInput};objects.push({kind:'stage-candidate-source',id:original.id,value:{...proof,digest:valueDigest(proof)}});
       }
+      objects.push({kind:'lifecycle-instance',id:'one',value:instance});
+      store.mutate(actor,{projectId:'alpha',operation:'synthetic-test-stage-fixture',requestId:'synthetic-fixture-'+stage,expectedRevision:store.revision('alpha'),input:{pins:instance.pinsDigest},permission:'execution.request'},()=>({objects:[...objects,...svc.recovery.claim(prior,authority,original,actor)],value:{fixtureOnly:true},event:{type:'synthetic-fixture',data:{fixtureOnly:true}}}));
     }
-    objects.push({kind:'lifecycle-instance',id:'one',value:instance});
-    store.mutate(actor,{projectId:'alpha',operation:'synthetic-test-stage-fixture',requestId:'synthetic-fixture',expectedRevision:store.revision('alpha'),input:{pins:instance.pinsDigest},permission:'execution.request'},()=>({objects,value:{fixtureOnly:true},event:{type:'synthetic-fixture',data:{fixtureOnly:true}}}));
     f.releaseControls={documentReads:0,verificationReads:0,failVerification:false,failDocuments:false};
     f.releaseFactory=(s,services)=>createReleaseStageAdapter(s,f.configPath,{verification:{async inspect(r){f.releaseControls.verificationReads++;const p=s.object('alpha','stage-progress',r.id);return f.releaseControls.failVerification?{...p.observation,phase:'UNKNOWN'}:p.observation;}},platform:()=>({async documents(_a,input){f.releaseControls.documentReads++;if(f.releaseControls.failDocuments)throw Error('Synthetic document interruption');const documents=releaseDocuments(input.documents).map(d=>{const text=f.releaseControls.documentText??('# Synthetic '+d.role+'\nDocumentation fixture, not release approval.\n');return{...d,text,digest:byteDigest(text),bytes:Buffer.byteLength(text)};}),facts={provider:binding.provider,projectId:'alpha',repositoryId:binding.repositoryId,bindingDigest:valueDigest(binding),commit:input.commit,documents};return{schema:'runtime-release-documents/v1',...facts,factsDigest:evidenceValueDigest(facts),observedAt:new Date().toISOString(),releaseAuthorized:false};}})},services.releaseAuthority,services.authorityPolicy);
     if(collect){
+      const prior=instance,admitted=svc.recovery.admission(prior,authority,'release-decision',actor);assert.equal(admitted.allowed,true);
       const adapter=f.releaseFactory(store,{releaseAuthority:svc.resolveRelease,authorityPolicy:f.policy}),plan=await adapter.prepare(instance,'release-decision',actor,new AbortController().signal);instance=requestStage(instance,'release-decision','synthetic-release',{authority,bindingsCurrent:true});
-      const body={schema:'runtime-stage-request/v1',id:'synthetic-release',workspaceId:'synthetic',projectId:'alpha',instanceId:'one',stageId:'release-decision',pinsDigest:instance.pinsDigest,inputDigest:instance.stages['release-decision'].inputDigest,bindingStamp:valueDigest('synthetic'),authorityRef:g.ref,releaseAuthorityRef:null,initiatedBy:{id:actor.id,revision:actor.revision},plan,planDigest:valueDigest(plan),requestedAt:new Date().toISOString(),deadlineAt:g.input.subject.expiresAt},r={...body,digest:valueDigest(body)};
-      store.mutate(actor,{projectId:'alpha',operation:'synthetic-release-request-fixture',requestId:'synthetic-release-request',expectedRevision:store.revision('alpha'),input:{fixtureOnly:true},permission:'execution.request'},()=>({objects:[{kind:'lifecycle-instance',id:'one',value:instance},{kind:'stage-request',id:r.id,value:r}],value:{fixtureOnly:true},event:{type:'synthetic-fixture',data:{fixtureOnly:true}}}));
+      const body={schema:'runtime-stage-request/v1',id:'synthetic-release',workspaceId:'synthetic',projectId:'alpha',instanceId:'one',stageId:'release-decision',pinsDigest:instance.pinsDigest,inputDigest:instance.stages['release-decision'].inputDigest,bindingStamp:valueDigest('synthetic'),authorityRef:g.ref,releaseAuthorityRef:null,initiatedBy:{id:actor.id,revision:actor.revision},plan,planDigest:valueDigest(plan),requestedAt:new Date().toISOString(),deadlineAt:admitted.deadlineAt},r={...body,digest:valueDigest(body)};
+      store.mutate(actor,{projectId:'alpha',operation:'synthetic-release-request-fixture',requestId:'synthetic-release-request',expectedRevision:store.revision('alpha'),input:{fixtureOnly:true},permission:'execution.request'},()=>({objects:[{kind:'lifecycle-instance',id:'one',value:instance},{kind:'stage-request',id:r.id,value:r},{kind:'stage-progress',id:r.id,value:{requestId:r.id,phase:'DISPATCHING',terminal:false,handle:null,observation:null,observationRef:null,reason:null,observedAt:r.requestedAt}},...svc.recovery.claim(prior,authority,r,actor)],value:{fixtureOnly:true},event:{type:'synthetic-fixture',data:{fixtureOnly:true}}}));
       const observed=await adapter.dispatch(r,instance,async()=>actor,new AbortController().signal);assert.equal(observed.phase,'RUNNING');
-      store.mutate(actor,{projectId:'alpha',operation:'synthetic-release-progress-fixture',requestId:'synthetic-release-progress',expectedRevision:store.revision('alpha'),input:{fixtureOnly:true},permission:'read'},()=>({objects:[{kind:'stage-progress',id:r.id,value:{requestId:r.id,phase:observed.phase,terminal:false,handle:observed.handle,observation:observed,observationRef:valueDigest(observed),reason:null,observedAt:new Date().toISOString()}}],value:{fixtureOnly:true},event:{type:'synthetic-fixture',data:{fixtureOnly:true}}}));
+      instance=recordStageOutcome(instance,'release-decision',observed.outcome);
+      const envelope={schema:'runtime-stage-observation/v1',requestId:r.id,observation:observed,reason:null,observedAt:new Date().toISOString()};
+      store.mutate(actor,{projectId:'alpha',operation:'synthetic-release-progress-fixture',requestId:'synthetic-release-progress',expectedRevision:store.revision('alpha'),input:{fixtureOnly:true},permission:'read'},()=>({objects:[{kind:'lifecycle-instance',id:'one',value:instance},{kind:'stage-observation',id:valueDigest(envelope),value:envelope},{kind:'stage-progress',id:r.id,value:{requestId:r.id,phase:observed.phase,terminal:false,handle:observed.handle,observation:observed,observationRef:valueDigest(envelope),reason:null,observedAt:envelope.observedAt}}],value:{fixtureOnly:true},event:{type:'synthetic-fixture',data:{fixtureOnly:true}}}));
     }
     f.revision=store.revision('alpha');return instance;
   }finally{store.close();await f.open();}
@@ -365,10 +370,29 @@ function stageAdapter(f){
   };
   f.executor=adapter;return{state,adapter,observe};
 }
+// Trusted adapter fixture only: these facts stand in for independently read
+// owner evidence. Production adapters remain unavailable until that read exists.
+function trustedRepairFixture(adapter){
+  const state={calls:0,changed:true,failureClass:'DETERMINISTIC',noProgress:false,semanticRevision:'v1',verify:null};
+  adapter.verifyRepair=async(subject,actor,signal)=>{
+    state.calls++;if(state.verify)await state.verify(subject,actor,signal,state.calls);
+    const attempt=subject.history.length,inputs=n=>({sourceDigest:valueDigest('synthetic-source-'+n),candidateDigest:subject.candidateDigest,toolchainDigest:valueDigest('synthetic-toolchain'),dependencyClosureDigest:valueDigest('synthetic-input-closure-'+n)});
+    const before=inputs(attempt-1),after=state.changed?inputs(attempt):structuredClone(before);
+    if(state.semanticRevision!=='v1')after.dependencyClosureDigest=valueDigest(state.semanticRevision);
+    const count=state.noProgress?Math.max(2,attempt):attempt;
+    const rounds=Array.from({length:count},(_,n)=>({evidenceRef:'synthetic:actual-repair-round-'+n,beforeFactsDigest:valueDigest('before-'+n),afterFactsDigest:valueDigest(state.noProgress?'before-'+n:'after-'+n)}));
+    return{schema:'runtime-stage-repair-facts/v1',subjectDigest:valueDigest(subject),failureClass:state.failureClass,before,after,rounds,evidenceRef:'synthetic:native-repair/'+attempt,expiresAt:new Date(Date.now()+60000).toISOString()};
+  };
+  return state;
+}
 async function execWrite(f,op,input,actor='executor',meta={}){await request(f,'runtime.status');return write(f,op,input,actor,meta);}
 async function stageState(f,id){return request(f,'lifecycle.stage.request.inspect',{stageRequestId:id},'reader');}
 async function until(probe,predicate,timeout=5000){const end=Date.now()+timeout;let value;do{value=await probe();if(predicate(value))return value;await new Promise(r=>setTimeout(r,10));}while(Date.now()<end);assert.fail('Timed out waiting for exact retained stage state: '+JSON.stringify(value));}
-async function executingFixture(){const f=fixture(),adapter=stageAdapter(f);await f.open();await activate(f);const g=await grant(f);assert.equal((await create(f,g)).status,200);return{f,g,...adapter};}
+async function seedLegacyNativeInstance(f,g){
+ await f.server.close();const store=new RuntimeStore(f.root,'synthetic');
+ try{const actor=currentPrincipal(f.root,'synthetic','executor'),native=createAuthorityService(store,f.policy,id=>currentPrincipal(f.root,'synthetic',id)),definition=store.object('alpha','definition-revision',f.definitionRevisionId).compilation.effective,authority=await native.resolveExecution(g.ref,definition,actor,new AbortController().signal),legacy=pinInstance('one',f.definitionRevisionId,definition,authority);store.mutate(actor,{projectId:'alpha',operation:'synthetic.pre-correction-instance',requestId:'legacy-seed',expectedRevision:store.revision('alpha'),input:{synthetic:true},permission:'execution.request'},()=>({objects:[{kind:'lifecycle-instance',id:'one',value:legacy},{kind:'instance-authority',id:'one',value:{evidenceRef:g.ref}}],value:{synthetic:true},event:{type:'synthetic-legacy-instance',data:{synthetic:true}}}));}finally{store.close();await f.open();}
+}
+async function executingFixture(legacy=false){const f=fixture(),adapter=stageAdapter(f);await f.open();await activate(f);const g=await grant(f);if(legacy)await seedLegacyNativeInstance(f,g);else assert.equal((await create(f,g)).status,200);return{f,g,...adapter};}
 
 test('fresh read-only preparation can exceed five seconds without renewing original execution pins',async()=>{
   const {f,state}=await executingFixture();try{
@@ -651,7 +675,7 @@ test('revocation during read-only prepare causes no dispatch; an exhausted attem
     assert.notEqual((await execWrite(first.f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'})).status,200);assert.equal(first.state.dispatches,0);
     assert.deepEqual((await request(first.f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance.requestIds,[]);
   }finally{await first.f.server.close();first.f.cleanup();}
-  const {f,state}=await executingFixture();try{
+  const {f,state,adapter}=await executingFixture();trustedRepairFixture(adapter);try{
     state.mode='fail';for(let n=0;n<2;n++){const sent=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'});assert.equal(sent.status,200);await until(()=>stageState(f,sent.result.result.stageRequestId),r=>r.result.progress.terminal);}
     assert.equal((await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'})).error.code,'STAGE_BLOCKED');assert.equal(state.dispatches,2);
     const fixed=(await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance;assert.equal(fixed.stages.scope.attempts,2);assert.equal(new Set(fixed.requestIds).size,2);
@@ -738,4 +762,320 @@ test('observation persistence failure is visible and recovery inspects the origi
     RuntimeStore.prototype.mutate=original;state.inspectMode='complete';await execWrite(f,'lifecycle.stage.reconcile',{stageRequestId:id},'reader');
     const recovered=await until(()=>stageState(f,id),r=>r.result.progress.terminal);assert.equal(recovered.result.progress.phase,'COMPLETE');assert.equal(recovered.result.workerError,null);assert.equal(state.dispatches,1);assert.equal((await request(f,'runtime.status')).result.observationWorker.state,'READY');
   }finally{RuntimeStore.prototype.mutate=original;await f.server.close();f.cleanup();}
+});
+
+test('direct failed stage.request cannot bypass missing trusted repair proof or substitute a plan timestamp',async()=>{
+ const {f,state,adapter}=await executingFixture();try{
+  state.mode='fail';const first=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=first.result.result.stageRequestId;
+  await until(()=>stageState(f,id),v=>v.result.progress.terminal);const before=(await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance;
+  const prepare=adapter.prepare;adapter.prepare=async(...args)=>({...await prepare(...args),parameters:{synthetic:true,refreshedAt:new Date().toISOString()}});
+  let denied=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'},'executor',{requestId:'missing-repair-proof'});
+  assert.equal(denied.error.code,'REPAIR_VERIFIER_UNAVAILABLE');assert.equal((await request(f,'runtime.receipt.read',{requestId:'missing-repair-proof'},'executor')).status,404);
+  assert.deepEqual((await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance,before);assert.equal(state.dispatches,1);
+  const repair=trustedRepairFixture(adapter);repair.changed=false;
+  denied=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'});assert.equal(denied.error.code,'UNCHANGED_DETERMINISTIC_FAILURE');assert.equal(state.dispatches,1);
+  repair.changed=true;repair.noProgress=true;denied=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'});assert.equal(denied.error.code,'TWO_NO_PROGRESS_ROUNDS');
+  repair.noProgress=false;adapter.verifyRepair=async()=>null;denied=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'});assert.equal(denied.error.code,'REPAIR_EVIDENCE_REQUIRED');assert.equal(state.dispatches,1);
+ }finally{await f.server.close();f.cleanup();}
+});
+
+test('verified semantic repair uses retained grant, attempt history and original cutoff across restart',async()=>{
+ const {f,state,adapter}=await executingFixture();const repair=trustedRepairFixture(adapter);try{
+  state.mode='fail';const first=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=first.result.result.stageRequestId;
+  const original=(await until(()=>stageState(f,id),v=>v.result.progress.terminal)).result.request;
+  await f.server.close();await f.open();state.mode='complete';
+  const retried=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'});assert.equal(retried.status,200,JSON.stringify(retried));const nextId=retried.result.result.stageRequestId;
+  const next=(await until(()=>stageState(f,nextId),v=>v.result.progress.terminal)).result;
+  assert.equal(next.progress.phase,'COMPLETE');assert.equal(next.request.deadlineAt,original.deadlineAt);assert.equal(next.request.authorityRef,original.authorityRef);assert.equal(next.request.pinsDigest,original.pinsDigest);assert.equal(next.request.inputDigest,original.inputDigest,'same reducer digest is not semantic repair proof');assert.equal(next.request.planDigest,original.planDigest,'same plan digest can still address independently proved semantic repair');assert(next.repairAdmission);assert.equal(next.repairAdmission.requestDigest,next.request.digest);assert(repair.calls>=3,'admission and each permit independently reread trusted repair evidence');
+  assert.equal(state.dispatches,2);assert.deepEqual((await stageState(f,id)).result.request,original);
+  const instance=(await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance;assert.equal(instance.stages.scope.attempts,2);assert.deepEqual(instance.requestIds,[id,nextId]);
+ }finally{await f.server.close();f.cleanup();}
+});
+
+test('prepared repair changes before dispatch block the retry side effect and preserve original evidence',async()=>{
+ const {f,state,adapter}=await executingFixture();try{
+  state.mode='fail';const first=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=first.result.result.stageRequestId;
+  await until(()=>stageState(f,id),v=>v.result.progress.terminal);
+  const repair=trustedRepairFixture(adapter);repair.verify=async(_subject,_actor,_signal,calls)=>{if(calls>1)repair.semanticRevision='changed-after-admission';};
+  const retry=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'});assert.equal(retry.status,200,JSON.stringify(retry));
+  const observed=await until(()=>stageState(f,retry.result.result.stageRequestId),v=>v.result.progress.phase==='UNKNOWN');assert.equal(observed.result.progress.reason,'REPAIR_FACTS_CHANGED');assert.equal(state.dispatches,1);assert.equal((await stageState(f,id)).result.progress.phase,'FAILED');
+ }finally{await f.server.close();f.cleanup();}
+});
+
+test('UNKNOWN cannot bypass original observation through stage.advance with a trusted retry adapter',async()=>{
+ const {f,state,adapter,observe}=await executingFixture();let advances=0;trustedRepairFixture(adapter);try{
+  state.mode='unknown';adapter.advance=async(r,i,_p,permit)=>{await permit();advances++;return observe(r,i,'complete');};
+  const first=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=first.result.result.stageRequestId;await until(()=>stageState(f,id),v=>v.result.progress.phase==='UNKNOWN');
+  assert.equal((await execWrite(f,'lifecycle.stage.advance',{stageRequestId:id})).error.code,'RECONCILE_ORIGINAL_REQUEST');assert.equal((await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'})).error.code,'STAGE_BLOCKED');assert.equal(advances,0);assert.equal(state.dispatches,1);
+ }finally{await f.server.close();f.cleanup();}
+});
+
+for(const variant of ['revocation','revision','deadline'])test('trusted repair verification preserves '+variant+' rejection before request commit',async()=>{
+ const {f,g,state,adapter}=await executingFixture();const originalMutate=RuntimeStore.prototype.mutate;try{
+  state.mode='fail';const first=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=first.result.result.stageRequestId;
+  const original=(await until(()=>stageState(f,id),v=>v.result.progress.terminal)).result.request;
+  const before=(await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance,repair=trustedRepairFixture(adapter),requestId='repair-denied-'+variant;
+  if(variant==='deadline')RuntimeStore.prototype.mutate=function(principal,mutation,operation,reauthorize){if(mutation.requestId!==requestId)return originalMutate.call(this,principal,mutation,operation,reauthorize);return originalMutate.call(this,principal,mutation,()=>{const now=Date.now;Date.now=()=>Date.parse(original.deadlineAt);try{return operation();}finally{Date.now=now;}},reauthorize);};
+  else repair.verify=async()=>{repair.verify=null;if(variant==='revocation')await execWrite(f,'lifecycle.authority.revoke',{authorityRef:g.ref,reason:'Synthetic trusted repair read revoked'},'decider');else await execWrite(f,'lifecycle.stage.reconcile',{stageRequestId:id},'reader');};
+  const denied=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'},'executor',{requestId});assert.notEqual(denied.status,200,JSON.stringify(denied));if(variant==='revision')assert.equal(denied.error.code,'REVISION_CONFLICT');if(variant==='deadline')assert.equal(denied.error.code,'EXECUTION_DEADLINE');
+  assert.equal((await request(f,'runtime.receipt.read',{requestId},'executor')).status,404);assert.deepEqual((await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance,before);assert.equal(state.dispatches,1);
+ }finally{RuntimeStore.prototype.mutate=originalMutate;await f.server.close();f.cleanup();}
+});
+
+test('repair verifier timeout aborts lookup without a replacement receipt or late dispatch',async()=>{
+ const {f,state,adapter}=await executingFixture();let finish,aborted=false;try{
+  state.mode='fail';const first=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=first.result.result.stageRequestId;await until(()=>stageState(f,id),v=>v.result.progress.terminal);
+  const repair=trustedRepairFixture(adapter);repair.verify=async(_subject,_actor,signal)=>{signal.addEventListener('abort',()=>{aborted=true;},{once:true});await new Promise(resolve=>finish=resolve);};
+  const denied=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'},'executor',{requestId:'repair-timeout'});assert.equal(denied.error.code,'OBSERVATION_INTERRUPTED');assert.equal(aborted,true);finish();await new Promise(resolve=>setTimeout(resolve,20));assert.equal(state.dispatches,1);assert.equal((await request(f,'runtime.receipt.read',{requestId:'repair-timeout'},'executor')).status,404);assert.equal((await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance.stages.scope.attempts,1);
+ }finally{finish?.();await f.server.close();f.cleanup();}
+});
+
+test('retry rejects inconsistent failure progress and immutable observation envelope before trusted verification',async()=>{
+ const {f,state,adapter}=await executingFixture(),originalObject=RuntimeStore.prototype.object;const repair=trustedRepairFixture(adapter);
+ try{
+  state.mode='fail';const first=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=first.result.result.stageRequestId;
+  const observed=(await until(()=>stageState(f,id),v=>v.result.progress.terminal)).result;
+  const envelope=(await request(f,'lifecycle.stage.observation.read',{stageRequestId:id,observationRef:observed.progress.observationRef},'reader')).result.evidence;
+  const before=(await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance;
+  for(const variant of ['phase','terminal','handle','reason','observedAt','envelope-schema','envelope-request','envelope-reason','envelope-observedAt']){
+   const corrupted=structuredClone(observed.progress),forged=structuredClone(envelope);
+   if(variant==='phase'){corrupted.observation.phase='COMPLETE';corrupted.observation.outcome.status='COMPLETE';}
+   else if(variant==='terminal')corrupted.terminal='true';
+   else if(variant==='handle')corrupted.handle=null;
+   else if(variant==='reason')corrupted.reason='synthetic substituted failure reason';
+   else if(variant==='observedAt')corrupted.observedAt=new Date(Date.parse(corrupted.observedAt)+1).toISOString();
+   else{
+    if(variant==='envelope-schema')forged.schema='runtime-stage-observation/v99';
+    if(variant==='envelope-request')forged.requestId='another-original-request';
+    if(variant==='envelope-reason')forged.reason='synthetic replaced envelope reason';
+    if(variant==='envelope-observedAt')forged.observedAt=new Date(Date.parse(forged.observedAt)+1).toISOString();
+    corrupted.observationRef=valueDigest(forged);
+   }
+   // Inject a faulty retained read only in this isolated fixture. Original
+   // durable request, envelope, progress and audit are never rewritten.
+   RuntimeStore.prototype.object=function(projectId,kind,objectId){
+    if(projectId==='alpha'&&kind==='stage-progress'&&objectId===id)return structuredClone(corrupted);
+    if(projectId==='alpha'&&kind==='stage-observation'&&objectId===corrupted.observationRef&&variant.startsWith('envelope-'))return structuredClone(forged);
+    return originalObject.call(this,projectId,kind,objectId);
+   };
+   const requestId='corrupt-repair-'+variant,denied=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'},'executor',{requestId});
+   RuntimeStore.prototype.object=originalObject;
+   assert.equal(denied.error.code,'CORRUPT_STAGE_OBSERVATION',variant+': '+JSON.stringify(denied));assert.equal(repair.calls,0);assert.equal(state.dispatches,1);
+   assert.equal((await request(f,'runtime.receipt.read',{requestId},'executor')).status,404);
+   assert.deepEqual((await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance,before);
+   assert.deepEqual((await stageState(f,id)).result.progress,observed.progress);
+  }
+ }finally{RuntimeStore.prototype.object=originalObject;await f.server.close();f.cleanup();}
+});
+
+test('first execution of an independent stage does not reinterpret unrelated historical request contracts',async()=>{
+ // Explicit pre-correction native fixture: no fabricated recovery root.
+ const {f,state}=await executingFixture(true),originalObject=RuntimeStore.prototype.object;try{
+  const first=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=first.result.result.stageRequestId;
+  const original=(await until(()=>stageState(f,id),v=>v.result.progress.terminal)).result.request;
+  RuntimeStore.prototype.object=function(projectId,kind,objectId){
+   if(projectId==='alpha'&&kind==='stage-request'&&objectId===id)return{schema:'synthetic-historical-predecessor/v1',id,stageId:'scope'};
+   return originalObject.call(this,projectId,kind,objectId);
+  };
+  const next=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'plan'});RuntimeStore.prototype.object=originalObject;
+  assert.equal(next.status,200,JSON.stringify(next));await until(()=>stageState(f,next.result.result.stageRequestId),v=>v.result.progress.terminal);
+  assert.equal(state.dispatches,2);assert.deepEqual((await stageState(f,id)).result.request,original);
+ }finally{RuntimeStore.prototype.object=originalObject;await f.server.close();f.cleanup();}
+});
+
+test('selected retry history still rejects synthetic contracts and missing stage membership',async()=>{
+ const {f,state,adapter}=await executingFixture(),originalObject=RuntimeStore.prototype.object;const repair=trustedRepairFixture(adapter);try{
+  state.mode='fail';const first=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=first.result.result.stageRequestId;
+  const original=(await until(()=>stageState(f,id),v=>v.result.progress.terminal)).result.request;
+  for(const variant of ['synthetic','hidden']){
+   RuntimeStore.prototype.object=function(projectId,kind,objectId){
+    if(projectId==='alpha'&&kind==='stage-request'&&objectId===id)return variant==='synthetic'?{schema:'synthetic-predecessor/v1',id,stageId:'scope'}:{...original,stageId:'plan'};
+    return originalObject.call(this,projectId,kind,objectId);
+   };
+   const denied=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'});RuntimeStore.prototype.object=originalObject;
+   assert.equal(denied.error.code,variant==='synthetic'?'CORRUPT_STAGE_REQUEST':'REPAIR_HISTORY_REQUIRED',JSON.stringify(denied));assert.equal(repair.calls,0);assert.equal(state.dispatches,1);
+   assert.deepEqual((await stageState(f,id)).result.request,original);
+  }
+ }finally{RuntimeStore.prototype.object=originalObject;await f.server.close();f.cleanup();}
+});
+
+test('UNKNOWN continuation recovers original receipts read-only and permits only the resolved remaining action',async()=>{
+ const {f,state,adapter,observe}=await executingFixture();let reconciliations=0,advances=0;
+ try{
+  state.mode='unknown';adapter.reconcileAdvance=async(r,i,p,actor)=>{reconciliations++;assert.deepEqual(actor.permissions,['read']);assert.equal(p.phase,'UNKNOWN');return observe(r,i,'running');};
+  adapter.advance=async(r,i,p,permit)=>{assert.equal(p.phase,'CI_RUNNING');await permit();advances++;return observe(r,i,'complete');};
+  const first=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=first.result.result.stageRequestId;await until(()=>stageState(f,id),v=>v.result.progress.phase==='UNKNOWN');await until(()=>request(f,'runtime.status'),v=>v.result.observationWorker.inFlight===0);
+  const original=(await stageState(f,id)).result.request,advanced=await execWrite(f,'lifecycle.stage.advance',{stageRequestId:id});assert.equal(advanced.status,200,JSON.stringify(advanced));await until(()=>stageState(f,id),v=>v.result.progress.phase==='COMPLETE');
+  assert.equal(reconciliations,1);assert.equal(advances,1);assert.equal(state.dispatches,1);assert.deepEqual((await stageState(f,id)).result.request,original);assert.equal((await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance.stages.scope.attempts,1);
+ }finally{await f.server.close();f.cleanup();}
+});
+
+test('unresolved original receipt recovery accepts observation without entering advance or dispatch',async()=>{
+ const {f,state,adapter,observe}=await executingFixture();let reconciliations=0,advances=0;
+ try{
+  state.mode='unknown';adapter.reconcileAdvance=async(r,i,_p,actor)=>{reconciliations++;assert.deepEqual(actor.permissions,['read']);return observe(r,i,'unknown');};
+  adapter.advance=async(r,i,_p,permit)=>{await permit();advances++;return observe(r,i,'complete');};
+  const first=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=first.result.result.stageRequestId;await until(()=>stageState(f,id),v=>v.result.progress.phase==='UNKNOWN');await until(()=>request(f,'runtime.status'),v=>v.result.observationWorker.inFlight===0);
+  const original=(await stageState(f,id)).result.request,advanced=await execWrite(f,'lifecycle.stage.advance',{stageRequestId:id});assert.equal(advanced.status,200,JSON.stringify(advanced));await until(()=>request(f,'runtime.status'),v=>v.result.observationWorker.inFlight===0);
+  assert.equal(reconciliations,1);assert.equal(advances,0);assert.equal(state.dispatches,1);assert.equal((await stageState(f,id)).result.progress.phase,'UNKNOWN');assert.deepEqual((await stageState(f,id)).result.request,original);
+ }finally{await f.server.close();f.cleanup();}
+});
+
+test('authority revoked during read-only recovery cannot authorize a remaining action',async()=>{
+ const {f,g,state,adapter,observe}=await executingFixture();let advances=0;
+ try{
+  state.mode='unknown';adapter.reconcileAdvance=async(r,i)=>{await execWrite(f,'lifecycle.authority.revoke',{authorityRef:g.ref,reason:'Synthetic revocation during original receipt lookup'},'decider');return observe(r,i,'running');};
+  adapter.advance=async(r,i,_p,permit)=>{await permit();advances++;return observe(r,i,'complete');};
+  const first=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=first.result.result.stageRequestId;await until(()=>stageState(f,id),v=>v.result.progress.phase==='UNKNOWN');await until(()=>request(f,'runtime.status'),v=>v.result.observationWorker.inFlight===0);
+  assert.equal((await execWrite(f,'lifecycle.stage.advance',{stageRequestId:id})).status,200);
+  await until(()=>stageState(f,id),v=>v.result.progress.reason==='AUTHORITY_REVOKED');assert.equal(advances,0);assert.equal(state.dispatches,1);assert.equal((await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance.stages.scope.attempts,1);
+ }finally{await f.server.close();f.cleanup();}
+});
+
+async function recoveryView(f,id='one'){return(await request(f,'lifecycle.instance.inspect',{instanceId:id})).result.recovery;}
+async function successor(f,original,id){const root=await recoveryView(f),subject={...original.input.subject,instanceId:id,recoveryRootRef:root.rootRef,expiresAt:root.deadlineAt},approved=await grant(f,'execution',subject);assert.equal((await create(f,approved,id)).status,200);return approved;}
+
+test('native successor authority must explicitly bind the original root without widening scope or budgets',async()=>{
+ const {f,g}=await executingFixture();try{
+  const root=await recoveryView(f);assert.match(root.rootRef,/^recovery-root:sha256:/);assert.equal(root.originalInstanceId,'one');assert.equal(root.originalAuthorityRef,g.ref);assert.equal(root.originalTargetRef,g.input.subject.targetRef);
+  const base={...g.input.subject,instanceId:'two',expiresAt:root.deadlineAt};
+  for(const [subject,code] of [[base,'RECOVERY_ROOT_REQUIRED'],[{...base,recoveryRootRef:'recovery-root:'+valueDigest('absent')},'RECOVERY_ROOT_NOT_FOUND'],[{...base,recoveryRootRef:root.rootRef,goalRef:'synthetic:goal/unrelated'},'RECOVERY_SCOPE_CHANGED'],[{...base,recoveryRootRef:root.rootRef,expiresAt:new Date(Date.parse(root.deadlineAt)+1000).toISOString()},'RECOVERY_BUDGET_WIDENED'],[{...base,recoveryRootRef:root.rootRef,budget:{...base.budget,maxAttempts:3}},'RECOVERY_BUDGET_WIDENED']])assert.equal((await request(f,'lifecycle.authority.preview',{kind:'execution',subject},'decider')).error.code,code);
+  const linked=await successor(f,g,'two');const decision=(await inspect(f,linked.ref)).result.decision;assert.equal(decision.subject.recoveryRootRef,root.rootRef);assert.equal(decision.subject.recoveryRootDigest,root.rootDigest);assert.equal((await recoveryView(f,'two')).rootRef,root.rootRef);
+  assert.equal((await write(f,'lifecycle.instance.create',{instanceId:'three',definitionRevisionId:f.definitionRevisionId,authorityRef:linked.ref,recoveryRootRef:root.rootRef},'executor')).error.code,'INVALID_FIELDS');
+  assert.equal(Object.hasOwn((await inspect(f,g.ref)).result.decision.subject,'recoveryRootRef'),false,'original decision bytes are not rewritten');
+ }finally{await f.server.close();f.cleanup();}
+});
+
+test('PASSED stages rerun only within cumulative root attempts across successor, restart and relocated state',async()=>{
+ const {f,g,state}=await executingFixture();try{
+  const first=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),firstId=first.result.result.stageRequestId;const original=(await until(()=>stageState(f,firstId),v=>v.result.progress.terminal)).result.request;
+  await successor(f,g,'two');await f.server.close();const relocated=join(f.dir,'relocated-state');renameSync(f.root,relocated);f.root=relocated;f.options.stateRoot=relocated;await f.open();
+  const second=await execWrite(f,'lifecycle.stage.request',{instanceId:'two',stageId:'scope'},'publisher');assert.equal(second.status,200,JSON.stringify(second));const secondId=second.result.result.stageRequestId;await until(()=>stageState(f,secondId),v=>v.result.progress.terminal);
+  assert.equal((await stageState(f,secondId)).result.request.deadlineAt,original.deadlineAt);assert.deepEqual((await stageState(f,firstId)).result.request,original);assert.equal(state.dispatches,2);
+  await successor(f,g,'three');const denied=await execWrite(f,'lifecycle.stage.request',{instanceId:'three',stageId:'scope'},'executor',{requestId:'root-exhausted'});assert.equal(denied.error.code,'STAGE_BLOCKED');assert.match(denied.error.message,/RECOVERY_ATTEMPTS_EXHAUSTED/);assert.equal((await request(f,'runtime.receipt.read',{requestId:'root-exhausted'},'executor')).status,404);
+  const root=await recoveryView(f,'three');assert.deepEqual(root.attempts.map(a=>a.requestId),[firstId,secondId]);assert.equal((await request(f,'lifecycle.instance.inspect',{instanceId:'three'})).result.instance.stages.scope.attempts,0);
+ }finally{await f.server.close();f.cleanup();}
+});
+
+for(const [mode,reason]of [['unknown','RECONCILE_ORIGINAL_REQUEST'],['running','RECONCILE_ORIGINAL_REQUEST'],['fail','RECOVERY_REPAIR_EVIDENCE_REQUIRED']])test('successor cannot bypass '+mode+' original stage through a new instance',async()=>{
+ const {f,g,state}=await executingFixture();try{
+  state.mode=mode;state.inspectMode=mode;const first=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=first.result.result.stageRequestId;await until(()=>stageState(f,id),v=>v.result.progress.phase===(mode==='fail'?'FAILED':mode==='running'?'CI_RUNNING':'UNKNOWN'));
+  await successor(f,g,'two');const denied=await execWrite(f,'lifecycle.stage.request',{instanceId:'two',stageId:'scope'});assert.equal(denied.error.code,'STAGE_BLOCKED',JSON.stringify(denied));assert.match(denied.error.message,new RegExp(reason));assert.equal(state.dispatches,1);
+ }finally{await f.server.close();f.cleanup();}
+});
+
+test('root concurrency spans member instances while separately reviewed goals remain independent',async()=>{
+ const f=fixture(),{state}=stageAdapter(f);for(const phase of ['plan','verification'])f.data.config[phase].budget.maxConcurrency=1;await f.open();try{
+  await activate(f);const g=await grant(f);await create(f,g);const scope=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'});await until(()=>stageState(f,scope.result.result.stageRequestId),v=>v.result.progress.terminal);
+  await successor(f,g,'two');state.mode='running';state.inspectMode='running';const planning=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'plan'});await until(()=>stageState(f,planning.result.result.stageRequestId),v=>v.result.progress.phase==='CI_RUNNING');
+  const denied=await execWrite(f,'lifecycle.stage.request',{instanceId:'two',stageId:'scope'});assert.equal(denied.error.code,'STAGE_BLOCKED');assert.match(denied.error.message,/RECOVERY_CONCURRENCY_EXHAUSTED/);
+  const separate=await grant(f,'execution',executionSubject(f,'independent'));assert.equal((await create(f,separate,'independent')).status,200);assert.notEqual((await recoveryView(f,'independent')).rootRef,(await recoveryView(f)).rootRef);assert.equal((await execWrite(f,'lifecycle.stage.request',{instanceId:'independent',stageId:'scope'})).status,200);
+ }finally{await f.server.close();f.cleanup();}
+});
+
+test('expired recovery root cannot be revived by successor approval; its original history remains readable',async()=>{
+ const {f,g,state}=await executingFixture();const now=Date.now;try{
+  const root=await recoveryView(f);Date.now=()=>Date.parse(root.deadlineAt)+1;
+  const subject={...g.input.subject,instanceId:'two',recoveryRootRef:root.rootRef,expiresAt:new Date(Date.now()+60000).toISOString()},denied=await request(f,'lifecycle.authority.preview',{kind:'execution',subject},'decider');assert.equal(denied.error.code,'RECOVERY_DEADLINE_EXHAUSTED',JSON.stringify(denied));
+  assert.deepEqual(await recoveryView(f),root);assert.equal((await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'})).status,409);assert.equal(state.dispatches,0);
+ }finally{Date.now=now;await f.server.close();f.cleanup();}
+});
+
+test('legacy native instances remain rootless and cannot be silently backfilled or replaced by a fresh root',async()=>{
+ const f=fixture();await f.open();try{
+  await activate(f);const g=await grant(f);await seedLegacyNativeInstance(f,g);
+  assert.equal(await recoveryView(f),null);const subject={...g.input.subject,instanceId:'two'};assert.equal((await request(f,'lifecycle.authority.preview',{kind:'execution',subject},'decider')).error.code,'RECOVERY_ORIGIN_UNAVAILABLE');assert.equal(await recoveryView(f),null);
+ }finally{await f.server.close();f.cleanup();}
+});
+
+for(const variant of ['missing-ledger','omitted-request','omitted-request-and-counter','missing-member','binding-downgrade','binding-and-member-downgrade'])test('native recovery rejects '+variant+' instead of renewing cumulative authority',async()=>{
+ const {f,g,state}=await executingFixture(),originalObject=RuntimeStore.prototype.object;try{
+  const first=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=first.result.result.stageRequestId;await until(()=>stageState(f,id),v=>v.result.progress.terminal);await until(()=>request(f,'runtime.status'),v=>v.result.observationWorker.inFlight===0);
+  await successor(f,g,'two');const root=await recoveryView(f),before=(await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance;
+  RuntimeStore.prototype.object=function(projectId,kind,objectId){
+   const raw=originalObject.call(this,projectId,kind,objectId);if(projectId!=='alpha')return raw;
+   if(kind==='lifecycle-recovery-ledger'&&objectId==='attempts:'+root.rootRef){if(variant==='missing-ledger')return null;if(variant.startsWith('omitted-request')){const{digest,...body}=raw;body.entries=[];return{...body,digest:valueDigest(body)};}}
+   if(kind==='lifecycle-recovery-ledger'&&objectId==='member:one'&&['missing-member','binding-and-member-downgrade'].includes(variant))return null;
+   if(kind==='instance-authority'&&objectId==='one'&&variant.includes('downgrade'))return{evidenceRef:raw.evidenceRef};
+   if(kind==='lifecycle-instance'&&objectId==='one'&&variant==='omitted-request-and-counter'){const saved=structuredClone(raw);saved.requestIds=[];saved.stages.scope={status:'PENDING',attempts:0,requestId:null,inputDigest:null,requestedAt:null,receiptRef:null,outcomeDigest:null,expiresAt:null};return saved;}
+   return raw;
+  };
+  const denied=await execWrite(f,'lifecycle.stage.request',{instanceId:'two',stageId:'scope'},'executor',{requestId:'tampered-root-'+variant});
+  assert.equal(denied.status,503,JSON.stringify(denied));assert.match(denied.error.code,/^CORRUPT_RECOVERY_(LEDGER|MEMBER)$/);assert.equal(state.dispatches,1);
+  RuntimeStore.prototype.object=originalObject;
+  assert.deepEqual((await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance,before);assert.equal((await request(f,'runtime.receipt.read',{requestId:'tampered-root-'+variant},'executor')).status,404);assert.deepEqual(await recoveryView(f),root);
+ }finally{RuntimeStore.prototype.object=originalObject;await f.server.close();f.cleanup();}
+});
+
+test('native preparation identity preserves target id and version across explicitly reviewed source successors',async()=>{
+ const f=fixture();stageAdapter(f);
+ // Only this trusted fixture validator supplies preparation facts. The native
+ // service still retains and checks the complete packet; no client trust flags.
+ f.preparation=()=>({reviewerIds:['decider'],evidence:{syntheticFixture:true}});await f.open();try{
+  await activate(f);const definition=(await request(f,'lifecycle.definition.read',{revisionId:f.definitionRevisionId})).result.compilation.effective,base=executionSubject(f);
+  const input={definitionRevisionId:f.definitionRevisionId,goalRef:base.goalRef,loopRef:base.loopRef,target:{id:'synthetic-recovery',version:'0.9.0',title:'Synthetic prepared successor',scope:['Synthetic recovery identity only'],exclusions:['Real owner or repair qualification']},source:{provider:'github',repositoryId:'42',commit:'a'.repeat(40)},compatibility:'compatible',documents:Object.fromEntries(['plan','impact','verification','rollback','migration'].map(role=>[role,role==='migration'?null:{path:join(f.dir,'synthetic-'+role+'.md'),digest:valueDigest('synthetic-'+role)}])),verification:{requirementsDigest:requiredChecksDigest(definition),checks:definition.nodes.flatMap(n=>n.checks.map(checkId=>({stageId:n.id,checkId,source:'owner-receipt',procedure:'Synthetic fixture evidence only'})))}};
+  const retain=async packet=>{const r=await write(f,'lifecycle.preparation.save',packet,'owner');assert.equal(r.status,200,JSON.stringify(r));return r.result.result.preparationRef;};
+  const firstRef=await retain(input),g=await grant(f,'execution',{...base,targetRef:firstRef});assert.equal((await create(f,g)).status,200);const root=await recoveryView(f);
+  assert.deepEqual(root.identity.target,{kind:'preparation',id:input.target.id,version:input.target.version});assert.equal(root.originalTargetRef,firstRef);
+  const nextRef=await retain({...input,source:{...input.source,commit:'b'.repeat(40)}}),subject={...base,instanceId:'two',targetRef:nextRef,recoveryRootRef:root.rootRef,expiresAt:root.deadlineAt};assert.notEqual(nextRef,firstRef);
+  assert.equal((await request(f,'lifecycle.authority.preview',{kind:'execution',subject:{...subject,recoveryRootRef:undefined}},'decider')).error.code,'RECOVERY_ROOT_REQUIRED');
+  const next=await grant(f,'execution',subject);assert.equal((await create(f,next,'two')).status,200);assert.equal((await recoveryView(f,'two')).rootRef,root.rootRef);assert.equal((await request(f,'lifecycle.instance.inspect',{instanceId:'two'})).result.instance.pins.targetRef,nextRef);
+  for(const target of [{...input.target,id:'another-target'},{...input.target,version:'0.9.1'}]){const ref=await retain({...input,target});const denied=await request(f,'lifecycle.authority.preview',{kind:'execution',subject:{...subject,instanceId:'three',targetRef:ref}},'decider');assert.equal(denied.error.code,'RECOVERY_SCOPE_CHANGED');}
+  assert.equal((await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance.pins.targetRef,firstRef);
+ }finally{await f.server.close();f.cleanup();}
+});
+
+test('concurrent successor claims cannot both consume the last original stage attempt',async()=>{
+ const {f,g,state}=await executingFixture();let release;try{
+  const first=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'});await until(()=>stageState(f,first.result.result.stageRequestId),v=>v.result.progress.terminal);
+  await successor(f,g,'two');await successor(f,g,'three');let entered=0;const hold=new Promise(resolve=>release=resolve);state.prepare=async()=>{entered++;await hold;};
+  const a=execWrite(f,'lifecycle.stage.request',{instanceId:'two',stageId:'scope'},'executor',{requestId:'last-attempt-two'}),b=execWrite(f,'lifecycle.stage.request',{instanceId:'three',stageId:'scope'},'publisher',{requestId:'last-attempt-three'});await until(async()=>entered,v=>v===2);release();
+  const results=await Promise.all([a,b]);assert.deepEqual(results.map(r=>r.status).sort(),[200,409]);const accepted=results.find(r=>r.status===200),denied=results.find(r=>r.status!==200);assert.equal(denied.error.code,'REVISION_CONFLICT');await until(()=>stageState(f,accepted.result.result.stageRequestId),v=>v.result.progress.terminal);assert.equal(state.dispatches,2);
+  assert.equal((await recoveryView(f)).attempts.length,2);assert.equal((await request(f,'runtime.receipt.read',{requestId:results[0].status===200?'last-attempt-three':'last-attempt-two'},results[0].status===200?'publisher':'executor')).status,404);
+ }finally{release?.();await f.server.close();f.cleanup();}
+});
+
+test('revoking original native authority blocks a separately approved successor without rewriting history',async()=>{
+ const {f,g,state}=await executingFixture();try{
+  await successor(f,g,'two');const root=await recoveryView(f);assert.equal((await execWrite(f,'lifecycle.authority.revoke',{authorityRef:g.ref,reason:'Synthetic root withdrawal'},'decider')).status,200);
+  const denied=await execWrite(f,'lifecycle.stage.request',{instanceId:'two',stageId:'scope'});assert.equal(denied.error.code,'RECOVERY_AUTHORITY_REVOKED');assert.equal(state.dispatches,0);assert.deepEqual(await recoveryView(f),root);assert.equal((await recoveryView(f,'two')).rootRef,root.rootRef);
+ }finally{await f.server.close();f.cleanup();}
+});
+
+test('an active narrower native grant constrains a looser sibling starting a different stage',async()=>{
+ const {f,g,state}=await executingFixture();try{
+  for(const stageId of ['scope','plan']){const r=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId});assert.equal(r.status,200,JSON.stringify(r));await until(()=>stageState(f,r.result.result.stageRequestId),v=>v.result.progress.terminal);}
+  const root=await recoveryView(f);for(const phase of ['plan','verification'])f.data.config[phase].budget.maxConcurrency=1;await request(f,'runtime.status');await activate(f);
+  const subject={...g.input.subject,instanceId:'narrow',definitionRevisionId:f.definitionRevisionId,budget:{...g.input.subject.budget,maxConcurrency:1},expiresAt:root.deadlineAt,recoveryRootRef:root.rootRef},narrow=await grant(f,'execution',subject);assert.equal((await create(f,narrow,'narrow')).status,200);
+  const scope=await execWrite(f,'lifecycle.stage.request',{instanceId:'narrow',stageId:'scope'});await until(()=>stageState(f,scope.result.result.stageRequestId),v=>v.result.progress.terminal);
+  state.mode='running';state.inspectMode='running';const active=await execWrite(f,'lifecycle.stage.request',{instanceId:'narrow',stageId:'plan'});assert.equal(active.status,200,JSON.stringify(active));await until(()=>stageState(f,active.result.result.stageRequestId),v=>v.result.progress.phase==='CI_RUNNING');
+  const before=state.dispatches,denied=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'implementation'},'executor',{requestId:'looser-sibling'});assert.equal(denied.error.code,'STAGE_BLOCKED');assert.match(denied.error.message,/RECOVERY_CONCURRENCY_EXHAUSTED/);assert.doesNotMatch(denied.error.message,/RECONCILE_ORIGINAL_REQUEST/);assert.equal(state.dispatches,before);assert.equal((await request(f,'runtime.receipt.read',{requestId:'looser-sibling'},'executor')).status,404);
+ }finally{await f.server.close();f.cleanup();}
+});
+
+test('rootless injected legacy instances remain readable under native service without blocking unrelated native lineage',async()=>{
+ const f=fixture();f.authorities=async(ref,definition)=>({projectId:'alpha',instanceId:'legacy-injected',definitionRevisionId:f.definitionRevisionId,semanticDigest:definition.semanticDigest,requirementsDigest:requiredChecksDigest(definition),goalRef:'synthetic:legacy/goal',targetRef:'synthetic:legacy/target',loopRef:'synthetic:legacy/loop',budget:f.data.config.plan.budget,evidenceRef:ref,revision:'synthetic-legacy-1',expiresAt:'2030-01-01T00:00:00Z'});await f.open();try{
+  await activate(f);const created=await write(f,'lifecycle.instance.create',{instanceId:'legacy-injected',definitionRevisionId:f.definitionRevisionId,authorityRef:'synthetic:legacy-authority'},'executor');assert.equal(created.status,200,JSON.stringify(created));const original=(await request(f,'lifecycle.instance.inspect',{instanceId:'legacy-injected'})).result.instance;
+  await f.server.close();f.authorities=undefined;await f.open();const historical=await request(f,'lifecycle.instance.inspect',{instanceId:'legacy-injected'});assert.equal(historical.status,200,JSON.stringify(historical));assert.deepEqual(historical.result.instance,original);assert.equal(historical.result.recovery,null);
+  const native=await grant(f);assert.equal((await create(f,native)).status,200);assert.match((await recoveryView(f)).rootRef,/^recovery-root:sha256:/);assert.deepEqual((await request(f,'lifecycle.instance.inspect',{instanceId:'legacy-injected'})).result.instance,original);
+ }finally{await f.server.close();f.cleanup();}
+});
+
+test('a counterfeit PASSED predecessor projection cannot override its original UNKNOWN receipt',async()=>{
+ const {f,state}=await executingFixture(),originalObject=RuntimeStore.prototype.object;try{
+  state.mode='unknown';state.inspectMode='unknown';const original=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=original.result.result.stageRequestId,retained=(await until(()=>stageState(f,id),v=>v.result.progress.phase==='UNKNOWN')).result;
+  await until(()=>request(f,'runtime.status'),v=>v.result.observationWorker.inFlight===0);const before=(await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance;
+  RuntimeStore.prototype.object=function(projectId,kind,objectId){const raw=originalObject.call(this,projectId,kind,objectId);if(projectId==='alpha'&&kind==='lifecycle-instance'&&objectId==='one'){const forged=structuredClone(raw);forged.stages.scope.status='PASSED';forged.stages.scope.expiresAt='2030-01-01T00:00:00Z';return forged;}return raw;};
+  const denied=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'plan'},'executor',{requestId:'forged-predecessor'});assert.equal(denied.error.code,'CORRUPT_RECOVERY_LEDGER');assert.equal(state.dispatches,1);
+  RuntimeStore.prototype.object=originalObject;assert.deepEqual((await stageState(f,id)).result,retained);assert.deepEqual((await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance,before);assert.equal((await request(f,'runtime.receipt.read',{requestId:'forged-predecessor'},'executor')).status,404);
+ }finally{RuntimeStore.prototype.object=originalObject;await f.server.close();f.cleanup();}
+});
+
+test('a pending candidate stage cannot carry a fabricated self-consistent candidate manifest',async()=>{
+ const {f,state}=await executingFixture(),originalObject=RuntimeStore.prototype.object;try{
+  const before=(await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance,candidate={schema:'runtime-candidate/v1',version:'synthetic-fabricated',profile:'candidate-verification',sourceDigest:valueDigest('fabricated-source'),buildDigest:valueDigest('fabricated-build'),artifacts:[{name:'synthetic.tgz',digest:valueDigest('fabricated-bytes'),bytes:1}]};
+  RuntimeStore.prototype.object=function(projectId,kind,objectId){const raw=originalObject.call(this,projectId,kind,objectId);if(projectId==='alpha'&&kind==='lifecycle-instance'&&objectId==='one')return{...raw,candidate,candidateDigest:valueDigest(candidate)};return raw;};
+  const denied=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'},'executor',{requestId:'fabricated-candidate'});assert.equal(denied.error.code,'CORRUPT_RECOVERY_LEDGER');assert.equal(state.dispatches,0);
+  RuntimeStore.prototype.object=originalObject;assert.deepEqual((await request(f,'lifecycle.instance.inspect',{instanceId:'one'})).result.instance,before);assert.equal((await request(f,'runtime.receipt.read',{requestId:'fabricated-candidate'},'executor')).status,404);
+ }finally{RuntimeStore.prototype.object=originalObject;await f.server.close();f.cleanup();}
 });

@@ -139,22 +139,8 @@ async function expertCase(run,expert,c,fields,control,initial,activeSource){
 }
 
 test('E03 fixed candidate service admission cases',async()=>{
- const run=await openScenario('E03');let browser,expert;
- try{
-  const fields=JSON.parse(fs.readFileSync(path.join(repository,'governance/lifecycle-contract-v090.json'))).fields;
-  const base=await run.read('lifecycle.base.inspect');assert.deepEqual(base.fields,fields);
-  const initial=await run.read('lifecycle.definition.inspect');assert(initial.active,'Use a real previously activated isolated baseline; do not seed its database');
-  const activeSource=await run.source(initial.active.revisionId??initial.active.id);
-  let eventCursor;
-  for(;;){const page=await run.read('runtime.events.read',eventCursor?{cursor:eventCursor}:{});eventCursor=page.cursor;if(page.events.length<50)break;}
-  const variants=new Map();
-  for(const provider of new Set(run.cases.filter(c=>['REAL_SERVICE_PARAMETER','ENTRY_ADMISSION'].includes(c.kind)).map(c=>c.parameters.provider))){
-   const data=structuralInput(base,provider,run.selection.projectId),control=await run.read('lifecycle.definition.validate',{yaml:stringify(data,{lineWidth:0})});
-   assert.equal(control.compilation.valid,true,'The negative-case control must be structurally valid');variants.set(provider,data);
-  }
-  if(run.cases.some(c=>['dashboard-graph','dashboard-yaml'].includes(c.parameters.entry)))browser=await chromium.launch({headless:true});
-  if(run.cases.some(c=>c.parameters.entry==='expert'||c.caseInstanceId==='E03.EX12'))expert=await run.openExpert();
-  for(const c of run.cases)await run.collect(c,async()=>{
+ let run,browser,expert,fields,initial,activeSource,eventCursor;const variants=new Map();
+ async function collectCase(c){
    if(c.caseInstanceId==='E03.EX12')return extensionEntries(run,c,expert);
    assert(['REAL_SERVICE_PARAMETER','ENTRY_ADMISSION'].includes(c.kind),'This frozen journey still requires its actual collector; it may not be skipped or replaced by a field test');
    if(c.parameters.entry==='expert'){
@@ -183,6 +169,22 @@ test('E03 fixed candidate service admission cases',async()=>{
    assert.deepEqual(events.events.map(e=>e.type),['definition-draft-saved','definition-activation-blocked'],'Invalid configuration must not create an instance or dispatch work');
    if(before.draft)assert.equal(await run.source(before.draft.revisionId??before.draft.id),oldDraft);
    return{entry,field:spec.path,fault,specificFieldRuleAndRemedy:true,invalidDraftRetained:true,activationBlocked:true,existingActiveAndHistoryUnchanged:true,externalExecutionRequested:false,inputKind:'SYNTHETIC_NEGATIVE_CONFIGURATION',service:'ACTUAL_INSTALLED_HTTP'};
-  });
+ }
+ run=await openScenario('E03',{phase:'PRE_RELEASE',register:catalog=>new Map(catalog.filter(c=>c.caseInstanceId==='E03.EX12'||['REAL_SERVICE_PARAMETER','ENTRY_ADMISSION'].includes(c.kind)).map(c=>[c.caseInstanceId,()=>collectCase(c)]))});
+ run.artifact('collector-callable-preflight.json',run.callablePreflight);
+
+ try{
+  fields=JSON.parse(fs.readFileSync(path.join(repository,'governance/lifecycle-contract-v090.json'))).fields;
+  const base=await run.read('lifecycle.base.inspect');assert.deepEqual(base.fields,fields);
+  initial=await run.read('lifecycle.definition.inspect');assert(initial.active,'Use a real previously activated isolated baseline; do not seed its database');
+  activeSource=await run.source(initial.active.revisionId??initial.active.id);
+  for(;;){const page=await run.read('runtime.events.read',eventCursor?{cursor:eventCursor}:{});eventCursor=page.cursor;if(page.events.length<50)break;}
+  for(const provider of new Set(run.cases.filter(c=>['REAL_SERVICE_PARAMETER','ENTRY_ADMISSION'].includes(c.kind)).map(c=>c.parameters.provider))){
+   const data=structuralInput(base,provider,run.selection.projectId),control=await run.read('lifecycle.definition.validate',{yaml:stringify(data,{lineWidth:0})});
+   assert.equal(control.compilation.valid,true,'The negative-case control must be structurally valid');variants.set(provider,data);
+  }
+  if(run.cases.some(c=>['dashboard-graph','dashboard-yaml'].includes(c.parameters.entry)))browser=await chromium.launch({headless:true});
+  if(run.cases.some(c=>c.parameters.entry==='expert'||c.caseInstanceId==='E03.EX12'))expert=await run.openExpert();
+  for(const c of run.cases)await run.collectRegistered(c);
  }finally{await browser?.close();await expert?.close();run.finish();}
 });
