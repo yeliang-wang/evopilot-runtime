@@ -255,6 +255,7 @@ export function createNativeExtensionStageAdapter(store:RuntimeStore,configPath:
     await a.mutate(actor,r.projectId,request,{projectId:r.projectId,owner:p.kind,requestDigest:body.requestDigest,authorityRef:r.authorityRef,expiresAt:r.deadlineAt});return inspect(r,i,null,actor,signal);
   }
   async function verifyRepair(subject:StageRepairSubject,actor:Principal,signal:AbortSignal):Promise<StageRepairFacts|null>{
+    if(subject.schema!=='runtime-stage-repair-subject/v1')return null;
     authorize(actor,subject.projectId,'execution.request');signal.throwIfAborted();
     const originalRequest=subject.history.at(-1)?.request;if(!originalRequest||subject.workspaceId!==store.workspaceId||originalRequest.instanceId!==subject.instanceId||originalRequest.stageId!==subject.stageId)return null;
     const p=originalRequest.plan.parameters as unknown as Parameters,current=subject.preparedPlan.parameters as unknown as Parameters;

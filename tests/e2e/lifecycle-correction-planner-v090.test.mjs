@@ -302,12 +302,13 @@ test('EX01 requires the exact protected second-project selection before installa
   }
 });
 
-test('actual E04 EX11 collector rejects missing actual fixture before installation access or browser launch', { timeout: 60000 }, async () => {
+test('actual EX11 collectors reject missing actual fixtures before installation access or browser launch', { timeout: 60000 }, async t => {
+ for(const scenario of ['E04','E05'])await t.test(scenario,async()=>{
   const { execFile } = await import('node:child_process');
   const { fileURLToPath } = await import('node:url');
   const f = collectorFixture();
   try {
-    const selection = { schema: 'runtime-v090-acceptance-selection/v1', installedRoot: path.join(f.root, 'absent-installation'), expectedManifestDigest: 'a'.repeat(64), connectionRef: path.join(f.root, 'absent-connection'), workspaceId: 'test', projectId: 'test', runId: 'e04-registry-test', outputRoot: path.join(f.root, 'must-not-exist'), qualification: 'DEVELOPMENT', caseIds: ['E04.EX11'] };
+    const selection = { schema: 'runtime-v090-acceptance-selection/v1', installedRoot: path.join(f.root, 'absent-installation'), expectedManifestDigest: 'a'.repeat(64), connectionRef: path.join(f.root, 'absent-connection'), workspaceId: 'test', projectId: 'test', runId: 'e04-registry-test', outputRoot: path.join(f.root, 'must-not-exist'), qualification: 'DEVELOPMENT', caseIds: [scenario+'.EX11'] };
     const filename = path.join(f.root, 'e04-selection.json'); fs.writeFileSync(filename, JSON.stringify(selection), { mode: 0o600 });
     // Carry only the active source loader into this bounded child; no global
     // NODE_OPTIONS change and no compiled dist mutation is needed.
@@ -319,23 +320,42 @@ test('actual E04 EX11 collector rejects missing actual fixture before installati
     }
     const childEnv = { ...process.env, EVOPILOT_V090_ACCEPTANCE_SELECTION: filename };
     delete childEnv.NODE_TEST_CONTEXT; // This is a fresh test runner, not its parent's worker.
-    const result = await new Promise(resolve => execFile(process.execPath, [...loaderArgs, '--test', '--test-concurrency=1', fileURLToPath(new URL('../acceptance/v090/e04.test.mjs', import.meta.url))], { env: childEnv, timeout: 30000, maxBuffer: 1048576, encoding: 'utf8' }, (error, stdout, stderr) => resolve({ error, stdout, stderr })));
+    const result = await new Promise(resolve => execFile(process.execPath, [...loaderArgs, '--test', '--test-concurrency=1', fileURLToPath(new URL('../acceptance/v090/'+scenario.toLowerCase()+'.test.mjs', import.meta.url))], { env: childEnv, timeout: 30000, maxBuffer: 1048576, encoding: 'utf8' }, (error, stdout, stderr) => resolve({ error, stdout, stderr })));
     assert.equal(result.error?.code, 1); assert.equal(result.error.killed, false);
-    assert.match(result.stdout + result.stderr, /E04\.EX11 requires protected actual owner obligations fixture/);
+    assert((result.stdout + result.stderr).includes(scenario+'.EX11 requires protected actual owner obligations fixture'));
     assert.doesNotMatch(result.stdout + result.stderr, /ENOENT/);
     assert.equal(fs.existsSync(selection.outputRoot), false); assert.equal(fs.existsSync(selection.installedRoot), false);
   } finally { f.cleanup(); }
+ });
 });
 
 test('EX11 actual owner selection rejects incomplete or unsafe protected fixtures before installation reads',async t=>{
  const {openScenario,sha}=await import('../acceptance/v090/support.mjs');
- for(const variant of ['missing-case-plan','unexpected-plan-field','unsafe-fixture'])await t.test(variant,async()=>{
+ for(const scenario of ['E04','E05'])for(const variant of ['missing-case-plan','wrong-case-plan','unexpected-plan-field','unsafe-fixture','valid-protected'])await t.test(scenario+':'+variant,async()=>{
   const f=collectorFixture(),prior=process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;
   try{
-   const selection={schema:'runtime-v090-acceptance-selection/v1',installedRoot:path.join(f.root,'absent-installation'),expectedManifestDigest:'a'.repeat(64),connectionRef:path.join(f.root,'absent-connection'),workspaceId:'test',projectId:'test',runId:'ex11-input-test',outputRoot:path.join(f.root,'must-not-exist'),qualification:'DEVELOPMENT',caseIds:['E04.EX11']};
-   const fixture={schema:'runtime-v090-extension-execution-fixture/v1',candidateDigest:'sha256:'+selection.expectedManifestDigest,workspaceId:'test',projectId:'test',syntheticAssets:true,syntheticDecisions:true,exchangeRoot:f.root,casePlans:variant==='unexpected-plan-field'?{'E04.EX11':{status:'PASS'}}:{}};
+   const selection={schema:'runtime-v090-acceptance-selection/v1',installedRoot:path.join(f.root,'absent-installation'),expectedManifestDigest:'a'.repeat(64),connectionRef:path.join(f.root,'absent-connection'),workspaceId:'test',projectId:'test',runId:'ex11-input-test',outputRoot:path.join(f.root,'must-not-exist'),qualification:'DEVELOPMENT',caseIds:[scenario+'.EX11']};
+   const fixture={schema:'runtime-v090-extension-execution-fixture/v1',candidateDigest:'sha256:'+selection.expectedManifestDigest,workspaceId:'test',projectId:'test',syntheticAssets:true,syntheticDecisions:true,exchangeRoot:f.root,casePlans:variant==='unexpected-plan-field'?{[scenario+'.EX11']:{status:'PASS'}}:variant==='wrong-case-plan'?{[scenario==='E04'?'E05.EX11':'E04.EX11']:{status:'PASS'}}:{}};
+   if(variant==='valid-protected'){
+    const pinned=(name,value)=>{const ref=path.join(f.root,name),bytes=Buffer.from(value);fs.writeFileSync(ref,bytes,{mode:0o600});return{ref,sha256:sha(bytes)};};
+    // A schema-only fixture reaches the absent installation. These source bytes
+    // cannot establish owner execution, business approval or acceptance credit.
+    fixture.casePlans[scenario+'.EX11']={baseline:pinned('baseline.yaml','schema-only baseline\n'),extended:pinned('extended.yaml','schema-only extension\n'),ownerConnection:pinned('owner.json','{}\n'),passed:{instanceId:'pass-instance',targetRef:'target:pass',definitionRevisionId:'revision:exact'},failed:{instanceId:'fail-instance',targetRef:'target:fail',definitionRevisionId:'revision:exact'},stageId:'project.owner-check',successorId:'implementation'};
+   }
    const pinRef=path.join(f.root,'fixture.json'),bytes=Buffer.from(JSON.stringify(fixture));fs.writeFileSync(pinRef,bytes,{mode:variant==='unsafe-fixture'?0o644:0o600});selection.extensionExecution={ref:pinRef,sha256:sha(bytes)};const ref=path.join(f.root,'selection.json');fs.writeFileSync(ref,JSON.stringify(selection),{mode:0o600});process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION=ref;
-   await assert.rejects(openScenario('E04',{phase:'PRE_RELEASE',register:catalog=>new Map(catalog.map(c=>[c.caseInstanceId,()=>{throw Error('must not execute');}]))}),error=>{assert(!String(error).includes('ENOENT'));return true;});assert.equal(fs.existsSync(selection.outputRoot),false);
+   await assert.rejects(openScenario(scenario,{phase:'PRE_RELEASE',register:catalog=>new Map(catalog.map(c=>[c.caseInstanceId,()=>{throw Error('must not execute');}]))}),error=>{if(variant==='valid-protected')assert.equal(error.code,'ENOENT');else assert(!String(error).includes('ENOENT'));return true;});assert.equal(fs.existsSync(selection.outputRoot),false);
   }finally{if(prior===undefined)delete process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;else process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION=prior;f.cleanup();}
  });
+});
+
+
+test('E05 live parent campaign defers native EX11 fixture validation to its exact child',async()=>{
+ const {openScenario,sha}=await import('../acceptance/v090/support.mjs'),f=collectorFixture(),prior=process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;
+ try{
+  const ref=path.join(f.root,'campaign.json'),bytes=Buffer.from('{}\n');fs.writeFileSync(ref,bytes,{mode:0o600});
+  const selection={schema:'runtime-v090-acceptance-selection/v1',installedRoot:path.join(f.root,'absent-installation'),expectedManifestDigest:'a'.repeat(64),connectionRef:path.join(f.root,'absent-connection'),workspaceId:'test',projectId:'test',runId:'ex11-live-parent',outputRoot:path.join(f.root,'must-not-exist'),qualification:'DEVELOPMENT',caseIds:['E05.EX11'],caseCampaign:{ref,sha256:sha(bytes)}};
+  const filename=path.join(f.root,'selection.json');fs.writeFileSync(filename,JSON.stringify(selection),{mode:0o600});process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION=filename;
+  await assert.rejects(openScenario('E05'),error=>error.code==='ENOENT'&&(error.path===selection.installedRoot||error.path.startsWith(selection.installedRoot+path.sep)));
+  assert.equal(fs.existsSync(selection.outputRoot),false);
+ }finally{if(prior===undefined)delete process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;else process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION=prior;f.cleanup();}
 });

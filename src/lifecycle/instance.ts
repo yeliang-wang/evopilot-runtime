@@ -3,7 +3,7 @@ import { isCurrentBase, requireCurrentBase, valueDigest, type BasePin } from './
 import { atPath, compileLifecycle, type EffectiveDefinition, type EffectiveNode } from './compiler.js';
 import type { Principal } from '../server/security.js';
 import type { StoredObject } from '../server/store.js';
-import type { StageRequest } from './execution.js';
+import type { StageRequest, StageProgress } from './execution.js';
 
 export interface Budget { timeoutSeconds:number; maxAttempts:number; maxConcurrency:number; maxLoops:number; }
 /** Obtained from a trusted authority adapter, never directly from API/YAML data. */
@@ -17,10 +17,16 @@ export interface ExecutionAuthority {
  * acquire a fabricated original recovery root. No method dispatches work. */
 export interface RecoveryLineageService {
   create(instance:LifecycleInstance,authority:ExecutionAuthority,actor:Principal):StoredObject[];
-  admission(instance:LifecycleInstance,authority:ExecutionAuthority,stageId:string,actor:Principal,requestId?:string):{allowed:boolean;reasons:string[];deadlineAt:string;rootRef:string|null;stageAttempts:number};
-  claim(instance:LifecycleInstance,authority:ExecutionAuthority,request:StageRequest,actor:Principal):StoredObject[];
+  admission(instance:LifecycleInstance,authority:ExecutionAuthority,stageId:string,actor:Principal,requestId?:string,repair?:RecoveryRepairCoverage):{allowed:boolean;reasons:string[];deadlineAt:string;rootRef:string|null;stageAttempts:number;repairOrigins?:RecoveryFailureOrigin[];rootDigest?:string};
+  claim(instance:LifecycleInstance,authority:ExecutionAuthority,request:StageRequest,actor:Principal,repair?:RecoveryRepairCoverage):StoredObject[];
   inspect(instance:LifecycleInstance):unknown;
 }
+/** Produced only by the native lineage reader. Historical failures are never
+ * compressed into the most recent candidate or a caller-supplied ID list. */
+export interface RecoveryFailureOrigin {request:StageRequest;progress:StageProgress;candidateDigest:string|null;pinsDigest:string;authorityRef:string;}
+/** Internal handoff after trusted adapter verification; not an API input. The
+ * root repeats the complete-origin comparison inside the request transaction. */
+export interface RecoveryRepairCoverage {rootRef:string;rootDigest:string;originsDigest:string;subjectDigest:string;factsDigest:string;candidateDigest:string|null;expiresAt:string;}
 export type AuthorityResolver=(authorityRef:string,definition:EffectiveDefinition,actor:Principal,signal:AbortSignal)=>Promise<ExecutionAuthority|null>;
 export async function resolveAuthority(provider:AuthorityResolver|undefined,authorityRef:string,definition:EffectiveDefinition,actor:Principal):Promise<ExecutionAuthority>{
   if(!provider)reject('AUTHORITY_UNAVAILABLE','No trusted execution authority adapter is configured',409);

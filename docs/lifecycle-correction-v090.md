@@ -54,6 +54,21 @@ remain `repairVerified: false`: only the trusted adapter's separate examination
 of the fault and actual verification can establish retry eligibility. The
 capture also retains `completeInputClosure: false`; it is not a reuse certificate.
 
+For a failed candidate-verification stage, the protected failure resource may
+bind an exact published Harness `repairComparison` policy. Its separate actual
+criteria assess comparability, regression and progress; an optional transient
+criterion is required before treating a failure as transient. Error text alone
+cannot establish that classification. This comparison binds every failed origin
+in the original recovery root and the selected successor candidate before any
+owner call. Private origin observations cannot be sent to a public policy scope.
+
+A comparison whose required evidence is unavailable cannot authorize retry. If
+the candidate itself passed but comparison input exceeds its supported bound,
+Runtime preserves the candidate's real PASS and records comparison unavailability
+separately. Refreshing policy registration metadata does not reset two completed
+rounds without progress. A successor admission preview remains read-only and
+must identify the exact retained correction proposal and recovery root.
+
 An independent, predeclared sibling native check can run after its sibling
 fails, subject to the existing graph and limits. A failed predecessor still
 blocks its dependants. These APIs do not create a universal repair route for
@@ -113,8 +128,21 @@ A trusted read-only verifier must check a separately retained native Harness
 assessment and the current policy/trust state. A generic Harness PASS alone is
 insufficient. Missing or unsupported owner policy blocks qualification. Neither
 qualification nor a reused PASS establishes current environment state. The
-current LC release auditor accepts executed evidence only; formal reuse needs
-the separately integrated owner-policy and qualification consumption path.
+v1 release auditor accepts executed evidence only. The additive v2 native
+qualification service prepares an exact assessment action, dispatches it once
+under its original authority, and reads the actual published Harness receipt.
+Uncertain dispatch requires inspection of that same request, never automatic
+redispatch. Current credentials, grant, policy trust, complete history and input
+inventories are checked again after asynchronous reads and synchronously before
+single-result, batch-audit and review consumption.
+
+The v2 release preflight distinguishes `EXECUTED` from `PASS_REUSED` and requires
+all 698 PRE obligations. It produces review material, not release authority.
+Registered service/API composition, formal collector integration and v2 release
+authentication still require completion. The concrete closed-file fixture
+producer exercises the protocol with actual inputs and retains failed attempts,
+but is explicitly ineligible as formal acceptance evidence. Development tests
+and native fixture experiments do not establish installed qualification support.
 
 Original CI artifact capture is also separate from qualification. A report
 downloaded from an identified provider run can establish where those bytes came

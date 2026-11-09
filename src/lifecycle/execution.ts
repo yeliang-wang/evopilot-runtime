@@ -5,7 +5,7 @@ import { RuntimeStore, type Receipt } from '../server/store.js';
 import { valueDigest } from './base.js';
 import { containsInlineSecret, type EffectiveDefinition } from './compiler.js';
 import { validateBindings, type DefinitionBindingProvider } from './bindings.js';
-import { inspectInstance, requestStage, recordStageOutcome, resolveAuthority, stageAdmission, stageBudget, type AuthorityResolver, type ExecutionAuthority, type LifecycleInstance, type ReleaseAuthority, type StageOutcome, type RecoveryLineageService } from './instance.js';
+import { inspectInstance, requestStage, recordStageOutcome, resolveAuthority, stageAdmission, stageBudget, type AuthorityResolver, type ExecutionAuthority, type LifecycleInstance, type ReleaseAuthority, type StageOutcome, type RecoveryLineageService, type RecoveryFailureOrigin, type RecoveryRepairCoverage } from './instance.js';
 import { readImplementationEvidence } from '../adapters/implementation-stages.js';
 import { readReleaseMaterial } from '../adapters/release-stages.js';
 import { readPublicationEvidence } from '../adapters/publication-stage.js';
@@ -37,13 +37,15 @@ export interface StageRepairInputs {
    * complete dependency manifest required for cross-candidate evidence reuse. */
   dependencyClosureDigest:string;
 }
-export interface StageRepairSubject {
+export interface StageRepairSubjectV1 {
   schema:'runtime-stage-repair-subject/v1'; workspaceId:string; projectId:string;
   instanceId:string; stageId:string; pinsDigest:string; authorityDigest:string;
   candidateDigest:string|null; history:{request:StageRequest;progress:StageProgress}[];
   preparedPlan:StagePlan;
 }
-export interface StageRepairFacts {
+export interface StageRepairSubjectV2 extends Omit<StageRepairSubjectV1,'schema'> {schema:'runtime-stage-repair-subject/v2';root:{ref:string;digest:string};origins:RecoveryFailureOrigin[];}
+export type StageRepairSubject=StageRepairSubjectV1|StageRepairSubjectV2;
+export interface StageRepairFactsV1 {
   schema:'runtime-stage-repair-facts/v1'; subjectDigest:string;
   failureClass:'DETERMINISTIC'|'TRANSIENT'|'UNKNOWN';
   before:StageRepairInputs; after:StageRepairInputs;
@@ -51,8 +53,16 @@ export interface StageRepairFacts {
   rounds:{evidenceRef:string;beforeFactsDigest:string;afterFactsDigest:string}[];
   evidenceRef:string; expiresAt:string;
 }
+export interface StageRepairFactsV2 {
+  schema:'runtime-stage-repair-facts/v2';subjectDigest:string;rootRef:string;rootDigest:string;originsDigest:string;
+  failureClass:'DETERMINISTIC'|'TRANSIENT';failureKind:'FIXED_PRODUCT_CHECK';
+  origins:{requestId:string;requestDigest:string;observationRef:string;before:StageRepairInputs;failedCriteria:{criterionId:string;variantId:'actual-observation';evidenceDigest:string}[];
+    coverage:{criterionId:string;captureDigest:string;roundDigest:string;nativeActionDigest:string;nativeReceiptDigest:string;comparisonActionDigest:string;comparisonReceiptDigest:string;probeCandidateDigest:string}[]}[];
+  after:StageRepairInputs;rounds:StageRepairFactsV1['rounds'];evidenceRef:string;expiresAt:string;
+}
+export type StageRepairFacts=StageRepairFactsV1|StageRepairFactsV2;
 interface StageRepairAdmission {
-  schema:'runtime-stage-repair-admission/v1'; requestId:string; requestDigest:string;
+  schema:'runtime-stage-repair-admission/v1'|'runtime-stage-repair-admission/v2'; requestId:string; requestDigest:string;
   subjectDigest:string; facts:StageRepairFacts; factsDigest:string; digest:string;
 }
 /** Fixed trusted adapters only. prepare and inspect must be read-only. dispatch
@@ -155,18 +165,45 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     }
     return history;
   }
-  function repairSubject(saved:LifecycleInstance,stageId:string,plan:StagePlan,history:StageRepairSubject['history']):StageRepairSubject{
-    return copy({schema:'runtime-stage-repair-subject/v1',workspaceId:store.workspaceId,projectId:saved.pins.projectId,instanceId:saved.id,stageId,pinsDigest:saved.pinsDigest,authorityDigest:saved.pins.authorityDigest,candidateDigest:saved.candidateDigest,history,preparedPlan:plan});
+  function repairSubject(saved:LifecycleInstance,stageId:string,plan:StagePlan,history:StageRepairSubject['history'],lineage?:ReturnType<RecoveryLineageService['admission']>):StageRepairSubject{
+    const base={workspaceId:store.workspaceId,projectId:saved.pins.projectId,instanceId:saved.id,stageId,pinsDigest:saved.pinsDigest,authorityDigest:saved.pins.authorityDigest,candidateDigest:saved.candidateDigest,history,preparedPlan:plan};
+    if(lineage?.repairOrigins?.some(o=>o.request.instanceId!==saved.id)){
+      if(!lineage.rootRef||!lineage.rootDigest)reject('REPAIR_NATIVE_ROOT_REQUIRED','Cross-instance repair requires its exact native root',409);
+      return copy({...base,schema:'runtime-stage-repair-subject/v2',root:{ref:lineage.rootRef,digest:lineage.rootDigest},origins:lineage.repairOrigins,history:lineage.repairOrigins.map(o=>({request:o.request,progress:o.progress}))});
+    }
+    return copy({...base,schema:'runtime-stage-repair-subject/v1'});
   }
+  const coverage=(subject:StageRepairSubject,facts:StageRepairFacts):RecoveryRepairCoverage|undefined=>subject.schema==='runtime-stage-repair-subject/v2'&&facts.schema==='runtime-stage-repair-facts/v2'?{rootRef:subject.root.ref,rootDigest:subject.root.digest,originsDigest:valueDigest(subject.origins),subjectDigest:valueDigest(subject),factsDigest:valueDigest(facts),candidateDigest:subject.candidateDigest,expiresAt:facts.expiresAt}:undefined;
   function repairAdmission(r:StageRequest):StageRepairAdmission{
     const raw=store.object(r.projectId,'lifecycle-recovery-admission',r.id);
     if(!raw)reject('REPAIR_ADMISSION_REQUIRED','Retry has no retained trusted repair admission',409);
     const v=record(raw);exact(v,['schema','requestId','requestDigest','subjectDigest','facts','factsDigest','digest']);
     const {digest,...body}=v;
-    if(v.schema!=='runtime-stage-repair-admission/v1'||v.requestId!==r.id||v.requestDigest!==r.digest||valueDigest(body)!==digest||valueDigest(v.facts)!==v.factsDigest||record(v.facts).subjectDigest!==v.subjectDigest)reject('CORRUPT_REPAIR_ADMISSION','Retained repair admission changed',503);
+    if(v.schema!==(record(v.facts).schema==='runtime-stage-repair-facts/v2'?'runtime-stage-repair-admission/v2':'runtime-stage-repair-admission/v1')||v.requestId!==r.id||v.requestDigest!==r.digest||valueDigest(body)!==digest||valueDigest(v.facts)!==v.factsDigest||record(v.facts).subjectDigest!==v.subjectDigest)reject('CORRUPT_REPAIR_ADMISSION','Retained repair admission changed',503);
     return copy(v as unknown as StageRepairAdmission);
   }
   function validateRepair(facts:StageRepairFacts,subject:StageRepairSubject):void{
+    if(subject.schema==='runtime-stage-repair-subject/v2'||facts.schema==='runtime-stage-repair-facts/v2'){
+      if(subject.schema!=='runtime-stage-repair-subject/v2'||facts.schema!=='runtime-stage-repair-facts/v2')reject('REPAIR_FACTS_MISMATCH','Cross-instance repair requires versioned per-origin evidence',409);
+      exact(record(facts),['schema','subjectDigest','rootRef','rootDigest','originsDigest','failureClass','failureKind','origins','after','rounds','evidenceRef','expiresAt']);safeData(facts);
+      if(facts.subjectDigest!==valueDigest(subject)||facts.rootRef!==subject.root.ref||facts.rootDigest!==subject.root.digest||facts.originsDigest!==valueDigest(subject.origins)||!['DETERMINISTIC','TRANSIENT'].includes(facts.failureClass)||facts.failureKind!=='FIXED_PRODUCT_CHECK'||!Array.isArray(facts.origins)||facts.origins.length!==subject.origins.length||facts.after.candidateDigest!==subject.candidateDigest||!subject.candidateDigest)reject('REPAIR_FACTS_MISMATCH','Every original failure and current immutable candidate must be covered',409);
+      const inputs=(v:StageRepairInputs)=>{exact(record(v),['sourceDigest','candidateDigest','toolchainDigest','dependencyClosureDigest']);for(const x of [v.sourceDigest,v.toolchainDigest,v.dependencyClosureDigest])hash(x);if(v.candidateDigest!==null)hash(v.candidateDigest);};inputs(facts.after);
+      for(const [index,origin]of subject.origins.entries()){
+        const f=facts.origins[index];exact(record(f),['requestId','requestDigest','observationRef','before','failedCriteria','coverage']);inputs(f.before);
+        if(f.requestId!==origin.request.id||f.requestDigest!==origin.request.digest||f.observationRef!==origin.progress.observationRef||f.before.candidateDigest!==origin.candidateDigest||facts.failureClass==='DETERMINISTIC'&&valueDigest(f.before)===valueDigest(facts.after)||!Array.isArray(f.failedCriteria)||!f.failedCriteria.length||f.failedCriteria.length>4096||!Array.isArray(f.coverage)||f.coverage.length!==f.failedCriteria.length)reject('REPAIR_ORIGIN_UNPROVEN','An unchanged deterministic or incompletely covered original failure cannot be retried',409);
+        const ids=new Set<string>();for(const [n,criterion]of f.failedCriteria.entries()){exact(record(criterion),['criterionId','variantId','evidenceDigest']);string(criterion.criterionId);hash(criterion.evidenceDigest);if(criterion.variantId!=='actual-observation'||ids.has(criterion.criterionId))reject('REPAIR_ORIGIN_UNPROVEN','Unique actual failing criteria are required',409);ids.add(criterion.criterionId);
+          const c=f.coverage[n];exact(record(c),['criterionId','captureDigest','roundDigest','nativeActionDigest','nativeReceiptDigest','comparisonActionDigest','comparisonReceiptDigest','probeCandidateDigest']);if(c.criterionId!==criterion.criterionId||c.probeCandidateDigest!==subject.candidateDigest)reject('REPAIR_ORIGIN_UNPROVEN','Actual minimal regression must cover each original failure',409);for(const [k,v]of Object.entries(c))if(k!=='criterionId')hash(v);
+        }
+      }
+      if(!Array.isArray(facts.rounds)||!facts.rounds.length||facts.rounds.length>4096||new Set(facts.rounds.map(x=>x.evidenceRef)).size!==facts.rounds.length)reject('REPAIR_HISTORY_REQUIRED','Complete bounded actual verification rounds are required',409);
+      for(const r of facts.rounds){exact(record(r),['evidenceRef','beforeFactsDigest','afterFactsDigest']);string(r.evidenceRef,512);hash(r.beforeFactsDigest);hash(r.afterFactsDigest);}
+      for(let n=1;n<facts.rounds.length;n++)if(facts.rounds[n-1].beforeFactsDigest===facts.rounds[n-1].afterFactsDigest&&facts.rounds[n].beforeFactsDigest===facts.rounds[n].afterFactsDigest)reject('TWO_NO_PROGRESS_ROUNDS','Two completed repair rounds stop this original path',409);
+      for(const origin of subject.origins)if(store.object(subject.projectId,'lifecycle-recovery-admission',origin.request.id)){
+        const prior=repairAdmission(origin.request);if(canonical(facts.rounds.slice(0,prior.facts.rounds.length))!==canonical(prior.facts.rounds))reject('REPAIR_HISTORY_CHANGED','An earlier admitted round prefix cannot be erased',409);
+      }
+      string(facts.evidenceRef,512);if(!Number.isFinite(Date.parse(facts.expiresAt))||Date.parse(facts.expiresAt)<=Date.now()||Date.parse(facts.expiresAt)>Math.min(...subject.origins.map(o=>Date.parse(o.request.deadlineAt))))reject('REPAIR_EVIDENCE_EXPIRED','Original failed request deadlines still bound repair',409);
+      return;
+    }
     exact(record(facts),['schema','subjectDigest','failureClass','before','after','rounds','evidenceRef','expiresAt']);safeData(facts);
     if(facts.schema!=='runtime-stage-repair-facts/v1'||facts.subjectDigest!==valueDigest(subject))reject('REPAIR_FACTS_MISMATCH','Trusted repair facts must cover the exact original failures and prepared plan',409);
     if(!['DETERMINISTIC','TRANSIENT','UNKNOWN'].includes(facts.failureClass))reject('INVALID_REPAIR_FACTS','Unsupported failure classification');
@@ -230,16 +267,18 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     signal?.throwIfAborted();
     if(!current.checked.ready||current.checked.stamp!==r.bindingStamp||valueDigest(current.authority)!==saved.pins.authorityDigest||current.authority.evidenceRef!==r.authorityRef||(current.release?.decisionRef??null)!==r.releaseAuthorityRef)reject('EXECUTION_BINDING_CHANGED','Current execution pins or authority differ from the retained request',409);
     if(!observationOnly&&progress(r).phase==='UNKNOWN')reject('RECONCILE_ORIGINAL_REQUEST','Unknown outcomes allow only observation of the original request',409);
-    if(saved.stages[r.stageId].attempts>1){
-      const retained=repairAdmission(r),history=repairHistory(saved,r.stageId,r.authorityRef,r.id),subject=repairSubject(saved,r.stageId,r.plan,history);
+    let lineage=deps.recovery?.admission(saved,current.authority,r.stageId,actor,r.id),repairCoverage:RecoveryRepairCoverage|undefined;
+    if(saved.stages[r.stageId].attempts>1||lineage?.repairOrigins?.some(o=>o.request.instanceId!==saved.id)){
+      const retained=repairAdmission(r),history=saved.stages[r.stageId].attempts>1?repairHistory(saved,r.stageId,r.authorityRef,r.id):[],subject=repairSubject(saved,r.stageId,r.plan,history,lineage);
       if(retained.subjectDigest!==valueDigest(subject))reject('REPAIR_FACTS_MISMATCH','Retained repair does not match this original request history',409);
       validateRepair(retained.facts,subject);
       const observed=await bounded(s=>verifyRepair(subject,actor,s),signal??new AbortController().signal,Math.max(1,Math.min(5000,Date.parse(r.deadlineAt)-Date.now())));
       const stable=(f:StageRepairFacts)=>{const {expiresAt,...content}=f;return valueDigest(content);};
       if(stable(observed)!==stable(retained.facts))reject('REPAIR_FACTS_CHANGED','Semantic repair facts changed after admission',409);
       validateRepair(retained.facts,subject);
+      repairCoverage=coverage(subject,retained.facts);
     }
-    const lineage=deps.recovery?.admission(saved,current.authority,r.stageId,actor,r.id);if(lineage&&!lineage.allowed)reject('EXECUTION_RECOVERY_BLOCKED',lineage.reasons.join('; '),409);
+    lineage=deps.recovery?.admission(saved,current.authority,r.stageId,actor,r.id,repairCoverage);if(lineage&&!lineage.allowed)reject('EXECUTION_RECOVERY_BLOCKED',lineage.reasons.join('; '),409);
     readNativeRepairCapture(store,r);
     const fresh=actorFor(r);deps.verifyAuthority?.(current.authority,saved.definition,fresh);deps.verifyProjectReviewState?.(saved,fresh);
     if(closed||Date.parse(r.deadlineAt)<=Date.now())reject('EXECUTION_DEADLINE','This original request cannot dispatch now',409);return fresh;
@@ -360,7 +399,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
       if(!admitted.allowed)reject('STAGE_BLOCKED',admitted.reasons.join('; '),409);
       const history=saved.stages[stageId].attempts>0?repairHistory(saved,stageId,current.authority.evidenceRef):null;
       const lineage=deps.recovery?.admission(saved,current.authority,stageId,actor);
-      if(lineage&&!lineage.allowed)reject('STAGE_BLOCKED',lineage.reasons.join('; '),409);
+      if(lineage&&!lineage.allowed&&(!deps.adapter?.verifyRepair||lineage.reasons.some(r=>r!=='RECOVERY_REPAIR_EVIDENCE_REQUIRED')))reject('STAGE_BLOCKED',lineage.reasons.join('; '),409);
       const effectiveDeadline=Math.min(preparationDeadline,Date.parse(current.authority.expiresAt),lineage?Date.parse(lineage.deadlineAt):Infinity);
       const remaining=effectiveDeadline-Date.now();
       if(!Number.isFinite(remaining)||remaining<=0)reject('EXECUTION_DEADLINE','Original execution admission has expired',409);
@@ -369,9 +408,9 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
       exact(record(plan),['adapterId','adapterDigest','action','bindingDigest','parameters']);slug(plan.adapterId);hash(plan.adapterDigest);hash(plan.bindingDigest);record(plan.parameters);safeData(plan);
       if(plan.action!==(node.source==='base'?'base.'+node.id:node.action!.actionRef))reject('ACTION_MISMATCH','Adapter action does not match the fixed Base/extension action',409);
       let repair:{subject:StageRepairSubject;facts:StageRepairFacts}|null=null;
-      if(saved.stages[stageId].attempts>0){
-        if(saved.stages[stageId].status!=='FAILED')reject('REPAIR_HISTORY_REQUIRED','A new attempt requires the exact retained failed stage',409);
-        const subject=repairSubject(saved,stageId,plan,history!);
+      if(saved.stages[stageId].attempts>0||lineage?.repairOrigins?.some(o=>o.request.instanceId!==saved.id)){
+        if(saved.stages[stageId].attempts>0&&saved.stages[stageId].status!=='FAILED')reject('REPAIR_HISTORY_REQUIRED','A new attempt requires the exact retained failed stage',409);
+        const subject=repairSubject(saved,stageId,plan,history??[],lineage);
         const facts=await bounded(s=>verifyRepair(subject,actor,s),signal,Math.max(1,Math.min(5000,effectiveDeadline-Date.now())));
         signal.throwIfAborted();repair={subject,facts};
       }
@@ -430,7 +469,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     const planned=copy(plan),now=Date.now(),limit=stageBudget(saved,node);
     const content:Omit<StageRequest,'digest'>={schema:'runtime-stage-request/v1',id:randomUUID(),workspaceId:store.workspaceId,projectId,instanceId:saved.id,stageId,pinsDigest:saved.pinsDigest,inputDigest:admitted.inputDigest,bindingStamp:current.checked.stamp!,authorityRef:current.authority.evidenceRef,releaseAuthorityRef:current.release?.decisionRef??null,initiatedBy:{id:actor.id,revision:actor.revision},...(correctionRef?{correctionRef}:{}),plan:planned,planDigest:valueDigest(planned),requestedAt:new Date(now).toISOString(),deadlineAt:new Date(Math.min(now+limit.timeoutSeconds*1000,preparationDeadline,Date.parse(current.authority.expiresAt),selection?Date.parse(selection.deadlineAt):Infinity)).toISOString()};
     const r=copy({...content,digest:valueDigest(content)});
-    const repairBody=repair?{schema:'runtime-stage-repair-admission/v1' as const,requestId:r.id,requestDigest:r.digest,subjectDigest:valueDigest(repair.subject),facts:repair.facts,factsDigest:valueDigest(repair.facts)}:null;
+    const repairBody=repair?{schema:repair.facts.schema==='runtime-stage-repair-facts/v2'?'runtime-stage-repair-admission/v2' as const:'runtime-stage-repair-admission/v1' as const,requestId:r.id,requestDigest:r.digest,subjectDigest:valueDigest(repair.subject),facts:repair.facts,factsDigest:valueDigest(repair.facts)}:null;
     const retainedRepair:StageRepairAdmission|null=repairBody?copy({...repairBody,digest:valueDigest(repairBody)}):null;
     const result=store.mutate(actor,mutation,()=>{
       if(closed)reject('STOPPING','Service is stopping',503);
@@ -440,7 +479,7 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
       if(!current.checked.expiresAt||Date.parse(current.checked.expiresAt)<=Date.now()||Date.parse(r.deadlineAt)<=Date.now())reject('EXECUTION_DEADLINE','Execution admission expired before request commit',409);
       if(repair)validateRepair(repair.facts,repair.subject);
       if(stageId==='publication'&&deps.releaseAuthority?.(saved,fresh)?.decisionRef!==r.releaseAuthorityRef)reject('AUTHORITY_CHANGED','Release authority changed before request commit',409);
-      const recoveryObjects=deps.recovery?.claim(saved,current.authority,r,fresh)??[];
+      const recoveryObjects=deps.recovery?.claim(saved,current.authority,r,fresh,repair?coverage(repair.subject,repair.facts):undefined)??[];
       if(correctionRef){if(!deps.recovery)reject('REPAIR_NATIVE_ROOT_REQUIRED','Repair capture requires native root authority',409);const originalRoot=record(deps.recovery.inspect(instance(projectId,selection!.originalInstanceId))),currentRoot=record(deps.recovery.inspect(saved));if(originalRoot.rootRef!==selection!.rootRef||currentRoot.rootRef!==selection!.rootRef)reject('REPAIR_ROOT_MISMATCH','Current native root differs from the selected repair lineage',409);recoveryObjects.push(prepareNativeRepairCapture(store,fresh,correctionRef,r));}
       const next=requestStage(saved,stageId,r.id,current.context),p:StageProgress={requestId:r.id,phase:'DISPATCHING',terminal:false,handle:null,observation:null,observationRef:null,reason:null,observedAt:r.requestedAt};
       return{objects:[{kind:'lifecycle-instance',id:saved.id,value:next},{kind:'stage-request',id:r.id,value:r},{kind:'stage-progress',id:r.id,value:p},...recoveryObjects,...(retainedRepair?[{kind:'lifecycle-recovery-admission',id:r.id,value:retainedRepair}]:[])],value:{stageRequestId:r.id,instanceId:saved.id,stageId,inputDigest:r.inputDigest,status:'REQUEST_RETAINED',automaticRedispatch:false},event:{type:'stage-requested',data:{instanceId:saved.id,stageId,stageRequestId:r.id,inputDigest:r.inputDigest,planDigest:r.planDigest,initiatedBy:actor.id}}};
@@ -449,22 +488,30 @@ export function createExecutionService(store:RuntimeStore,deps:ExecutionDependen
     // perform an external action. Replays/restarts never enter this branch.
     start(r,'dispatch');return result;
   }
-  return{read,write,async correctionAdmission(actor:Principal,projectId:string,id:string){
+  return{read,write,async correctionAdmission(actor:Principal,projectId:string,id:string,correctionRef?:string){
     authorize(actor,projectId,'execution.request');const original=request(projectId,id);
     if(original.stageId==='publication')authorize(actor,projectId,'release.request');
     const base={originalRequestId:id,originalRequestDigest:original.digest,executionAuthorized:false as const};
     try{
       if(closed)reject('STOPPING','Service is stopping',503);
       if(!deps.adapter)reject('EXECUTOR_UNAVAILABLE','No fixed stage adapter is configured',409);
-      const saved=fixedInstance(original),p=progress(original);
+      const originalInstance=fixedInstance(original),p=progress(original);let saved=originalInstance;
       if(p.phase==='UNKNOWN'||!p.terminal)return{...base,allowed:false,reasons:['RECONCILE_ORIGINAL_REQUEST']};
       if(p.phase!=='FAILED')return{...base,allowed:false,reasons:['STAGE_ALREADY_COMPLETE']};
+      if(correctionRef!==undefined){
+        const proposal=readCorrectionProposal(store,projectId,correctionRef),selection=proposal.verificationBinding;
+        if(!selection||selection.schema!=='runtime-repair-selection/v2'||selection.originalRequestId!==id||selection.originalRequestDigest!==original.digest||selection.originalObservationRef!==p.observationRef||selection.originalInstanceId!==original.instanceId||selection.originalStageId!==original.stageId||selection.verificationInstanceId===original.instanceId||Date.parse(selection.deadlineAt)<=Date.now()||!deps.recovery)reject('CORRECTION_SCOPE','Preview requires the exact live retained successor association',409);
+        saved=instance(projectId,selection.verificationInstanceId);const before=record(deps.recovery.inspect(originalInstance)),after=record(deps.recovery.inspect(saved));
+        if(saved.pinsDigest!==selection.verificationPinsDigest||before.rootRef!==selection.rootRef||after.rootRef!==selection.rootRef||before.rootDigest!==selection.rootDigest||after.rootDigest!==selection.rootDigest)reject('CORRECTION_SCOPE','Successor preview must retain the original native root and pins',409);
+      }
       const prepared=await prepareAdmission(saved,original.stageId,actor);
-      const fresh=actorFor(original);deps.verifyAuthority?.(prepared.current.authority,saved.definition,fresh);deps.verifyProjectReviewState?.(saved,fresh);
+      const fresh=correctionRef===undefined?actorFor(original):deps.principal(actor.id);
+      if(!fresh||fresh.revision!==actor.revision)reject('AUTHORITY_CHANGED','Preview principal changed',403);authorize(fresh,projectId,'execution.request');deps.verifyAuthority?.(prepared.current.authority,saved.definition,fresh);deps.verifyProjectReviewState?.(saved,fresh);
       if(!prepared.repair)reject('REPAIR_EVIDENCE_REQUIRED','Exact trusted repair assessment required',409);
       if(Date.parse(prepared.repair.facts.expiresAt)<=Date.now()||prepared.preparationDeadline<=Date.now())reject('REPAIR_EVIDENCE_EXPIRED','Prepared repair evidence expired',409);
       fixedInstance(original);
-      return{...base,allowed:true,reasons:[],subjectDigest:valueDigest(prepared.repair.subject),facts:prepared.repair.facts,deadlineAt:new Date(prepared.preparationDeadline).toISOString()};
+      if(valueDigest(instance(projectId,saved.id))!==valueDigest(saved))reject('CORRECTION_FACTS_CHANGED','Successor changed during the read-only preview',409);
+      return{...base,allowed:true,reasons:[],instanceId:saved.id,stageId:original.stageId,subjectDigest:valueDigest(prepared.repair.subject),facts:prepared.repair.facts,deadlineAt:new Date(prepared.preparationDeadline).toISOString()};
     }catch(error){return{...base,allowed:false,reasons:[error instanceof ServiceError?error.code:'REPAIR_EVIDENCE_UNKNOWN']};}
   },async authorizeOriginal(actor:Principal,projectId:string,id:string):Promise<Principal>{
     authorize(actor,projectId,'execution.request');const r=request(projectId,id);

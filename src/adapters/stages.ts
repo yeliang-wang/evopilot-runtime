@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { constants, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { canonicalEvidence as canonical, exact, record, reject, ServiceError, string } from '../server/errors.js';
+import { canonicalEvidence as canonical, canonical as canonicalState, exact, record, reject, ServiceError, string } from '../server/errors.js';
 import { authorize, privateFile, type Principal } from '../server/security.js';
 import { RuntimeStore } from '../server/store.js';
 import {byteDigest} from '../lifecycle/base.js';
@@ -9,7 +9,7 @@ import {evidenceValueDigest as valueDigest} from '../server/errors.js';
 import { atPath } from '../lifecycle/compiler.js';
 import { inspectInstance, type LifecycleInstance } from '../lifecycle/instance.js';
 import { isPreparationRef, readPreparationPacket } from '../lifecycle/preparation.js';
-import type { StageAdapter, StageObservation, StagePlan, StageProgress, StageRequest } from '../lifecycle/execution.js';
+import type { StageAdapter, StageObservation, StagePlan, StageProgress, StageRequest, StageRepairSubject, StageRepairFactsV2 } from '../lifecycle/execution.js';
 import { nativeSha256, validateNativeReference, type NativeReference, type NativeScope, type NativeValidationContext } from '../../vendor/compatibility/v1/native.mjs';
 import { configuredPlatform, readIntegrationConfiguration, type IntegrationConfiguration, type PlatformRegistration } from './config.js';
 import { validateResourceDefinition, type BindingConnections } from './bindings.js';
@@ -21,6 +21,7 @@ import type {NativeSourceScope} from '../native-types.js';
 import {retainVerificationRun} from './stage-feedback.js';
 import {CI_PREPARATION_ADAPTER_ID,CI_PREPARATION_ADAPTER_DIGEST,preparationConfiguration,validatePreparationInput,observePreparedSource,verifyPreparationNativeAction,type CiPreparationInput,type PreparedSourceObservation} from './ci-preparation.js';
 import {mappedExtensionCriteria} from './extension-stages.js';
+import {readNativeRepairCapture,readNativeRepairHistory,type NativeRepairCapture,type NativeRepairSelection} from './authority.js';
 
 const LEGACY_ID='runtime-ci-owner-stage-v1';
 const LEGACY_DIGEST=valueDigest({id:LEGACY_ID,stages:['implementation','candidate','verification'],source:'verified-exact-commit/v1',candidate:'immutable-archive-consumption/v1',workflow:'runtime-ci/v1',owners:'native/v1',observation:'runtime-ci-owner-values/v1',continuation:'explicit-original-request/v1'});
@@ -37,7 +38,9 @@ interface CiPlan {
   candidateInput?:CandidateInput;
   sourceTree?:SourceTreeObservation;sourceScope?:NativeSourceScope;
   preparation?:{configuration:ReturnType<typeof preparationConfiguration>;input:CiPreparationInput};
+  repairComparison?:RepairComparisonPlan;
 }
+export interface RepairComparisonPlan {schema:'runtime-repair-comparison-policy/v1';resourceDigest:string;owner:OwnerPin;effectiveConfigDigest:string;criteria:{comparable:string;regression:string;progress:string;transient?:string};}
 export interface NativeAction {request:OwnerRequest;requestDigest:string;context:NativeValidationContext;observationDigest:string|null;digest:string;}
 export interface OwnerResult {owner:Owner;status:'PASS'|'FAIL'|'UNKNOWN';receiptDigest:string|null;reportDigest:string|null;}
 export interface VerifiedStageSource {commit:string;evidenceRef:string;}
@@ -90,6 +93,66 @@ export function verifyNativeStageResult(receipt:Record<string,unknown>,kind:Owne
     const failed=['NONCONFORMING','FAIL','ERROR','UNSUPPORTED'].includes(String(status))||criteria.some(c=>['FAIL','ERROR','SKIPPED'].includes(String(c.status)));
     const output:OwnerResult={owner:kind,status:passed?'PASS':failed?'FAIL':'UNKNOWN',receiptDigest:nativeSha256(receipt),reportDigest:String(reportDigest)};
     return output;
+}
+
+/** Read the actual original CI/native records. This is an internal protected
+ * reader, never an import endpoint or a caller-supplied evaluation result. */
+export function readCiRepairEvidence(store:RuntimeStore,r:StageRequest){
+  const p=r.plan.parameters as unknown as CiPlan;
+  if(r.plan.adapterId!==ADAPTER_ID||r.plan.adapterDigest!==ADAPTER_DIGEST||!['candidate','verification'].includes(r.stageId)||r.digest!==valueDigest((({digest,...body})=>body)(r))||r.planDigest!==valueDigest(r.plan)||r.plan.bindingDigest!==valueDigest(p))reject('REPAIR_CI_ORIGIN','Repair requires the exact retained native CI plan',409);
+  const ci=store.object(r.projectId,'ci-stage-artifact',r.id) as VerifiedCiArtifact|null;
+  if(ci&&(ci.schema!=='runtime-ci-verified-artifact/v1'||ci.requestId!=='stage-'+valueDigest({workspaceId:r.workspaceId,projectId:r.projectId,requestId:r.id}).slice(7,55)||ci.inputDigest!==r.inputDigest||ci.artifactsVerified!==true))reject('CORRUPT_REPAIR_HISTORY','Original CI artifact identity differs',503);
+  const read=(kind:Owner|'comparison')=>{
+    const comparison=kind==='comparison',pin=comparison?p.repairComparison?.owner:p.owners[kind],effective=comparison?p.repairComparison?.effectiveConfigDigest:p.effectiveConfigDigest;
+    const a=store.object(r.projectId,comparison?'lifecycle-recovery-ledger':'stage-native-action',comparison?'comparison-action:'+r.id:r.id+':'+kind) as NativeAction|null;
+    const raw=store.object(r.projectId,comparison?'lifecycle-recovery-ledger':'stage-native-receipt',comparison?'comparison-receipt:'+r.id:r.id+':'+kind);
+    if(!a){if(raw)reject('CORRUPT_REPAIR_HISTORY','Native receipt lost its original action',503);return null;}
+    if(!pin||!effective||a.digest!==valueDigest((({digest,...body})=>body)(a))||a.requestDigest!==ownerRequestDigest(comparison?'harness':kind,a.request)||a.request.operation!=='native.package.validate'||a.context.claimId!==valueDigest({stageRequestDigest:r.digest})||a.context.inputDigest!==r.inputDigest||a.context.workspaceId!==r.workspaceId||!same(a.request.input.context,a.context)||a.context.scope.projectId!==r.projectId||a.context.requirementSetDigest!==record(p.sourceScope).requirementsDigest||a.request.input.id!==pin.reference.id||a.request.input.version!==pin.reference.version||a.observationDigest!==(comparison||kind==='harness'?nativeSha256(a.request.input.observation):null))reject('CORRUPT_REPAIR_HISTORY','Native action is not the original scoped validation',503);
+    if(!raw)return{action:a,receipt:null,result:null};
+    const receipt=record(raw),result=verifyNativeStageResult(receipt,comparison?'harness':kind,pin,a,p.toolchainLockDigest,effective);return{action:a,receipt,result};
+  };
+  return{plan:p,ci,harness:read('harness'),ontology:read('ontology'),comparison:read('comparison')};
+}
+
+function comparisonStatuses(p:RepairComparisonPlan,receipt:Record<string,unknown>|null){
+  if(!receipt)return null;const report=record(receipt.result??{});
+  if(report.executionStatus!=='SUCCEEDED'||!Array.isArray(report.criteria))return null;
+  const criteria=report.criteria.map(record),selected=Object.fromEntries(Object.entries(p.criteria).map(([key,id])=>[key,criteria.find(c=>c.criterionId===id&&c.variantId==='actual-observation')?.status]));
+  if(criteria.some(c=>c.variantId!=='actual-observation'&&c.status!=='PASS')||Object.values(selected).some(s=>s!=='PASS'&&s!=='FAIL'))return null;
+  return selected as Record<'comparable'|'regression'|'progress','PASS'|'FAIL'>&{transient?:'PASS'|'FAIL'};
+}
+function comparisonFacts(request:StageRequest,view:ReturnType<typeof readCiRepairEvidence>){
+  if(!view.ci||!view.harness?.receipt||!view.ontology?.receipt)reject('REPAIR_COMPARISON_INPUT','An original product observation is unavailable',409);
+  const report=record(view.harness.receipt.result??{}),observation=record(view.harness.action.request.input.observation);
+  return{request:{id:request.id,digest:request.digest,instanceId:request.instanceId,stageId:request.stageId,pinsDigest:request.pinsDigest,authorityRef:request.authorityRef,planDigest:request.planDigest},source:view.plan.source,sourceTreeDigest:view.plan.sourceTree?.treeDigest??null,ci:{archiveDigest:view.ci.archiveDigest,resultDigest:view.ci.resultDigest,candidateDigest:view.ci.candidateDigest},product:{owner:view.plan.owners.harness,effectiveConfigDigest:view.plan.effectiveConfigDigest,toolchainLockDigest:view.plan.toolchainLockDigest,actionDigest:view.harness.action.digest,receiptDigest:valueDigest(view.harness.receipt),reportDigest:report.reportDigest??null,executionStatus:report.executionStatus??null,qualityStatus:report.qualityStatus??null,criteria:report.criteria??[],observation},ontologyStatus:view.ontology.result?.status??'UNKNOWN'};
+}
+/** No provider/owner effects: reject unsupported originals before a candidate
+ * request can consume authority or transmit any historical observation. */
+export function assertCiRepairOrigins(store:RuntimeStore,selection:NativeRepairSelection|NativeRepairCapture,plan:StagePlan):void{
+  const p=plan.parameters as unknown as CiPlan,policy=p.repairComparison;
+  if(!policy||!selection.origins?.length)reject('REPAIR_POLICY_REQUIRED','Complete original failures and the exact comparison policy are required',409);
+  const originals=selection.origins.map(origin=>{
+    const view=readCiRepairEvidence(store,origin.request);
+    if(view.plan.owners.harness.scope.visibility==='private'&&policy.owner.scope.visibility!=='private')reject('REPAIR_POLICY_SCOPE','A private original observation cannot enter public comparison scope',409);
+    if(!same(view.plan.owners,p.owners)||view.plan.effectiveConfigDigest!==p.effectiveConfigDigest||view.plan.toolchainLockDigest!==p.toolchainLockDigest)reject('REPAIR_ORIGIN_UNPROVEN','Original and probe product pins must be comparable before execution',409);
+    const report=record(view.harness?.receipt?.result??{}),criteria=report.criteria;
+    if(view.ci?.status!=='PASSED'||view.ontology?.result?.status!=='PASS'||report.executionStatus!=='SUCCEEDED'||!Array.isArray(criteria)||!criteria.some(c=>record(c).variantId==='actual-observation'&&record(c).status==='FAIL')||criteria.some(raw=>{const c=record(raw);return c.status!=='PASS'&&(c.status!=='FAIL'||c.variantId!=='actual-observation');}))reject('REPAIR_ORIGIN_UNPROVEN','This comparison path requires original actual product-check failures',409);
+    return{originalObservationRef:origin.progress.observationRef,candidateDigest:origin.candidateDigest,...comparisonFacts(origin.request,view)};
+  });
+  if(Buffer.byteLength(canonical(originals))>1048576)reject('REPAIR_COMPARISON_LIMIT','Original comparison inputs exceed the bounded profile',409);
+  try{canonicalState(originals);}catch(error){if(error instanceof ServiceError&&error.code==='INPUT_LIMIT')reject('REPAIR_COMPARISON_LIMIT','Original inputs cannot fit the existing protected action profile',409);throw error;}
+}
+export function assertCiRepairCaptureProgress(store:RuntimeStore,actor:Principal,originalId:string,projectId:string):void{
+  const history=readNativeRepairHistory(store,projectId,originalId,actor);let noProgress=0;
+  for(const round of history.rounds){
+    if(round.schema!=='runtime-repair-round/v2'){noProgress=0;continue;}
+    const r=store.object(projectId,'stage-request',round.requestId) as StageRequest,view=readCiRepairEvidence(store,r),pin=view.plan.repairComparison,status=pin?comparisonStatuses(pin,view.comparison?.receipt??null):null;
+    if(!status||status.comparable!=='PASS'){noProgress=0;continue;}
+    // A new registration or policy cannot erase two actual completed rounds
+    // on the same root/stage path. Unknown rounds break adjacency only.
+    noProgress=status.progress==='FAIL'?noProgress+1:0;
+    if(noProgress>=2)reject('TWO_NO_PROGRESS_ROUNDS','Two completed comparable native policy rounds proved no progress',409);
+  }
 }
 
 /** CI-backed candidate and verification composition. Other base/extension
@@ -197,7 +260,20 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
       if(input.baselineCommit!==preparationConfig.baselineCommit||input.requirementsDigest!==instance.pins.requirementsDigest)reject('CI_PREPARATION_INPUT','Preparation must preserve the original reviewed baseline and requirements',409);
       preparation={configuration:preparationConfig,input};
     }
-    const parameters:CiPlan={stageId,binding,commit:current.commit,workflowDigest:current.workflowDigest,source:selected,sourceTree:tree,sourceScope:scope,...(preparation?{preparation}:{}),...(originalCandidate?{candidateInput:originalCandidate}:{}),expectedChecks:[...instance.definition.nodes.find(n=>n.id===stageId)!.checks],owners:pins,toolchainLockDigest:connections.toolchainLockDigest,...(connections.toolchainManifestDigest?{toolchainManifestDigest:connections.toolchainManifestDigest}:{}),effectiveConfigDigest,candidateDigest:instance.candidateDigest};
+    let repairComparison:RepairComparisonPlan|undefined;
+    const failure=config.resources.find(x=>x.projectId===instance.pins.projectId&&x.ref===atPath(instance.definition.semantic,'config.verification.failurePolicyRef')&&x.role==='config.verification.failurePolicyRef');
+    if(failure?.definition.repairComparison!==undefined){
+      validateResourceDefinition(failure);if(Date.parse(failure.expiresAt)<=Date.now())reject('REPAIR_POLICY_EXPIRED','Repair comparison registration expired',409);
+      const policy=record(failure.definition.repairComparison),reference=validateNativeReference(policy.reference,{product:'harness'}),scope=record(policy.scope) as unknown as NativeScope;
+      if(pins.harness.scope.visibility==='private'&&scope.visibility!=='private')reject('REPAIR_POLICY_SCOPE','Private original observations cannot be sent to a public comparison scope',409);
+      const registration=config.owners.find(o=>o.ref===policy.adapterRef&&o.owner==='harness'&&o.projects.includes(instance.pins.projectId));if(!registration)reject('REPAIR_POLICY_SCOPE','Repair policy requires the registered project Harness owner',409);
+      const adapter=connections.owner(string(policy.adapterRef),config);if(adapter.owner!=='harness'||adapter.workspaceId!==store.workspaceId)reject('REPAIR_POLICY_SCOPE','Repair comparison owner scope differs',409);
+      const material=await adapter.readPackage(actor,instance.pins.projectId,scope,reference),validation=record(material.validation),{reportDigest,...body}=validation,criteria=nativeInventory(record(material.package),'harness');
+      const actual=criteria.filter(c=>c.variantId==='actual-observation').map(c=>c.criterionId).sort(),required=Object.values(record(policy.criteria)).map(String).sort();
+      if(reportDigest!==nativeSha256(body)||!same(validation.reference,reference)||validation.qualityStatus!=='PASS'||!same(actual,required))reject('REPAIR_POLICY_INVALID','Exact published comparison policy and its complete declared actual criteria are required',409);
+      repairComparison={schema:'runtime-repair-comparison-policy/v1',resourceDigest:valueDigest(failure),owner:{ref:string(policy.adapterRef),registrationDigest:hash(record(adapter.capabilities()).registrationDigest),scope,reference,criteria},effectiveConfigDigest:hash(validation.effectiveConfigDigest),criteria:policy.criteria as RepairComparisonPlan['criteria']};
+    }
+    const parameters:CiPlan={stageId,binding,commit:current.commit,workflowDigest:current.workflowDigest,source:selected,sourceTree:tree,sourceScope:scope,...(preparation?{preparation}:{}),...(originalCandidate?{candidateInput:originalCandidate}:{}),...(repairComparison?{repairComparison}:{}),expectedChecks:[...instance.definition.nodes.find(n=>n.id===stageId)!.checks],owners:pins,toolchainLockDigest:connections.toolchainLockDigest,...(connections.toolchainManifestDigest?{toolchainManifestDigest:connections.toolchainManifestDigest}:{}),effectiveConfigDigest,candidateDigest:instance.candidateDigest};
     return{adapterId:preparing?CI_PREPARATION_ADAPTER_ID:ADAPTER_ID,adapterDigest:preparing?CI_PREPARATION_ADAPTER_DIGEST:ADAPTER_DIGEST,action:preparing?'runtime.operation.ci-prepare':'base.'+stageId,bindingDigest:valueDigest(parameters),parameters:parameters as unknown as Record<string,unknown>};
   }
   function plan(r:StageRequest,instance:LifecycleInstance,actor:Principal):{p:CiPlan;config:Readonly<IntegrationConfiguration>;client:PlatformClient;ci:PlatformRunRequest}{
@@ -213,6 +289,7 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
     const current=configuredPlatform(config,actor,r.projectId,p.binding.ref);if(!same(current,p.binding))reject('PLATFORM_BINDING_CHANGED','Original stage platform registration changed');
     if(!same(p.candidateInput??null,candidateInput(instance,p.binding,p.commit)??null))reject('CI_CANDIDATE_INPUT_INVALID','Original candidate delivery identity cannot change',409);
     for(const kind of ['ontology','harness'] as const)owner(config,p.owners[kind],kind,r.projectId);
+    if(p.repairComparison){const failure=config.resources.find(x=>x.projectId===r.projectId&&x.ref===atPath(instance.definition.semantic,'config.verification.failurePolicyRef')&&x.role==='config.verification.failurePolicyRef');if(!failure||valueDigest(failure)!==p.repairComparison.resourceDigest||Date.parse(failure.expiresAt)<=Date.now())reject('REPAIR_POLICY_CHANGED','Original repair comparison registration changed',409);owner(config,p.repairComparison.owner,'harness',r.projectId);}
     const ci:PlatformRunRequest={schema:'runtime-ci-request/v1',requestId:'stage-'+valueDigest({workspaceId:r.workspaceId,projectId:r.projectId,requestId:r.id}).slice(7,55),projectId:r.projectId,bindingDigest:valueDigest(p.binding),commit:p.commit,workflowDigest:p.workflowDigest,inputDigest:r.inputDigest,stageId:r.stageId,candidateDigest:p.candidateDigest,...(p.preparation?{preparationInput:p.preparation.input}:{}),...(p.candidateInput?{candidateInput:p.candidateInput}:{}),requestedAt:r.requestedAt,deadlineAt:r.deadlineAt};
     return{p,config,client:connections.platform(p.binding),ci};
   }
@@ -234,6 +311,45 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
     catch(error){if(error instanceof ServiceError&&error.code==='NOT_FOUND')return result;throw error;}
     const output=verifyNativeStageResult(receipt,kind,p.owners[kind],a,p.toolchainLockDigest,p.effectiveConfigDigest);
     retain(r.projectId,'stage-native-receipt',r.id+':'+kind,receipt);return output;
+  }
+  function comparisonInput(r:StageRequest,capture:NativeRepairCapture){
+    const current=readCiRepairEvidence(store,r);
+    if(capture.schema!=='runtime-repair-capture/v2'||!capture.origins||!current.ci||!current.harness?.receipt||!current.ontology?.receipt)reject('REPAIR_COMPARISON_INPUT','Comparison requires original actual product results',409);
+    const value={schema:'runtime-repair-comparison-input/v1',rootRef:capture.rootRef,rootDigest:capture.rootDigest,captureDigest:capture.digest,originsDigest:capture.originsDigest,origins:capture.origins.map(o=>({originalObservationRef:o.progress.observationRef,candidateDigest:o.candidateDigest,...comparisonFacts(o.request,readCiRepairEvidence(store,o.request))})),probe:comparisonFacts(r,current)};
+    if(Buffer.byteLength(canonical(value))>1048576)reject('REPAIR_COMPARISON_LIMIT','Comparison input exceeds its fixed bounded native profile',409);return value;
+  }
+  async function compare(r:StageRequest,p:CiPlan,config:Readonly<IntegrationConfiguration>,actor:Principal,permit:(()=>Promise<Principal>)|undefined,signal:AbortSignal):Promise<'DONE'|'PENDING'> {
+    const capture=readNativeRepairCapture(store,r);if(capture?.schema!=='runtime-repair-capture/v2')return'DONE';
+    const policy=p.repairComparison;if(!policy||!capture.comparison)reject('REPAIR_POLICY_REQUIRED','Pre-bound candidate repair requires its exact published comparison policy',409);
+    let a=store.object(r.projectId,'lifecycle-recovery-ledger','comparison-action:'+r.id) as NativeAction|null;
+    assertCiRepairOrigins(store,capture,r.plan);
+    const unavailable=store.object(r.projectId,'lifecycle-recovery-ledger','comparison-unavailable:'+r.id);
+    if(unavailable){const v=record(unavailable),{digest,...body}=v;if(a||v.schema!=='runtime-repair-comparison-unavailable/v1'||v.requestDigest!==r.digest||v.captureDigest!==capture.digest||v.reason!=='REPAIR_COMPARISON_LIMIT'||digest!==valueDigest(body))reject('CORRUPT_REPAIR_HISTORY','Comparison unavailability differs from its original request',503);return'DONE';}
+    const retainUnavailable=()=>{const body={schema:'runtime-repair-comparison-unavailable/v1',requestDigest:r.digest,captureDigest:capture.digest,reason:'REPAIR_COMPARISON_LIMIT'};retain(r.projectId,'lifecycle-recovery-ledger','comparison-unavailable:'+r.id,{...body,digest:valueDigest(body)},true);};
+    let values:ReturnType<typeof comparisonInput>;
+    try{values=comparisonInput(r,capture);}catch(error){
+      if(a||!(error instanceof ServiceError)||error.code!=='REPAIR_COMPARISON_LIMIT')throw error;
+      retainUnavailable();return'DONE';
+    }
+    const adapter=owner(config,policy.owner,'harness',r.projectId),observed=record(readCiRepairEvidence(store,r).harness!.action.request.input.observation);
+    const context={...readCiRepairEvidence(store,r).harness!.action.context,effectiveConfigDigest:policy.effectiveConfigDigest};
+    const observationInput={...observed,values:{runtimeRepairComparison:values}};
+    if(a){
+      if(record(a).captureDigest!==capture.digest||record(a).policyDigest!==valueDigest(policy)||record(a).originsDigest!==capture.originsDigest||a.request.requestId!==capture.comparison.expectedRequestId||!same(a.request.input.observation,observationInput)||!same(a.context,context))reject('REPAIR_COMPARISON_CHANGED','Original comparison action or complete origin input changed',503);
+    }else{
+      if(!permit)return'PENDING';
+      const state=record(await adapter.read(actor,r.projectId,{operation:'workspace.inspect',scope:policy.owner.scope,input:{}}));if(!Number.isSafeInteger(state.revision)||Number(state.revision)<0)reject('OWNER_REVISION_INVALID','Comparison owner revision unavailable',409);
+      const request:OwnerRequest={operation:'native.package.validate',scope:policy.owner.scope,input:{id:policy.owner.reference.id,version:policy.owner.reference.version,context,observation:observationInput},requestId:capture.comparison.expectedRequestId,expectedRevision:Number(state.revision)};
+      const body={request,requestDigest:ownerRequestDigest('harness',request),context,observationDigest:nativeSha256(observationInput),captureDigest:capture.digest,policyDigest:valueDigest(policy),originsDigest:capture.originsDigest};a={...body,digest:valueDigest(body)};
+      try{canonicalState(a);}catch(error){if(!(error instanceof ServiceError)||error.code!=='INPUT_LIMIT')throw error;retainUnavailable();return'DONE';}
+      signal.throwIfAborted();retain(r.projectId,'lifecycle-recovery-ledger','comparison-action:'+r.id,a,true);
+      const fresh=await permit();signal.throwIfAborted();await adapter.mutate(fresh,r.projectId,request,{projectId:r.projectId,owner:'harness',requestDigest:a.requestDigest,authorityRef:r.authorityRef,expiresAt:r.deadlineAt});
+    }
+    let receipt:Record<string,unknown>;
+    try{receipt=record(await adapter.read(actor,r.projectId,{operation:'native.receipt.inspect',scope:policy.owner.scope,input:{requestId:a.request.requestId}}));}
+    catch(error){if(error instanceof ServiceError&&['NOT_FOUND','RECEIPT_NOT_FOUND'].includes(error.code))return'PENDING';throw error;}
+    const result=verifyNativeStageResult(receipt,'harness',policy.owner,a,p.toolchainLockDigest,policy.effectiveConfigDigest);if(result.status==='UNKNOWN')return'PENDING';
+    retain(r.projectId,'lifecycle-recovery-ledger','comparison-receipt:'+r.id,receipt,true);return'DONE';
   }
   async function preparedSource(r:StageRequest,p:CiPlan,verified:VerifiedCiArtifact,client:PlatformClient,actor:Principal,signal:AbortSignal):Promise<{digest:string;observation:PreparedSourceObservation}|null>{
     if(!p.preparation)return null;if(!verified.preparationOutput)reject('CI_PREPARATION_OUTPUT','Exact preparation CI output is required',409);
@@ -275,6 +391,7 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
       validateCandidateInput(input,{commit:p.commit,candidateDigest:verified.candidateDigest},p.binding.provider,p.binding.repositoryId);
       const body={schema:'runtime-candidate-source-evidence/v1',requestId:r.id,requestDigest:r.digest,pinsDigest:r.pinsDigest,outcomeDigest:valueDigest(result.outcome),input};retain(r.projectId,'stage-candidate-source',r.id,{...body,digest:valueDigest(body)},true);
     }
+    if(readNativeRepairCapture(store,r)?.schema==='runtime-repair-capture/v2'&&owners.every(o=>o.status!=='UNKNOWN')&&await compare(r,p,config,actor,undefined,signal)==='PENDING')return observation(r,p,ci,'RUNNING');
     return result;
   }
   async function advance(r:StageRequest,instance:LifecycleInstance,progress:StageProgress,permit:()=>Promise<Principal>,signal:AbortSignal):Promise<StageObservation>{
@@ -302,9 +419,53 @@ export function createCiStageAdapter(store:RuntimeStore,configPath:string,connec
       if(fresh.id!==r.initiatedBy.id||fresh.revision!==r.initiatedBy.revision)reject('AUTHORITY_CHANGED','Native continuation requires the original current principal');
       await a.mutate(fresh,r.projectId,request,{projectId:r.projectId,owner:kind,requestDigest:body.requestDigest,authorityRef:r.authorityRef,expiresAt:r.deadlineAt});
     }
+    if(readNativeRepairCapture(store,r)?.schema==='runtime-repair-capture/v2'){
+      // The ordinary inspector authenticates and retains the product receipts
+      // before the separate comparison can consume them.
+      await inspect(r,instance,progress,actor,signal);const results=readCiRepairEvidence(store,r);
+      if(results.harness?.receipt&&results.ontology?.receipt&&results.harness.result?.status!=='UNKNOWN'&&results.ontology.result?.status!=='UNKNOWN')await compare(r,p,config,actor,permit,signal);
+    }
     return inspect(r,instance,progress,actor,signal);
   }
-  return{prepare,inspect,reconcileAdvance:inspect,advance,async dispatch(r,instance,permit,signal){
+  async function verifyRepair(subject:StageRepairSubject,actor:Principal,signal:AbortSignal):Promise<StageRepairFactsV2|null>{
+    if(subject.schema!=='runtime-stage-repair-subject/v2'||subject.stageId!=='verification'||!subject.candidateDigest||!subject.origins.length)return null;
+    authorize(actor,subject.projectId,'execution.request');signal.throwIfAborted();
+    const current=subject.preparedPlan.parameters as unknown as CiPlan,policy=current.repairComparison;
+    if(subject.preparedPlan.adapterId!==ADAPTER_ID||!policy||current.candidateDigest!==subject.candidateDigest)return null;
+    const history=readNativeRepairHistory(store,subject.projectId,subject.origins[0].request.id,actor);
+    if(history.rootRef!==subject.root.ref||history.rootDigest!==subject.root.digest||history.open.length)return null;
+    assertCiRepairCaptureProgress(store,actor,subject.origins[0].request.id,subject.projectId);
+    const rounds:StageRepairFactsV2['rounds']=[],originDigest=valueDigest(subject.origins);let chosen:{capture:NativeRepairCapture;round:typeof history.rounds[number];view:ReturnType<typeof readCiRepairEvidence>;request:StageRequest}|null=null;
+    for(const round of history.rounds){
+      if(round.schema!=='runtime-repair-round/v2')return null;
+      const capture=history.captures.find(c=>c.verificationRequestId===round.requestId)!;const r=store.object(subject.projectId,'stage-request',round.requestId) as StageRequest,view=readCiRepairEvidence(store,r),status=view.plan.repairComparison?comparisonStatuses(view.plan.repairComparison,view.comparison?.receipt??null):null;
+      const before=valueDigest({originsDigest:capture.originsDigest,policy:view.plan.repairComparison??null});
+      rounds.push({evidenceRef:'runtime:repair-round/'+r.id,beforeFactsDigest:before,afterFactsDigest:status?.comparable==='PASS'&&status.progress==='FAIL'?before:valueDigest({round:round.digest,status})});
+      if(capture.schema!=='runtime-repair-capture/v2'||capture.originsDigest!==originDigest||r.instanceId!==subject.instanceId||round.outcome!=='PASS'||!same(view.plan.repairComparison,policy)||!status||status.comparable!=='PASS'||status.regression!=='PASS'||!view.ci?.candidate||!view.harness?.receipt||!view.comparison?.receipt||view.ontology?.result?.status!=='PASS')continue;
+      const candidate=round.candidateEvidence?.candidate,progress=store.object(subject.projectId,'stage-progress',r.id) as StageProgress,manifest=progress.observation?.outcome.candidate,source=store.object(subject.projectId,'stage-candidate-source',r.id);
+      if(!candidate||!manifest||!source||progress.phase!=='COMPLETE'||valueDigest(manifest)!==subject.candidateDigest||view.ci.candidateDigest!==subject.candidateDigest||valueDigest(view.ci.candidate)!==subject.candidateDigest||view.harness.action.context.projectCandidateDigest!==subject.candidateDigest||candidate.manifestDigest!==subject.candidateDigest||candidate.outcomeDigest!==valueDigest(progress.observation!.outcome)||candidate.sourceEvidenceDigest!==record(source).digest||record(source).outcomeDigest!==candidate.outcomeDigest||record(source).digest!==valueDigest((({digest,...body})=>body)(record(source))))reject('REPAIR_CANDIDATE_CHANGED','Completed probe candidate must match its own outcome, CI archive and native action',409);
+      if(!same(record(view.comparison.action.request.input.observation).values,{runtimeRepairComparison:comparisonInput(r,capture)})||record(view.comparison.action).captureDigest!==capture.digest||record(view.comparison.action).originsDigest!==originDigest||record(view.comparison.action).policyDigest!==valueDigest(policy)||view.comparison.action.request.requestId!==capture.comparison?.expectedRequestId||round.candidateEvidence?.comparison?.actionDigest!==view.comparison.action.digest||round.candidateEvidence?.comparison?.receiptDigest!==valueDigest(view.comparison.receipt)||round.candidateEvidence?.product?.actionDigest!==view.harness.action.digest||round.candidateEvidence?.product?.receiptDigest!==valueDigest(view.harness.receipt)||!same(round.candidateEvidence?.ci,{archiveDigest:view.ci.archiveDigest,resultDigest:view.ci.resultDigest,candidateDigest:view.ci.candidateDigest}))reject('REPAIR_COMPARISON_CHANGED','Native comparison must certify the exact complete original input',503);
+      chosen={capture,round,view,request:r};
+    }
+    if(!chosen)return null;
+    // Both sides describe the same fault-relevant inputs. Request, receipt and
+    // comparison action identities authenticate evidence; they are not repairs.
+    const inputs=(p:CiPlan,candidateDigest:string,observation:unknown)=>({sourceDigest:p.sourceTree!.treeDigest,candidateDigest,toolchainDigest:valueDigest({lock:p.toolchainLockDigest,manifest:p.toolchainManifestDigest??null}),dependencyClosureDigest:valueDigest({owners:p.owners,binding:p.binding,effectiveConfigDigest:p.effectiveConfigDigest,values:record(observation).values})});
+    const selected=chosen,after=inputs(current,subject.candidateDigest,selected.view.harness!.action.request.input.observation);
+    if(selected.view.plan.commit!==current.commit||selected.view.plan.sourceTree?.treeDigest!==current.sourceTree?.treeDigest||!same(selected.view.plan.binding,current.binding)||!same(selected.view.plan.owners,current.owners)||selected.view.plan.effectiveConfigDigest!==current.effectiveConfigDigest||selected.view.plan.toolchainLockDigest!==current.toolchainLockDigest||selected.view.plan.toolchainManifestDigest!==current.toolchainManifestDigest)return null;
+    const currentReport=record(selected.view.harness!.receipt!.result),currentCriteria=(currentReport.criteria as Record<string,unknown>[]);
+    if(currentReport.executionStatus!=='SUCCEEDED')return null;
+    const origins:StageRepairFactsV2['origins']=[];
+    for(const origin of subject.origins){
+      const original=readCiRepairEvidence(store,origin.request),report=record(original.harness?.receipt?.result??{}),criteria=report.criteria;
+      if(origin.request.stageId!=='verification'||!origin.candidateDigest||!original.ci||original.ci.status!=='PASSED'||original.ontology?.result?.status!=='PASS'||!original.harness?.receipt||report.executionStatus!=='SUCCEEDED'||!Array.isArray(criteria)||criteria.some(raw=>{const c=record(raw);return c.status!=='PASS'&&(c.status!=='FAIL'||c.variantId!=='actual-observation');})||original.harness.action.context.projectCandidateDigest!==origin.candidateDigest||!same(original.plan.owners,current.owners)||original.plan.effectiveConfigDigest!==current.effectiveConfigDigest||original.plan.toolchainLockDigest!==current.toolchainLockDigest)return null;
+      const failedCriteria=criteria.map(record).filter(c=>c.status==='FAIL').map(c=>({criterionId:string(c.criterionId),variantId:'actual-observation' as const,evidenceDigest:hash(c.evidenceDigest)}));
+      if(!failedCriteria.length||failedCriteria.some(c=>!currentCriteria.some(x=>x.criterionId===c.criterionId&&x.variantId==='actual-observation'&&x.status==='PASS')))return null;
+      origins.push({requestId:origin.request.id,requestDigest:origin.request.digest,observationRef:origin.progress.observationRef!,before:inputs(original.plan,origin.candidateDigest,original.harness.action.request.input.observation),failedCriteria,coverage:failedCriteria.map(c=>({criterionId:c.criterionId,captureDigest:selected.capture.digest,roundDigest:selected.round.digest,nativeActionDigest:selected.view.harness!.action.digest,nativeReceiptDigest:valueDigest(selected.view.harness!.receipt),comparisonActionDigest:selected.view.comparison!.action.digest,comparisonReceiptDigest:valueDigest(selected.view.comparison!.receipt),probeCandidateDigest:subject.candidateDigest!}))});
+    }
+    signal.throwIfAborted();return{schema:'runtime-stage-repair-facts/v2',subjectDigest:valueDigest(subject),rootRef:subject.root.ref,rootDigest:subject.root.digest,originsDigest:originDigest,failureClass:comparisonStatuses(policy,selected.view.comparison!.receipt)?.transient==='PASS'?'TRANSIENT':'DETERMINISTIC',failureKind:'FIXED_PRODUCT_CHECK',origins,after,rounds,evidenceRef:'runtime:repair-round/'+selected.request.id,expiresAt:new Date(Math.min(...subject.origins.map(o=>Date.parse(o.request.deadlineAt)),Date.parse(selected.capture.deadlineAt))).toISOString()};
+  }
+  return{prepare,inspect,reconcileAdvance:inspect,advance,verifyRepair,async dispatch(r,instance,permit,signal){
     const actor=await permit(),{p,client,ci}=plan(r,instance,actor);
     await currentSource(p,instance,actor,signal);signal.throwIfAborted();
     // The execution core persisted the original StageRequest before entering

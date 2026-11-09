@@ -61,6 +61,21 @@ export interface EvidenceQualification {
   establishesEnvironmentState:false; executionAuthorized:false;
 }
 
+/** V2 selects protected records. It never accepts an execution, history,
+ * dependency inventory, policy verdict or verifier from a public caller. */
+export interface QualificationSelection {
+  schema:'runtime-evidence-qualification-selection/v2'; scope:EvidenceScope;
+  caseId:string; currentCandidateDigest:string; originalExecutionDigest:string;
+  phase:'PRE_RELEASE'|'POST_RELEASE';
+}
+export interface NativeEvidenceQualification extends Omit<EvidenceQualification,'schema'> {
+  schema:'runtime-evidence-qualification/v2'; phase:'PRE_RELEASE'|'POST_RELEASE';
+  actionRef:string; actionDigest:string; protectedFactsDigest:string;
+  originalReceiptRef:string; originalRawBytesRef:string;
+  historyWatermark:string; nativeReceiptDigest:string|null; nativeReportDigest:string|null;
+  releaseAuthorized:false; formalAcceptanceEligible:boolean;
+}
+
 export interface RecoveryRoot {
   schema:'runtime-recovery-root/v1'; workspaceId:string; projectId:string;
   /** Stable owner-resolved lineage, never derived from Host, path or new request. */

@@ -5,10 +5,12 @@ import {isAbsolute,join,resolve} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {isDeepStrictEqual} from 'node:util';
 import {verifyDecisionEvidence,type DecisionSubject} from '../../vendor/compatibility/v1/decision-evidence.mjs';
-import {canonical} from '../server/errors.js';
+import {canonical,evidenceValueDigest} from '../server/errors.js';
 import {evaluateGovernance} from '../governance.js';
 import {inspectSourceCiRecords} from './source-ci.js';
-import {inspectAcceptanceEvidence,inspectCorrectionAcceptanceEvidence} from './evidence.js';
+import {inspectAcceptanceEvidence,inspectCorrectionAcceptanceEvidence,inspectQualifiedAcceptanceEvidence,assertQualifiedAcceptanceCurrent,type QualifiedAcceptanceEvidenceRequest} from './evidence.js';
+import type {NativeQualificationService} from '../lifecycle/evidence-qualification.js';
+import type {Principal} from '../server/security.js';
 import {inspectUsageAcceptanceEvidence} from './usage-evidence.js';
 
 export const RUNTIME_RELEASE_REPOSITORY='yeliang-wang/evopilot-runtime' as const;
@@ -24,6 +26,11 @@ export interface RuntimeReleasePreflightInput {
  schema:'runtime-release-preflight-input/v1';candidate:RuntimeReleaseCandidateInput;
  scope:{workspaceId:string;projectId:string;};
  reports:{scenario:string;report:ReleaseFileReference;}[];usageReport:ReleaseFileReference;correctionReport:ReleaseFileReference;releaseNotes:ReleaseFileReference;
+}
+export interface RuntimeQualifiedReleasePreflightInput {
+ schema:'runtime-release-preflight-input/v2';candidate:RuntimeReleaseCandidateInput;
+ scope:{workspaceId:string;projectId:string};
+ qualifications:QualifiedAcceptanceEvidenceRequest['qualifications'];releaseNotes:ReleaseFileReference;
 }
 export interface RuntimeReleaseGovernance {
  status:'VALID';targetId:'runtime-v090-independent-lifecycle';targetVersion:'0.9.0';
@@ -156,4 +163,24 @@ export async function verifyRuntimeReleaseDecision(repositoryRoot:string,raw:Run
  const at=Date.parse(authenticated.authenticatedAt),expires=Date.parse(authenticated.expiresAt),now=Date.now();requireValue(Number.isFinite(at)&&at>=started-60000&&at<=now+5000&&Number.isFinite(expires)&&expires>now&&expires>at&&expires<=started+900000,'Authentication is stale or unbounded');signal.throwIfAborted();
  const fresh=await prepareRuntimeRelease(repositoryRoot,input,signal);requireValue(fresh.reviewDigest===review.reviewDigest,'Release material changed during authentication');decision(reference,subject);requireValue(expires>Date.now(),'Authentication expired during final revalidation');signal.throwIfAborted();
  return{schema:'runtime-release-authorization/v1' as const,reviewDigest:review.reviewDigest,governance:review.governance,publication:review.publication,decisionEvidenceDigest:reference.sha256,decisionSourceDigest:sourceRef.sha256,authenticationDigest:digest(authenticated),expiresAt:authenticated.expiresAt,authorizedOperation:'github.preview.publish' as const,releaseAuthorized:true as const,installationAuthorized:false as const,migrationAuthorized:false as const,postRelease:review.acceptance.postRelease,overallCompletion:'NOT_COMPLETE' as const,privateEvidenceUploadAllowed:false as const};
+}
+
+/** V2 native qualification preflight. Like v1 this is review material only;
+ * semantic approval, exact release authentication and public delivery remain
+ * independent decisions. The service capability is trusted composition, never
+ * part of the JSON input or an imported assessment object. */
+export async function prepareQualifiedRuntimeRelease(repositoryRoot:string,raw:RuntimeQualifiedReleasePreflightInput,service:NativeQualificationService,actor:Principal,signal:AbortSignal) {
+ const input=structuredClone(raw);exact(input,['schema','candidate','scope','qualifications','releaseNotes']);requireValue(input.schema==='runtime-release-preflight-input/v2','Wrong v2 preflight schema');exact(input.scope,['workspaceId','projectId']);slug(input.scope.workspaceId);slug(input.scope.projectId);
+ const governed=governance(repositoryRoot),notes=pinned(input.releaseNotes,262144);let notesText:string;
+ try{notesText=new TextDecoder('utf-8',{fatal:true}).decode(notes);}catch{return fail('Release notes must be UTF-8 Markdown');}
+ requireValue(notesText.trim().length>0&&!/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(notesText),'Release notes must be nonempty Markdown text');
+ const candidate=await inspectRuntimeReleaseCandidate(repositoryRoot,input.candidate,signal),files=input.candidate.files;
+ const acceptance=await inspectQualifiedAcceptanceEvidence(repositoryRoot,{schema:'runtime-qualified-release-evidence-input/v2',sourceCommit:input.candidate.sourceCommit,manifest:files['distribution-manifest.json'],archive:files['evopilot-runtime-0.9.0-darwin-arm64.tar.gz'],sourceRevision:files['source-revision.txt'],scope:input.scope,qualifications:input.qualifications},service,actor,signal);
+ requireValue(acceptance.candidateDigest===candidate.candidateDigest&&acceptance.archiveDigest===candidate.archiveDigest&&acceptance.qualified===698&&acceptance.executed+acceptance.reused===698,'Native qualification denominator or candidate changed');
+ verifyRuntimeReleaseGovernanceCurrent(repositoryRoot,candidate.sourceCommit,governed);signal.throwIfAborted();
+ const review={schema:'runtime-release-review/v2' as const,scope:input.scope,governance:governed,publication:{repository:candidate.repository,version:candidate.version,tag:candidate.tag,title:candidate.title,prerelease:candidate.prerelease,latest:candidate.latest,sourceCommit:candidate.sourceCommit,candidateDigest:candidate.candidateDigest,archiveDigest:candidate.archiveDigest,files:candidate.files,releaseNotes:{sha256:sha(notes),bytes:notes.length,mediaType:'text/markdown; charset=utf-8'}},sourceCi:candidate.sourceCi,acceptance,postRelease:{required:11,passed:0,status:'NOT_EVALUATED',scenarios:['E21','E22','UT24','LC12']},privacy:{publicAssets:[...RUNTIME_RELEASE_ASSETS],privateEvidenceUploadAllowed:false},productAcceptance:'NOT_EVALUATED',releaseAuthorized:false,installationAuthorized:false};
+ // Full original histories remain in private audit records. Digest computation
+ // uses the bounded evidence profile rather than the small public request cap.
+ const reviewDigest=evidenceValueDigest(review);assertQualifiedAcceptanceCurrent(service,input.scope.projectId,acceptance.qualifications,actor,signal);
+ return{...review,reviewDigest};
 }

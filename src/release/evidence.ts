@@ -4,6 +4,10 @@ import {closeSync,constants,fstatSync,openSync,readFileSync,realpathSync} from '
 import {basename,dirname,isAbsolute,join,resolve} from 'node:path';
 import {isDeepStrictEqual} from 'node:util';
 import {evaluateGovernance} from '../governance.js';
+import {valueDigest} from '../lifecycle/base.js';
+import {assertNativeQualificationService,type NativeQualificationService} from '../lifecycle/evidence-qualification.js';
+import type {Principal} from '../server/security.js';
+import type {NativeEvidenceQualification} from '../lifecycle/correction-contract.js';
 
 interface FileReference {ref:string;sha256:string;}
 export interface AcceptanceEvidenceRequest {
@@ -16,6 +20,10 @@ export interface CorrectionAcceptanceEvidenceRequest extends Omit<AcceptanceEvid
 }
 export interface E20PrerequisiteEvidenceRequest extends Omit<AcceptanceEvidenceRequest,'schema'> {
   schema:'runtime-e20-prerequisite-evidence-input/v1';
+}
+export interface QualifiedAcceptanceEvidenceRequest extends Omit<AcceptanceEvidenceRequest,'schema'|'reports'> {
+  schema:'runtime-qualified-release-evidence-input/v2';scope:{workspaceId:string;projectId:string};
+  qualifications:{caseId:string;actionRef:string;actionDigest:string}[];
 }
 type ObjectValue=Record<string,unknown>;
 const sha=(bytes:Buffer):string=>createHash('sha256').update(bytes).digest('hex');
@@ -103,7 +111,7 @@ function inspectFixedEvidence(repositoryRoot:string,input:AcceptanceEvidenceRequ
     const selection=parse(selectionBytes);
     requireValue(selection.scenario===scenario&&selection.matrixDigest===matrixDigest&&selection.qualification==='FINAL_CANDIDATE'&&selection.candidateDigest===candidateDigest&&isDeepStrictEqual(selection.candidate,report.candidate),'Selection differs from the report or frozen cases');
     requireValue(isDeepStrictEqual(array(selection.selectedCaseIds).map(string).sort(),expected),'Selected case list is incomplete or duplicated');
-    const collectorPins=object(selection.collectorPins),collectorNames=['support.mjs','preflight.mjs',scenario.toLowerCase()+'.test.mjs',...(['E01','E02','E04','E05','E06','E07','E12','E13','E16','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(['E01','E02','E13'].includes(scenario)?['execution.mjs']:[])];exact(collectorPins,collectorNames);
+    const collectorPins=object(selection.collectorPins),collectorNames=['support.mjs','preflight.mjs',scenario.toLowerCase()+'.test.mjs',...(['E01','E02','E04','E05','E06','E07','E12','E13','E16','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(['E01','E02','E04','E05','E13'].includes(scenario)?['execution.mjs']:[])];exact(collectorPins,collectorNames);
     for(const name of collectorNames){
       const relative='tests/acceptance/v090/'+name,committed=git(['show',input.sourceCommit+':'+relative]);
       requireValue(sha(committed)===digest(collectorPins[name])&&sha(read(join(repositoryRoot,relative),4194304,false))===sha(committed),'Collector differs from the tested source');
@@ -204,4 +212,49 @@ export function inspectCorrectionAcceptanceEvidence(repositoryRoot:string,input:
   const setup=array(report.setupEvidence);requireValue(setup.length>0,'Correction installed service setup evidence is missing');
   for(const item of setup)evidence(item,null,null);
   return{schema:'runtime-correction-evidence-audit/v1' as const,sourceCommit:input.sourceCommit,candidateDigest,archiveDigest:sha(archive),addendumDigest,reportDigest:sha(reportBytes),required:20,passed:20,failed:0,skipped:0,requiredVectors:observedVectors,passedVectors:observedVectors,originalRequired:688,originalAcceptanceIndependentlyRequired:true as const,combinedRequired:709,correctionPostReleaseRemaining:1,evidenceFiles,evidenceBytes,recordIntegrity:'VERIFIED' as const,executionAuthenticity:'NOT_ESTABLISHED_BY_FILE_HASHES' as const,productAcceptance:'NOT_EVALUATED' as const,releaseAuthorized:false as const,remainingChecks:['Original 688 acceptance obligations remain independently required','Review actual execution and Host provenance, not passing labels','Independent source CI and exact release decision','LC12 downloaded release and installed current Host acceptance','HO01–HO03 remain separate post-delivery coordination obligations']};
+}
+
+/** Additive v2 audit: each entry is a reference to a durable owner action, never
+ * a copied PASS, supplied verifier or self-consistent qualification document.
+ * V1 auditors and immutable raw reports keep their original behavior. */
+export async function inspectQualifiedAcceptanceEvidence(repositoryRoot:string,input:QualifiedAcceptanceEvidenceRequest,service:NativeQualificationService,actor:Principal,signal:AbortSignal) {
+  assertNativeQualificationService(service);signal.throwIfAborted();
+  exact(object(input),['schema','sourceCommit','manifest','archive','sourceRevision','scope','qualifications']);exact(object(input.scope),['workspaceId','projectId']);
+  requireValue(input.schema==='runtime-qualified-release-evidence-input/v2','Wrong qualification audit schema');
+  string(input.scope.workspaceId);string(input.scope.projectId);
+  const {candidateDigest,archive}=inspectEvidenceCandidate(repositoryRoot,input);
+  const paths=['governance/acceptance-v090.json','governance/parameter-matrix-v090.json','governance/token-usage-v090.json','governance/lifecycle-correction-v090.json'];
+  const bindings=paths.map(path=>{const bytes=read(join(repositoryRoot,path),2097152,false);return{path,sha256:'sha256:'+sha(bytes),bytes:bytes.length};});
+  const acceptanceScopeDigest=valueDigest({product:'runtime',targetId:'runtime-v090-independent-lifecycle',targetVersion:'0.9.0',catalogBindings:bindings});
+  const matrix=parse(read(join(repositoryRoot,paths[1]),2097152,false)),usage=parse(read(join(repositoryRoot,paths[2]),2097152,false)),correction=parse(read(join(repositoryRoot,paths[3]),2097152,false));
+  const originalCases=array(matrix.caseInstances).map(object),usageCases=array(object(usage.acceptance).cases).map(object),correctionCases=array(object(correction.acceptance).cases).map(object);
+  const original=originalCases.filter(c=>c.phase==='PRE_RELEASE').map(c=>string(c.caseInstanceId)),additive=usageCases.filter(c=>c.phase==='PRE_RELEASE').map(c=>string(c.id)),corrected=correctionCases.filter(c=>c.phase==='PRE_RELEASE').map(c=>string(c.id));
+  requireValue(originalCases.length===664&&usageCases.length===24&&correctionCases.length===21&&original.length===655&&additive.length===23&&corrected.length===20,'Fixed original, usage and LC acceptance denominators changed');
+  const expected=[...original,...additive,...corrected].sort(),entries=array(input.qualifications).map(object);
+  requireValue(entries.length===698&&isDeepStrictEqual(entries.map(e=>e.caseId).sort(),expected),'Every fixed PRE obligation requires one original native qualification action');
+  const rows:Awaited<ReturnType<NativeQualificationService['inspect']>>[]=[];let executed=0,reused=0;
+  for(const entry of entries){
+    signal.throwIfAborted();exact(entry,['caseId','actionRef','actionDigest']);const caseId=string(entry.caseId),actionRef=string(entry.actionRef),actionDigest=string(entry.actionDigest);
+    requireValue(/^sha256:[a-f0-9]{64}$/.test(actionDigest),'Exact original assessment action digest required');
+    const q=await service.inspect(input.scope.projectId,actionRef,actor,signal);
+    requireValue(q.schema==='runtime-evidence-qualification/v2'&&q.phase==='PRE_RELEASE'&&q.actionRef===actionRef&&q.actionDigest===actionDigest&&q.caseId===caseId&&q.currentCandidateDigest===candidateDigest&&isDeepStrictEqual(q.scope,{...input.scope,acceptanceScopeDigest}),'Qualification does not cover the exact current source, case, scope and phase');
+    requireValue(q.formalAcceptanceEligible===true&&q.status==='QUALIFIED'&&q.reasons.length===0&&q.assessment?.verdict==='PASS'&&q.nativeReceiptDigest&&q.nativeReportDigest&&q.expiresAt&&Date.parse(q.expiresAt)>Date.now()&&q.establishesEnvironmentState===false&&q.executionAuthorized===false&&q.releaseAuthorized===false,'Current authentic native assessment is unavailable, stale or not passing');
+    if(q.mode==='EXECUTED'){requireValue(q.originalCandidateDigest===candidateDigest,'Executed evidence belongs to another candidate');executed++;}
+    else{requireValue(q.mode==='PASS_REUSED'&&q.originalCandidateDigest!==candidateDigest&&!q.hasFailureHistory&&q.assessment?.executionRequirement==='REUSE_PERMITTED','Reuse cannot replace execution or hide failures');reused++;}
+    rows.push(q);
+  }
+  // No per-case TTL may expire while the remaining bounded inventory is read.
+  requireValue(rows.every(q=>Date.parse(q.expiresAt!)>Date.now()),'A qualification expired during the full audit');signal.throwIfAborted();inspectEvidenceCandidate(repositoryRoot,input);
+  const family=(ids:string[])=>({required:ids.length,qualified:ids.length,executed:rows.filter(q=>ids.includes(q.caseId)&&q.mode==='EXECUTED').length,reused:rows.filter(q=>ids.includes(q.caseId)&&q.mode==='PASS_REUSED').length});
+  // No async work follows: earlier rows cannot retain revoked trust/history
+  // merely because their TTL remains valid while later rows are inspected.
+  assertQualifiedAcceptanceCurrent(service,input.scope.projectId,rows,actor,signal);
+  return{schema:'runtime-qualified-release-evidence-audit/v2' as const,sourceCommit:input.sourceCommit,candidateDigest,archiveDigest:sha(archive),acceptanceScopeDigest,catalogBindings:bindings,required:698,qualified:698,executed,reused,failed:0,skipped:0,combinedRequired:709,postReleaseRemaining:11,original:family(original),usage:family(additive),correction:family(corrected),qualifications:rows,executionAuthenticity:'CURRENT_NATIVE_ASSESSMENTS' as const,productAcceptance:'NOT_EVALUATED' as const,releaseAuthorized:false as const,establishesEnvironmentState:false as const};
+}
+
+/** Same synchronous final guard used by the complete release audit. A saved
+ * JSON qualification is not accepted as a freshly authenticated native row. */
+export function assertQualifiedAcceptanceCurrent(service:NativeQualificationService,projectId:string,rows:readonly NativeEvidenceQualification[],actor:Principal,signal:AbortSignal):void {
+  assertNativeQualificationService(service);requireValue(rows.length>0&&rows.length<=698,'Bounded nonempty native qualification batch required');
+  for(const row of rows)service.assertCurrent(projectId,row,actor,signal);
 }

@@ -22,7 +22,7 @@ function fixture(t,{prerequisitesOnly=false}={}){
  const matrixBytes=fs.readFileSync(join(source,'governance/parameter-matrix-v090.json')),matrix=JSON.parse(matrixBytes),candidate={manifestDigest:manifest.sha256,archiveDigest:archive.sha256,version:'0.9.0',serviceId:'synthetic',workspaceId:'synthetic',projectId:'synthetic'},candidateDigest='sha256:'+manifest.sha256;
  const input={schema:'runtime-release-evidence-input/v1',sourceCommit,manifest,archive,sourceRevision,reports:[]};
  for(let i=1;i<=(prerequisitesOnly?19:20);i++){
-  const scenario='E'+String(i).padStart(2,'0'),dir=join(evidenceRoot,scenario),ids=matrix.caseInstances.filter(c=>c.scenario===scenario).map(c=>c.caseInstanceId),collectorPins=Object.fromEntries(['support.mjs','preflight.mjs',scenario.toLowerCase()+'.test.mjs',...(['E01','E02','E04','E05','E06','E07','E12','E13','E16','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(['E01','E02','E13'].includes(scenario)?['execution.mjs']:[])].map(name=>[name,sha(fs.readFileSync(join(source,'tests/acceptance/v090',name)))]));
+  const scenario='E'+String(i).padStart(2,'0'),dir=join(evidenceRoot,scenario),ids=matrix.caseInstances.filter(c=>c.scenario===scenario).map(c=>c.caseInstanceId),collectorPins=Object.fromEntries(['support.mjs','preflight.mjs',scenario.toLowerCase()+'.test.mjs',...(['E01','E02','E04','E05','E06','E07','E12','E13','E16','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(['E01','E02','E04','E05','E13'].includes(scenario)?['execution.mjs']:[])].map(name=>[name,sha(fs.readFileSync(join(source,'tests/acceptance/v090',name)))]));
   const selection=put(join(dir,'selection.json'),{scenario,qualification:'FINAL_CANDIDATE',candidate,candidateDigest,collectorPins,matrixDigest:sha(matrixBytes),selectedCaseIds:ids,scenarioDenominator:ids.length,fullDenominator:664});
   const records=id=>{const prefix=id??'setup',request=put(join(dir,prefix+'-request.json'),{caseInstanceId:id,synthetic:true,request:'read-only fixture'}),response=put(join(dir,prefix+'-response.json'),{caseInstanceId:id,synthetic:true,response:'fixture result'});return{caseInstanceId:id,request:prefix+'-request.json',requestDigest:request.sha256,response:prefix+'-response.json',fileDigest:response.sha256};};
   const results=ids.map(caseInstanceId=>{const r={caseInstanceId,status:'PASS',qualification:'FINAL_CANDIDATE',candidateDigest,assertions:{synthetic:'Schema/integrity fixture only; not product acceptance'},evidence:[records(caseInstanceId)]};put(join(dir,caseInstanceId+'.json'),r);return r;});
@@ -62,7 +62,7 @@ test('changed candidate, wrong source revision and edited collectors cannot reus
 });
 test('preflight, browser, maintenance and interruption helpers are part of exact collector evidence bindings',t=>{
  const f=fixture(t);
- const pairs=[...['E03','E20'].map(scenario=>[scenario,'preflight.mjs']),...['E01','E02','E04','E05','E06','E07','E12','E13','E16','E17','E19'].map(scenario=>[scenario,'browser.mjs']),...['E05','E14','E15','E17'].map(scenario=>[scenario,'maintenance.mjs']),...['E01','E02','E13'].map(scenario=>[scenario,'execution.mjs'])];
+ const pairs=[...['E03','E20'].map(scenario=>[scenario,'preflight.mjs']),...['E01','E02','E04','E05','E06','E07','E12','E13','E16','E17','E19'].map(scenario=>[scenario,'browser.mjs']),...['E05','E14','E15','E17'].map(scenario=>[scenario,'maintenance.mjs']),...['E01','E02','E04','E05','E13'].map(scenario=>[scenario,'execution.mjs'])];
  for(const [scenario,helper] of pairs){
   const entry=f.input.reports.find(r=>r.scenario===scenario),selectionRef=join(f.evidenceRoot,scenario,'selection.json'),selection=JSON.parse(fs.readFileSync(selectionRef)),original=structuredClone(selection),report=JSON.parse(fs.readFileSync(entry.report.ref));
   for(const value of [null,'0'.repeat(64)]){
@@ -117,4 +117,14 @@ test('E20 prerequisite negative cases reach the actual partial, candidate, case-
  const raw=join(f.evidenceRoot,'E01/E01.journey-response.json'),bytes=fs.readFileSync(raw);fs.appendFileSync(raw,' ');
  assert.throws(audit,/Original evidence bytes changed/);fs.writeFileSync(raw,bytes);
  assert.equal(audit().passed,652);assert.equal(fs.existsSync(join(f.evidenceRoot,'E20')),false);
+});
+
+import {inspectQualifiedAcceptanceEvidence} from '../../dist/release/evidence.js';
+import {createNativeQualificationService} from '../../dist/lifecycle/evidence-qualification.js';
+test('v2 release audit refuses caller-supplied verifiers and serialized passing assessments',async()=>{
+ const controller=new AbortController();for(const service of [{inspect:async()=>({schema:'runtime-evidence-qualification/v2',status:'QUALIFIED'})},{schema:'runtime-evidence-qualification/v2',status:'QUALIFIED'},{}])await assert.rejects(inspectQualifiedAcceptanceEvidence(repository,{},service,{},controller.signal),{code:'TRUSTED_QUALIFICATION_SERVICE_REQUIRED'});
+});
+test('v2 release audit freezes the exact 698 PRE identities before any owner lookup',async t=>{
+ const f=fixture(t),service=createNativeQualificationService({},{}),common={schema:'runtime-qualified-release-evidence-input/v2',sourceCommit:f.input.sourceCommit,manifest:f.input.manifest,archive:f.input.archive,sourceRevision:f.input.sourceRevision,scope:{workspaceId:'synthetic',projectId:'synthetic'},qualifications:[]},signal=new AbortController().signal;
+ for(const qualifications of [[],[{caseId:'LC12',actionRef:'post-release',actionDigest:'sha256:'+'a'.repeat(64)}],Array.from({length:698},()=>({caseId:'E01.journey',actionRef:'duplicate',actionDigest:'sha256:'+'a'.repeat(64)}))])await assert.rejects(inspectQualifiedAcceptanceEvidence(f.source,{...common,qualifications},service,{},signal),/Every fixed PRE obligation/);
 });

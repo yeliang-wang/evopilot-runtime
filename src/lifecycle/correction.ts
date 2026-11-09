@@ -7,6 +7,7 @@ import type { StageProgress, StageRequest, StageObservation } from './execution.
 import { readExtensionEvidence, assertNativeRepairCaptureProgress } from '../adapters/extension-stages.js';
 import { selectNativeRepairCapture, readNativeRepairCapture, readNativeRepairHistory, type NativeRepairSelection, type NativeRepairCapture, type NativeRepairRound } from '../adapters/authority.js';
 import { readVerificationFeedbackForRequest } from '../adapters/stage-feedback.js';
+import {readCiRepairEvidence,assertCiRepairCaptureProgress,assertCiRepairOrigins} from '../adapters/stages.js';
 
 export const CORRECTION_READS = ['lifecycle.correction.inspect', 'lifecycle.correction.admission'] as const;
 export const CORRECTION_WRITES = ['lifecycle.correction.propose'] as const;
@@ -33,7 +34,7 @@ export interface CorrectionDependencies {
   /** Trusted execution service read, never a caller-provided evidence payload. */
   original(actor: Principal, projectId: string, stageRequestId: string): { request: StageRequest; progress: StageProgress };
   stageAdmission(actor: Principal, projectId: string, instanceId: string, stageId: string): Promise<unknown>;
-  repairAdmission?(actor: Principal, projectId: string, stageRequestId: string): Promise<{
+  repairAdmission?(actor: Principal, projectId: string, stageRequestId: string, correctionRef?:string): Promise<{
     allowed: boolean; reasons: string[]; originalRequestId: string; originalRequestDigest: string; executionAuthorized: false;
   }>;
 }
@@ -66,9 +67,9 @@ export function readCorrectionProposal(store:RuntimeStore, projectId: string, re
     const input=proposalInput(p.input);
     if((p.schema==='runtime-correction-proposal/v2')!==(input.verification!==undefined)|| (input.verification!==undefined)!==(p.verificationBinding!==undefined))reject('CORRUPT_CORRECTION','Linked proposal schema and native selection differ',503);
     if(p.verificationBinding!==undefined){
-      const selected=record(p.verificationBinding);exact(selected,['schema','rootRef','rootDigest','originalRequestId','originalRequestDigest','originalObservationRef','originalInstanceId','originalStageId','deadlineAt','verificationInstanceId','verificationStageId','verificationPinsDigest','verificationNodeDigest']);
-      for(const value of Object.values(selected))string(value,512);
-      if(selected.schema!=='runtime-repair-selection/v1'||selected.originalRequestId!==input.stageRequestId||selected.verificationInstanceId!==input.verification!.instanceId||selected.verificationStageId!==input.verification!.stageId||!Number.isFinite(Date.parse(String(selected.deadlineAt))))reject('CORRUPT_CORRECTION','Native verification selection identity changed',503);
+      const selected=record(p.verificationBinding),v2=selected.schema==='runtime-repair-selection/v2';exact(selected,['schema','rootRef','rootDigest','originalRequestId','originalRequestDigest','originalObservationRef','originalInstanceId','originalStageId','deadlineAt','verificationInstanceId','verificationStageId','verificationPinsDigest','verificationNodeDigest',...(v2?['origins','originsDigest']:[])]);
+      for(const [key,value]of Object.entries(selected))if(key!=='origins')string(value,512);
+      if(!v2&&selected.schema!=='runtime-repair-selection/v1'||selected.originalRequestId!==input.stageRequestId||selected.verificationInstanceId!==input.verification!.instanceId||selected.verificationStageId!==input.verification!.stageId||!Number.isFinite(Date.parse(String(selected.deadlineAt)))||v2&&(!Array.isArray(selected.origins)||!selected.origins.length||selected.origins.length>4096||selected.originsDigest!==valueDigest(selected.origins)))reject('CORRUPT_CORRECTION','Native verification selection identity changed',503);
     }
     return JSON.parse(canonical(p)) as Proposal;
   }
@@ -169,7 +170,7 @@ export function createCorrectionService(store: RuntimeStore, deps: CorrectionDep
     // repeats the trusted preparation, repair, authority and atomic budget checks.
     let repairAdmission: Awaited<ReturnType<NonNullable<CorrectionDependencies['repairAdmission']>>> | null = null;
     if (!reasons.length && deps.repairAdmission) {
-      repairAdmission = await deps.repairAdmission(actor, projectId, current.originalRequestId);
+      repairAdmission = await deps.repairAdmission(actor, projectId, current.originalRequestId,proposal?.verificationBinding?.schema==='runtime-repair-selection/v2'?string(input.correctionRef,128):undefined);
       if (repairAdmission.originalRequestId !== current.originalRequestId || repairAdmission.originalRequestDigest !== current.originalRequestDigest || repairAdmission.executionAuthorized !== false) reject('CORRECTION_SCOPE', 'Repair preview belongs to another original request', 409);
       if (!repairAdmission.allowed) reasons.push(...repairAdmission.reasons);
       if (valueDigest(facts(actor, projectId, current.originalRequestId)) !== valueDigest(current)) reasons.push('CORRECTION_FACTS_CHANGED');
@@ -208,16 +209,24 @@ export function prepareNativeRepairCapture(store:RuntimeStore,actor:Principal,co
   authorize(actor,r.projectId,'execution.request');const proposal=readCorrectionProposal(store,r.projectId,correctionRef),selected=proposal.input.verification;
   if(!selected||!proposal.verificationBinding||selected.instanceId!==r.instanceId||selected.stageId!==r.stageId||r.correctionRef!==correctionRef)reject('REPAIR_CAPTURE_SELECTION','Request must use the exact previously selected verification identity',409);
   const selection=selectNativeRepairCapture(store,r.projectId,proposal.input.stageRequestId,selected);
-  assertNativeRepairCaptureProgress(store,actor,proposal.input.stageRequestId,r.projectId);
-  if(canonical(selection)!==canonical(proposal.verificationBinding)||proposal.facts.originalRequestDigest!==selection.originalRequestDigest||proposal.facts.observationRef!==selection.originalObservationRef||Date.parse(selection.deadlineAt)<=Date.now()||Date.parse(r.deadlineAt)>Date.parse(selection.deadlineAt)||r.plan.adapterId!=='runtime-native-extension-stage-v1')reject('REPAIR_CAPTURE_SELECTION','Original failure, root, fixed verifier or cutoff changed before admission',409);
+  const v2=selection.schema==='runtime-repair-selection/v2';
+  if(v2){assertCiRepairOrigins(store,selection,r.plan);assertCiRepairCaptureProgress(store,actor,proposal.input.stageRequestId,r.projectId);}else assertNativeRepairCaptureProgress(store,actor,proposal.input.stageRequestId,r.projectId);
+  if(canonical(selection)!==canonical(proposal.verificationBinding)||proposal.facts.originalRequestDigest!==selection.originalRequestDigest||proposal.facts.observationRef!==selection.originalObservationRef||Date.parse(selection.deadlineAt)<=Date.now()||Date.parse(r.deadlineAt)>Date.parse(selection.deadlineAt)||r.plan.adapterId!==(v2?'runtime-ci-owner-stage-v2':'runtime-native-extension-stage-v1'))reject('REPAIR_CAPTURE_SELECTION','Original failure, root, fixed verifier or cutoff changed before admission',409);
+  if(v2&&!record(r.plan.parameters).repairComparison)reject('REPAIR_POLICY_REQUIRED','Candidate comparison requires the predeclared exact published policy',409);
   if(store.object(r.projectId,'stage-request',r.id)||store.object(r.projectId,'lifecycle-recovery-ledger','repair-capture:'+r.id))reject('REPAIR_PREBIND_REQUIRED','Existing requests cannot acquire a repair association',409);
-  const body={...selection,schema:'runtime-repair-capture/v1' as const,workspaceId:r.workspaceId,projectId:r.projectId,correctionRef,verificationRequestId:r.id,verificationRequestDigest:r.digest,verificationPlanDigest:r.planDigest,expectedNativeRequestId:'extension-native-'+valueDigest({requestDigest:r.digest}).slice(7,51),boundAt:r.requestedAt,inputs:{originalPlanDigest:proposal.facts.planDigest,verificationPlanDigest:r.planDigest,completeInputClosure:false as const}};
+  const body={...selection,schema:v2?'runtime-repair-capture/v2' as const:'runtime-repair-capture/v1' as const,workspaceId:r.workspaceId,projectId:r.projectId,correctionRef,verificationRequestId:r.id,verificationRequestDigest:r.digest,verificationPlanDigest:r.planDigest,expectedNativeRequestId:v2?'stage-native-'+valueDigest({requestId:r.id,projectId:r.projectId,owner:'harness'}).slice(7,55):'extension-native-'+valueDigest({requestDigest:r.digest}).slice(7,51),...(v2?{comparison:{policyDigest:valueDigest(record(r.plan.parameters).repairComparison),expectedRequestId:'stage-repair-'+valueDigest({requestDigest:r.digest}).slice(7,55)}}:{}),boundAt:r.requestedAt,inputs:{originalPlanDigest:proposal.facts.planDigest,verificationPlanDigest:r.planDigest,completeInputClosure:false as const}};
   const capture:NativeRepairCapture={...body,digest:valueDigest(body)};return{kind:'lifecycle-recovery-ledger',id:'repair-capture:'+r.id,value:capture};
 }
 /** Complete only from the actual fixed adapter receipt, in the same transaction
  * as the terminal stage observation. A captured FAIL is retained as a round. */
 export function completeNativeRepairCapture(store:RuntimeStore,r:StageRequest,observation:StageObservation,observationRef:string,observedAt:string):StoredObject[]{
   const capture=readNativeRepairCapture(store,r);if(!capture||!['COMPLETE','FAILED'].includes(observation.phase))return[];
+  if(capture.schema==='runtime-repair-capture/v2'){
+    const view=readCiRepairEvidence(store,r),product=view.harness,comparison=view.comparison,source=store.object(r.projectId,'stage-candidate-source',r.id),manifest=observation.outcome.candidate,unavailable=store.object(r.projectId,'lifecycle-recovery-ledger','comparison-unavailable:'+r.id);
+    const snapshot={ci:view.ci?{archiveDigest:view.ci.archiveDigest,resultDigest:view.ci.resultDigest,candidateDigest:view.ci.candidateDigest}:null,product:product?.receipt?{actionDigest:product.action.digest,receiptDigest:evidenceValueDigest(product.receipt),reportDigest:record(product.receipt.result??{}).reportDigest??null,observationDigest:product.action.observationDigest}:null,comparison:comparison?.receipt?{actionDigest:comparison.action.digest,receiptDigest:evidenceValueDigest(comparison.receipt),reportDigest:record(comparison.receipt.result??{}).reportDigest??null}:null,candidate:manifest&&source?{manifestDigest:valueDigest(manifest),outcomeDigest:valueDigest(observation.outcome),sourceEvidenceDigest:record(source).digest}:null,...(unavailable?{comparisonUnavailable:{reason:string(record(unavailable).reason),digest:string(record(unavailable).digest)}}:{})};
+    const body={schema:'runtime-repair-round/v2' as const,rootRef:capture.rootRef,rootDigest:capture.rootDigest,captureDigest:capture.digest,requestId:r.id,requestDigest:r.digest,observationRef,observedAt,completedRevision:store.revision(r.projectId)+1,outcome:observation.phase==='COMPLETE'?'PASS' as const:'FAIL' as const,nativeActionDigest:product?.action.digest??null,nativeRequestId:capture.expectedNativeRequestId,nativeReceiptDigest:product?.receipt?evidenceValueDigest(product.receipt):null,nativeReportDigest:product?.receipt&&typeof record(product.receipt.result??{}).reportDigest==='string'?String(record(product.receipt.result).reportDigest):null,nativeEvidenceRef:observation.outcome.checks[0]?.evidenceRef??null,repairVerified:false as const,candidateEvidence:snapshot};
+    const value:NativeRepairRound={...body,digest:valueDigest(body)};return[{kind:'lifecycle-recovery-ledger',id:'repair-round:'+r.id,value}];
+  }
   const original=readExtensionEvidence(store,r);if(!original.evidence||!original.action||!original.receipt)reject('REPAIR_NATIVE_RECEIPT_REQUIRED','Terminal capture requires its original native action and receipt',409);
   const evidence=record(original.evidence),result=record(evidence.result),receipt=record(original.receipt),phase=result.status==='PASS'?'COMPLETE':result.status==='FAIL'?'FAILED':null;
   if(evidence.receiptTerminal!==true||phase!==observation.phase||original.action.request.requestId!==capture.expectedNativeRequestId||original.action.context.claimId!==valueDigest({stageRequestDigest:r.digest})||observation.outcome.receiptRef!=='runtime:extension/'+r.id||!observation.outcome.checks.length||observation.outcome.checks.some(c=>c.evidenceRef!==original.evidenceRef||c.status!==(phase==='COMPLETE'?'PASS':'FAIL')))reject('REPAIR_NATIVE_RECEIPT_REQUIRED','Native validation is not the pre-bound verification action',409);

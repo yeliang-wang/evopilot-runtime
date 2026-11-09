@@ -698,3 +698,11 @@ test('Codex identity invokes only the fixed version query and verifies the file 
   await assert.rejects(()=>inspectExternalAgent(definition,AbortSignal.timeout(5000)),{code:'AGENT_IDENTITY_CHANGED'});
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
+
+test('repair comparison resource requires exact scoped owner pins and distinct actual policy criteria',()=>{
+ const reference={product:'harness',id:'synthetic-repair',version:'1.0.0',specVersion:'v1',visibility:'private',digest:valueDigest('repair'),standardDigest:valueDigest('standard'),standardLockDigest:valueDigest('lock'),producer:{product:'harness',version:'0.3.0'},contractDigest:NATIVE_CONTRACT_DIGEST};
+ const resource={projectId:'alpha',role:'config.verification.failurePolicyRef',definition:{kind:'failure',onFailure:'BLOCK',onUnknown:'BLOCK',repairComparison:{schema:'runtime-repair-comparison-policy/v1',adapterRef:'binding:alpha/harness',scope:{visibility:'private',projectId:'alpha'},reference,criteria:{comparable:'compare',regression:'regression',progress:'progress'}}}};
+ assert.doesNotThrow(()=>validateResourceDefinition(resource));assert.doesNotThrow(()=>validateResourceDefinition({...resource,definition:{kind:'failure',onFailure:'BLOCK',onUnknown:'BLOCK'}}));
+ for(const mutate of [x=>x.definition.repairComparison.scope.projectId='another',x=>x.definition.repairComparison.reference.digest='latest',x=>x.definition.repairComparison.criteria.progress='compare',x=>x.definition.repairComparison.criteria.transient='regression',x=>x.definition.repairComparison.trusted=true,x=>x.definition.repairComparison.criteria.pass=true]){const changed=structuredClone(resource);mutate(changed);assert.throws(()=>validateResourceDefinition(changed));}
+ const transient=structuredClone(resource);transient.definition.repairComparison.criteria.transient='transient';assert.doesNotThrow(()=>validateResourceDefinition(transient));
+});

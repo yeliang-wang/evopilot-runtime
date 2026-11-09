@@ -122,3 +122,139 @@ test('continuation must preserve original input and cannot waive exhausted histo
  const facts=recovery();facts.current.phase='RUNNING';assert.equal(evaluateRecovery(facts,'CONTINUE_ORIGINAL',NOW).disposition,'ELIGIBLE');facts.proposedInputDigest=hash('different');assert(evaluateRecovery(facts,'CONTINUE_ORIGINAL',NOW).reasons.includes('ORIGINAL_INPUT_CHANGED'));
  facts.proposedInputDigest=facts.root.initialInputDigest;facts.root.maxAttempts=1;facts.rootDigest=hash(facts.root);facts.attempts.push({requestId:'second',inputDigest:facts.proposedInputDigest,requestedAt:iso(NOW-500)});facts.current.requestId='second';assert(evaluateRecovery(facts,'CONTINUE_ORIGINAL',NOW).reasons.includes('CUMULATIVE_ATTEMPTS_EXHAUSTED'));
 });
+
+import fs from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {RuntimeStore} from '../../dist/server/store.js';
+import {createClosedFixtureQualificationProducer,createNativeQualificationService,assertNativeQualificationService} from '../../dist/lifecycle/evidence-qualification.js';
+import {nativeSha256} from '../../vendor/compatibility/v1/native.mjs';
+function closedFixture(t){
+ const root=fs.mkdtempSync(join(fs.realpathSync(tmpdir()),'runtime-closed-qualification-')),fixtureRoot=join(root,'fixture');fs.mkdirSync(fixtureRoot,{mode:0o700});
+ const put=(name,value)=>fs.writeFileSync(join(fixtureRoot,name),JSON.stringify(value),{mode:0o600});put('input.json',{z:2,a:1});put('expected.json',{canonicalDigest:hash({z:2,a:1})});
+ const scope={workspaceId:'synthetic',projectId:'alpha',acceptanceScopeDigest:hash('catalog')},actor={id:'synthetic-operator',projects:['alpha'],permissions:['read','execution.request'],revision:1,expiresAt:'2030-01-01T00:00:00Z'},expiresAt=iso(Date.now()+600000),store=new RuntimeStore(join(root,'state'),'synthetic');
+ t.after(()=>{store.close();fs.rmSync(root,{recursive:true,force:true});});
+ const pairs=[{criterionId:'HQA01',variantId:'actual-observation'},{criterionId:'HQA01',variantId:'fixture'}],reference={product:'harness',id:'synthetic-policy',version:'1.0.0',digest:hash('policy'),specVersion:'v1',visibility:'private',producer:{name:'synthetic',version:'1'},contractDigest:hash('contract'),standardDigest:hash('standard'),standardLockDigest:hash('standard-lock')};
+ const policy={owner:{ref:'harness',registrationDigest:hash('registration'),scope:{visibility:'private',projectId:'alpha'},reference,criteria:pairs},publishedReceiptRef:'synthetic:published-policy',effectiveConfigDigest:hash('config'),toolchainLockDigest:hash('toolchain'),profileDigest:hash('profile'),catalogScopeDigest:scope.acceptanceScopeDigest,caseInventoryDigest:hash('inventory'),validityContractDigest:hash('ttl'),trust:{revision:'one',protectedRecordRef:'synthetic:trust',recordDigest:hash('trust'),expiresAt},requirement:{phase:'PRE_RELEASE',executionRequirement:'AFFECTED_OR_UNKNOWN_MUST_EXECUTE',impact:'UNCHANGED',serialGroupStatus:'PROTECTED_COMPLETE_UNCHANGED_GROUP',inventoryRef:'synthetic:inventory',inventoryRevision:'one'}};
+ const producer=createClosedFixtureQualificationProducer(store,{scope,caseId:'LC03',fixtureRoot,policy:async()=>copy(policy),authority:async(_actor,s)=>({requestId:'assessment-'+hash(s).slice(7,55),authorityRef:'synthetic:authority',authorityDigest:hash('authority'),deadlineAt:expiresAt})});
+ const receipts=new Map(),calls=[];let published=true,editReceipt=r=>r;
+ const owner={owner:'harness',workspaceId:'synthetic',capabilities:()=>({registrationDigest:hash('registration')}),async readPackage(){calls.push('package');if(!published)throw Error('policy unpublished');return{package:{manifest:{entrypoints:{coverage:'coverage.json'}},files:{'coverage.json':JSON.stringify({requirements:[{id:'HQA01',caseIds:['fixture']}]})}}};},async read(_actor,_project,request){calls.push(request.operation);if(request.operation==='workspace.inspect')return{revision:0};return copy(editReceipt(receipts.get(request.input.requestId)));},async mutate(_actor,_project,request){calls.push(request.operation);const body={reference,context:request.input.context,toolchainLockDigest:policy.toolchainLockDigest,effectiveConfigDigest:policy.effectiveConfigDigest,observationDigest:nativeSha256(request.input.observation),executionStatus:'SUCCEEDED',qualityStatus:'PASS',criteria:pairs.map(p=>({...p,status:'PASS',evidenceDigest:hash(p)}))},receipt={requestId:request.requestId,operation:request.operation,scope:request.scope,requestDigest:nativeSha256({operation:request.operation,scope:request.scope,input:request.input}),status:'SUCCEEDED',result:{...body,reportDigest:nativeSha256(body)}};receipts.set(request.requestId,receipt);}};
+ const readPrincipals=new Map([[actor.id,copy(actor)]]);
+ const bindings={read:producer.read,owner:()=>owner,authorizeInspect:(_subject,observer)=>copy(readPrincipals.get(observer.id)),authorizeDispatch:s=>({actor,permit:{owner:'harness',projectId:'alpha',requestDigest:s.requestDigest,authorityRef:s.authorityRef,expiresAt:s.expiresAt}})},service=createNativeQualificationService(store,bindings),signal=new AbortController().signal;
+ const selection=(original,candidate='B')=>({schema:'runtime-evidence-qualification-selection/v2',scope,caseId:'LC03',currentCandidateDigest:hash(candidate),originalExecutionDigest:original.originalExecutionDigest,phase:'PRE_RELEASE'});
+ async function assess(s){const a=await service.prepare(s,actor,signal);await service.dispatch('alpha',a.actionRef,actor,signal);return a;}
+ return{store,root,put,policy,producer,service,bindings,owner,readPrincipals,actor,signal,expiresAt,selection,assess,calls,receipts,setPublished:v=>published=v,editReceipt:f=>editReceipt=f};
+}
+test('closed producer actually executes immutable fixtures and native v2 qualifies A to B to C without rewriting A',async t=>{
+ const f=closedFixture(t),original=await f.producer.execute(hash('A'),'execution-a',f.expiresAt,f.actor,f.signal);assert.equal(original.original.outcome,'PASS');
+ for(const candidate of ['B','C']){const s=f.selection(original,candidate),a=await f.assess(s),before=f.store.revision('alpha'),q=await f.service.inspect('alpha',a.actionRef,f.actor,f.signal);assert.equal(q.schema,'runtime-evidence-qualification/v2');assert.equal(q.status,'QUALIFIED');assert.equal(q.mode,'PASS_REUSED');assert.equal(q.originalExecutionDigest,original.originalExecutionDigest);assert.equal(q.originalCandidateDigest,hash('A'));assert.equal(q.history.length,1);assert.equal(q.formalAcceptanceEligible,false);assert.equal(q.releaseAuthorized,false);assert.equal(f.store.revision('alpha'),before,'Readonly inspection must not write state');assert.equal(f.calls.filter(x=>x==='native.package.validate').length,candidate==='B'?1:2);}
+ assert.throws(()=>assertNativeQualificationService({inspect:async()=>({status:'QUALIFIED'})}),{code:'TRUSTED_QUALIFICATION_SERVICE_REQUIRED'});
+});
+test('native v2 never dispatches twice, preserves request after restart and rechecks current publication',async t=>{
+ const f=closedFixture(t),original=await f.producer.execute(hash('A'),'execution-a',f.expiresAt,f.actor,f.signal),s=f.selection(original),a=await f.assess(s);
+ const restarted=createNativeQualificationService(f.store,f.bindings);assert.equal((await restarted.inspect('alpha',a.actionRef,f.actor,f.signal)).status,'QUALIFIED');
+ await assert.rejects(restarted.dispatch('alpha',a.actionRef,f.actor,f.signal),{code:'QUALIFICATION_OBSERVE_ORIGINAL'});
+ f.setPublished(false);await assert.rejects(restarted.inspect('alpha',a.actionRef,f.actor,f.signal),/unpublished/);assert.equal(f.calls.filter(x=>x==='native.package.validate').length,1);
+});
+test('closed producer retains all failures and refuses fixture, policy, trust or history changes',async t=>{
+ const f=closedFixture(t);f.put('expected.json',{canonicalDigest:hash('wrong')});const failed=await f.producer.execute(hash('A'),'failed',f.expiresAt,f.actor,f.signal);assert.equal(failed.original.outcome,'FAIL');f.put('expected.json',{canonicalDigest:hash({z:2,a:1})});const passed=await f.producer.execute(hash('A'),'passed',f.expiresAt,f.actor,f.signal);
+ const facts=await f.producer.read(f.selection(passed),f.actor,f.signal);assert.deepEqual(facts.input.history.map(x=>x.outcome),['FAIL','PASS']);await assert.rejects(f.service.prepare(f.selection(passed),f.actor,f.signal),{code:'QUALIFICATION_EXECUTION_REQUIRED'});
+ const current=f.selection(passed,'A'),a=await f.assess(current);assert.equal((await f.service.inspect('alpha',a.actionRef,f.actor,f.signal)).hasFailureHistory,true);
+ f.policy.trust.revision='revoked-revision';await assert.rejects(f.service.inspect('alpha',a.actionRef,f.actor,f.signal),{code:'QUALIFICATION_FACTS_CHANGED'});
+});
+test('interrupted closed attempts cannot be erased or upgraded into a complete PASS history',async t=>{
+ const f=closedFixture(t);f.put('expected.json',{invalid:true});await assert.rejects(f.producer.execute(hash('A'),'malformed',f.expiresAt,f.actor,f.signal));f.put('expected.json',{canonicalDigest:hash({z:2,a:1})});const passed=await f.producer.execute(hash('A'),'later',f.expiresAt,f.actor,f.signal),facts=await f.producer.read(f.selection(passed),f.actor,f.signal);assert.deepEqual(facts.input.history.map(x=>x.outcome),['UNKNOWN','PASS']);await assert.rejects(f.service.prepare(f.selection(passed),f.actor,f.signal),{code:'QUALIFICATION_EXECUTION_REQUIRED'});await assert.rejects(f.producer.execute(hash('A'),'malformed',f.expiresAt,f.actor,f.signal),{code:'QUALIFICATION_OBSERVE_ORIGINAL'});
+});
+test('native report tamper, missing actual criterion and changed fixture do not qualify',async t=>{
+ const f=closedFixture(t),original=await f.producer.execute(hash('A'),'execution-a',f.expiresAt,f.actor,f.signal),a=await f.assess(f.selection(original));
+ f.editReceipt(r=>({...r,requestDigest:hash('other')}));await assert.rejects(f.service.inspect('alpha',a.actionRef,f.actor,f.signal),{code:'OWNER_RECEIPT_MISMATCH'});
+ f.editReceipt(r=>{const v=copy(r);v.result.criteria.pop();const{reportDigest,...body}=v.result;v.result.reportDigest=nativeSha256(body);return v;});await assert.rejects(f.service.inspect('alpha',a.actionRef,f.actor,f.signal),{code:'OWNER_REPORT_INCOMPLETE'});
+ f.editReceipt(r=>r);f.put('input.json',{z:3,a:1});await assert.rejects(f.service.inspect('alpha',a.actionRef,f.actor,f.signal),{code:'QUALIFICATION_EXECUTION_REQUIRED'});
+});
+
+test('native qualification pins the actual owner registration even when workspace identity is unchanged',async t=>{
+ const f=closedFixture(t),original=await f.producer.execute(hash('A'),'binding-origin',f.expiresAt,f.actor,f.signal),selection=f.selection(original);
+ f.owner.capabilities=()=>({registrationDigest:hash('other-owner-root')});
+ await assert.rejects(f.service.prepare(selection,f.actor,f.signal),{code:'QUALIFICATION_OWNER_CHANGED'});
+ assert.equal(f.calls.filter(x=>x==='native.package.validate').length,0);assert.equal(f.calls.filter(x=>x==='package').length,0);
+});
+test('qualification dispatch rechecks protected authority after awaited owner read and before the marker',async t=>{
+ const f=closedFixture(t),original=await f.producer.execute(hash('A'),'authority-origin',f.expiresAt,f.actor,f.signal),a=await f.service.prepare(f.selection(original),f.actor,f.signal),read=f.owner.readPackage;
+ f.owner.readPackage=async(...args)=>{const pkg=await read(...args);f.policy.trust.revision='revoked-during-owner-read';return pkg;};
+ await assert.rejects(f.service.dispatch('alpha',a.actionRef,f.actor,f.signal),{code:'QUALIFICATION_AUTHORITY_CHANGED'});
+ assert.equal(f.store.object('alpha','lifecycle-evidence-qualification','dispatch:'+a.actionRef),null);assert.equal(f.calls.filter(x=>x==='native.package.validate').length,0);
+});
+test('current principal and exact permit are required after every async dispatch prerequisite',async t=>{
+ for(const change of [r=>r.actor.permissions=['execution.request'],r=>r.actor.permissions=['read'],r=>r.actor.id='other',r=>r.actor.revision++,r=>r.permit.projectId='other',r=>r.permit.owner='ontology',r=>r.permit.requestDigest=hash('wrong'),r=>r.permit.authorityRef='wrong',r=>r.permit.expiresAt=iso(Date.now()-1)]){
+  const f=closedFixture(t),original=await f.producer.execute(hash('A'),'principal-origin',f.expiresAt,f.actor,f.signal),a=await f.service.prepare(f.selection(original),f.actor,f.signal),authorize=f.bindings.authorizeDispatch,read=f.owner.readPackage;let revoked=false;
+  f.owner.readPackage=async(...args)=>{const pkg=await read(...args);revoked=true;return pkg;};
+  f.bindings.authorizeDispatch=(...args)=>{const result=copy(authorize(...args));if(revoked)change(result);return result;};
+  await assert.rejects(f.service.dispatch('alpha',a.actionRef,f.actor,f.signal));assert.equal(f.calls.filter(x=>x==='native.package.validate').length,0);assert.equal(f.store.object('alpha','lifecycle-evidence-qualification','dispatch:'+a.actionRef),null);
+ }
+});
+test('revocation after dispatch marker prevents native effect and keeps original-only recovery',async t=>{
+ const f=closedFixture(t),original=await f.producer.execute(hash('A'),'marker-origin',f.expiresAt,f.actor,f.signal),a=await f.service.prepare(f.selection(original),f.actor,f.signal),read=f.bindings.read,authorize=f.bindings.authorizeDispatch;let revoked=false,checks=0;
+ f.bindings.read=async(...args)=>{const value=await read(...args);if(f.store.object('alpha','lifecycle-evidence-qualification','dispatch:'+a.actionRef))revoked=true;return value;};
+ f.bindings.authorizeDispatch=(...args)=>{checks++;if(revoked)throw Error('Synthetic original authority revoked');return authorize(...args);};
+ await assert.rejects(f.service.dispatch('alpha',a.actionRef,f.actor,f.signal),/original authority revoked/);assert.equal(checks,2);assert(f.store.object('alpha','lifecycle-evidence-qualification','dispatch:'+a.actionRef));assert.equal(f.calls.filter(x=>x==='native.package.validate').length,0);
+ await assert.rejects(f.service.dispatch('alpha',a.actionRef,f.actor,f.signal),{code:'QUALIFICATION_OBSERVE_ORIGINAL'});
+ const revision=f.store.revision('alpha');await assert.rejects(f.service.inspect('alpha',a.actionRef,f.actor,f.signal));assert.equal(f.store.revision('alpha'),revision);assert.equal(f.calls.filter(x=>x==='native.package.validate').length,0);
+});
+test('binding replacement or interruption after marker leaves no native effect',async t=>{
+ for(const fault of ['owner','abort']){
+  const f=closedFixture(t),controller=new AbortController(),original=await f.producer.execute(hash('A'),'final-boundary-origin',f.expiresAt,f.actor,f.signal),a=await f.service.prepare(f.selection(original),f.actor,f.signal),read=f.bindings.read;
+  f.bindings.read=async(...args)=>{const facts=await read(...args);if(f.store.object('alpha','lifecycle-evidence-qualification','dispatch:'+a.actionRef)){if(fault==='owner')f.owner.capabilities=()=>({registrationDigest:hash('replacement')});else controller.abort();}return facts;};
+  await assert.rejects(f.service.dispatch('alpha',a.actionRef,f.actor,controller.signal));assert(f.store.object('alpha','lifecycle-evidence-qualification','dispatch:'+a.actionRef));assert.equal(f.calls.filter(x=>x==='native.package.validate').length,0);
+ }
+});
+
+test('final owner package await cannot hide trust or assessment authority revocation',async t=>{
+ for(const fault of ['trust','authority']){
+  const f=closedFixture(t),original=await f.producer.execute(hash('A'),'inspect-final-origin',f.expiresAt,f.actor,f.signal),a=await f.assess(f.selection(original)),readPackage=f.owner.readPackage,readFacts=f.bindings.read;let packages=0,revoked=false;
+  f.owner.readPackage=async(...args)=>{const pkg=await readPackage(...args);if(++packages===2){revoked=true;if(fault==='trust')f.policy.trust.revision='revoked-in-final-package-read';}return pkg;};
+  f.bindings.read=async(...args)=>{const facts=await readFacts(...args);if(revoked&&fault==='authority')facts.assessmentAuthority.authorityDigest=hash('revoked-assessment-grant');return facts;};
+  const revision=f.store.revision('alpha'),mutations=f.calls.filter(x=>x==='native.package.validate').length;
+  await assert.rejects(f.service.inspect('alpha',a.actionRef,f.actor,f.signal),{code:'QUALIFICATION_FACTS_CHANGED'});assert.equal(packages,2,'Fault must occur only in the final owner package read');assert.equal(f.store.revision('alpha'),revision);assert.equal(f.calls.filter(x=>x==='native.package.validate').length,mutations);
+ }
+});
+test('final owner package await cannot swap the registered owner unnoticed',async t=>{
+ const f=closedFixture(t),original=await f.producer.execute(hash('A'),'inspect-owner-origin',f.expiresAt,f.actor,f.signal),a=await f.assess(f.selection(original)),readPackage=f.owner.readPackage;let packages=0;
+ f.owner.readPackage=async(...args)=>{const pkg=await readPackage(...args);if(++packages===2)f.owner.capabilities=()=>({registrationDigest:hash('replaced-after-final-read')});return pkg;};
+ const revision=f.store.revision('alpha'),mutations=f.calls.filter(x=>x==='native.package.validate').length;
+ await assert.rejects(f.service.inspect('alpha',a.actionRef,f.actor,f.signal),{code:'QUALIFICATION_OWNER_CHANGED'});assert.equal(packages,2);assert.equal(f.store.revision('alpha'),revision);assert.equal(f.calls.filter(x=>x==='native.package.validate').length,mutations);
+});
+test('final synchronous read boundary rejects revoked credentials or grant without demanding execution permission',async t=>{
+ const f=closedFixture(t),original=await f.producer.execute(hash('A'),'readonly-observer-origin',f.expiresAt,f.actor,f.signal),a=await f.assess(f.selection(original)),observer={...copy(f.actor),id:'readonly-observer',permissions:['read']};f.readPrincipals.set(observer.id,copy(observer));
+ const revision=f.store.revision('alpha'),mutations=f.calls.filter(x=>x==='native.package.validate').length;
+ assert.equal((await f.service.inspect('alpha',a.actionRef,observer,f.signal)).status,'QUALIFIED');assert.deepEqual(observer.permissions,['read']);
+ const readFacts=f.bindings.read;let reads=0;f.bindings.read=async(...args)=>{const facts=await readFacts(...args);if(++reads===3)f.readPrincipals.set(observer.id,{...observer,permissions:[]});return facts;};
+ await assert.rejects(f.service.inspect('alpha',a.actionRef,observer,f.signal));assert.equal(reads,3,'Revoke only after the last protected facts snapshot');
+ f.bindings.read=readFacts;f.readPrincipals.set(observer.id,{...observer,revision:observer.revision+1});await assert.rejects(f.service.inspect('alpha',a.actionRef,observer,f.signal),{code:'QUALIFICATION_READ_AUTHORITY_CHANGED'});
+ f.readPrincipals.set(observer.id,copy(observer));f.bindings.authorizeInspect=()=>{throw Error('Synthetic existing assessment grant revoked at final boundary');};await assert.rejects(f.service.inspect('alpha',a.actionRef,observer,f.signal),/grant revoked/);
+ assert.equal(f.store.revision('alpha'),revision);assert.equal(f.calls.filter(x=>x==='native.package.validate').length,mutations);
+});
+
+import {assertQualifiedAcceptanceCurrent} from '../../dist/release/evidence.js';
+test('release batch final guard rejects earlier case revocation or history drift during a later case read',async t=>{
+ for(const fault of ['trust','history','inventory']){
+  const f=closedFixture(t),original=await f.producer.execute(hash('A'),'batch-first-origin',f.expiresAt,f.actor,f.signal),first=await f.assess(f.selection(original)),firstResult=await f.service.inspect('alpha',first.actionRef,f.actor,f.signal);
+  const scope=original.original.scope,secondProducer=createClosedFixtureQualificationProducer(f.store,{scope,caseId:'LC04',fixtureRoot:join(f.root,'fixture'),policy:async()=>copy(f.policy),authority:async(_actor,s)=>({requestId:'assessment-'+hash(s).slice(7,55),authorityRef:'synthetic:authority',authorityDigest:hash('authority'),deadlineAt:f.expiresAt})});
+  const secondOriginal=await secondProducer.execute(hash('A'),'batch-second-origin',f.expiresAt,f.actor,f.signal),secondSelection={...f.selection(secondOriginal),caseId:'LC04'},read=f.bindings.read;
+  f.bindings.read=(s,...args)=>s.caseId==='LC04'?secondProducer.read(s,...args):read(s,...args);const second=await f.assess(secondSelection),readPackage=f.owner.readPackage,authorize=f.bindings.authorizeInspect;let firstCurrent=true;
+  // This fixture models the trusted synchronous reader's actual protected
+  // grant/history/inventory watermark changing while a different case awaits.
+  f.owner.readPackage=async(...args)=>{const pkg=await readPackage(...args);firstCurrent=false;return pkg;};
+  f.bindings.authorizeInspect=(subject,observer)=>{if(subject.actionRef===first.actionRef&&!firstCurrent)throw Error('Protected first-case '+fault+' changed');return authorize(subject,observer);};
+  const secondResult=await f.service.inspect('alpha',second.actionRef,f.actor,f.signal),revision=f.store.revision('alpha'),mutations=f.calls.filter(x=>x==='native.package.validate').length;
+  assert.equal(secondResult.status,'QUALIFIED');assert.equal(firstResult.expiresAt>iso(Date.now()),true,'TTL is unchanged and still valid');
+  assert.throws(()=>assertQualifiedAcceptanceCurrent(f.service,'alpha',[firstResult,secondResult],f.actor,f.signal),new RegExp('first-case '+fault+' changed'));
+  assert.equal(f.store.revision('alpha'),revision);assert.equal(f.calls.filter(x=>x==='native.package.validate').length,mutations);
+ }
+});
+test('synchronous qualification consumption requires original in-memory service inspection, never copied JSON',async t=>{
+ const f=closedFixture(t),original=await f.producer.execute(hash('A'),'batch-authentic-origin',f.expiresAt,f.actor,f.signal),a=await f.assess(f.selection(original)),q=await f.service.inspect('alpha',a.actionRef,f.actor,f.signal),revision=f.store.revision('alpha'),mutations=f.calls.filter(x=>x==='native.package.validate').length;
+ assertQualifiedAcceptanceCurrent(f.service,'alpha',[q],f.actor,f.signal);
+ assert.throws(()=>assertQualifiedAcceptanceCurrent(f.service,'alpha',[copy(q)],f.actor,f.signal),{code:'QUALIFICATION_INSPECTION_REQUIRED'});
+ const other=createNativeQualificationService(f.store,f.bindings);assert.throws(()=>assertQualifiedAcceptanceCurrent(other,'alpha',[q],f.actor,f.signal),{code:'QUALIFICATION_INSPECTION_REQUIRED'});
+ assert.equal(f.store.revision('alpha'),revision);assert.equal(f.calls.filter(x=>x==='native.package.validate').length,mutations);
+});

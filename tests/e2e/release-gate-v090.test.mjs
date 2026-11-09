@@ -48,7 +48,7 @@ function fixture(t,changeGovernance){
  const candidate={manifestDigest:sha(manifest),archiveDigest:sha(archive),version:'0.9.0',serviceId:'synthetic',workspaceId:'synthetic',projectId:'synthetic'},candidateDigest='sha256:'+sha(manifest),matrixBytes=fs.readFileSync(join(source,'governance/parameter-matrix-v090.json')),matrix=JSON.parse(matrixBytes);
  const reports=[];
  function report(scenario,ids,usage=false){
-  const dir=join(evidence,scenario),collectorNames=usage?['usage.test.mjs']:['support.mjs','preflight.mjs',scenario.toLowerCase()+'.test.mjs',...(['E01','E02','E04','E05','E06','E07','E12','E13','E16','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(['E01','E02','E13'].includes(scenario)?['execution.mjs']:[])];
+  const dir=join(evidence,scenario),collectorNames=usage?['usage.test.mjs']:['support.mjs','preflight.mjs',scenario.toLowerCase()+'.test.mjs',...(['E01','E02','E04','E05','E06','E07','E12','E13','E16','E17','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(['E01','E02','E04','E05','E13'].includes(scenario)?['execution.mjs']:[])];
   const selection={scenario,qualification:'FINAL_CANDIDATE',candidate,candidateDigest,collectorPins:Object.fromEntries(collectorNames.map(n=>[n,sha(fs.readFileSync(join(source,'tests/acceptance/v090',n)))])),selectedCaseIds:ids,...(usage?{sourceCommit,addendumDigest:sha(fs.readFileSync(join(source,'governance/token-usage-v090.json')))}:{matrixDigest:sha(matrixBytes)})};
   const selectionRef=put(join(dir,'selection.json'),selection);
   const records=id=>{const n=id??'setup',request=put(join(dir,n+'-request.json'),{caseInstanceId:id,synthetic:true,request:'Integrity fixture'}),response=put(join(dir,n+'-response.json'),{caseInstanceId:id,synthetic:true,response:'Not actual acceptance'});return{caseInstanceId:id,request:n+'-request.json',requestDigest:request.sha256,response:n+'-response.json',fileDigest:response.sha256};};
@@ -191,4 +191,9 @@ test('LC original case, raw evidence bytes and file ownership are rechecked afte
  fs.chmodSync(raw,0o644);await assert.rejects(f.prepare,/private and owned/);fs.chmodSync(raw,0o600);
  const changedCase=JSON.parse(caseBytes);changedCase.status='FAIL';f.put(caseRef,changedCase);await assert.rejects(f.prepare,/Original correction case differs/);fs.writeFileSync(caseRef,caseBytes);
  await assert.rejects(()=>verifyRuntimeReleaseDecision(f.source,f.input,review.reviewDigest,decision,async request=>{fs.appendFileSync(raw,' ');return syntheticAuthentication(request);},signal()),/Original correction evidence bytes changed/);
+});
+
+test('v2 qualification preflight is versioned and never silently upgrades v1 input',async()=>{
+ const {prepareQualifiedRuntimeRelease}=await import('../../dist/release/gate.js');
+ await assert.rejects(prepareQualifiedRuntimeRelease('/unused',{schema:'runtime-release-preflight-input/v1'}, {}, {},new AbortController().signal),/Unexpected input fields/);
 });

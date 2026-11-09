@@ -410,8 +410,10 @@ fixed E04 catalog even when a subset is selected. All 15 E04 callbacks are
 implemented; this proves callable coverage only, not environment readiness or
 acceptance.
 
-E04.EX11 requires a protected `extensionExecution` fixture with an exact
-`casePlans["E04.EX11"]` entry before installation or browser access. Its
+E04.EX11 and E05.EX11 require a protected `extensionExecution` fixture with an
+exact entry for the selected case (`casePlans["E04.EX11"]` or
+`casePlans["E05.EX11"]`) before installation or browser access. Their shared
+execution helper retains the same complete native-owner obligations. The
 `baseline` and `extended` YAML pins must differ only by the appended Harness
 extension. `ownerConnection` pins the actual published owner connection, while
 `passed` and `failed` each bind an original instance, Target and definition
@@ -425,7 +427,9 @@ The case then appends and activates the extension through the browser, rejects
 from the draft, and verifies that the original failed Target still cannot enter
 its dependent stage. It preserves the failed request and owner assets. Preparing
 these fixtures or passing source regressions does not establish that the installed
-case has passed; a final-candidate run must collect its actual evidence.
+case has passed; each final-candidate case must collect its own actual evidence.
+An EX11-only E05 run does not require the unrelated `revisionEvolution` fixture;
+a live case-campaign coordinator still validates each child's exact EX11 fixture.
 
 The paired E03.EX12 and E04.EX12 cases use the same exact legal YAML and a single
 extension-scope change as the illegal input. E03 exercises HTTP, MCP, CLI and a
@@ -456,8 +460,9 @@ original request rather than submitting another activation. Restart cases requir
 installation and use its native current-selection service-control API. They do
 not replay a historical installer plan or require a Codex conversation.
 
-E04 and E06 pin `browser.mjs` in addition to their own collector and `support.mjs`;
-the release evidence audit rejects missing or changed helper pins. The helper
+E04, E05 and E06 pin `browser.mjs` in addition to their own collector and
+`support.mjs`; E04 and E05 also pin the shared `execution.mjs` helper. The release
+evidence audit rejects missing or changed helper pins. The browser helper
 omits authentication headers, cookies, CSRF values, session responses and one-use
 connection codes. Exact variants requiring live extension execution, current
 permission revocation, in-flight instances or transaction fault points fail
