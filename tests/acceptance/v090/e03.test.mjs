@@ -138,6 +138,64 @@ async function expertCase(run,expert,c,fields,control,initial,activeSource){
  return{entry:'expert',stage:c.parameters.stage,field:spec.path,inputRepresentation:missing?'missing-yaml-key':'yaml-null',actualModelTurn:true,actualInstalledExpert:true,actualInstalledHttpMcp:true,model:observed.model,provider:observed.provider,threadId:observed.threadId,turnId:observed.turnId,originalDraftRequestId:requestId,exactDraftApprovalResponses:observed.approvalResponses,specificFieldRuleAndRemedy:true,invalidDraftRetained:true,activationNotAdmitted:true,existingActiveAndHistoryUnchanged:true,externalExecutionRequested:false,inputKind:'SYNTHETIC_NEGATIVE_CONFIGURATION'};
 }
 
+async function exactSingleBaseProjects(run,c,base){
+ assert.equal(c.caseInstanceId,'E03.EX01');
+ const aliases=['default','beta'],principals=aliases.map(alias=>run.principal(alias));
+ assert.notEqual(principals[0].projectId,principals[1].projectId);assert.notEqual(principals[0].principalId,principals[1].principalId);
+ for(const p of principals)for(const permission of ['read','draft.write','definition.activate'])assert(p.expectedPermissions.includes(permission));
+ const read=async(alias,operation,input={})=>{const response=await run.principalRequest(alias,operation,input);assert.equal(response.status,200,JSON.stringify(response.body));assert(!response.body.error);return response.body.result;};
+ const source=async(alias,revisionId)=>{let offset=0,digest,total;const chunks=[];for(let i=0;i<9;i++){const p=await read(alias,'lifecycle.definition.source.read',{revisionId,offset});assert.equal(p.revisionId,revisionId);assert.equal(p.encoding,'base64');digest??=p.sourceDigest;total??=p.totalBytes;assert.equal(p.sourceDigest,digest);assert.equal(p.totalBytes,total);chunks.push(Buffer.from(p.data,'base64'));if(p.nextOffset===null){const bytes=Buffer.concat(chunks);assert.equal(bytes.length,total);assert.equal('sha256:'+sha(bytes),digest);return bytes.toString('utf8');}assert(p.nextOffset>offset);offset=p.nextOffset;}assert.fail('EX01 bounded definition source exceeded 256 KiB');};
+ const events=async alias=>{let cursor,last=0;const rows=[];for(let i=0;i<21;i++){const p=await read(alias,'runtime.events.read',cursor?{cursor}:{});assert(Array.isArray(p.events)&&p.events.length<=50);for(const row of p.events){assert(row.seq>last);last=row.seq;rows.push(row);}if(!p.events.length)return rows;assert.notEqual(p.cursor,cursor);cursor=p.cursor;}assert.fail('EX01 requires a fresh isolated project with at most 1000 events');};
+ const inventory=async alias=>{
+  const view=await read(alias,'lifecycle.definition.inspect');assert.equal(view.projectId,run.principal(alias).projectId);assert(view.active&&view.draft);
+  const rows=await events(alias),created=rows.filter(row=>row.type==='lifecycle-instance-created'),instances=[];assert(created.length>0,'Each project independently needs an actual natively admitted current instance');
+  assert.equal(new Set(created.map(row=>row.data.instanceId)).size,created.length);
+  for(const row of created){const observed=await read(alias,'lifecycle.instance.inspect',{instanceId:row.data.instanceId}),instance=observed.instance;assert.equal(instance.pins.projectId,view.projectId);assert.deepEqual(instance.pins.base,base.pin);assert.deepEqual(instance.requestIds,[]);for(const stage of Object.values(instance.stages)){assert.equal(stage.status,'PENDING');assert.equal(stage.attempts,0);assert.equal(stage.requestId,null);}const authority=await read(alias,'lifecycle.authority.inspect',{authorityRef:row.data.authorityRef});assert.equal(authority.decision.subject.instanceId,instance.id);instances.push({instance,authorityRef:row.data.authorityRef,decision:authority.decision,revocation:authority.revocation});}
+  return{view,activeSource:await source(alias,view.active.id),draftSource:await source(alias,view.draft.id),events:rows,instances};
+ };
+ const manifestRef=path.join(run.selection.installedRoot,'distribution-manifest.json'),manifestBytes=fs.readFileSync(manifestRef);assert.equal(sha(manifestBytes),run.selection.expectedManifestDigest);const manifest=JSON.parse(manifestBytes),packageRoot=path.join(run.selection.installedRoot,'package');
+ const baseFiles=['lifecycle/base/manifest.json','lifecycle/base/software-release-0.9.0.json'];
+ const captureBase=()=>Object.fromEntries(baseFiles.map(relative=>{const ref=path.join(packageRoot,relative),s=fs.lstatSync(ref),pin=manifest.files[relative];assert(pin?.type==='file');assert.equal(fs.realpathSync(ref),ref);assert(s.isFile()&&!s.isSymbolicLink()&&s.nlink===1&&s.uid===process.getuid());assert.equal(s.mode&0o777,pin.mode);assert.equal(s.size,pin.bytes);assert(s.size>0&&s.size<=1048576);const bytes=fs.readFileSync(ref);assert.equal(bytes.length,pin.bytes);assert.equal(sha(bytes),pin.sha256);return[relative,{sha256:sha(bytes),bytes:bytes.length,text:bytes.toString('utf8')}];}));
+ const originalBase=captureBase(),publisherManifest=JSON.parse(originalBase[baseFiles[0]].text);assert.equal(publisherManifest.bases.length,1);const{file,...publisherPin}=publisherManifest.bases[0];assert.equal(file,'software-release-0.9.0.json');assert.deepEqual(publisherPin,base.pin);assert.equal('sha256:'+originalBase[baseFiles[1]].sha256,base.pin.digest);
+ const baselines={};for(const alias of aliases){assert.deepEqual(await read(alias,'lifecycle.base.inspect'),base);baselines[alias]=await inventory(alias);assert.deepEqual(parse(baselines[alias].activeSource).extends,base.pin);}
+ run.artifact('exact-single-base-original.json',{candidate:run.candidate,principals,base:originalBase,projects:baselines,qualification:'Two real native synthetic project configurations and inert instances; not actual CI or business execution'});
+ const proofs=[];
+ for(const [index,alias]of aliases.entries()){
+  const other=aliases[1-index],projectId=run.principal(alias).projectId,initial=await inventory(alias),otherBefore=await inventory(other),data=parse(initial.activeSource),field=base.fields.find(f=>f.path==='config.plan.budget.timeoutSeconds');assert(field?.type==='integer');
+  const oldTimeout=data.config.plan.budget.timeoutSeconds,nextTimeout=oldTimeout+index+1<=field.rules.maximum?oldTimeout+index+1:oldTimeout-index-1;assert(nextTimeout>=field.rules.minimum&&nextTimeout<=field.rules.maximum&&nextTimeout!==oldTimeout);data.config.plan.budget.timeoutSeconds=nextTimeout;const legal=stringify(data,{lineWidth:0});
+  const stable=async label=>{assert.deepEqual(captureBase(),originalBase,'Publisher Base bytes must remain unchanged');assert.deepEqual(await read(alias,'lifecycle.base.inspect'),base);assert.deepEqual(await read(other,'lifecycle.base.inspect'),base);assert.deepEqual(await inventory(other),otherBefore,'The other project definition, event history and every original instance must remain unchanged');const own=await inventory(alias);assert.deepEqual(own.instances,initial.instances,'New definition configuration cannot mutate existing instance pins or original authority');for(const row of own.events.slice(initial.events.length))assert(['definition-draft-saved','definition-activation-blocked','definition-activated'].includes(row.type));assert.deepEqual(own.events.slice(0,initial.events.length),initial.events);assert.equal(await source(alias,initial.view.active.id),initial.activeSource);assert.equal(await source(alias,initial.view.draft.id),initial.draftSource);run.artifact('project-isolation-readback.json',{label,projectId,otherProjectId:otherBefore.view.projectId,ownRevision:own.view.revision,otherRevision:otherBefore.view.revision,ownInstanceIds:own.instances.map(v=>v.instance.id),otherInstanceIds:otherBefore.instances.map(v=>v.instance.id),basePin:base.pin,originalInstancesUnchanged:true,otherProjectUnchanged:true});return own;};
+  const write=async(source,label,validationDigest)=>{
+   const view=await read(alias,'lifecycle.definition.inspect'),requestId=run.requestId(c.caseInstanceId,projectId+'-'+label);
+   const response=await run.principalRequest(alias,'lifecycle.definition.save-and-activate',{yaml:source,validationDigest},{requestId,expectedRevision:view.revision});
+   assert.equal(response.status,200,JSON.stringify(response.body));assert(!response.body.error);assert.equal(response.body.result.requestId,requestId);return{requestId,result:response.body.result.result};
+  };
+  const proof={projectId,principalId:run.principal(alias).principalId,originalActive:initial.view.active.id,originalInstanceIds:initial.instances.map(x=>x.instance.id),positive:null,negative:[],repair:null,crossProject:null};
+  // Use this project's scoped credential with the other project's envelope.
+  // A foreign YAML alone would test compilation, not authenticated isolation.
+  const deniedRequestId=run.requestId(c.caseInstanceId,projectId+'-foreign-project-write');
+  const denied=await run.principalRequest(alias,'lifecycle.definition.save-and-activate',{yaml:otherBefore.activeSource,validationDigest:null},{projectId:otherBefore.view.projectId,requestId:deniedRequestId,expectedRevision:otherBefore.view.revision});
+  assert.equal(denied.status,403);assert.equal(denied.body.error?.code,'FORBIDDEN');assert(!Object.hasOwn(denied.body,'result'));
+  assert.deepEqual(await inventory(alias),initial);assert.deepEqual(await inventory(other),otherBefore);proof.crossProject={requestId:deniedRequestId,foreignProjectId:otherBefore.view.projectId,httpStatus:denied.status,code:denied.body.error.code};
+  const positive=await read(alias,'lifecycle.definition.validate',{yaml:legal});assert.equal(positive.ready,true);assert.equal(positive.compilation.valid,true);assert.equal(positive.bindings?.ready,true);assert.deepEqual(positive.compilation.effective.base,base.pin);
+  const activation=await write(legal,'independent-legal',positive.validationDigest);assert.equal(activation.result.status,'ACTIVE');assert.equal(activation.result.executionAuthorized,false);assert.equal(activation.result.releaseAuthorized,false);
+  const activated=await stable('AFTER_INDEPENDENT_LEGAL_CONFIGURATION');assert.equal(activated.activeSource,legal);assert.notEqual(activated.view.active.id,initial.view.active.id);assert.notEqual(activated.view.active.semanticDigest,initial.view.active.semanticDigest);proof.positive={sourceSha256:sha(legal),oldTimeout,nextTimeout,revisionId:activated.view.active.id,requestId:activation.requestId};
+  const attacks=[['latest',{...base.pin,version:'latest'}],['multiple-bases',[{...base.pin},{...base.pin}]],['project-inherits-project',{projectId:otherBefore.view.projectId,definitionRevisionId:otherBefore.view.active.id}],['alternative-path',{...base.pin,file:'../projects/'+otherBefore.view.projectId+'/lifecycle.yaml'}]];
+  for(const[name,inheritance]of attacks){
+   const changed=structuredClone(data);changed.extends=inheritance;const invalid=stringify(changed,{lineWidth:0});const{extends:ignored,...rest}=changed,{extends:unused,...legalRest}=data;assert.deepEqual(rest,legalRest);
+   const preview=await read(alias,'lifecycle.definition.validate',{yaml:invalid});assert.equal(preview.ready,false);assert.equal(preview.compilation.valid,false);assert.equal(preview.validationDigest,null);assert(preview.compilation.issues.some(i=>i.code==='BASE_PIN'&&i.path==='extends'&&i.rule==='base.exact-single-pin'&&i.remedy));
+   const attempt=await write(invalid,name,null);assert.equal(attempt.result.status,'BLOCKED');assert.equal(attempt.result.executionAuthorized,false);assert.equal(attempt.result.releaseAuthorized,false);assert.equal(attempt.result.activeRevisionId,activated.view.active.id);assert(attempt.result.issues.some(i=>i.code==='BASE_PIN'&&i.path==='extends'&&i.rule==='base.exact-single-pin'));
+   const after=await stable('AFTER_'+name.toUpperCase());assert.equal(after.activeSource,legal);assert.equal(after.draftSource,invalid);proof.negative.push({name,input:inheritance,sourceSha256:sha(invalid),revisionId:after.view.draft.id,activationRequestId:attempt.requestId,diagnostic:{code:'BASE_PIN',path:'extends',rule:'base.exact-single-pin'},status:attempt.result.status,entry:'ACTUAL_INSTALLED_HTTP_PUBLIC_API'});
+  }
+  const repair=await read(alias,'lifecycle.definition.validate',{yaml:legal});assert.equal(repair.ready,true);const restored=await write(legal,'repair',repair.validationDigest);assert.equal(restored.result.status,'ACTIVE');
+  const repaired=await stable('AFTER_LEGITIMATE_DRAFT_REPAIR');assert.equal(repaired.activeSource,legal);assert.equal(repaired.draftSource,legal);assert.equal(repaired.view.active.id,activated.view.active.id);proof.repair={requestId:restored.requestId,activeRevisionId:repaired.view.active.id};
+  for(const rejected of proof.negative){assert.equal(sha(await source(alias,rejected.revisionId)),rejected.sourceSha256);const receipt=await read(alias,'runtime.receipt.read',{requestId:rejected.activationRequestId});assert.equal(receipt.result.status,'BLOCKED');}
+  proofs.push(proof);
+ }
+ const final={};for(const alias of aliases){final[alias]=await inventory(alias);assert.deepEqual(final[alias].instances,baselines[alias].instances);assert.deepEqual(await read(alias,'lifecycle.base.inspect'),base);}assert.deepEqual(captureBase(),originalBase);
+ run.artifact('exact-single-base-project-results.json',{candidate:run.candidate,basePin:base.pin,proofs,final,counts:{projects:2,legalIndependentConfigurations:2,invalidInheritanceAttempts:8,crossProjectWriteRefusals:2,repairedDrafts:2},entry:'ACTUAL_INSTALLED_HTTP_PUBLIC_API',browserEvidence:false,publisherBaseBytesUnchanged:true,currentInstancePinsUnchanged:true,stageDispatches:0});
+ return{projects:proofs,basePin:base.pin,independentLegalConfigurations:2,actualInheritanceRefusals:8,crossProjectWriteRefusals:2,baseBytesUnchanged:true,otherProjectUnchangedDuringEachWrite:true,originalInstancePinsUnchanged:true,executionDispatched:false};
+}
+
 // EX02 consumes operator-selected real binding inputs. structuralInput() is
 // deliberately not used: syntactic validity is not owner/provider readiness.
 async function fieldClassification(run,c,fields,base,initial,activeSource){
@@ -198,6 +256,14 @@ async function fieldClassification(run,c,fields,base,initial,activeSource){
 test('E03 fixed candidate service admission cases',async()=>{
  let run,browser,expert,fields,base,initial,activeSource,eventCursor;const variants=new Map();
  async function collectCase(c){
+   if(c.caseInstanceId==='E03.EX01'){
+    const result=await exactSingleBaseProjects(run,c,base);
+    // Later cases use the actual independently activated current baseline;
+    // EX01 retains its original revisions, authorities and instance evidence.
+    initial=await run.read('lifecycle.definition.inspect');activeSource=await run.source(initial.active.revisionId??initial.active.id);
+    for(;;){const page=await run.read('runtime.events.read',{cursor:eventCursor});eventCursor=page.cursor;if(page.events.length<50)break;}
+    return result;
+   }
    if(c.caseInstanceId==='E03.EX02'){
     const result=await fieldClassification(run,c,fields,base,initial,activeSource),events=[];
     for(;;){const page=await run.read('runtime.events.read',{cursor:eventCursor});eventCursor=page.cursor;events.push(...page.events);if(page.events.length<50)break;}
@@ -232,7 +298,7 @@ test('E03 fixed candidate service admission cases',async()=>{
    if(before.draft)assert.equal(await run.source(before.draft.revisionId??before.draft.id),oldDraft);
    return{entry,field:spec.path,fault,specificFieldRuleAndRemedy:true,invalidDraftRetained:true,activationBlocked:true,existingActiveAndHistoryUnchanged:true,externalExecutionRequested:false,inputKind:'SYNTHETIC_NEGATIVE_CONFIGURATION',service:'ACTUAL_INSTALLED_HTTP'};
  }
- run=await openScenario('E03',{phase:'PRE_RELEASE',register:catalog=>new Map(catalog.filter(c=>['E03.EX02','E03.EX12'].includes(c.caseInstanceId)||['REAL_SERVICE_PARAMETER','ENTRY_ADMISSION'].includes(c.kind)).map(c=>[c.caseInstanceId,()=>collectCase(c)]))});
+ run=await openScenario('E03',{phase:'PRE_RELEASE',register:catalog=>new Map(catalog.filter(c=>['E03.EX01','E03.EX02','E03.EX12'].includes(c.caseInstanceId)||['REAL_SERVICE_PARAMETER','ENTRY_ADMISSION'].includes(c.kind)).map(c=>[c.caseInstanceId,()=>collectCase(c)]))});
  run.artifact('collector-callable-preflight.json',run.callablePreflight);
 
  try{

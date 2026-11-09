@@ -99,6 +99,20 @@ export async function openScenario(scenario,callableRegistration){
  assert(Array.isArray(selectedIds)&&selectedIds.length&&new Set(selectedIds).size===selectedIds.length);
  assert(selectedIds.every(id=>all.some(c=>c.caseInstanceId===id)),'The selection may not create or replace a frozen case');
  const cases=all.filter(c=>selectedIds.includes(c.caseInstanceId));
+ // EX01 reuses the existing named connection contract, but only for its exact
+ // second project. It never creates a project, principal, grant or instance.
+ if(scenario==='E03'&&(selectedIds.includes('E03.EX01')||Object.hasOwn(selection,'principals'))){
+  assert(selectedIds.includes('E03.EX01'),'E03 named principals require EX01 selected');
+  assert(selection.principals,'E03.EX01 requires a protected beta connection');keys(selection.principals,['beta']);
+  const beta=selection.principals.beta;keys(beta,['connectionRef','connectionSha256','principalId','projectId','expectedPermissions']);
+  assert.equal(typeof beta.connectionRef,'string');assert(/^[a-f0-9]{64}$/.test(beta.connectionSha256));
+  assert.equal(sha(readRegular(beta.connectionRef,131072,true)),beta.connectionSha256,'EX01 beta connection digest mismatch');
+  assert(typeof beta.projectId==='string'&&beta.projectId.length>0&&beta.projectId!==selection.projectId,'EX01 requires a distinct second project');
+  assert(typeof beta.principalId==='string'&&beta.principalId.length>0);
+  assert(Array.isArray(beta.expectedPermissions)&&new Set(beta.expectedPermissions).size===beta.expectedPermissions.length);
+  for(const permission of ['read','draft.write','definition.activate'])assert(beta.expectedPermissions.includes(permission),'EX01 beta needs current configuration permissions');
+ }
+
  // EX02's positive controls must be explicit protected provider inputs, never
  // structurally generated fixtures or invented owner/platform readiness.
  const fieldClassificationPins=selection.fieldClassification===undefined?null:structuredClone(selection.fieldClassification);
@@ -134,13 +148,14 @@ export async function openScenario(scenario,callableRegistration){
  const permissions=rolePermissions[plan.role];assert(permissions);
  named.set('default',{connection,connectionRef:selection.connectionRef,expectedPermissions:permissions});
  if(selection.principals){
-  assert(['E04','E07','E11','E12','E16','E19'].includes(scenario));assert(selection.principals&&typeof selection.principals==='object'&&!Array.isArray(selection.principals));assert(Object.keys(selection.principals).length>0&&Object.keys(selection.principals).length<=8);
+  assert(['E03','E04','E07','E11','E12','E16','E19'].includes(scenario));assert(selection.principals&&typeof selection.principals==='object'&&!Array.isArray(selection.principals));assert(Object.keys(selection.principals).length>0&&Object.keys(selection.principals).length<=8);
   if(scenario==='E16'){assert(selectedIds.includes('E16.CV02'),'Extra scoped roles are only for a campaign containing E16.CV02');assert.deepEqual(Object.keys(selection.principals).sort(),['activator','editor','monitor']);}
   if(['E04','E11'].includes(scenario))assert.deepEqual(Object.keys(selection.principals),['beta'],'E04/E11 select only the exact second project principal');
   for(const [alias,item]of Object.entries(selection.principals)){
    assert(/^[a-z][a-z0-9-]{0,31}$/.test(alias)&&alias!=='default');keys(item,['connectionRef','connectionSha256','principalId','projectId','expectedPermissions']);assert(/^[a-f0-9]{64}$/.test(item.connectionSha256));assert.equal(sha(readRegular(item.connectionRef,131072,true)),item.connectionSha256);
    const conn=readHostConnection(item.connectionRef);for(const key of ['origin','serviceId','workspaceId','version'])assert.equal(conn[key],connection[key],'Named principal must use this exact installed service');assert.equal(conn.principalId,item.principalId);assert.equal(conn.projectId,item.projectId);
    assert(Array.isArray(item.expectedPermissions)&&item.expectedPermissions.length>0&&new Set(item.expectedPermissions).size===item.expectedPermissions.length&&item.expectedPermissions.every(p=>rolePermissions.operator.includes(p)));
+   if(scenario==='E03'){assert.equal(alias,'beta');assert.notEqual(conn.projectId,connection.projectId);assert.notEqual(conn.principalId,connection.principalId);for(const permission of ['read','draft.write','definition.activate'])assert(permissions.includes(permission),'EX01 default principal needs current configuration permissions');}
    named.set(alias,{connection:conn,connectionRef:item.connectionRef,expectedPermissions:item.expectedPermissions});
   }
  }

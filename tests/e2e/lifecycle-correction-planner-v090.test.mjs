@@ -265,3 +265,65 @@ test('EX02 selection gates stop before installation access; valid file pins alon
     f.cleanup();
   }
 });
+
+test('EX01 requires the exact protected second-project selection before installation reads', async t => {
+  const { openScenario, sha } = await import('../acceptance/v090/support.mjs');
+  const f = collectorFixture(), previous = process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;
+  const selectionRef = path.join(f.root, 'ex01-selection.json'), connectionRef = path.join(f.root, 'beta-connection.json');
+  function selected() {
+    // Only a file-pin probe: the absent installation stops this test before
+    // connection parsing, authentication, project readiness or any public call.
+    fs.writeFileSync(connectionRef, '{"sourceTestOnly":true}', { mode: 0o600 }); fs.chmodSync(connectionRef, 0o600);
+    return { schema: 'runtime-v090-acceptance-selection/v1', installedRoot: path.join(f.root, 'absent-installation'), expectedManifestDigest: 'a'.repeat(64), connectionRef: path.join(f.root, 'absent-default'), workspaceId: 'test', projectId: 'alpha', runId: 'ex01-boundary-test', outputRoot: path.join(f.root, 'must-not-exist'), qualification: 'DEVELOPMENT', caseIds: ['E03.EX01'], principals: { beta: { connectionRef, connectionSha256: sha(fs.readFileSync(connectionRef)), principalId: 'beta-reader', projectId: 'beta', expectedPermissions: ['read', 'draft.write', 'definition.activate'] } } };
+  }
+  const checks = [
+    ['missing beta selection', s => { delete s.principals; }, /E03.EX01 requires a protected beta connection/],
+    ['unknown principal alias', s => { s.principals.gamma = s.principals.beta; delete s.principals.beta; }, { code: 'ERR_ASSERTION' }],
+    ['same project is not isolation', s => { s.principals.beta.projectId = s.projectId; }, /EX01 requires a distinct second project/],
+    ['missing activation capability', s => { s.principals.beta.expectedPermissions = ['read']; }, /EX01 beta needs current configuration permissions/],
+    ['changed connection bytes', () => fs.appendFileSync(connectionRef, 'changed'), /EX01 beta connection digest mismatch/],
+    ['public connection bytes', () => fs.chmodSync(connectionRef, 0o644), { code: 'UNSAFE_FILE' }],
+    ['unselected EX01 rejects named principals', s => { s.caseIds = ['E03.EX12']; }, /E03 named principals require EX01 selected/]
+  ];
+  try {
+    process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION = selectionRef;
+    for (const [name, change, error] of checks) await t.test(name, async () => {
+      const selection = selected(); change(selection); fs.writeFileSync(selectionRef, JSON.stringify(selection), { mode: 0o600 });
+      await assert.rejects(openScenario('E03'), error); assert.equal(fs.existsSync(selection.outputRoot), false);
+    });
+    await t.test('valid protected pin reaches only existing installation inspection', async () => {
+      const selection = selected(); fs.writeFileSync(selectionRef, JSON.stringify(selection), { mode: 0o600 });
+      await assert.rejects(openScenario('E03'), error => error.code === 'ENOENT' && typeof error.path === 'string' && (error.path === selection.installedRoot || error.path.startsWith(selection.installedRoot + path.sep)));
+      assert.equal(fs.existsSync(selection.outputRoot), false);
+    });
+  } finally {
+    if (previous === undefined) delete process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION; else process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION = previous;
+    f.cleanup();
+  }
+});
+
+test('actual E04 collector rejects missing EX11 before installation access or browser launch', { timeout: 60000 }, async () => {
+  const { execFile } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const f = collectorFixture();
+  try {
+    const selection = { schema: 'runtime-v090-acceptance-selection/v1', installedRoot: path.join(f.root, 'absent-installation'), expectedManifestDigest: 'a'.repeat(64), connectionRef: path.join(f.root, 'absent-connection'), workspaceId: 'test', projectId: 'test', runId: 'e04-registry-test', outputRoot: path.join(f.root, 'must-not-exist'), qualification: 'DEVELOPMENT', caseIds: ['E04.EX11'] };
+    const filename = path.join(f.root, 'e04-selection.json'); fs.writeFileSync(filename, JSON.stringify(selection), { mode: 0o600 });
+    // Carry only the active source loader into this bounded child; no global
+    // NODE_OPTIONS change and no compiled dist mutation is needed.
+    const loaderArgs = [];
+    for (let i = 0; i < process.execArgv.length; i++) {
+      const arg = process.execArgv[i];
+      if (arg === '--experimental-loader' || arg === '--loader') loaderArgs.push(arg, process.execArgv[++i]);
+      else if (arg.startsWith('--experimental-loader=') || arg.startsWith('--loader=')) loaderArgs.push(arg);
+    }
+    const childEnv = { ...process.env, EVOPILOT_V090_ACCEPTANCE_SELECTION: filename };
+    delete childEnv.NODE_TEST_CONTEXT; // This is a fresh test runner, not its parent's worker.
+    const result = await new Promise(resolve => execFile(process.execPath, [...loaderArgs, '--test', '--test-concurrency=1', fileURLToPath(new URL('../acceptance/v090/e04.test.mjs', import.meta.url))], { env: childEnv, timeout: 30000, maxBuffer: 1048576, encoding: 'utf8' }, (error, stdout, stderr) => resolve({ error, stdout, stderr })));
+    assert.equal(result.error?.code, 1); assert.equal(result.error.killed, false);
+    assert.match(result.stdout + result.stderr, /COLLECTOR_MAPPING_INCOMPLETE/);
+    assert.match(result.stdout + result.stderr, /E04\.EX11/);
+    assert.doesNotMatch(result.stdout + result.stderr, /ENOENT/);
+    assert.equal(fs.existsSync(selection.outputRoot), false); assert.equal(fs.existsSync(selection.installedRoot), false);
+  } finally { f.cleanup(); }
+});

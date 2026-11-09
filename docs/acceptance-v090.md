@@ -45,6 +45,18 @@ response reuses existing test authority; it never supplies a domain/release
 decision or changes daily Codex configuration. Unexpected shell use or an
 uncertain write fails the case and retains the original request for inspection.
 
+E03.EX01 requires an exact protected `principals.beta` connection for a different
+project and principal on the same installed service. Both principals need current
+`read`, `draft.write` and `definition.activate` permissions. Each project must
+already have a usable active definition and an actually admitted, unstarted
+instance. The collector does not create those prerequisites. Through the public
+HTTP API it activates independent legal configurations, rejects foreign-project
+writes and invalid Base inheritance, and repairs the invalid drafts. It checks
+publisher Base bytes, original instances and authority, retained revisions and
+the other project's state throughout. It does not dispatch lifecycle stages.
+Selection checks and source tests are not evidence that EX01 has passed on an
+installed service.
+
 E03.EX02 requires `fieldClassification: {github: {yamlRef, yamlSha256},
 gitlab: {yamlRef, yamlSha256}}` in its protected selection. Both files must be
 distinct, canonical, private, owner-held regular files, nonempty and at most
@@ -389,6 +401,14 @@ registered configuration, supplied to E03 and E04 as optional protected
 definition. Compiler-only structural controls are labeled as such; unresolved
 synthetic references never establish a usable extension. Actual parallel joins,
 frozen execution budgets and owner outcomes keep their separate fixed variants.
+
+E04 registers its implemented case callbacks before reading the installation or
+starting a browser. Selecting a missing callback fails with
+`COLLECTOR_MAPPING_INCOMPLETE` at that preflight; it does not run a placeholder
+and does not skip the requirement. The retained callable report covers the full
+fixed E04 catalog even when a subset is selected. It proves callable coverage
+only, not environment readiness or acceptance. E04.EX11 remains unimplemented
+until its actual pinned owner report and current Target controls are collected.
 
 The paired E03.EX12 and E04.EX12 cases use the same exact legal YAML and a single
 extension-scope change as the illegal input. E03 exercises HTTP, MCP, CLI and a

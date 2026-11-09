@@ -439,29 +439,35 @@ async function extensionExecution(run,c,browser,openBrowser){
  async function originalRequest(i,requestId){const name=Object.keys(i.stages).find(name=>i.stages[name].requestId===requestId);assert(name);return original(i,name);}
 }
 
-const unavailable={
- 'E04.EX11':'Actual pinned owner report plus failed current Target, rejected latest/forged PASS, and removing the draft check while preserving current obligations are required.',
-};
 test('E04 exact installed Base inheritance and constrained extension cases',async()=>{
- const run=await openScenario('E04');let browser;
+ let run,browser,base,initial,activeSource,activeData,positiveSource;
+ // Register only implemented callbacks before installation reads or browser
+ // startup. EX11 still needs real owner-report/current-Target evidence; no
+ // placeholder callback may make that fixed obligation look executable.
+ const collectors={
+  'E04.journey':c=>entryCase(run,c,base,positiveSource,'http-api'),
+  'E04.variant.01':c=>browserEntry(run,c,base,positiveSource,browser,true),
+  'E04.variant.02':c=>browserEntry(run,c,base,positiveSource,browser,false),
+  'E04.variant.03':c=>entryCase(run,c,base,positiveSource,'http-api'),
+  'E04.variant.04':c=>entryCase(run,c,base,positiveSource,'cli'),
+  'E04.variant.05':c=>entryCase(run,c,base,positiveSource,'http-mcp'),
+  'E04.EX01':c=>exactSingleBaseProjects(run,c,browser,base),
+  'E04.EX02':c=>schemaCase(run,c,base),
+  'E04.EX03':c=>budgetBoundaries(run,c,base,activeSource),
+  'E04.EX04':c=>extensionExecution(run,c,browser,openBrowser),
+  'E04.EX05':c=>graphAttacks(run,c,base,activeData),
+  'E04.EX06':c=>actionAttacks(run,c,base,activeData),
+  'E04.EX07':c=>extensionExecution(run,c,browser,openBrowser),
+  'E04.EX12':c=>extensionBrowserEntries(run,c,browser)
+ };
+ run=await openScenario('E04',{phase:'PRE_RELEASE',register:catalog=>new Map(catalog.filter(c=>Object.hasOwn(collectors,c.caseInstanceId)).map(c=>[c.caseInstanceId,()=>collectors[c.caseInstanceId](c)]))});
+ run.artifact('collector-callable-preflight.json',run.callablePreflight);
  try{
-  const base=await run.read('lifecycle.base.inspect');assert.equal(base.projectMutationAllowed,false);
-  const initial=await run.read('lifecycle.definition.inspect');assert(initial.active,'Use a real natively activated isolated baseline, never seeded database state');
-  const activeSource=await run.source(initial.active.id),activeData=parse(activeSource),positiveSource=controlSource(run,activeSource);
+  base=await run.read('lifecycle.base.inspect');assert.equal(base.projectMutationAllowed,false);
+  initial=await run.read('lifecycle.definition.inspect');assert(initial.active,'Use a real natively activated isolated baseline, never seeded database state');
+  activeSource=await run.source(initial.active.id);activeData=parse(activeSource);positiveSource=controlSource(run,activeSource);
   assert.equal(activeData.projectId,run.selection.projectId);assert.deepEqual(activeData.extends,base.pin);
   if(run.cases.some(c=>['E04.variant.01','E04.variant.02','E04.EX01','E04.EX12','E04.EX04','E04.EX07'].includes(c.caseInstanceId)))browser=await chromium.launch({headless:true});
-  for(const c of run.cases)await run.collect(c,async()=>{
-   if(unavailable[c.caseInstanceId]){run.artifact('required-uncollected-contract.json',{contract:c.parameters.variantContract,reason:unavailable[c.caseInstanceId],sourceTestsNotSubstituted:true});throw Error('UNIMPLEMENTED_REQUIRED_VARIANT: '+unavailable[c.caseInstanceId]);}
-   if(['E04.EX04','E04.EX07'].includes(c.caseInstanceId))return extensionExecution(run,c,browser,openBrowser);
-   if(c.caseInstanceId==='E04.EX01')return exactSingleBaseProjects(run,c,browser,base);
-   if(c.caseInstanceId==='E04.EX12')return extensionBrowserEntries(run,c,browser);
-   if(c.caseInstanceId==='E04.EX03')return budgetBoundaries(run,c,base,activeSource);
-   if(['E04.journey','E04.variant.03','E04.variant.04','E04.variant.05'].includes(c.caseInstanceId))return entryCase(run,c,base,positiveSource,c.caseInstanceId==='E04.variant.04'?'cli':c.caseInstanceId==='E04.variant.05'?'http-mcp':'http-api');
-   if(['E04.variant.01','E04.variant.02'].includes(c.caseInstanceId))return browserEntry(run,c,base,positiveSource,browser,c.caseInstanceId==='E04.variant.01');
-   if(c.caseInstanceId==='E04.EX02')return schemaCase(run,c,base);
-   if(c.caseInstanceId==='E04.EX05')return graphAttacks(run,c,base,activeData);
-   if(c.caseInstanceId==='E04.EX06')return actionAttacks(run,c,base,activeData);
-   throw Error('UNIMPLEMENTED_REQUIRED_VARIANT: '+c.caseInstanceId);
-  });
+  for(const c of run.cases)await run.collectRegistered(c);
  }finally{await browser?.close();run.finish();}
 });
