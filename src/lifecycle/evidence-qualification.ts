@@ -165,6 +165,9 @@ export interface ProtectedQualificationFacts {
   assessmentAuthority:{requestId:string;authorityRef:string;authorityDigest:string;deadlineAt:string};
 }
 export interface NativeQualificationBindings {
+  /** Trusted invocation-local byte observation only; never deserialized from
+   * a request. Nested calls may borrow an existing caller scope. */
+  openObservationScope?(signal:AbortSignal):QualificationObservationScope;
   /** Must authenticate originals, a complete history watermark and independently
    * discovered inventories, including current policy revocation and validity.
    * No caller declarations may be promoted to these facts. */
@@ -247,7 +250,10 @@ function policyObservation(selection:QualificationSelection,facts:ProtectedQuali
   return{schema:'evopilot-observation/v1',origin:'runtime-observation',source:{revision:facts.original.revision,digest:facts.original.readbackDigest},values:{evidenceQualification:{schema:'runtime-qualification-policy-input/runtime-v090-proposal-v1',binding:{profileContext:'FINAL_CANDIDATE_ACCEPTANCE',subjectDigest:valueDigest(i),currentCandidateDigest:i.currentCandidateDigest,originalCandidateDigest:i.original.candidateDigest,scope:i.scope,currentProtectedScope:i.scope,currentProtectedCandidateDigest:i.currentCandidateDigest,caseId:i.caseId,requestedMode:i.original.candidateDigest===i.currentCandidateDigest?'EXECUTED':'REUSE',currentPhase:selection.phase},original,authenticatedOriginal:{execution:original,status:'PROTECTED_RECORD_READBACK',originalReceiptRef:facts.original.receiptRef,originalRawBytesRef:facts.original.rawBytesRef,readbackRevision:facts.original.revision,readbackDigest:facts.original.readbackDigest,rawBytesDigest:byteDigest(i.rawReceipt)},originalInputs:closure(i.originalInputs,facts.inventories.original),currentInputs:closure(i.currentInputs,facts.inventories.current),inputComparison:{originalClosureDigest:manifest(i.originalInputs).closureDigest,currentClosureDigest:manifest(i.currentInputs).closureDigest,status:'PROTECTED_NORMALIZATION',derivationReceiptRef:facts.inventories.current.receiptRef},policy:{id:p.owner.reference.id,version:p.owner.reference.version,referenceDigest:p.owner.reference.digest,selectedReferenceDigest:p.owner.reference.digest,publicationStatus:'PUBLISHED',originalPublicationReceiptRef:p.publishedReceiptRef,trust:{status:'ACTIVE',scope:i.scope,revision:p.trust.revision,protectedRecordRef:p.trust.protectedRecordRef,recordDigest:p.trust.recordDigest,expiresEpochSeconds:epoch(p.trust.expiresAt)},ttlParameterDigest:p.validityContractDigest},clock:{nowEpochSeconds:epoch(assessedAt),protectedSnapshotRef:facts.assessmentAuthority.requestId},validity:{schema:'runtime-qualification-validity-input/proposal-v1',contractDigest:p.validityContractDigest,status:'PROTECTED_COMPLETE_VALIDITY_BOUNDS',bounds,originalPolicyApplicability:facts.validity.originalPolicyApplicability,earliestExpiresEpochSeconds:Math.min(...Object.values(bounds).map(b=>b.expiresEpochSeconds))},authenticatedValidity:{status:'PROTECTED_CURRENT_VALIDITY_READBACK',bounds,originalPolicyApplicability:facts.validity.originalPolicyApplicability,originalReceiptRef:facts.validity.receiptRef,revision:facts.validity.revision,recordDigest:facts.validity.recordDigest},assessmentAction:{subjectDigest:valueDigest(i),originalRequestId:facts.assessmentAuthority.requestId,originalAuthorityRef:facts.assessmentAuthority.authorityRef,authorityDigest:facts.assessmentAuthority.authorityDigest,originalDeadlineEpochSeconds:epoch(facts.assessmentAuthority.deadlineAt)},requirement:{caseId:i.caseId,phase:selection.phase,currentProtectedPhase:selection.phase,profileDigest:p.profileDigest,protectedInventoryDigest:p.caseInventoryDigest,protectedInventoryRef:p.requirement.inventoryRef,protectedInventoryRevision:p.requirement.inventoryRevision,executionRule:i.executionRule,impact:p.requirement.impact,serialGroupStatus:p.requirement.serialGroupStatus},history:{status:'COMPLETE',entries:history,watermark:facts.history.watermark},authenticatedHistory:{status:'PROTECTED_CURRENT_HISTORY',entries:history,watermark:facts.history.watermark,originalReceiptRef:facts.history.receiptRef,historyDigest:valueDigest(i.history)},constraints:{purpose:'QUALIFICATION_ONLY',establishesEnvironmentState:false,useAsPreparation:false,executionAuthorized:false,releaseAuthorized:false,mutateOriginal:false}}}};
 }
 const nativeServices=new WeakSet<object>();
+export interface QualificationObservationScope {run<T>(read:()=>T):T;close():void;drain?():Promise<void>;cacheDependent?():boolean;}
 export interface NativeQualificationService {
+  openObservationScope?(signal:AbortSignal):QualificationObservationScope;
+  closeInspection?(qualification:NativeEvidenceQualification):void;
   prepare(selection:QualificationSelection,actor:Principal,signal:AbortSignal,mutation?:QualificationMutationContext):Promise<{actionRef:string;actionDigest:string;requestDigest:string;authorityRef:string;expiresAt:string}>;
   dispatch(projectId:string,actionRef:string,actor:Principal,signal:AbortSignal,mutation?:QualificationMutationContext):Promise<void>;
   inspect(projectId:string,actionRef:string,actor:Principal,signal:AbortSignal):Promise<NativeEvidenceQualification>;
@@ -262,7 +268,7 @@ export interface NativeQualificationService {
 export function assertNativeQualificationService(service:NativeQualificationService):void {if(!nativeServices.has(service))reject('TRUSTED_QUALIFICATION_SERVICE_REQUIRED','Use the registered native qualification service');}
 export function createNativeQualificationService(store:RuntimeStore,bindings:NativeQualificationBindings):NativeQualificationService {
   const kind='lifecycle-evidence-qualification';
-  const inspections=new WeakMap<NativeEvidenceQualification,{subject:QualificationInspectionSubject;observer:{id:string;revision:number}}>();
+  const inspections=new WeakMap<NativeEvidenceQualification,{subject:QualificationInspectionSubject;observer:{id:string;revision:number};scope?:QualificationObservationScope}>();
   const executions=new WeakMap<TypedCurrentExecutionCapture,{id:string;revision:number}>();
   function retain(projectId:string,id:string,value:unknown,actor:Principal,mutation?:QualificationMutationContext):Receipt|undefined {
     const old=store.object(projectId,kind,id);if(old){if(!sameQualification(old,value))reject('QUALIFICATION_IMMUTABLE','Original qualification action cannot change',409);if(!mutation)return;}
@@ -287,7 +293,7 @@ export function createNativeQualificationService(store:RuntimeStore,bindings:Nat
     if(!sameQualification(nativeInventory(record(pkg.package),'harness'),facts.policy.owner.criteria))reject('QUALIFICATION_CRITERIA_CHANGED','Every published policy criterion and actual-observation variant is required');
     signal.throwIfAborted();return{facts,owner};
   }
-  const service:NativeQualificationService={
+  const implementation:NativeQualificationService={
     async inspectExecution(projectId,captureRef,actor,signal){
       authorize(actor,projectId,'read');signal.throwIfAborted();
       if(!bindings.readExecution||!bindings.authorizeExecution)reject('QUALIFICATION_EXECUTION_REQUIRED','No registered current execution producer is available',409);
@@ -374,6 +380,14 @@ export function createNativeQualificationService(store:RuntimeStore,bindings:Nat
       qualificationFacts(a.selection,a.facts,Date.now());registeredOwner(a.facts);signal.throwIfAborted();
       if(qualification.status==='QUALIFIED'&&(!qualification.expiresAt||correctionTime(qualification.expiresAt)<=Date.now()))reject('QUALIFICATION_EXPIRED','Qualification expired before final consumption',409);
     },
+  };
+  const service:NativeQualificationService={...implementation,
+    ...(bindings.openObservationScope?{openObservationScope:(signal:AbortSignal)=>bindings.openObservationScope!(signal)}:{}),
+    async prepare(...args){const scope=bindings.openObservationScope?.(args[2]);try{return await(scope?scope.run(()=>implementation.prepare(...args)):implementation.prepare(...args));}finally{scope?.close();await scope?.drain?.();}},
+    async dispatch(...args){const scope=bindings.openObservationScope?.(args[3]);try{return await(scope?scope.run(()=>implementation.dispatch(...args)):implementation.dispatch(...args));}finally{scope?.close();await scope?.drain?.();}},
+    async inspect(...args){const scope=bindings.openObservationScope?.(args[3]);try{const output=await(scope?scope.run(()=>implementation.inspect(...args)):implementation.inspect(...args));scope?.run(()=>{});const proof=inspections.get(output)!;if(scope)proof.scope=scope;return output;}catch(error){scope?.close();await scope?.drain?.();throw error;}},
+    assertCurrent(...args){const scope=inspections.get(args[1])?.scope;if(scope)scope.run(()=>implementation.assertCurrent(...args));else implementation.assertCurrent(...args);},
+    closeInspection(qualification){inspections.get(qualification)?.scope?.close();inspections.delete(qualification);},
   };
   nativeServices.add(service);return Object.freeze(service);
 }

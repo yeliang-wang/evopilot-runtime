@@ -1,4 +1,27 @@
 // Source-level deterministic regressions; these are not actual LC acceptance.
+// LC03–05 fixtures below validate collector refusal and routing only. They are
+// synthetic and are never emitted as native acceptance artifacts.
+test('LC native selector rejects caller conclusions, dispatch and mismatched provenance',async()=>{
+ const {validateLcNativeSelection:check,LC_NATIVE_VECTORS:vectors}=await import('../acceptance/v090/correction.test.mjs');
+ const pin={ref:'/synthetic-only/original.json',sha256:'b'.repeat(64)},original={stageRequestId:'original',record:pin},selection={expectedManifestDigest:'a'.repeat(64),sourceCommit:'c'.repeat(40),phase:'PRE_RELEASE',caseIds:['LC03']};
+ const value={schema:'runtime-lc-native-selection/v1',candidateDigest:'sha256:'+selection.expectedManifestDigest,sourceCommit:selection.sourceCommit,workspaceId:'workspace',projectId:'project',caseId:'LC03',vectors:Object.fromEntries(vectors.LC03.map(v=>[v,{original,...(v==='same-text-different-baseline'?{second:{...original,stageRequestId:'other'}}:{}),...(v==='unknown'?{}:{correctionRef:'correction:sha256:'+'d'.repeat(64)})}]))};
+ assert.deepEqual(check(value,selection),value);
+ for(const change of [v=>v.outcome='PASS',v=>v.failureClass='TRANSIENT',v=>v.sourceCommit='e'.repeat(40),v=>v.candidateDigest='sha256:'+'e'.repeat(64),v=>v.vectors.unknown.correctionRef='correction:sha256:'+'d'.repeat(64),v=>v.vectors.unknown.dispatch=true,v=>v.vectors.unknown.original.record.sha256='not-a-hash',v=>delete v.vectors['facts-vs-hypothesis'],v=>v.vectors['two-no-progress']={original}]){const bad=structuredClone(value);change(bad);assert.throws(()=>check(bad,selection));}
+});
+test('LC UNKNOWN routing inspects the original once and never seeks admission or dispatch',async()=>{
+ const {observeLcNativeVector:observe}=await import('../acceptance/v090/correction.test.mjs'),{createHash}=await import('node:crypto');
+ const stable=v=>v===null||typeof v!=='object'?JSON.stringify(v):Array.isArray(v)?'['+v.map(stable).join(',')+']':'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+stable(v[k])).join(',')+'}',hash=v=>'sha256:'+createHash('sha256').update(stable(v)).digest('hex');
+ const request={id:'original',digest:'request-digest',instanceId:'instance',stageId:'verification',pinsDigest:'pins',inputDigest:'inputs',planDigest:'plan',plan:{adapterId:'native',adapterDigest:'adapter',bindingDigest:'binding'},authorityRef:'existing',deadlineAt:'2026-11-01T00:00:00Z'},progress={phase:'UNKNOWN',terminal:false,reason:'uncertain',observationRef:'observation',observation:{retained:'synthetic-routing-only'}},stage={request,progress},facts={originalRequestId:request.id,originalRequestDigest:request.digest,instanceId:request.instanceId,stageId:request.stageId,pinsDigest:request.pinsDigest,inputDigest:request.inputDigest,planDigest:request.planDigest,adapterId:request.plan.adapterId,adapterDigest:request.plan.adapterDigest,bindingDigest:request.plan.bindingDigest,authorityRef:request.authorityRef,deadlineAt:request.deadlineAt,phase:progress.phase,terminal:progress.terminal,reason:progress.reason,observationRef:progress.observationRef,observationDigest:hash(progress.observation)},view={facts,proposal:null,executionAuthorized:false,releaseAuthorized:false,automaticRedispatch:false};
+ const calls=[];const read=async(op,input)=>{calls.push({op,input});assert.equal(op,'lifecycle.correction.inspect');return view;};const result=await observe('LC03','unknown',{original:{stageRequestId:'original'}},read,async()=>stage);assert.equal(result.assertions.inspectOnly,true);assert.equal(calls.length,1);
+ for(const key of ['executionAuthorized','releaseAuthorized','automaticRedispatch']){const bad=structuredClone(view);bad[key]=true;await assert.rejects(observe('LC03','unknown',{original:{}},async()=>bad,async()=>stage));}
+});
+test('LC native original pins cannot supply alternate requests or rewritten outcomes',async()=>{
+ const {assertLcNativeOriginal:check}=await import('../acceptance/v090/correction.test.mjs'),{createHash}=await import('node:crypto');
+ const stable=v=>v===null||typeof v!=='object'?JSON.stringify(v):Array.isArray(v)?'['+v.map(stable).join(',')+']':'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+stable(v[k])).join(',')+'}',hash=v=>'sha256:'+createHash('sha256').update(stable(v)).digest('hex');
+ const body={id:'retained',workspaceId:'workspace',projectId:'project',inputDigest:'input'},request={...body,digest:hash(body)},progress={requestId:'retained',phase:'FAILED',terminal:true,observationRef:'raw',observation:{requestId:'retained',inputDigest:'input',outcome:{status:'FAILED'}}},original={request,progress},stage={...original,automaticRedispatch:false},config={workspaceId:'workspace',projectId:'project'};
+ assert.deepEqual(check(stage,original,config,'retained'),stage);
+ for(const change of [v=>v.request.id='other',v=>v.request.projectId='other',v=>v.request.digest='forged',v=>v.progress.phase='COMPLETE',v=>v.progress.observation.outcome.status='PASS',v=>v.automaticRedispatch=true]){const bad=structuredClone(stage);change(bad);assert.throws(()=>check(bad,original,config,'retained'));}
+});
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CORRECTION_BINDING_KEYS, preflightCorrection, planCorrectionBranches } from '../../dist/lifecycle/correction-planner.js';
@@ -609,4 +632,15 @@ test('E17 original public history requires unchanged values exact literal status
 });
 test('E17 old published package verifier refuses caller-selected archives before any package import',async()=>{
  const{verifyE17PublishedArchive:check}=await import('../acceptance/v090/maintenance.mjs');assert.throws(()=>check('/absent-never-imported',Buffer.from('synthetic not official archive')));
+});
+
+// Never accepted as product evidence: these mocks exercise fail-closed routing.
+test('LC04 and LC05 reject absent native proofs and ambiguous deterministic refusal',async()=>{
+ const {observeLcNativeVector:observe}=await import('../acceptance/v090/correction.test.mjs'),{createHash}=await import('node:crypto');
+ const stable=v=>v===null||typeof v!=='object'?JSON.stringify(v):Array.isArray(v)?'['+v.map(stable).join(',')+']':'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+stable(v[k])).join(',')+'}',hash=v=>'sha256:'+createHash('sha256').update(stable(v)).digest('hex');
+ const request={id:'original',digest:'request-digest',instanceId:'instance',stageId:'verification',pinsDigest:'pins',inputDigest:'inputs',planDigest:'plan',plan:{adapterId:'runtime-ci-owner-stage-v2',adapterDigest:'adapter',bindingDigest:'binding'},authorityRef:'existing',deadlineAt:'2026-11-01T00:00:00Z'},progress={phase:'FAILED',terminal:true,reason:'failure',observationRef:'observation',observation:{synthetic:true}},stage={request,progress},facts={originalRequestId:request.id,originalRequestDigest:request.digest,instanceId:request.instanceId,stageId:request.stageId,pinsDigest:request.pinsDigest,inputDigest:request.inputDigest,planDigest:request.planDigest,adapterId:request.plan.adapterId,adapterDigest:request.plan.adapterDigest,bindingDigest:request.plan.bindingDigest,authorityRef:request.authorityRef,deadlineAt:request.deadlineAt,phase:progress.phase,terminal:progress.terminal,reason:progress.reason,observationRef:progress.observationRef,observationDigest:hash(progress.observation)};
+ const view={facts,proposal:{input:{stageRequestId:request.id,hypothesis:'synthetic hypothesis only'},facts,factsDigest:hash(facts)},proposalCurrent:true,executionAuthorized:false,releaseAuthorized:false,automaticRedispatch:false,nativeEvidence:{status:'AVAILABLE',originalRequestId:request.id,originalRequestDigest:request.digest},captureHistory:{rounds:[]}};
+ for(const [caseId,vector,reason] of [['LC04','preparation-defect','REPAIR_EVIDENCE_REQUIRED'],['LC04','product-defect','REPAIR_EVIDENCE_REQUIRED'],['LC05','transient-bounded','REPAIR_EVIDENCE_REQUIRED'],['LC05','unchanged-deterministic','REPAIR_ORIGIN_UNPROVEN'],['LC05','two-no-progress','TWO_NO_PROGRESS_ROUNDS']]){
+  const calls=[];const read=async op=>{calls.push(op);return op==='lifecycle.correction.inspect'?view:{...view,allowed:false,repairAdmission:{allowed:false,reasons:[reason]}};};await assert.rejects(observe(caseId,vector,{original:{},correctionRef:'synthetic'},read,async()=>stage),/NOT_READY|Assertion/);assert.deepEqual(calls,['lifecycle.correction.inspect','lifecycle.correction.admission']);
+ }
 });

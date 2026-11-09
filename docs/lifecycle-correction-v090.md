@@ -235,6 +235,49 @@ erase failures or renew budgets. This source path is not a claim that the
 semantic asset has been approved/published or that actual LC20 acceptance passed.
 The other conditional cases gain no producer by analogy.
 
+### Bounded current-system-file observation
+
+The inner environment record is `runtime-lc20-environment/v2`, with basis
+`PROCESS_PATHS_CURRENT_SYSTEM_FILES`. It resolves every logical shared-object
+path reported by the actual Runtime process to a current disk file or a checked
+Darwin cache image mapping. Supported Darwin caches are hashed in full: the main
+cache and all declared executable subcaches, not just image metadata. UUIDs bind
+cache membership; they do not replace byte hashes. Unsupported formats, missing
+images or files, unstable identities and exceeded limits remain UNKNOWN and
+fail closed. Historical v1 observations cannot be relabeled as v2.
+
+This proves current system-file bytes corresponding to process-reported paths.
+It does not prove mapped-memory bytes, the running process's cache UUID or a
+hermetic environment. A process may retain stale mappings after an OS update;
+current disk bytes alone cannot exclude that condition.
+
+The first cache acquisition starts a 10-second acquisition ceiling and a
+12-second observation lifetime, both capped by the caller's existing deadline.
+Operations that do not acquire cache bytes retain their existing deadlines.
+There is one active cache acquisition per process, with no queue and no global
+or cross-request digest cache. Nested trusted calls may share the same open
+scope and fully read proof; synchronous final guards recheck descriptor/path
+identities and the current process report. A new root operation reads fresh
+bytes. Expiry or cancellation immediately invalidates the proof; pending reads
+and descriptor closes must drain before a replacement acquisition can begin.
+HTTP/MCP client-disconnect cancellation is not yet propagated to qualification
+reads; the local deadline does not close that gap.
+
+Release review closes its observation scope. Decision verification obtains
+fresh scopes, including a fresh retained observation after authentication;
+human review time cannot extend a prior proof. For cache-dependent publication,
+each next mutation first obtains a fresh bounded observation and revalidates
+the same reviewed candidate, source, decision and audit. This does not renew
+publication authority or its deadline. A synchronous currentness guard then
+immediately precedes the mutation. If revalidation fails, the next mutation is
+refused while original side effects and receipts remain for reconciliation.
+There is no automatic retry, redispatch or cleanup deletion.
+
+Low-level cache probes are engineering diagnostics with zero formal case
+credit. They do not establish installed Runtime protocol acceptance, formal
+end-to-end LC20 acceptance, or that a complete qualification or release audit
+fits the scope. Those require separate original execution evidence.
+
 Current CI execution capture also distinguishes the outer lifecycle artifact-set
 digest from the inner Runtime distribution manifest digest. Original archive,
 manifest and source-revision bytes must prove both; v3 private source records

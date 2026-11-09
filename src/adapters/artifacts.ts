@@ -9,7 +9,7 @@ import type { PlatformArtifactArchive, PlatformRunObservation, PlatformRunReques
 import type { SourceTreeObservation } from './source-tree.js';
 import {validatePreparationInput,validatePreparationOutput,type CiPreparationOutput} from './ci-preparation.js';
 import {EVIDENCE_INPUT_KINDS,LC20_VECTORS,LC20_CHILDREN,type Lc20ProducerContract,type Lc20ProducerPin,type EvidenceInputManifest,type RuntimeDistributionIdentity} from '../lifecycle/correction-contract.js';
-import {constants,closeSync,fstatSync,lstatSync,openSync,readFileSync,readSync,realpathSync,readdirSync,readlinkSync} from 'node:fs';
+import {constants,closeSync,fstatSync,lstatSync,openSync,readFileSync,readSync,realpathSync,readdirSync,readlinkSync,type Stats} from 'node:fs';
 import {dirname,join,resolve,posix} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {release as osRelease} from 'node:os';
@@ -18,6 +18,101 @@ import {readRegisteredNativeToolchain,type IntegrationConfiguration} from './con
 import {verifyOwnerDistribution} from './published-owners.js';
 import type {EvidenceScope,Lc20ProtocolObservation} from '../lifecycle/correction-contract.js';
 import type {Principal} from '../server/security.js';
+import {AsyncLocalStorage} from 'node:async_hooks';
+import {open as openAsync,type FileHandle} from 'node:fs/promises';
+import {performance} from 'node:perf_hooks';
+
+type Lc20FilePin={path:string;digest:string;bytes:number};
+type CacheMapping={file:string;address:number;size:number;offset:number};
+type CacheImage={logicalPath:string;address:number;file:string;offset:number;source:'IMAGE_TABLE'|'DYLD_HEADER'};
+export interface Lc20CacheProof {schema:'runtime-lc20-dyld-cache/v1';basis:'PROCESS_PATHS_CURRENT_SYSTEM_FILES';logicalMainPath:string;mainPath:string;onDiskCacheUuid:string;files:Lc20FilePin[];images:CacheImage[];}
+type CacheReader=(path:string,offset:number,length:number)=>Promise<Buffer>;
+function lc20Unknown(message:string):never{return reject('LC20_RUNTIME_INPUT_UNKNOWN',message,409);}
+const lc20Range=(offset:number,length:number,size:number)=>{if(!Number.isSafeInteger(offset)||!Number.isSafeInteger(length)||offset<0||length<0||offset>size||length>size-offset)lc20Unknown('Unsupported cache byte range');};
+const lc20U64=(b:Buffer,p:number)=>{const n=b.readBigUInt64LE(p);if(n>BigInt(Number.MAX_SAFE_INTEGER))lc20Unknown('Unsupported cache integer');return Number(n);};
+const lc20Path=(path:string)=>{if(!path.startsWith('/')||resolve(path)!==path||path.includes('\\')||/[\u0000-\u001f]/.test(path)||Buffer.byteLength(path)>2048)lc20Unknown('Unsupported logical image path');return path;};
+/** Layout source: Apple dyld-1376.6 include/mach-o/dyld_cache_format.h,
+ * dyld_cache_header (552 bytes), mapping_info (32), image_info (32), and
+ * dyld_subcache_entry (56). Only this modern macOS arm64e layout is supported.
+ * UUIDs validate relationships; every physical byte is separately SHA-256 read.
+ * No memory mapping or target cache UUID is asserted by this parser. */
+export async function readLc20DyldLayout(mainPath:string,logicalPaths:readonly string[],read:CacheReader,size:(path:string)=>Promise<number>) {
+  const mappings:CacheMapping[]=[],members:string[]=[],uuids=new Set<string>();let count=0;
+  const header=async(path:string)=>{if(++count>16)lc20Unknown('Cache file count exceeded');const bytes=await size(path);if(bytes<552||bytes>2147483648)lc20Unknown('Cache member size exceeded');const h=await read(path,0,552);
+    if(h.length!==552||h.subarray(0,16).toString('ascii').replace(/\0+$/,'')!=='dyld_v1  arm64e'||h.readUInt32LE(16)!==552||h.readUInt32LE(216)!==1||(h.readUInt32LE(220)&~0x18ff)!==0)lc20Unknown('Unsupported default macOS cache layout');
+    const uuid=h.subarray(88,104).toString('hex');if(/^0+$/.test(uuid)||uuids.has(uuid))lc20Unknown('Duplicate or absent cache identity');uuids.add(uuid);members.push(path);
+    const n=h.readUInt32LE(20);if(n<1||mappings.length+n>4096)lc20Unknown('Cache mapping count exceeded');lc20Range(552,n*32,bytes);const table=await read(path,552,n*32);
+    for(let i=0;i<n;i++){const p=i*32,address=lc20U64(table,p),length=lc20U64(table,p+8),offset=lc20U64(table,p+16);lc20Range(offset,length,bytes);lc20Range(address,length,Number.MAX_SAFE_INTEGER);if(!length||i===0&&offset!==0||mappings.some(m=>address<m.address+m.size&&m.address<address+length))lc20Unknown('Overlapping or invalid cache mappings');mappings.push({file:path,address,size:length,offset});}
+    lc20Range(lc20U64(h,40),lc20U64(h,48),bytes);return{h,bytes,uuid};};
+  const main=await header(mainPath),subCount=main.h.readUInt32LE(396),subOffset=main.h.readUInt32LE(392),base=mappings[0].address;
+  if(subCount>15)lc20Unknown('Cache subfile count exceeded');lc20Range(subOffset,subCount*56,main.bytes);const subs=await read(mainPath,subOffset,subCount*56),suffixes=new Set<string>();
+  for(let i=0;i<subCount;i++){const p=i*56,raw=subs.subarray(p+24,p+56),end=raw.indexOf(0);if(end<1)lc20Unknown('Unterminated cache suffix');const suffix=raw.subarray(0,end).toString('ascii');if(!/^\.[a-zA-Z0-9_.-]{1,30}$/.test(suffix)||suffix.includes('..')||suffixes.has(suffix))lc20Unknown('Unsafe or duplicate cache suffix');suffixes.add(suffix);const path=mainPath+suffix,start=mappings.length,sub=await header(path);if(sub.uuid!==subs.subarray(p,p+16).toString('hex')||mappings[start].address-base!==lc20U64(subs,p+16))lc20Unknown('Subcache identity or mapping changed');}
+  const locate=(address:number,length:number)=>{const found=mappings.filter(m=>address>=m.address&&length<=m.size-(address-m.address));if(found.length!==1)lc20Unknown('Image is outside the complete physical cache');const m=found[0];return{file:m.file,offset:m.offset+address-m.address};};
+  const cstring=async(offset:number)=>{const chunks:Buffer[]=[];for(let n=0;n<2048;n+=64){const take=Math.min(64,main.bytes-offset-n);if(take<1)lc20Unknown('Unterminated cache image path');const b=await read(mainPath,offset+n,take),end=b.indexOf(0);chunks.push(end<0?b:b.subarray(0,end));if(end>=0)return lc20Path(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks)));}return lc20Unknown('Cache image path exceeded bound');};
+  if(logicalPaths.length>512||new Set(logicalPaths).size!==logicalPaths.length)lc20Unknown('Invalid target image inventory');logicalPaths.forEach(lc20Path);
+  const imageOffset=main.h.readUInt32LE(448),imageCount=main.h.readUInt32LE(452);if(!imageCount||imageCount>65536)lc20Unknown('Cache image table exceeded bound');lc20Range(imageOffset,imageCount*32,main.bytes);const table=await read(mainPath,imageOffset,imageCount*32),paths=new Map<string,number>();
+  for(let i=0;i<imageCount;i++){const p=i*32,path=await cstring(table.readUInt32LE(p+24));if(paths.has(path))lc20Unknown('Duplicate logical cache image');paths.set(path,lc20U64(table,p));}
+  const images:CacheImage[]=[];
+  for(const logicalPath of logicalPaths){const dyld=logicalPath==='/usr/lib/dyld',address=dyld?lc20U64(main.h,120):paths.get(logicalPath);if(address===undefined||!address)lc20Unknown('A reported image is absent from the cache');const location=locate(address,32),mh=await read(location.file,location.offset,32);
+    if(mh.readUInt32LE(0)!==0xfeedfacf||mh.readUInt32LE(4)!==0x0100000c||mh.readUInt32LE(12)!==(dyld?7:6))lc20Unknown('Unsupported cached Mach-O image');
+    const commands=mh.readUInt32LE(16),commandBytes=mh.readUInt32LE(20);if(commands<1||commands>4096||commandBytes>1048576)lc20Unknown('Mach-O load command bound');const all=locate(address+32,commandBytes),load=await read(all.file,all.offset,commandBytes);let pos=0,segments=0;
+    for(let i=0;i<commands;i++){lc20Range(pos,8,load.length);const cmd=load.readUInt32LE(pos),length=load.readUInt32LE(pos+4);lc20Range(pos,length,load.length);if(length<8)lc20Unknown('Invalid Mach-O command');if(cmd===0x19){if(length<72)lc20Unknown('Truncated segment');const vm=lc20U64(load,pos+24),vmSize=lc20U64(load,pos+32),fileSize=lc20U64(load,pos+48);if(fileSize>vmSize)lc20Unknown('Invalid cached segment');if(fileSize)locate(vm,fileSize);segments++;}pos+=length;}
+    if(pos!==load.length||!segments)lc20Unknown('Incomplete cached image');images.push({logicalPath,address,...location,source:dyld?'DYLD_HEADER':'IMAGE_TABLE'});
+  }
+  return{members,images:images.sort((a,b)=>a.logicalPath.localeCompare(b.logicalPath)),onDiskCacheUuid:main.uuid};
+}
+
+type OpenCacheFile={path:string;handle:FileHandle;before:Stats;pin?:Lc20FilePin};
+function sameLc20Stat(a:Stats,b:Stats){return ['dev','ino','uid','gid','mode','nlink','size','mtimeMs','ctimeMs'].every(k=>a[k as keyof typeof a]===b[k as keyof typeof b]);}
+export interface Lc20ObservationScope {run<T>(read:()=>T):T;close():void;drain():Promise<void>;cacheDependent():boolean;}
+type CacheScope=Lc20ObservationScope&{signal:AbortSignal;deadline:number;closed:boolean;files:Map<string,OpenCacheFile>;proof:Lc20CacheProof|null;report:string|null;root:{logical:string;real:string;stat:Stats}|null;pending:Promise<void>|null;cleanup:Promise<void>|null;cleanupFailure:unknown;activate():void;};
+const lc20Scopes=new AsyncLocalStorage<CacheScope>();let lc20CacheActive:CacheScope|null=null;
+// Successful acquisition releases its I/O slot while the request retains the
+// proof. Closing scopes separately block new acquisitions until every close
+// settles; an older cleanup can never release a newer acquisition's slot.
+const lc20CacheDraining=new Set<CacheScope>();
+export function openLc20ObservationScope(signal:AbortSignal):Lc20ObservationScope {
+  const inherited=lc20Scopes.getStore();if(inherited){return{run:read=>{checkLc20Scope(inherited);return inherited.run(read);},close(){},async drain(){},cacheDependent:()=>inherited.cacheDependent()};}
+  const controller=new AbortController(),combined=AbortSignal.any([signal,controller.signal]);let timer:ReturnType<typeof setTimeout>|undefined;
+  const scope:CacheScope={signal:combined,deadline:Infinity,closed:false,files:new Map(),proof:null,report:null,root:null,pending:null,cleanup:null,cleanupFailure:null,
+    run:read=>{checkLc20Scope(scope);return lc20Scopes.run(scope,read);},
+    cacheDependent:()=>scope.deadline!==Infinity,
+    activate:()=>{checkLc20Scope(scope);if(scope.deadline===Infinity){scope.deadline=performance.now()+12000;timer=setTimeout(scope.close,12000);timer.unref();}},
+    close:()=>{if(scope.closed)return;scope.closed=true;controller.abort();clearTimeout(timer);signal.removeEventListener('abort',scope.close);scope.proof=null;if(scope.cacheDependent())lc20CacheDraining.add(scope);
+      scope.cleanup=(async()=>{await scope.pending;const results=await Promise.allSettled([...scope.files.values()].map(async f=>{await f.handle.close();})),errors=results.filter((r):r is PromiseRejectedResult=>r.status==='rejected').map(r=>r.reason);
+        if(errors.length){scope.cleanupFailure=new AggregateError(errors,'Cache descriptor cleanup failed');throw scope.cleanupFailure;}
+        scope.files.clear();lc20CacheDraining.delete(scope);if(lc20CacheActive===scope)lc20CacheActive=null;
+      })();void scope.cleanup.catch(()=>{});},
+    drain:()=>{scope.close();return scope.cleanup!;}};
+  signal.addEventListener('abort',scope.close,{once:true});if(signal.aborted)scope.close();return scope;
+}
+function checkLc20Scope(scope:CacheScope){if(scope.closed||scope.signal.aborted||performance.now()>=scope.deadline)lc20Unknown('Cache observation expired or interrupted');}
+function assertLc20Cache(scope:CacheScope){checkLc20Scope(scope);if(!scope.proof||!scope.root)lc20Unknown('Cache byte observation not prepared');const root=scope.root;if(realpathSync(root.logical)!==root.real||!sameLc20Stat(lstatSync(root.real),root.stat))lc20Unknown('System cache root changed');for(const f of scope.files.values())if(realpathSync(f.path)!==f.path||!sameLc20Stat(f.before,fstatSync(f.handle.fd))||!sameLc20Stat(f.before,lstatSync(f.path)))lc20Unknown('System cache bytes changed');}
+/** Low-level read-only byte acquisition also accepts synthetic files for parser
+ * regression tests. Only prepareLc20Protocol chooses the fixed system locator;
+ * no HTTP input or caller-supplied proof can choose a Runtime cache root. */
+export async function acquireLc20CacheBytes(mainPath:string,paths:readonly string[],signal:AbortSignal):Promise<Lc20CacheProof>{
+  const scope=lc20Scopes.getStore();if(!scope)lc20Unknown('Request-local observation scope required');checkLc20Scope(scope);if(scope.proof){assertLc20Cache(scope);if(scope.proof.mainPath!==realpathSync(mainPath)||canonical(scope.proof.images.map(i=>i.logicalPath))!==canonical([...paths].sort()))lc20Unknown('Cache observation scope differs');return scope.proof;}
+  if(lc20CacheActive||lc20CacheDraining.size)lc20Unknown([...lc20CacheDraining].some(s=>s.cleanupFailure)?'Previous cache cleanup failed':'Cache observation busy');scope.activate();lc20CacheActive=scope;const logicalMainPath=mainPath,deadline=Math.min(scope.deadline,performance.now()+10000);let metadata=0,total=0;
+  const check=()=>{checkLc20Scope(scope);if(signal.aborted||performance.now()>=deadline)lc20Unknown('Cache acquisition interrupted or timed out');};
+  const work=async()=>{const logical=dirname(mainPath),real=realpathSync(logical),stat=lstatSync(real);if(!stat.isDirectory()||(stat.mode&0o022)!==0)lc20Unknown('Unsafe system cache directory');scope.root={logical,real,stat};mainPath=join(real,posix.basename(mainPath));
+    const member=async(path:string)=>{check();const old=scope.files.get(path);if(old)return old;if(scope.files.size>=16||dirname(path)!==real||realpathSync(path)!==path)lc20Unknown('Invalid cache member path');const before=lstatSync(path);if(!before.isFile()||before.nlink!==1||(before.mode&0o022)!==0||before.size<552||before.size>2147483648||(total+=before.size)>8589934592)lc20Unknown('Cache size or file safety bound');const handle=await openAsync(path,constants.O_RDONLY|constants.O_NOFOLLOW);const f={path,handle,before};scope.files.set(path,f);if(!sameLc20Stat(before,fstatSync(handle.fd)))lc20Unknown('Cache member changed before opening');return f;};
+    const read:CacheReader=async(path,offset,length)=>{check();if((metadata+=length)>33554432)lc20Unknown('Cache parser read budget exceeded');const f=await member(path);lc20Range(offset,length,f.before.size);const bytes=Buffer.alloc(length);let n=0;while(n<length){check();const r=await f.handle.read(bytes,n,Math.min(65536,length-n),offset+n);if(!r.bytesRead)lc20Unknown('Truncated cache metadata');n+=r.bytesRead;}return bytes;};
+    const layout=await readLc20DyldLayout(mainPath,paths,read,async path=>(await member(path)).before.size),buffer=Buffer.alloc(65536);
+    for(const path of layout.members){const f=scope.files.get(path)!,hash=createHash('sha256');let n=0;while(n<f.before.size){check();const r=await f.handle.read(buffer,0,Math.min(buffer.length,f.before.size-n),n);if(!r.bytesRead)lc20Unknown('Truncated cache bytes');hash.update(buffer.subarray(0,r.bytesRead));n+=r.bytesRead;}f.pin={path,bytes:n,digest:'sha256:'+hash.digest('hex')};}
+    check();scope.proof={schema:'runtime-lc20-dyld-cache/v1',basis:'PROCESS_PATHS_CURRENT_SYSTEM_FILES',logicalMainPath,mainPath,onDiskCacheUuid:layout.onDiskCacheUuid,files:[...scope.files.values()].map(f=>f.pin!).sort((a,b)=>a.path.localeCompare(b.path)),images:layout.images};assertLc20Cache(scope);return scope.proof;};
+  const task=work();scope.pending=task.then(()=>{},()=>{});try{return await task;}catch(error){scope.close();throw error;}finally{scope.pending=null;if(!scope.closed&&lc20CacheActive===scope)lc20CacheActive=null;}
+}
+function lc20Report(){const report=record(process.report.getReport()),environment=record(report.environmentVariables);if(process.version!=='v24.14.0'||environment.NODE_OPTIONS||environment.NODE_PATH||process.execArgv.length||Object.keys(environment).some(k=>k.startsWith('DYLD_')))lc20Unknown('Use the fixed installed invocation without loader overrides');const shared=report.sharedObjects;if(!Array.isArray(shared)||shared.length>512)lc20Unknown('Shared-object inventory unavailable');const paths=shared.map(p=>lc20Path(string(p,2048))).sort();if(new Set(paths).size!==paths.length)lc20Unknown('Duplicate reported image');return paths;}
+export async function prepareLc20Protocol(signal:AbortSignal):Promise<void>{
+  if(!fileURLToPath(import.meta.url).endsWith('/package/dist/adapters/artifacts.js'))return;
+  const scope=lc20Scopes.getStore();if(!scope)lc20Unknown('Request-local observation scope required');
+  try{const paths=lc20Report(),missing=paths.filter(path=>{try{realpathSync(path);return false;}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;return true;}});if(!missing.length)return;
+  if(process.platform!=='darwin'||process.arch!=='arm64')lc20Unknown('Unsupported cache platform');
+  const root='/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld',main=join(root,'dyld_shared_cache_arm64e');if(lstatSync(realpathSync(root)).uid!==0||lstatSync(main).uid!==0)lc20Unknown('System-owned default cache required');
+  await acquireLc20CacheBytes(main,missing,signal);if([...scope.files.values()].some(f=>f.before.uid!==0)||canonical(paths)!==canonical(lc20Report()))lc20Unknown('System ownership or loaded image inventory changed');scope.report=canonical(paths);
+  }catch(error){scope.close();if(signal.aborted)throw error;/* Synchronous observation retains UNKNOWN, never a partial cache proof. */}
+}
 
 // Candidate archive parsing is bounded and in-memory. Service code must not
 // import the operator installation subsystem or gain extraction/install APIs.
@@ -190,7 +285,7 @@ export function observeLc20Protocol(store:RuntimeStore,configuration:Readonly<In
     // Diagnostic observation only: preload flags never supply configuration,
     // paths or credentials, and the full report/environment is never retained.
     const report=record(process.report.getReport()),environment=record(report.environmentVariables);
-    if(process.version!=='v24.14.0'||environment.NODE_OPTIONS||environment.NODE_PATH||process.execArgv.length)reject('LC20_RUNTIME_INPUT_UNKNOWN','Use the fixed installed Node invocation without preloads',409);
+    if(process.version!=='v24.14.0'||environment.NODE_OPTIONS||environment.NODE_PATH||process.execArgv.length||Object.keys(environment).some(k=>k.startsWith('DYLD_')))reject('LC20_RUNTIME_INPUT_UNKNOWN','Use the fixed installed Node invocation without preloads or loader overrides',409);
     const modulePath=fileURLToPath(import.meta.url);if(!modulePath.endsWith('/package/dist/adapters/artifacts.js'))reject('LC20_RUNTIME_INPUT_UNKNOWN','An actual installed package is required',409);
     const root=resolve(dirname(modulePath),'../../..'),manifestPath=join(root,'distribution-manifest.json'),manifestBytes=readFileSync(manifestPath),manifest=record(JSON.parse(manifestBytes.toString('utf8'))),inventory=record(manifest.files),code:Record<string,string>={},connection=record(JSON.parse(readFileSync(join(root,'connection.json'),'utf8')));
     if(connection.workspaceId!==scope.workspaceId||connection.serviceId!==store.serviceId||connection.projectId!==scope.projectId||!(realpathSync(store.root)===root+'/data'||realpathSync(store.root).startsWith(root+'/data/')))reject('LC20_RUNTIME_INPUT_UNKNOWN','This is not the selected installed service',409);
@@ -199,8 +294,12 @@ export function observeLc20Protocol(store:RuntimeStore,configuration:Readonly<In
     for(const [path,raw]of Object.entries(inventory)){if(!selected(path))continue;artifactPath(path);const p=record(raw),absolute=join(root,'package',path);if(p.type==='symlink'){if(!lstatSync(absolute).isSymbolicLink()||readlinkSync(absolute)!==p.target||!realpathSync(absolute).startsWith(root+'/package/'))reject('LC20_RUNTIME_INPUT_UNKNOWN','Installed dependency link changed',409);code[path]=valueDigest({target:p.target});continue;}const actual=file(absolute);if(p.type!=='file'||actual.digest!=='sha256:'+p.sha256||actual.bytes!==p.bytes)reject('LC20_RUNTIME_INPUT_UNKNOWN','Installed executable bytes differ from the original manifest',409);code[path]=actual.digest;}
     const seen=new Set<string>(),walk=(relative:string)=>{const dir=join(root,'package',relative);for(const name of readdirSync(dir)){const path=relative?relative+'/'+name:name;if(!relative&&!selected(path)&&!['dist','vendor','node_modules','provenance'].includes(path))continue;const stat=lstatSync(join(root,'package',path));if(stat.isDirectory()&&!stat.isSymbolicLink())walk(path);else{if(!Object.hasOwn(code,path))reject('LC20_RUNTIME_INPUT_UNKNOWN','Unlisted installed code could affect resolution',409);seen.add(path);}}};walk('');if(seen.size!==Object.keys(code).length)reject('LC20_RUNTIME_INPUT_UNKNOWN','Installed code inventory is incomplete',409);
     if(!code['dist/adapters/artifacts.js']||!code['dist/lifecycle/evidence-qualification.js']||!code['package.json'])reject('LC20_RUNTIME_INPUT_UNKNOWN','Installed code inventory is incomplete',409);add('runtime:installed-code','generated',code);
-    const node=file(process.execPath),shared=report.sharedObjects;if(!Array.isArray(shared)||shared.length>512)reject('LC20_RUNTIME_INPUT_UNKNOWN','Runtime shared-object inventory is unavailable',409);const libraries=shared.map(p=>file(string(p,2048))).sort((a,b)=>a.path<b.path?-1:1);
-    add('runtime:environment','environment',{schema:'runtime-lc20-environment/v1',node,versions:process.versions,platform:process.platform,arch:process.arch,osRelease:osRelease(),libraries,preloads:[]});
+    const node=file(process.execPath),shared=lc20Report(),cacheScope=lc20Scopes.getStore();let cache:Lc20CacheProof|null=null;
+    const libraries=shared.map(logicalPath=>{let present=true;try{realpathSync(logicalPath);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;present=false;}if(present)return{kind:'FILE',logicalPath,...file(logicalPath)};
+      if(!cacheScope||cacheScope.report!==canonical(shared))lc20Unknown('Actual target cache observation is unavailable');assertLc20Cache(cacheScope);cache=cacheScope.proof;const image=cache!.images.find(i=>i.logicalPath===logicalPath);if(!image)lc20Unknown('Reported cache image is unresolved');return{kind:'DYLD_CACHE',logicalPath,closureDigest:valueDigest(cache),image};});
+    if(cacheScope?.proof){assertLc20Cache(cacheScope);for(const f of cacheScope.proof.files)files.set(f.path,f);}
+    const currentEnvironment={schema:'runtime-lc20-environment/v2',node,versions:process.versions,platform:process.platform,arch:process.arch,osRelease:osRelease(),libraries,cache,preloads:[],basis:'PROCESS_PATHS_CURRENT_SYSTEM_FILES'};
+    if(Buffer.byteLength(canonical(currentEnvironment))>262144)lc20Unknown('Environment representation exceeded bound');add('runtime:environment','environment',currentEnvironment);
     const toolchain=readRegisteredNativeToolchain(configuration),tools=Object.fromEntries(Object.entries(toolchain.tools).map(([id,t])=>{const actual=file(t.executable);if(actual.digest!=='sha256:'+t.sha256)reject('LC20_RUNTIME_INPUT_UNKNOWN','Native executable changed',409);return[id,{...actual,version:t.version}];})),dependencies=toolchain.dependencyFiles!.map(p=>{const actual=file(p.path);if(actual.digest!=='sha256:'+p.sha256)reject('LC20_RUNTIME_INPUT_UNKNOWN','Native dependency changed',409);return actual;});
     const owners=configuration.owners.filter(o=>o.owner==='harness'&&o.projects.includes(scope.projectId));if(!owners.length)reject('LC20_RUNTIME_INPUT_UNKNOWN','Registered Harness owner required',409);const identities=owners.map(o=>verifyOwnerDistribution('harness',o.packageRoot));add('runtime:toolchain','toolchain',{schema:'runtime-lc20-tools/v1',tools,dependencies,owners:identities,lockDigest:toolchain.lockDigest,dependencyLockDigest:toolchain.dependencyLockDigest});
     const registrations=configuration.resources.filter(r=>r.projectId===scope.projectId&&r.role==='runtime.qualification'&&record(r.definition.reference).digest===policyReferenceDigest),prefixes=new Set<string>();
@@ -212,7 +311,7 @@ export function observeLc20Protocol(store:RuntimeStore,configuration:Readonly<In
     let cursor:string|undefined,count=0;for(;;){const page=store.events(actor,scope.projectId,cursor);for(const raw of page.events){if(++count>32768)reject('LC20_PRESTATE_UNKNOWN','Complete child audit exceeds fixed read bound',409);const e=record(raw);if(e.type==='closed-fixture-execution'&&!prefixes.has(String(record(e.data).historyDigest)))reject('LC20_PRESTATE_UNKNOWN','A child claim is absent from the complete retained history',409);}if(!page.events.length)break;cursor=page.cursor;}
     add('runtime:prestate','prestate',{schema:'runtime-lc20-prestate-projection/v1',children:[...LC20_CHILDREN],allOriginalAttemptsTerminalPass:true,remainingFixedProtocolCapacity:true});
     add('runtime:configuration','config',{schema:'runtime-lc20-configuration/v1',scope,children:[...LC20_CHILDREN],protocol:'runtime-lc20-local-installed/v1',executionOperation:'CANONICAL_JSON_DIGEST_EQUALS',subcaseFormalCredit:0});
-    result.status='COMPLETE';
+    if(canonical(shared)!==canonical(lc20Report()))lc20Unknown('Loaded image inventory changed');if(cacheScope?.proof)assertLc20Cache(cacheScope);result.status='COMPLETE';
   }catch(error){result.reasons.push(error instanceof ServiceError?error.code:'LC20_RUNTIME_INPUT_UNKNOWN');}
   result.files=[...files.values()].sort((a,b)=>a.path<b.path?-1:1);return result;
 }

@@ -392,3 +392,32 @@ test('stage admission positive raw wire binds allow, input, identity, principal 
  assert.equal(assertStageAdmissionPair('scope',original,pair).stageRequestId,original.id);
  for(const mutate of [p=>p.admission.response.body.result.allowed=false,p=>p.admission.response.body.result.inputDigest=hash('other'),p=>p.request.response.body.result.result.stageRequestId='other',p=>p.request.response.body.result.principalId='fabricated',p=>p.request.request.envelope.input={...input,outcome:'PASS'},p=>p.request.response.status=409,p=>p.request.response.body.result.result.automaticRedispatch=true]){const p=copy(pair);mutate(p);assert.throws(()=>assertStageAdmissionPair('scope',original,p));}
 });
+
+import {openLc20ObservationScope} from '../../dist/adapters/artifacts.js';
+test('native invocation observation is retained only on original output and final currentness remains synchronous',async t=>{
+ const f=closedFixture(t),original=await f.producer.execute(hash('A'),'scope-original',f.expiresAt,f.actor,f.signal),a=await f.assess(f.selection(original));let opened=0,runs=0,closed=0;
+ f.bindings.openObservationScope=signal=>{opened++;const scope=openLc20ObservationScope(signal);return{run(fn){runs++;return scope.run(fn);},close(){closed++;scope.close();}};};
+ const first=await f.service.inspect('alpha',a.actionRef,f.actor,f.signal),before=runs;
+ assert.equal(f.service.assertCurrent('alpha',first,f.actor,f.signal),undefined);assert.equal(runs,before+1);assert.equal(opened,1);assert.equal(closed,0);
+ f.service.closeInspection(first);assert.equal(closed,1);assert.throws(()=>f.service.assertCurrent('alpha',first,f.actor,f.signal),{code:'QUALIFICATION_INSPECTION_REQUIRED'});
+ const second=await f.service.inspect('alpha',a.actionRef,f.actor,f.signal);assert.equal(opened,2,'New standalone invocation opens fresh observation');f.service.closeInspection(second);assert.equal(closed,2);
+});
+test('native observation closes after awaited revocation and caller abort invalidates a retained result',async t=>{
+ const f=closedFixture(t),original=await f.producer.execute(hash('A'),'scope-abort-original',f.expiresAt,f.actor,f.signal),a=await f.assess(f.selection(original)),controller=new AbortController();let closed=0;
+ f.bindings.openObservationScope=signal=>{const scope=openLc20ObservationScope(signal);return{run:fn=>scope.run(fn),close(){closed++;scope.close();}};};
+ const q=await f.service.inspect('alpha',a.actionRef,f.actor,controller.signal);controller.abort();assert.throws(()=>f.service.assertCurrent('alpha',q,f.actor,f.signal),{code:'LC20_RUNTIME_INPUT_UNKNOWN'});f.service.closeInspection(q);
+ const read=f.owner.readPackage;f.owner.readPackage=async(...args)=>{const pkg=await read(...args);f.policy.trust.revision='revoked-with-open-byte-scope';return pkg;};
+ await assert.rejects(f.service.inspect('alpha',a.actionRef,f.actor,f.signal),{code:'QUALIFICATION_FACTS_CHANGED'});assert.equal(closed,2);
+});
+test('trusted release root scope survives nested inspections and closes every retained currentness guard together',async t=>{
+ const f=closedFixture(t),original=await f.producer.execute(hash('A'),'scope-batch-original',f.expiresAt,f.actor,f.signal),a=await f.assess(f.selection(original));f.bindings.openObservationScope=openLc20ObservationScope;
+ const service=createNativeQualificationService(f.store,f.bindings),parent=service.openObservationScope(f.signal);let first,second;
+ try{await parent.run(async()=>{first=await service.inspect('alpha',a.actionRef,f.actor,f.signal);second=await service.inspect('alpha',a.actionRef,f.actor,f.signal);assertQualifiedAcceptanceCurrent(service,'alpha',[first,second],f.actor,f.signal);});
+  assertQualifiedAcceptanceCurrent(service,'alpha',[first,second],f.actor,f.signal);
+ }finally{parent.close();}
+ assert.throws(()=>assertQualifiedAcceptanceCurrent(service,'alpha',[first,second],f.actor,f.signal),{code:'LC20_RUNTIME_INPUT_UNKNOWN'});service.closeInspection(first);service.closeInspection(second);
+});
+test('LC20 current-system environment v2 cannot relabel a retained v1 input as unchanged',()=>{
+ const f=completeLc20Fixture(),environment=f.pin.protocolObservation.inputs.find(i=>i.id==='runtime:environment');environment.raw=JSON.stringify({schema:'runtime-lc20-environment/v1',libraries:[]});environment.digest=byteDigest(environment.raw);const input=f.snapshot.inputs.find(i=>i.id===environment.id);input.file=f.rawPin(input.file.path,environment.raw);f.rawPin(LC20_INPUT_PATH,f.snapshot);assert.equal(readLc20InputSnapshot(f.files,f.pin,{...f.expected,producerJobId:'71'},f.source,f.candidateFiles).completeness,'COMPLETE');
+ const original=environment.raw;environment.raw=JSON.stringify({schema:'runtime-lc20-environment/v2',basis:'PROCESS_PATHS_CURRENT_SYSTEM_FILES',libraries:[],cache:null});environment.digest=byteDigest(environment.raw);assert.throws(()=>readLc20InputSnapshot(f.files,f.pin,{...f.expected,producerJobId:'71'},f.source,f.candidateFiles),{code:'LC20_INPUT_UNAVAILABLE'});assert.equal(f.files.get(input.file.path).toString(),original,'Historical original bytes remain unchanged');
+});

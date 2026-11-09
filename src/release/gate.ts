@@ -8,7 +8,7 @@ import {verifyDecisionEvidence,type DecisionSubject} from '../../vendor/compatib
 import {canonical,evidenceValueDigest} from '../server/errors.js';
 import {evaluateGovernance} from '../governance.js';
 import {inspectSourceCiRecords} from './source-ci.js';
-import {inspectAcceptanceEvidence,inspectCorrectionAcceptanceEvidence,inspectQualifiedAcceptanceEvidence,assertMixedAcceptanceCurrent,qualifiedAcceptanceSourceFiles,type QualifiedAcceptanceEvidenceRequest} from './evidence.js';
+import {inspectAcceptanceEvidence,inspectCorrectionAcceptanceEvidence,inspectQualifiedAcceptanceEvidence,assertMixedAcceptanceCurrent,qualifiedAcceptanceSourceFiles,closeQualifiedAcceptanceObservation,drainQualifiedAcceptanceObservation,qualifiedAcceptanceCacheDependent,type QualifiedAcceptanceEvidenceRequest} from './evidence.js';
 import type {NativeQualificationService} from '../lifecycle/evidence-qualification.js';
 import type {Principal} from '../server/security.js';
 import {inspectUsageAcceptanceEvidence} from './usage-evidence.js';
@@ -170,12 +170,18 @@ export async function verifyRuntimeReleaseDecision(repositoryRoot:string,raw:Run
  * independent decisions. The service capability is trusted composition, never
  * part of the JSON input or an imported assessment object. */
 export async function prepareQualifiedRuntimeRelease(repositoryRoot:string,raw:RuntimeQualifiedReleasePreflightInput,service:NativeQualificationService,actor:Principal,signal:AbortSignal) {
+ const review=await prepareQualifiedRuntimeReleaseObserved(repositoryRoot,raw,service,actor,signal);await drainQualifiedAcceptanceObservation(review.acceptance);return review;
+}
+// Only the fresh post-authentication publication invocation retains observation
+// descriptors through its final effect guards. Human review receives a snapshot.
+async function prepareQualifiedRuntimeReleaseObserved(repositoryRoot:string,raw:RuntimeQualifiedReleasePreflightInput,service:NativeQualificationService,actor:Principal,signal:AbortSignal) {
  const input=structuredClone(raw);exact(input,['schema','candidate','scope','qualifications','executions','originalExecutions','releaseNotes']);requireValue(input.schema==='runtime-release-preflight-input/v2','Wrong v2 preflight schema');exact(input.scope,['workspaceId','projectId']);slug(input.scope.workspaceId);slug(input.scope.projectId);
  const governed=governance(repositoryRoot),notes=pinned(input.releaseNotes,262144);let notesText:string;
  try{notesText=new TextDecoder('utf-8',{fatal:true}).decode(notes);}catch{return fail('Release notes must be UTF-8 Markdown');}
  requireValue(notesText.trim().length>0&&!/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(notesText),'Release notes must be nonempty Markdown text');
  const candidate=await inspectRuntimeReleaseCandidate(repositoryRoot,input.candidate,signal),files=input.candidate.files;
  const acceptance=await inspectQualifiedAcceptanceEvidence(repositoryRoot,{schema:'runtime-qualified-release-evidence-input/v2',sourceCommit:input.candidate.sourceCommit,manifest:files['distribution-manifest.json'],archive:files['evopilot-runtime-0.9.0-darwin-arm64.tar.gz'],sourceRevision:files['source-revision.txt'],scope:input.scope,qualifications:input.qualifications,executions:input.executions,originalExecutions:input.originalExecutions},service,actor,signal);
+ try{
  requireValue(acceptance.candidateDigest===candidate.candidateDigest&&acceptance.archiveDigest===candidate.archiveDigest&&acceptance.covered===698&&acceptance.executed+acceptance.reused===698,'Native qualification denominator or candidate changed');
  verifyRuntimeReleaseGovernanceCurrent(repositoryRoot,candidate.sourceCommit,governed);signal.throwIfAborted();
  const review={schema:'runtime-release-review/v2' as const,scope:input.scope,governance:governed,publication:{repository:candidate.repository,version:candidate.version,tag:candidate.tag,title:candidate.title,prerelease:candidate.prerelease,latest:candidate.latest,sourceCommit:candidate.sourceCommit,candidateDigest:candidate.candidateDigest,archiveDigest:candidate.archiveDigest,files:candidate.files,releaseNotes:{sha256:sha(notes),bytes:notes.length,mediaType:'text/markdown; charset=utf-8'}},sourceCi:candidate.sourceCi,acceptance,postRelease:{required:11,passed:0,status:'NOT_EVALUATED',scenarios:['E21','E22','UT24','LC12']},privacy:{publicAssets:[...RUNTIME_RELEASE_ASSETS],privateEvidenceUploadAllowed:false},productAcceptance:'NOT_EVALUATED',releaseAuthorized:false,installationAuthorized:false};
@@ -183,6 +189,7 @@ export async function prepareQualifiedRuntimeRelease(repositoryRoot:string,raw:R
  // uses the bounded evidence profile rather than the small public request cap.
  const reviewDigest=evidenceValueDigest(review);assertMixedAcceptanceCurrent(acceptance,service,actor,signal);
  return{...review,reviewDigest};
+ }catch(error){await drainQualifiedAcceptanceObservation(acceptance);throw error;}
 }
 
 export type RuntimeQualifiedReleaseReview=Awaited<ReturnType<typeof prepareQualifiedRuntimeRelease>>;
@@ -205,6 +212,7 @@ export interface RuntimeQualifiedReleaseAuthentication {
 export type RuntimeQualifiedReleaseAuthenticator=(request:RuntimeQualifiedReleaseAuthenticationRequest,signal:AbortSignal)=>Promise<RuntimeQualifiedReleaseAuthentication>;
 interface QualifiedAuthorizationContext {repositoryRoot:string;input:RuntimeQualifiedReleasePreflightInput;service:NativeQualificationService;actor:Principal;review:RuntimeQualifiedReleaseReview;decisionEvidence:ReleaseFileReference;decisionSource:ReleaseFileReference;subject:DecisionSubject;authorizationDigest:string;}
 const qualifiedAuthorizations=new WeakMap<object,QualifiedAuthorizationContext>();
+const closedQualifiedAuthorizations=new WeakMap<object,QualifiedAuthorizationContext>();
 /** This is an independent v2 decision contract. Neither v1 authentication nor
  * a serialized review/permit can authorize the mixed evidence publication.
  * As in v1, all-raw local evidence uses this independent bounded human release
@@ -220,14 +228,16 @@ export async function verifyQualifiedRuntimeReleaseDecision(repositoryRoot:strin
  requireValue(authenticated.schema==='runtime-release-authentication/v2'&&authenticated.challenge===request.challenge&&isDeepStrictEqual(authenticated.subject,subject)&&authenticated.reviewDigest===review.reviewDigest&&authenticated.candidateDigest===review.publication.candidateDigest&&authenticated.sourceCommit===review.publication.sourceCommit&&authenticated.decisionEvidenceDigest===reference.sha256&&authenticated.decisionSourceDigest===sourceRef.sha256&&authenticated.sourceCiRecordsDigest===request.sourceCiRecordsDigest&&authenticated.acceptanceSourcesDigest===request.acceptanceSourcesDigest&&authenticated.originalExecutionSourcesDigest===request.originalExecutionSourcesDigest,'Authentication does not bind all exact v2 sources and decision');
  requireValue(authenticated.decision==='APPROVE'&&authenticated.humanIdentity.kind==='human'&&/^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$/.test(text(authenticated.humanIdentity.id))&&authenticated.decisionAuthentication==='AUTHENTICATED_HUMAN_DECISION'&&authenticated.sourceCiAuthentication==='AUTHENTICATED_PROVIDER_READS'&&authenticated.acceptanceAuthentication==='AUTHENTICATED_CURRENT_EXECUTION_AND_NATIVE_QUALIFICATION'&&authenticated.originalExecutionAuthentication==='AUTHENTICATED_ACTUAL_EXECUTION_SOURCES','Actual human/provider/execution-source authentication is required; hashes and closed fixtures are insufficient');
  const at=Date.parse(authenticated.authenticatedAt),expires=Date.parse(authenticated.expiresAt),now=Date.now();requireValue(Number.isFinite(at)&&at>=started-60000&&at<=now+5000&&Number.isFinite(expires)&&expires>now&&expires>at&&expires<=started+900000,'Authentication is stale or unbounded');signal.throwIfAborted();
- const fresh=await prepareQualifiedRuntimeRelease(repositoryRoot,input,service,actor,signal);requireValue(fresh.reviewDigest===review.reviewDigest&&evidenceValueDigest(qualifiedAcceptanceSourceFiles(fresh.acceptance))===request.originalExecutionSourcesDigest,'V2 sources changed during authentication');decision(reference,subject);requireValue(expires>Date.now(),'Authentication expired during final revalidation');signal.throwIfAborted();
+ const fresh=await prepareQualifiedRuntimeReleaseObserved(repositoryRoot,input,service,actor,signal);try{requireValue(fresh.reviewDigest===review.reviewDigest&&evidenceValueDigest(qualifiedAcceptanceSourceFiles(fresh.acceptance))===request.originalExecutionSourcesDigest,'V2 sources changed during authentication');decision(reference,subject);requireValue(expires>Date.now(),'Authentication expired during final revalidation');signal.throwIfAborted();
  const authorization={schema:'runtime-release-authorization/v2' as const,reviewDigest:fresh.reviewDigest,governance:fresh.governance,publication:fresh.publication,decisionEvidenceDigest:reference.sha256,decisionSourceDigest:sourceRef.sha256,sourceCiRecordsDigest:request.sourceCiRecordsDigest,acceptanceSourcesDigest:request.acceptanceSourcesDigest,originalExecutionSourcesDigest:request.originalExecutionSourcesDigest,authenticationDigest:evidenceValueDigest(authenticated),expiresAt:authenticated.expiresAt,authorizedOperation:'github.preview.publish' as const,releaseAuthorized:true as const,installationAuthorized:false as const,migrationAuthorized:false as const,postRelease:fresh.postRelease,overallCompletion:'NOT_COMPLETE' as const,privateEvidenceUploadAllowed:false as const};
  qualifiedAuthorizations.set(authorization,{repositoryRoot,input,service,actor:structuredClone(actor),review:fresh,decisionEvidence:reference,decisionSource:sourceRef,subject,authorizationDigest:evidenceValueDigest(authorization)});assertQualifiedRuntimeReleaseAuthorizationCurrent(authorization,signal);return authorization;
+ }catch(error){await drainQualifiedAcceptanceObservation(fresh.acceptance);throw error;}
 }
 export type RuntimeQualifiedReleaseAuthorization=Awaited<ReturnType<typeof verifyQualifiedRuntimeReleaseDecision>>;
 /** Synchronous final guard; the script calls this immediately before every
  * external mutation. The in-memory brand binds a reviewed context, not truth. */
 export function assertQualifiedRuntimeReleaseAuthorizationCurrent(authorization:RuntimeQualifiedReleaseAuthorization,signal:AbortSignal):void {
+ try{
  const c=qualifiedAuthorizations.get(authorization);requireValue(c&&authorization.schema==='runtime-release-authorization/v2'&&evidenceValueDigest(authorization)===c.authorizationDigest,'Original v2 authenticated authorization required; serialized permits cannot publish');signal.throwIfAborted();requireValue(Date.parse(authorization.expiresAt)>Date.now(),'Publication authority expired');
  verifyRuntimeReleaseGovernanceCurrent(c!.repositoryRoot,authorization.publication.sourceCommit,authorization.governance);
  for(const name of RUNTIME_RELEASE_ASSETS){const bytes=pinned(c!.input.candidate.files[name],268435456),pin=authorization.publication.files[name];requireValue(sha(bytes)===pin.sha256&&bytes.length===pin.bytes,'Reviewed public asset changed');}
@@ -235,4 +245,25 @@ export function assertQualifiedRuntimeReleaseAuthorizationCurrent(authorization:
  for(const file of Object.values(c!.input.candidate.sourceCi))pinned(file,268435456);
  decision(c!.decisionEvidence,c!.subject);pinned(c!.decisionSource,1048576);
  assertMixedAcceptanceCurrent(c!.review.acceptance,c!.service,c!.actor,signal);requireValue(Date.parse(authorization.expiresAt)>Date.now(),'Publication authority expired during final source check');signal.throwIfAborted();
+ }catch(error){closeQualifiedRuntimeReleaseAuthorization(authorization);throw error;}
 }
+/** Called in the publisher's finally block after terminal success or failure. */
+export function closeQualifiedRuntimeReleaseAuthorization(authorization:RuntimeQualifiedReleaseAuthorization):void {const captured=qualifiedAuthorizations.get(authorization);if(captured){closeQualifiedAcceptanceObservation(captured.review.acceptance);closedQualifiedAuthorizations.set(authorization,captured);qualifiedAuthorizations.delete(authorization);}}
+
+/** One read-only preparation for the next intended mutation. It cannot renew
+ * authority, change the reviewed subject, or retry an uncertain remote effect. */
+export async function refreshQualifiedRuntimeReleaseObservation(authorization:RuntimeQualifiedReleaseAuthorization,signal:AbortSignal):Promise<void>{
+ const c=qualifiedAuthorizations.get(authorization);requireValue(c&&evidenceValueDigest(authorization)===c.authorizationDigest,'Original v2 authenticated authorization required');signal.throwIfAborted();requireValue(Date.parse(authorization.expiresAt)>Date.now(),'Publication authority expired');
+ if(!qualifiedAcceptanceCacheDependent(c!.review.acceptance))return;
+ let fresh:RuntimeQualifiedReleaseReview|undefined;
+ try{
+  await drainQualifiedAcceptanceObservation(c!.review.acceptance);signal.throwIfAborted();requireValue(qualifiedAuthorizations.get(authorization)===c&&Date.parse(authorization.expiresAt)>Date.now(),'Publication authority changed or expired');
+  fresh=await prepareQualifiedRuntimeReleaseObserved(c!.repositoryRoot,c!.input,c!.service,c!.actor,signal);
+  requireValue(fresh.reviewDigest===authorization.reviewDigest&&evidenceValueDigest(fresh.acceptance)===authorization.acceptanceSourcesDigest&&evidenceValueDigest(qualifiedAcceptanceSourceFiles(fresh.acceptance))===authorization.originalExecutionSourcesDigest,'Current publication evidence differs from the original reviewed sources');
+  requireValue(qualifiedAuthorizations.get(authorization)===c&&evidenceValueDigest(authorization)===c!.authorizationDigest&&Date.parse(authorization.expiresAt)>Date.now(),'Publication authority changed or expired');
+  c!.review=fresh;assertQualifiedRuntimeReleaseAuthorizationCurrent(authorization,signal);
+ }catch(error){closeQualifiedRuntimeReleaseAuthorization(authorization);if(fresh)await drainQualifiedAcceptanceObservation(fresh.acceptance);await disposeQualifiedRuntimeReleaseAuthorization(authorization);throw error;}
+}
+/** Async owner disposal waits for all descriptors; final authority checks above
+ * remain synchronous. */
+export async function disposeQualifiedRuntimeReleaseAuthorization(authorization:RuntimeQualifiedReleaseAuthorization):Promise<void>{const c=qualifiedAuthorizations.get(authorization)??closedQualifiedAuthorizations.get(authorization);closeQualifiedRuntimeReleaseAuthorization(authorization);if(c)await drainQualifiedAcceptanceObservation(c.review.acceptance);closedQualifiedAuthorizations.delete(authorization);}

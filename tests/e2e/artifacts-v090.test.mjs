@@ -166,3 +166,85 @@ test('preparation archive binds exact input and every prepared file but still ne
  await assert.rejects(()=>verifyCiArtifact(archive(()=>{},Buffer.from('different')),f.request,['required.check'],signal()),{code:'CI_ARTIFACT_INTEGRITY'});
  const ordinary={...f.request};delete ordinary.preparationInput;await assert.rejects(()=>verifyCiArtifact(archive(),ordinary,['required.check'],signal()),{code:'CI_PREPARATION_OUTPUT'});
 });
+
+// Synthetic modern dyld layout only: no system cache is opened by these tests.
+import fs from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {openLc20ObservationScope,acquireLc20CacheBytes,readLc20DyldLayout} from '../../dist/adapters/artifacts.js';
+function dyldFixture(t){
+ const root=fs.mkdtempSync(join(fs.realpathSync(tmpdir()),'lc20-cache-fixture-'));fs.chmodSync(root,0o700);t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const main=join(root,'dyld_shared_cache_arm64e'),sub=main+'.01',base=0x100000000,length=8192,paths=['/usr/lib/dyld','/usr/lib/libSystem.B.dylib'];
+ const header=(address,uuid)=>{const b=Buffer.alloc(length);b.write('dyld_v1  arm64e');b.writeUInt32LE(552,16);b.writeUInt32LE(1,20);b.writeBigUInt64LE(BigInt(length),40);Buffer.alloc(16,uuid).copy(b,88);b.writeUInt32LE(1,216);b.writeBigUInt64LE(BigInt(address),552);b.writeBigUInt64LE(BigInt(length),560);b.writeUInt32LE(5,576);b.writeUInt32LE(5,580);return b;};
+ const macho=(b,offset,address,type)=>{b.writeUInt32LE(0xfeedfacf,offset);b.writeUInt32LE(0x100000c,offset+4);b.writeUInt32LE(type,offset+12);b.writeUInt32LE(1,offset+16);b.writeUInt32LE(72,offset+20);b.writeUInt32LE(0x19,offset+32);b.writeUInt32LE(72,offset+36);b.write('__TEXT',offset+40);b.writeBigUInt64LE(BigInt(address),offset+56);b.writeBigUInt64LE(128n,offset+64);b.writeBigUInt64LE(128n,offset+80);};
+ const a=header(base,1),b=header(base+length,2);a.writeBigUInt64LE(BigInt(base+4096),120);a.writeUInt32LE(1536,392);a.writeUInt32LE(1,396);Buffer.alloc(16,2).copy(a,1536);a.writeBigUInt64LE(BigInt(length),1552);a.write('.01',1560);a.writeUInt32LE(1024,448);a.writeUInt32LE(1,452);a.writeBigUInt64LE(BigInt(base+length+4096),1024);a.writeUInt32LE(2048,1048);a.write(paths[1],2048);macho(a,4096,base+4096,7);macho(b,4096,base+length+4096,6);
+ const save=()=>{fs.writeFileSync(main,a,{mode:0o600});fs.writeFileSync(sub,b,{mode:0o600});};save();return{root,main,sub,a,b,paths,save};
+}
+async function cacheProof(f,body){const controller=new AbortController(),scope=openLc20ObservationScope(controller.signal);try{return await scope.run(async()=>{const proof=await acquireLc20CacheBytes(f.main,f.paths,controller.signal);return body?body(proof,scope,controller):structuredClone(proof);});}finally{scope.close();await scope.drain();}}
+test('Darwin proof hashes every complete main/subcache byte and maps actual logical images including special dyld',async t=>{
+ const f=dyldFixture(t),proof=await cacheProof(f);assert.equal(proof.basis,'PROCESS_PATHS_CURRENT_SYSTEM_FILES');assert.deepEqual(proof.files.map(x=>[x.path,x.digest,x.bytes]),[f.main,f.sub].map(path=>[path,byteDigest(fs.readFileSync(path)),8192]));assert.deepEqual(proof.images.map(x=>[x.logicalPath,x.source]),[[f.paths[0],'DYLD_HEADER'],[f.paths[1],'IMAGE_TABLE']]);
+ const first=proof.files[1].digest;f.b[7000]=17;f.save();const next=await cacheProof(f);assert.equal(next.onDiskCacheUuid,proof.onDiskCacheUuid);assert.notEqual(next.files[1].digest,first,'Fresh request hashes changed bytes despite unchanged UUID');
+});
+test('Darwin parser rejects missing images, mismatched UUID, unsafe suffix, unsupported header and uncovered image segments',async t=>{
+ for(const mutate of [f=>f.a[1536]=9,f=>f.a.write('../x\0',1560),f=>f.a.writeUInt32LE(560,16),f=>f.a.writeUInt32LE(65537,452),f=>f.a.writeUInt32LE(16,396),f=>f.a.writeBigUInt64LE(0xffffffffffffffffn,1024),f=>f.b.writeBigUInt64LE(9000n,4096+80),f=>f.a.writeBigUInt64LE(0n,120)]){const f=dyldFixture(t);mutate(f);f.save();await assert.rejects(cacheProof(f),{code:'LC20_RUNTIME_INPUT_UNKNOWN'});}
+ const f=dyldFixture(t);f.paths.push('/usr/lib/not-in-cache.dylib');await assert.rejects(cacheProof(f),{code:'LC20_RUNTIME_INPUT_UNKNOWN'});
+});
+test('Darwin open-descriptor proof rejects mutation, path replacement, symlinks and parent retargeting',async t=>{
+ for(const change of [f=>{fs.writeFileSync(f.sub,Buffer.alloc(8192),{mode:0o600});},f=>{fs.renameSync(f.sub,f.sub+'.old');fs.writeFileSync(f.sub,f.b,{mode:0o600});},f=>{fs.renameSync(f.sub,f.sub+'.old');fs.symlinkSync(f.sub+'.old',f.sub);}]){const f=dyldFixture(t);await cacheProof(f,async(_proof,_scope,controller)=>{change(f);await assert.rejects(acquireLc20CacheBytes(f.main,f.paths,controller.signal),{code:'LC20_RUNTIME_INPUT_UNKNOWN'});});}
+});
+test('Darwin acquisition has one active slot, no queue, and cancellation releases resources before the next acquisition',async t=>{
+ const f=dyldFixture(t),controller=new AbortController(),first=openLc20ObservationScope(controller.signal),second=openLc20ObservationScope(new AbortController().signal);
+ try{const pending=first.run(()=>acquireLc20CacheBytes(f.main,f.paths,controller.signal));await assert.rejects(second.run(()=>acquireLc20CacheBytes(f.main,f.paths,new AbortController().signal)),/busy/);controller.abort();await assert.rejects(pending,{code:'LC20_RUNTIME_INPUT_UNKNOWN'});assert.throws(()=>first.run(()=>{}),{code:'LC20_RUNTIME_INPUT_UNKNOWN'});}finally{first.close();second.close();await first.drain();await second.drain();}
+ assert.equal((await cacheProof(f)).files.length,2);
+});
+test('Darwin scopes expire even when an acquired result is never consumed and reject any later guard',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});const f=dyldFixture(t),scope=openLc20ObservationScope(new AbortController().signal);
+ try{await scope.run(()=>acquireLc20CacheBytes(f.main,f.paths,new AbortController().signal));t.mock.timers.tick(12000);assert.throws(()=>scope.run(()=>{}),{code:'LC20_RUNTIME_INPUT_UNKNOWN'});}finally{scope.close();await scope.drain();}
+});
+test('Darwin parser uses finite checked binary ranges and never accepts an arbitrary header-only UUID',async t=>{
+ const f=dyldFixture(t),files=new Map([[f.main,f.a],[f.sub,f.b]]),read=async(p,o,n)=>files.get(p).subarray(o,o+n),size=async p=>files.get(p).length;
+ const result=await readLc20DyldLayout(f.main,f.paths,read,size);assert.deepEqual(result.members,[f.main,f.sub]);
+ f.a.writeUInt32LE(9000,448);await assert.rejects(readLc20DyldLayout(f.main,f.paths,read,size),{code:'LC20_RUNTIME_INPUT_UNKNOWN'});
+});
+test('nested consumers borrow one open cache proof but a new root request performs fresh acquisition',async t=>{
+ const f=dyldFixture(t);await cacheProof(f,async(proof,_parent,controller)=>{const nested=openLc20ObservationScope(controller.signal);try{assert.equal(await nested.run(()=>acquireLc20CacheBytes(f.main,f.paths,controller.signal)),proof);}finally{nested.close();}assert.equal(await acquireLc20CacheBytes(f.main,f.paths,controller.signal),proof,'Borrowed close must not close parent descriptors');});
+ assert.equal((await cacheProof(f)).files.length,2);
+});
+
+import fsPromises from 'node:fs/promises';
+import {syncBuiltinESMExports} from 'node:module';
+test('unused observation scopes do not impose the cache lifetime on unrelated work',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});const scope=openLc20ObservationScope(new AbortController().signal);
+ try{t.mock.timers.tick(13000);assert.equal(scope.cacheDependent(),false);assert.equal(scope.run(()=>42),42);}finally{await scope.drain();}
+});
+test('cache slot remains occupied until every delayed close drains after failure and success',async t=>{
+ for(const bad of [true,false]){
+  const f=dyldFixture(t),originalOpen=fsPromises.open,pending=[];let completed=0;
+  fsPromises.open=async(...args)=>{const h=await originalOpen(...args),close=h.close;h.close=()=>new Promise((resolve,reject)=>pending.push(async()=>{try{await close.call(h);completed++;resolve();}catch(e){reject(e);}}));return h;};syncBuiltinESMExports();
+  const first=openLc20ObservationScope(new AbortController().signal),next=openLc20ObservationScope(new AbortController().signal);
+  try{if(bad){f.a[0]=0;f.save();await assert.rejects(first.run(()=>acquireLc20CacheBytes(f.main,f.paths,new AbortController().signal)));}else await first.run(()=>acquireLc20CacheBytes(f.main,f.paths,new AbortController().signal));
+   first.close();let drained=false;const drain=first.drain().then(()=>{drained=true;});await new Promise(setImmediate);assert.equal(pending.length,bad?1:2);assert.equal(drained,false);
+   await assert.rejects(next.run(()=>acquireLc20CacheBytes(f.main,f.paths,new AbortController().signal)),/busy/);
+   fsPromises.open=originalOpen;syncBuiltinESMExports();for(const close of pending.splice(0))await close();await drain;assert.equal(completed,bad?1:2);f.a[0]=100;f.save();assert.equal((await next.run(()=>acquireLc20CacheBytes(f.main,f.paths,new AbortController().signal))).files.length,2);
+  }finally{fsPromises.open=originalOpen;syncBuiltinESMExports();for(const close of pending.splice(0))await close();first.close();next.close();await first.drain();await next.drain();}
+ }
+});
+test('retained proof does not own the acquisition slot and its old cleanup cannot release a newer owner',async t=>{
+ const f=dyldFixture(t),originalOpen=fsPromises.open,delayedClose=[];let phase='retained',resumeRead;
+ fsPromises.open=async(...args)=>{const h=await originalOpen(...args);if(phase==='retained'){const close=h.close;h.close=()=>new Promise((resolve,reject)=>delayedClose.push(async()=>{try{await close.call(h);resolve();}catch(error){reject(error);}}));}else if(phase==='reading'){const read=h.read;let first=true;h.read=async(...args)=>{if(first){first=false;await new Promise(resolve=>{resumeRead=resolve;});}return read.apply(h,args);};}return h;};syncBuiltinESMExports();
+ const signal=new AbortController().signal,old=openLc20ObservationScope(signal),active=openLc20ObservationScope(signal),next=openLc20ObservationScope(signal);let pending;
+ try{
+  await old.run(()=>acquireLc20CacheBytes(f.main,f.paths,signal));phase='reading';pending=active.run(()=>acquireLc20CacheBytes(f.main,f.paths,signal));while(!resumeRead)await new Promise(setImmediate);
+  phase='normal';old.close();const draining=old.drain();await new Promise(setImmediate);assert.equal(delayedClose.length,2);await assert.rejects(next.run(()=>acquireLc20CacheBytes(f.main,f.paths,signal)),/busy/);
+  for(const close of delayedClose.splice(0))await close();await draining;await assert.rejects(next.run(()=>acquireLc20CacheBytes(f.main,f.paths,signal)),/busy/,'Old cleanup must not clear the newer active owner');
+  resumeRead();await pending;pending=null;assert.equal((await next.run(()=>acquireLc20CacheBytes(f.main,f.paths,signal))).files.length,2,'A retained successful proof is not active acquisition I/O');
+ }finally{fsPromises.open=originalOpen;syncBuiltinESMExports();resumeRead?.();if(pending)await pending.catch(()=>{});for(const close of delayedClose.splice(0))await close();await old.drain();await active.drain();await next.drain();}
+});
+test('cancelled pending read drains before descriptor close and before any successor acquisition',async t=>{
+ const f=dyldFixture(t),originalOpen=fsPromises.open;let resumeRead,closes=0;
+ fsPromises.open=async(...args)=>{const h=await originalOpen(...args),read=h.read,close=h.close;let first=true;h.read=async(...args)=>{if(first){first=false;await new Promise(resolve=>{resumeRead=resolve;});}return read.apply(h,args);};h.close=async()=>{closes++;await close.call(h);};return h;};syncBuiltinESMExports();
+ const controller=new AbortController(),first=openLc20ObservationScope(controller.signal),next=openLc20ObservationScope(new AbortController().signal);let pending;
+ try{pending=first.run(()=>acquireLc20CacheBytes(f.main,f.paths,controller.signal));while(!resumeRead)await new Promise(setImmediate);controller.abort();const draining=first.drain();await new Promise(setImmediate);assert.equal(closes,0);await assert.rejects(next.run(()=>acquireLc20CacheBytes(f.main,f.paths,new AbortController().signal)),/busy/);
+  fsPromises.open=originalOpen;syncBuiltinESMExports();resumeRead();await assert.rejects(pending,{code:'LC20_RUNTIME_INPUT_UNKNOWN'});pending=null;await draining;assert.equal(closes,1);assert.equal((await next.run(()=>acquireLc20CacheBytes(f.main,f.paths,new AbortController().signal))).files.length,2);
+ }finally{fsPromises.open=originalOpen;syncBuiltinESMExports();resumeRead?.();if(pending)await pending.catch(()=>{});await first.drain();await next.drain();}
+});

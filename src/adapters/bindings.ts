@@ -24,7 +24,7 @@ import {createNativeQualificationService,createClosedFixtureQualificationProduce
 import {LC20_CHILDREN,type QualificationSelection,type TypedCurrentExecutionCapture,type Lc20ProducerContract,type OriginalEvidenceExecution,type EvidenceInputManifest} from '../lifecycle/correction-contract.js';
 import {createQualificationAssessmentAuthority,QUALIFICATION_AUTHORITY_READS,QUALIFICATION_AUTHORITY_WRITES,type QualificationAssessmentPlan,type PrincipalLookup} from './authority.js';
 import {nativeInventory,verifyNativeStageResult,protectedCiExecutionState,readProtectedCiExecution,readProtectedLc20Candidate,lc20ManagedHistoryState,type ProtectedLc20Candidate,type PublishedExecutionProducer} from './stages.js';
-import {readCurrentCaseReceipt,readLc20ProducerContract,observeLc20Protocol} from './artifacts.js';
+import {readCurrentCaseReceipt,readLc20ProducerContract,observeLc20Protocol,openLc20ObservationScope,prepareLc20Protocol} from './artifacts.js';
 import type { StageAdapter, StageServices } from '../lifecycle/execution.js';
 import { createReleaseStageAdapter } from './release-stages.js';
 import { publicationTarget } from './distribution.js';
@@ -438,6 +438,7 @@ export function createRegisteredQualificationService(store:RuntimeStore,configPa
       if(s?.execution){const original=originalExecution(scope,s);history.push({executionDigest:valueDigest(original),candidateDigest:original.candidateDigest,rawReceiptDigest:original.rawReceiptDigest,outcome:'PASS',executedAt:original.executedAt});}
       else{const outcome=claim.progress?.phase==='FAILED'?'FAIL':'UNKNOWN';history.push({executionDigest:valueDigest({request:claim.request.digest,outcome}),candidateDigest:claim.ci?.candidateDigest??valueDigest({request:claim.request.digest,candidate:'UNKNOWN'}),rawReceiptDigest:claim.ci?.archiveDigest??valueDigest({request:claim.request.digest,raw:'UNAVAILABLE'}),outcome,executedAt:claim.request.requestedAt});}}
     history.sort((a,b)=>a.executedAt<b.executedAt?-1:a.executedAt>b.executedAt?1:a.executionDigest<b.executionDigest?-1:1);const after=lc20ManagedHistoryState(store,projectId,actor);if(after.watermark!==before.watermark)reject('LC20_HISTORY_UNKNOWN','Managed history changed while reading original bytes',409);
+    await prepareLc20Protocol(signal);signal.throwIfAborted();if(lc20ManagedHistoryState(store,projectId,actor).watermark!==after.watermark)reject('LC20_HISTORY_UNKNOWN','Managed history changed during byte observation',409);
     completeSources.set(sourceKey(projectId,refs),{original,current,history,watermark:after.watermark});
   }
   function completeSnapshot(selection:QualificationSelection,refs:NonNullable<PlanRecord['sources']>,actor:Principal,p:Policy,grant:ProtectedQualificationFacts['assessmentAuthority']):ProtectedQualificationFacts {
@@ -478,8 +479,9 @@ export function createRegisteredQualificationService(store:RuntimeStore,configPa
     async readExecution(projectId,refValue,actor,signal){const r=executionRecord(projectId,refValue);await policy(projectId,r.registrationRef,actor,signal);const original=await readProtectedCiExecution(store,projectId,r.originRef,r.producer,signal);if(original.candidateDigest!==r.capture.candidateDigest||original.rawReceipt!==r.rawReceipt||!same(original.origin,r.capture.origin)||original.stateDigest!==r.originStateDigest)reject('QUALIFICATION_EXECUTION_CHANGED','Original Runtime distribution and actual case bytes changed',409);verifiedExecutionSources.set(refValue,valueDigest(r));executionCurrent(projectId,r.capture,actor);return r.capture;},
     authorizeExecution:executionCurrent,
   };
+  bindings.openObservationScope=openLc20ObservationScope;
   const native=createNativeQualificationService(store,bindings),signal=()=>AbortSignal.timeout(30000);
-  return{native,
+  const registered:RegisteredQualificationService={native,
     async read(actor,projectId,operation,input){
       authorize(actor,projectId,'read');
       if(operation==='lifecycle.qualification.action.inspect'){
@@ -503,6 +505,7 @@ export function createRegisteredQualificationService(store:RuntimeStore,configPa
         if(input.protocol!=='runtime-lc20-local-installed/v1'||caseId!=='LC20'||!p.completeProducer||input.afterRequestId!==undefined||input.limit!==undefined||input.originalExecutionDigest!==undefined||input.currentCandidateDigest!==undefined||!String(input.originRef).startsWith('stage-request:'))reject('INVALID_FIELDS','Select the original fixed LC20 producer request');
         const id=string(input.originRef,512).slice(14),request=record(store.object(projectId,'stage-request',id)),pin=record(record(record(request.plan).parameters).qualificationProducer),{digest,...body}=request;
         if(request.id!==id||request.workspaceId!==workspaceId||request.projectId!==projectId||valueDigest(body)!==digest||request.planDigest!==valueDigest(request.plan)||pin.contractDigest!==valueDigest(p.completeProducer)||pin.policyReferenceDigest!==p.base.owner.reference.digest)reject('LC20_ORIGIN_REQUIRED','Actual immutable scoped producer claim required',409);
+        await prepareLc20Protocol(signal());
         const current=observeLc20Protocol(store,readIntegrationConfiguration(configPath,workspaceId),{workspaceId,projectId,acceptanceScopeDigest:p.base.catalogScopeDigest},p.base.owner.reference.digest,observer),before=record(pin.protocolObservation),equal=current.status==='COMPLETE'&&before.status==='COMPLETE'&&same(current.inputs,before.inputs)&&current.installedCandidateDigest===before.installedCandidateDigest;
         authority.currentActor(actor,projectId,'read');policyCurrent(projectId,p.registration.ref);return{schema:'runtime-lc20-protocol-readback/v1',stageRequestId:id,stageRequestDigest:digest,inputDigest:request.inputDigest,contractDigest:pin.contractDigest,contract:pin.contract,mode:pin.mode,original:pin.protocolObservation,current,disposition:equal?'PROVEN_FIXED_INPUTS':'FULL',formalAcceptanceEligible:false,executionAuthorized:false,releaseAuthorized:false};
       }
@@ -555,4 +558,7 @@ export function createRegisteredQualificationService(store:RuntimeStore,configPa
       return store.mutate(actor,mutation,()=>{current();if(protectedCiExecutionState(store,projectId,originRef,caseId).stateDigest!==original.stateDigest)reject('QUALIFICATION_ORIGINAL_CHANGED','Original execution changed before capture',409);const old=store.object(projectId,kind,captureRef);if(old&&!same(old,saved))reject('QUALIFICATION_IMMUTABLE','Original execution capture cannot change',409);return{objects:[{kind,id:captureRef,value:saved}],value:{captureRef,captureDigest:capture.captureDigest,caseId,mode:'EXECUTED',releaseAuthorized:false},event:{type:'qualification-execution-captured',data:{captureRef,caseId}}};},current);
     },
   };
+  // HTTP/MCP currently supply no disconnect signal. This local operation limit
+  // bounds observation work; it must not be described as transport cancellation.
+  return{native,async read(...args){const scope=openLc20ObservationScope(signal());try{return await scope.run(()=>registered.read(...args));}finally{scope.close();await scope.drain();}},async write(...args){const scope=openLc20ObservationScope(signal());try{return await scope.run(()=>registered.write(...args));}finally{scope.close();await scope.drain();}}};
 }

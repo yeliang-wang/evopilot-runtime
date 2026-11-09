@@ -22,7 +22,7 @@ import {retainVerificationRun} from './stage-feedback.js';
 import {CI_PREPARATION_ADAPTER_ID,CI_PREPARATION_ADAPTER_DIGEST,preparationConfiguration,validatePreparationInput,observePreparedSource,verifyPreparationNativeAction,type CiPreparationInput,type PreparedSourceObservation} from './ci-preparation.js';
 import {mappedExtensionCriteria} from './extension-stages.js';
 import {readNativeRepairCapture,readNativeRepairHistory,type NativeRepairCapture,type NativeRepairSelection} from './authority.js';
-import {readLc20ProducerContract,observeLc20Protocol,readLc20InputSnapshot,readLc20Execution,LC20_INPUT_PATH} from './artifacts.js';
+import {readLc20ProducerContract,observeLc20Protocol,readLc20InputSnapshot,readLc20Execution,LC20_INPUT_PATH,openLc20ObservationScope,prepareLc20Protocol} from './artifacts.js';
 import type {Lc20ProducerPin} from '../lifecycle/correction-contract.js';
 
 const LEGACY_ID='runtime-ci-owner-stage-v1';
@@ -124,6 +124,9 @@ export interface PublishedExecutionProducer {
 /** Preparation observes the actual published asset, never a registration's
  * assertion that a collector is trusted or complete. No owner mutation occurs. */
 export async function prepareLc20Producer(store:RuntimeStore,config:Readonly<IntegrationConfiguration>,connections:Pick<BindingConnections,'owner'>,projectId:string,selection:unknown,workflow:{path:string;digest:string},actor:Principal,signal:AbortSignal):Promise<Lc20ProducerPin>{
+  const observationScope=openLc20ObservationScope(signal);try{return await observationScope.run(()=>prepareLc20ProducerInScope(store,config,connections,projectId,selection,workflow,actor,signal));}finally{observationScope.close();await observationScope.drain();}
+}
+async function prepareLc20ProducerInScope(store:RuntimeStore,config:Readonly<IntegrationConfiguration>,connections:Pick<BindingConnections,'owner'>,projectId:string,selection:unknown,workflow:{path:string;digest:string},actor:Principal,signal:AbortSignal):Promise<Lc20ProducerPin>{
   const s=record(selection);exact(s,['registrationRef','caseId','mode']);if(s.caseId!=='LC20'||!['EXECUTE','INVENTORY'].includes(String(s.mode)))reject('LC20_PRODUCER_CONTRACT','Fixed LC20 workflow mode required',409);
   const r=config.resources.find(r=>r.ref===s.registrationRef&&r.projectId===projectId&&r.role==='runtime.qualification');if(!r||Date.parse(r.expiresAt)<=Date.now())reject('QUALIFICATION_POLICY_UNAVAILABLE','Current exact qualification registration required',409);validateResourceDefinition(r);
   const d=r.definition,scope=d.scope as NativeScope,reference=validateNativeReference(d.reference,{product:'harness'}),owner=connections.owner(string(d.adapterRef),config);
@@ -131,6 +134,7 @@ export async function prepareLc20Producer(store:RuntimeStore,config:Readonly<Int
   if(published.status!=='SUCCEEDED'||published.operation!=='native.package.publish'||published.requestId!==d.publicationRequestId||!same(published.scope,scope)||record(published.result).published!==true||!same(record(published.result).reference,reference)||record(pkg.validation).executionStatus!=='SUCCEEDED'||record(pkg.validation).qualityStatus!=='PASS')reject('QUALIFICATION_POLICY_UNPUBLISHED','Exact original published producer receipt required',409);
   const files=record(record(pkg.package).files),text=files['sources/qualification-producers.json'];if(typeof text!=='string'||Buffer.byteLength(text)>262144)reject('LC20_PRODUCER_CONTRACT','Published fixed complete producer contract required',409);const body=record(JSON.parse(text));exact(body,['schema','cases']);if(body.schema!=='runtime-qualification-producers/v1'||!Array.isArray(body.cases)||body.cases.length!==1)reject('LC20_PRODUCER_CONTRACT','Only the reviewed complete LC20 producer is supported',409);
   const params=record(record(JSON.parse(string(files['data/qualification.json'],262144))).params),validityContractDigest=hash(params.validityContractDigest),contract=readLc20ProducerContract(body.cases[0]),mode=s.mode as 'EXECUTE'|'INVENTORY',expected=contract.workflows[mode];if(expected.sourcePath!==workflow.path||expected.digest!==workflow.digest)reject('LC20_PRODUCER_CONTRACT','The actual original workflow is not the published producer',409);
+  await prepareLc20Protocol(signal);signal.throwIfAborted();
   return{schema:'runtime-lc20-producer-pin/v1',registrationRef:r.ref,registrationDigest:valueDigest(r),registrationExpiresAt:r.expiresAt,policyReferenceDigest:reference.digest,publicationRequestId:string(d.publicationRequestId),validityContractDigest,contract,contractDigest:valueDigest(contract),mode,protocolObservation:observeLc20Protocol(store,config,{workspaceId:store.workspaceId,projectId,acceptanceScopeDigest:contract.catalogDigest},reference.digest,actor)};
 }
 /** The stage request is already immutable and claimed before this read. Both

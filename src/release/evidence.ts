@@ -5,7 +5,7 @@ import {basename,dirname,isAbsolute,join,resolve} from 'node:path';
 import {isDeepStrictEqual} from 'node:util';
 import {evaluateGovernance} from '../governance.js';
 import {valueDigest} from '../lifecycle/base.js';
-import {assertNativeQualificationService,type NativeQualificationService} from '../lifecycle/evidence-qualification.js';
+import {assertNativeQualificationService,type NativeQualificationService,type QualificationObservationScope} from '../lifecycle/evidence-qualification.js';
 import type {Principal} from '../server/security.js';
 import type {NativeEvidenceQualification,TypedCurrentExecutionCapture} from '../lifecycle/correction-contract.js';
 import {evidenceValueDigest} from '../server/errors.js';
@@ -222,7 +222,7 @@ export interface RawExecutionAudit {
   caseId:string;mode:'EXECUTED';candidateDigest:string;reportDigest:string;selectionDigest:string;caseDigest:string;
   rawSourcesDigest:string;assertionsDigest:string;recordIntegrity:'VERIFIED';executionAuthenticity:'REVIEW_REQUIRED';
 }
-const mixedAudits=new WeakMap<object,{service:NativeQualificationService;actor:Principal;projectId:string;files:AuditedFile[];auditDigest:string}>();
+const mixedAudits=new WeakMap<object,{service:NativeQualificationService;actor:Principal;projectId:string;files:AuditedFile[];auditDigest:string;scope?:QualificationObservationScope}>();
 
 /** A partial current collector report remains INCOMPLETE. Only its actually
  * executed selected cases enter this audit; omitted cases must be covered by
@@ -260,6 +260,10 @@ function inspectRawExecutions(repositoryRoot:string,input:QualifiedAcceptanceEvi
  * original execution records for final source authentication, and native reuse.
  * None of these branches prepares environment state or overrides stage status. */
 export async function inspectQualifiedAcceptanceEvidence(repositoryRoot:string,input:QualifiedAcceptanceEvidenceRequest,service:NativeQualificationService,actor:Principal,signal:AbortSignal) {
+  assertNativeQualificationService(service);const scope=service.openObservationScope?.(signal);
+  try{const result=await(scope?scope.run(()=>inspectQualifiedAcceptanceInScope(repositoryRoot,input,service,actor,signal)):inspectQualifiedAcceptanceInScope(repositoryRoot,input,service,actor,signal));if(scope)mixedAudits.get(result)!.scope=scope;return result;}catch(error){scope?.close();await scope?.drain?.();throw error;}
+}
+async function inspectQualifiedAcceptanceInScope(repositoryRoot:string,input:QualifiedAcceptanceEvidenceRequest,service:NativeQualificationService,actor:Principal,signal:AbortSignal) {
   assertNativeQualificationService(service);signal.throwIfAborted();
   exact(object(input),['schema','sourceCommit','manifest','archive','sourceRevision','scope','qualifications','executions','originalExecutions']);exact(object(input.scope),['workspaceId','projectId']);requireValue(input.schema==='runtime-qualified-release-evidence-input/v2','Wrong qualification audit schema');string(input.scope.workspaceId);string(input.scope.projectId);
   const {candidateDigest,archive,manifest,git}=inspectEvidenceCandidate(repositoryRoot,input),paths=['governance/acceptance-v090.json','governance/parameter-matrix-v090.json','governance/token-usage-v090.json','governance/lifecycle-correction-v090.json'],bindings=paths.map(path=>{const bytes=read(join(repositoryRoot,path),2097152,false);return{path,sha256:'sha256:'+sha(bytes),bytes:bytes.length};}),acceptanceScopeDigest=valueDigest({product:'runtime',targetId:'runtime-v090-independent-lifecycle',targetVersion:'0.9.0',catalogBindings:bindings});
@@ -283,11 +287,22 @@ export function qualifiedAcceptanceSourceFiles(audit:QualifiedAcceptanceAudit):r
 // permit. Raw local records rely on the separate bounded human/source release
 // authentication; only typed/native rows require current Runtime read authority.
 export function assertMixedAcceptanceCurrent(audit:QualifiedAcceptanceAudit,service:NativeQualificationService,actor:Principal,signal:AbortSignal):void {
+  const scope=mixedAudits.get(audit)?.scope;try{if(scope)scope.run(()=>assertMixedAcceptanceInScope(audit,service,actor,signal));else assertMixedAcceptanceInScope(audit,service,actor,signal);}catch(error){closeQualifiedAcceptanceObservation(audit);throw error;}
+}
+function assertMixedAcceptanceInScope(audit:QualifiedAcceptanceAudit,service:NativeQualificationService,actor:Principal,signal:AbortSignal):void {
   const captured=mixedAudits.get(audit);requireValue(captured&&captured.service===service&&(actor.projects.includes(captured.projectId)||actor.projects.includes('*'))&&isDeepStrictEqual(captured.actor,actor)&&captured.auditDigest===evidenceValueDigest(audit),'Original in-memory mixed audit and principal required');assertNativeQualificationService(service);signal.throwIfAborted();
   for(const file of captured!.files){signal.throwIfAborted();requireValue(sha(read(file.ref,file.maximum,file.privateFile))===file.sha256,'Original source bytes changed since audit');}
   for(const row of audit.qualifications)service.assertCurrent(captured!.projectId,row,actor,signal);
   for(const row of audit.executions)service.assertExecutionCurrent(captured!.projectId,row,actor,signal);
   const now=Date.now();requireValue(audit.qualifications.every(row=>row.expiresAt&&Date.parse(row.expiresAt)>now)&&audit.executions.every(row=>Date.parse(row.expiresAt)>now),'Evidence expired during final batch validation');signal.throwIfAborted();
 }
+/** Trusted caller owns the audit through every synchronous final guard and
+ * disposes it in finally after terminal consumption. Unconsumed native scopes
+ * also close on caller abort or their fixed 12-second deadline. */
+export function closeQualifiedAcceptanceObservation(audit:QualifiedAcceptanceAudit):void {const captured=mixedAudits.get(audit);if(!captured)return;for(const q of audit.qualifications)captured.service.closeInspection?.(q);captured.scope?.close();}
 /** Existing native batch contract remains available, with same-service brands. */
 export function assertQualifiedAcceptanceCurrent(service:NativeQualificationService,projectId:string,rows:readonly NativeEvidenceQualification[],actor:Principal,signal:AbortSignal):void {assertNativeQualificationService(service);requireValue(rows.length>0&&rows.length<=698,'Bounded nonempty native qualification batch required');for(const row of rows)service.assertCurrent(projectId,row,actor,signal);}
+
+/** Internal producer state only; serialized audit fields cannot assert this. */
+export function qualifiedAcceptanceCacheDependent(audit:QualifiedAcceptanceAudit):boolean{return mixedAudits.get(audit)?.scope?.cacheDependent?.()===true;}
+export async function drainQualifiedAcceptanceObservation(audit:QualifiedAcceptanceAudit):Promise<void>{closeQualifiedAcceptanceObservation(audit);await mixedAudits.get(audit)?.scope?.drain?.();}
