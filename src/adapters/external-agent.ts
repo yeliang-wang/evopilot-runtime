@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { constants, closeSync, fstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
-import { byteDigest } from '../lifecycle/base.js';
+import { constants, closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync, type BigIntStats } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { isAbsolute, resolve } from 'node:path';
 import { exact, record, reject, string } from '../server/errors.js';
 import { canonical } from '../server/errors.js';
 import { valueDigest } from '../lifecycle/base.js';
@@ -18,17 +18,31 @@ import { validateResourceDefinition } from './bindings.js';
 
 const execute=promisify(execFile);
 export interface AgentIdentity { adapter:'codex';version:string;executableDigest:string;hostId:string;modelInvoked:false; }
+/** Codex-only binary profile; generic toolchains retain their existing limits.
+ * Fixed memory, bounded reads, and descriptor/path snapshots bind the hash to
+ * one stable regular executable. Identity verification grants no execution authority. */
+export function verifyCodexExecutable(path:string,expected:string):{digest:string;bytes:number}{
+  const changed=():never=>reject('AGENT_IDENTITY_CHANGED','Agent executable differs from its registered bytes');
+  const same=(a:BigIntStats,b:BigIntStats):boolean=>a.dev===b.dev&&a.ino===b.ino&&a.size===b.size&&a.mode===b.mode&&a.nlink===b.nlink&&a.mtimeNs===b.mtimeNs&&a.ctimeNs===b.ctimeNs;
+  if(!isAbsolute(path)||resolve(path)!==path||realpathSync(path)!==path||!/^sha256:[a-f0-9]{64}$/.test(expected))changed();
+  const before=lstatSync(path,{bigint:true}),fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW);
+  try{
+    const stat=fstatSync(fd,{bigint:true});
+    if(!same(before,stat)||!stat.isFile()||stat.nlink!==1n||(stat.mode&0o022n)!==0n||(stat.mode&0o111n)===0n||stat.size<1n||stat.size>536870912n)changed();
+    const bytes=Number(stat.size),buffer=Buffer.allocUnsafe(65536),hash=createHash('sha256');let offset=0;
+    while(offset<bytes){const count=readSync(fd,buffer,0,Math.min(buffer.length,bytes-offset),offset);if(count===0)changed();hash.update(buffer.subarray(0,count));offset+=count;}
+    const digest='sha256:'+hash.digest('hex');
+    if(digest!==expected||!same(stat,fstatSync(fd,{bigint:true}))||realpathSync(path)!==path||!same(stat,lstatSync(path,{bigint:true})))changed();
+    return{digest,bytes};
+  }finally{closeSync(fd);}
+}
 /** A fixed version query establishes identity only. Runtime receives no model
  * profile/key, starts no coding task and cannot take authority from CLI output. */
 export async function inspectExternalAgent(definition:Record<string,unknown>,signal:AbortSignal):Promise<AgentIdentity>{
   exact(definition,['kind','adapter','executable','version','hostId','workspaceRoot']);
   if(definition.kind!=='agent'||definition.adapter!=='codex')reject('UNSUPPORTED_AGENT','Only the registered external Codex adapter is available');
   const file=record(definition.executable);exact(file,['path','digest']);const path=string(file.path,4096),expected=string(file.digest,71),version=string(definition.version,128),hostId=string(definition.hostId,256);
-  function verify(){
-    if(!isAbsolute(path)||realpathSync(path)!==path)reject('AGENT_IDENTITY_CHANGED','Agent executable must be canonical');
-    const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW);
-    try{const stat=fstatSync(fd);if(!stat.isFile()||stat.nlink!==1||(stat.mode&0o022)!==0||(stat.mode&0o111)===0||stat.size<1||stat.size>268435456||byteDigest(readFileSync(fd))!==expected)reject('AGENT_IDENTITY_CHANGED','Agent executable differs from its registered bytes');}finally{closeSync(fd);}
-  }
+  const verify=()=>verifyCodexExecutable(path,expected);
   signal.throwIfAborted();verify();let stdout:string;
   try{({stdout}=await execute(path,['--version'],{encoding:'utf8',timeout:3000,maxBuffer:8192,signal,windowsHide:true}));}
   catch{return reject('AGENT_UNAVAILABLE','Registered Codex version query did not complete',409);}

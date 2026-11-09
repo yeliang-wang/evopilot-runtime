@@ -1,4 +1,6 @@
 import test from 'node:test';
+import fs from 'node:fs';
+import {syncBuiltinESMExports} from 'node:module';
 import assert from 'node:assert/strict';
 import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,13 +15,13 @@ import { candidateDigest, pinInstance, requiredChecksDigest } from '../../dist/l
 import { syntheticReadinessMaterial, lifecycleBindingExample } from '../fixtures/adapters-v090.mjs';
 import { nativeSha256 } from '../../vendor/compatibility/v1/native.mjs';
 import { READINESS_STANDARD_DIGEST, noReconstruction } from '../../vendor/compatibility/usability/v2/contract.mjs';
-import { createRegisteredBindings, openRegisteredBindings } from '../../dist/adapters/bindings.js';
+import { createRegisteredBindings, openRegisteredBindings, validateResourceDefinition } from '../../dist/adapters/bindings.js';
 import { compileLifecycle } from '../../dist/lifecycle/compiler.js';
 import { validateBindings } from '../../dist/lifecycle/bindings.js';
 import { valueDigest, loadPublisherBase } from '../../dist/lifecycle/base.js';
 import { registeredAuthorityPolicy } from '../../dist/adapters/authority.js';
 import { yaml, extension } from '../fixtures/lifecycle-v090.mjs';
-import { inspectExternalAgent } from '../../dist/adapters/external-agent.js';
+import { inspectExternalAgent, verifyCodexExecutable } from '../../dist/adapters/external-agent.js';
 import { createOwnerFeedbackDelivery, verifyOwnerFeedbackInbox } from '../../dist/adapters/feedback.js';
 import { RuntimeStore } from '../../dist/server/store.js';
 import { ServiceError } from '../../dist/server/errors.js';
@@ -652,4 +654,47 @@ test('scope-review admission requires complete exact decision mappings and a con
   for(const[ref,role,definition]of [[e.parameters.reviewRef,'extension.review',{kind:'review',reviewerIds:['fixture'],evidenceRequired:true}],[e.requirementRefs[0],'extension.requirement',d],[e.evidenceMappingRef,'extension.mapping',{kind:'evidence-map',ontology:global.ontology,harness:global.harness,rows:[row]}]])f.configuration.resources.push({ref,role,workspaceId:'test',projectId:'alpha',revision:1,expiresAt:actor.expiresAt,definition:structuredClone(definition)});global.rows.push(row);f.save();assert.equal((await validateBindings(f.definition(),actor,f.provider)).ready,true);const original=structuredClone(f.configuration.resources);
   for(const variant of ['missing-policy','wrong-source','missing-local']){f.configuration.resources=structuredClone(original);if(variant==='missing-policy')f.configuration.resources=f.configuration.resources.filter(r=>r.ref!==e.parameters.reviewRef);if(variant==='wrong-source')for(const r of f.configuration.resources.filter(r=>[e.evidenceMappingRef,global.ref].includes(r.ref)||r.role==='config.verification.evidenceMappingRef'))for(const row of r.definition.rows)if(row.stage===e.id)row.source='owner-receipt';if(variant==='missing-local')f.configuration.resources.find(r=>r.ref===e.evidenceMappingRef).definition.rows=[];f.save();const result=await validateBindings(f.definition(),actor,f.provider);assert.equal(result.ready,false,variant);assert(result.issues.some(i=>i.path==='extensions.'+e.id));}
  }finally{f.cleanup();}
+});
+
+
+test('Codex identity hashes larger current binaries with bounded memory while retaining the toolchain cap',()=>{
+ const dir=mkdtempSync(join(realpathSync(tmpdir()),'codex-size-')),file=join(dir,'codex'),oldRead=fs.readSync;
+ try{
+  const size=268435457,fd=fs.openSync(file,'wx',0o700);fs.ftruncateSync(fd,size);fs.closeSync(fd);
+  const zeros=Buffer.alloc(65536),hash=createHash('sha256');for(let left=size;left>0;left-=zeros.length)hash.update(zeros.subarray(0,Math.min(left,zeros.length)));
+  const digest='sha256:'+hash.digest('hex');let reads=0;
+  fs.readSync=(fd,buffer,offset,length,position)=>{reads++;assert(buffer.length<=65536);return oldRead(fd,buffer,offset,length,position);};syncBuiltinESMExports();
+  assert.deepEqual(verifyCodexExecutable(file,digest),{digest,bytes:size});assert(reads>1);
+  const resource={role:'config.implementation.agentBindingRef',definition:{kind:'agent',adapter:'codex',executable:{path:file,digest},version:'test',hostId:'synthetic',workspaceRoot:dir}};
+  assert.doesNotThrow(()=>validateResourceDefinition(resource));
+  assert.throws(()=>validateResourceDefinition({role:'config.candidate.toolchainRef',definition:{kind:'toolchain',executables:[{file:{path:file,digest},version:'test'}]}}),{code:'UNSAFE_RESOURCE'});
+  const grown=fs.openSync(file,'r+');fs.ftruncateSync(grown,536870913);fs.closeSync(grown);reads=0;
+  assert.throws(()=>verifyCodexExecutable(file,digest),{code:'AGENT_IDENTITY_CHANGED'});assert.equal(reads,0);
+ }finally{fs.readSync=oldRead;syncBuiltinESMExports();rmSync(dir,{recursive:true,force:true});}
+});
+test('Codex identity rejects changed bytes, unsafe links and mutation or replacement during hashing',()=>{
+ const dir=mkdtempSync(join(realpathSync(tmpdir()),'codex-race-')),file=join(dir,'codex'),oldRead=fs.readSync,bytes=Buffer.alloc(131072,42),digest='sha256:'+createHash('sha256').update(bytes).digest('hex');
+ const reset=()=>{fs.readSync=oldRead;syncBuiltinESMExports();rmSync(file,{force:true});writeFileSync(file,bytes,{mode:0o700});};
+ try{
+  reset();assert.throws(()=>verifyCodexExecutable(file,'sha256:'+'0'.repeat(64)),{code:'AGENT_IDENTITY_CHANGED'});
+  chmodSync(file,0o722);assert.throws(()=>verifyCodexExecutable(file,digest),{code:'AGENT_IDENTITY_CHANGED'});
+  reset();fs.linkSync(file,join(dir,'hardlink'));assert.throws(()=>verifyCodexExecutable(file,digest),{code:'AGENT_IDENTITY_CHANGED'});rmSync(join(dir,'hardlink'));
+  symlinkSync(file,join(dir,'symlink'));assert.throws(()=>verifyCodexExecutable(join(dir,'symlink'),digest),{code:'AGENT_IDENTITY_CHANGED'});
+  for(const mutation of ['bytes','replace','mode']){
+   reset();let changed=false;
+   fs.readSync=(...args)=>{const count=oldRead(...args);if(!changed){changed=true;if(mutation==='replace'){fs.renameSync(file,join(dir,'prior'));writeFileSync(file,bytes,{mode:0o700});}else if(mutation==='mode')chmodSync(file,0o500);else{const fd=fs.openSync(file,'r+');fs.writeSync(fd,Buffer.from([43]),0,1,0);fs.closeSync(fd);}}return count;};syncBuiltinESMExports();
+   assert.throws(()=>verifyCodexExecutable(file,digest),{code:'AGENT_IDENTITY_CHANGED'});
+  }
+ }finally{fs.readSync=oldRead;syncBuiltinESMExports();rmSync(dir,{recursive:true,force:true});}
+});
+test('Codex identity invokes only the fixed version query and verifies the file again afterward',async()=>{
+ const dir=mkdtempSync(join(realpathSync(tmpdir()),'codex-query-')),file=join(dir,'codex'),log=join(dir,'args');
+ try{
+  const content='#!/bin/sh\nprintf "%s\\n" "$@" > "'+log+'"\nprintf "codex-cli test\\n"\n';writeFileSync(file,content,{mode:0o700});
+  const definition={kind:'agent',adapter:'codex',executable:{path:file,digest:'sha256:'+createHash('sha256').update(content).digest('hex')},version:'test',hostId:'synthetic',workspaceRoot:dir};
+  assert.equal((await inspectExternalAgent(definition,AbortSignal.timeout(5000))).modelInvoked,false);assert.equal(fs.readFileSync(log,'utf8'),'--version\n');
+  await assert.rejects(()=>inspectExternalAgent({...definition,version:'wrong'},AbortSignal.timeout(5000)),{code:'AGENT_IDENTITY_CHANGED'});
+  const rewrite=content+'printf "# changed\\n" >> "$0"\n';writeFileSync(file,rewrite);definition.executable.digest='sha256:'+createHash('sha256').update(rewrite).digest('hex');
+  await assert.rejects(()=>inspectExternalAgent(definition,AbortSignal.timeout(5000)),{code:'AGENT_IDENTITY_CHANGED'});
+ }finally{rmSync(dir,{recursive:true,force:true});}
 });

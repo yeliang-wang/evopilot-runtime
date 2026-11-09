@@ -29,9 +29,19 @@ async function execute(executable,args,{cwd,env,timeout=45000}={}){
  return new Promise(resolve=>execFile(executable,args,{cwd,env,encoding:'utf8',timeout,maxBuffer:2097152,shell:false},(error,stdout,stderr)=>resolve({exitCode:error?typeof error.code==='number'?error.code:null:0,signal:error?.signal??null,timedOut:!!error?.killed,stdout,stderr})));
 }
 async function selectedHost(codex){
- const executable=canonical(codex.executable),pin=codex.executableSha256??codex.sha256;assert(/^[a-f0-9]{64}$/.test(pin));const stat=fs.lstatSync(executable);assert(stat.isFile()&&(stat.mode&0o022)===0&&stat.size<=268435456);assert.equal(sha(fs.readFileSync(executable)),pin);
+ const executable=canonical(codex.executable),pin=codex.executableSha256??codex.sha256;assert(/^[a-f0-9]{64}$/.test(pin));
+ const verify=()=>{
+  canonical(executable);const before=fs.lstatSync(executable,{bigint:true}),fd=fs.openSync(executable,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);
+  const snapshot=s=>[s.dev,s.ino,s.size,s.mode,s.nlink,s.mtimeNs,s.ctimeNs];
+  try{
+   const stat=fs.fstatSync(fd,{bigint:true});assert.deepEqual(snapshot(stat),snapshot(before));assert(stat.isFile()&&stat.nlink===1n&&(stat.mode&0o022n)===0n&&(stat.mode&0o111n)!==0n&&stat.size>0n&&stat.size<=536870912n);
+   const hash=createHash('sha256'),buffer=Buffer.allocUnsafe(65536);let offset=0;
+   while(offset<Number(stat.size)){const count=fs.readSync(fd,buffer,0,Math.min(buffer.length,Number(stat.size)-offset),offset);assert(count>0);hash.update(buffer.subarray(0,count));offset+=count;}
+   assert.equal(hash.digest('hex'),pin);assert.deepEqual(snapshot(fs.fstatSync(fd,{bigint:true})),snapshot(stat));canonical(executable);assert.deepEqual(snapshot(fs.lstatSync(executable,{bigint:true})),snapshot(stat));
+  }finally{fs.closeSync(fd);}
+ };verify();
  const observed=await execute(executable,['--version'],{timeout:10000});assert.equal(observed.exitCode,0);assert.equal(observed.signal,null);const version=observed.stdout.trim();assert(/^codex-cli [A-Za-z0-9.+-]+$/.test(version));if(codex.version)assert.equal(version,'codex-cli '+codex.version);
- return{executable,sha256:pin,version:version.slice('codex-cli '.length)};
+ verify();return{executable,sha256:pin,version:version.slice('codex-cli '.length)};
 }
 
 /** Real App Server plugin discovery and tool invocation, without a model turn.

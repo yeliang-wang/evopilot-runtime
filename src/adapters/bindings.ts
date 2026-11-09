@@ -15,7 +15,7 @@ import type {LegacyIntentSource} from '../compat/gateway.js';
 import { readPlatformToken } from './config.js';
 import { githubClient } from './github.js';
 import { gitlabClient } from './gitlab.js';
-import { inspectExternalAgent, type AgentIdentity } from './external-agent.js';
+import { inspectExternalAgent, verifyCodexExecutable, type AgentIdentity } from './external-agent.js';
 import { readRegisteredNativeToolchain } from './config.js';
 import { createImplementationStageAdapters } from './implementation-stages.js';
 import { releaseDocuments } from './documents.js';
@@ -84,7 +84,7 @@ export function validateResourceDefinition(resource:ResourceRegistration):void{
     case 'compatibility':fields(['strategy','allowUnreviewedDrift']);fixed('strategy','exact-pins');fixed('allowUnreviewedDrift',false);break;
     case 'review':fields(['reviewerIds','evidenceRequired']);strings(d.reviewerIds,128).forEach(slug);yes('evidenceRequired');break;
     case 'recovery':fields(['strategy','onUnknown','maxAttempts']);fixed('strategy','inspect-original');fixed('onUnknown','BLOCK');if(!Number.isSafeInteger(d.maxAttempts)||Number(d.maxAttempts)<1||Number(d.maxAttempts)>4)reject('INVALID_RESOURCE','Recovery attempts must fit publisher limits');break;
-    case 'agent':fields(['adapter','executable','version','hostId','workspaceRoot']);fixed('adapter','codex');verifyResourceFile(d.executable,true);string(d.version);string(d.hostId);directory(d.workspaceRoot);break;
+    case 'agent':fields(['adapter','executable','version','hostId','workspaceRoot']);fixed('adapter','codex');{const file=record(d.executable);exact(file,['path','digest']);verifyCodexExecutable(string(file.path,4096),hash(file.digest));}string(d.version);string(d.hostId);directory(d.workspaceRoot);break;
     case 'workflow':fields(['platformRef','purpose','outputContract']);ref(d.platformRef);if(!['build','verify','publish','smoke','prepare'].includes(String(d.purpose)))reject('INVALID_RESOURCE','Unknown workflow purpose');fixed('outputContract','runtime-ci/v1');break;
     case 'toolchain':fields(['executables']);for(const raw of list(d.executables,32)){const e=record(raw);exact(e,['file','version']);verifyResourceFile(e.file,true);string(e.version);}break;
     case 'artifact-store':fields(['platformRef','retentionDays']);ref(d.platformRef);if(!Number.isSafeInteger(d.retentionDays)||Number(d.retentionDays)<1||Number(d.retentionDays)>365)reject('INVALID_RESOURCE','Invalid artifact retention');break;

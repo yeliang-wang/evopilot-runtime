@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import {execFile} from 'node:child_process';
+import {verifyCodexExecutable} from '../adapters/external-agent.js';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {constants,copyFileSync,existsSync,lstatSync,mkdirSync,readFileSync,readdirSync,readlinkSync,realpathSync,symlinkSync,unlinkSync,writeFileSync} from 'node:fs';
 import {dirname,isAbsolute,join,relative,resolve,sep} from 'node:path';
@@ -180,10 +181,11 @@ export function verifyInstalledRuntimePackage(plan:RuntimeInstallPlan,installedR
 function marketplaceName(root:string):string{return'evopilot-runtime-'+sha(root).slice(0,16);}
 async function codex(plan:RuntimeInstallPlan,args:string[]):Promise<Record<string,unknown>>{
   const host=plan.codex;if(!host)reject('HOST_NOT_CONFIGURED','A specific Codex installation is required');
-  const stat=lstatSync(host.executable);if(!stat.isFile()||(stat.mode&0o022)!==0||stat.size>268435456||sha(readFileSync(host.executable))!==host.sha256)reject('HOST_IDENTITY_CHANGED','Selected Codex executable changed');
+  const verify=()=>{try{verifyCodexExecutable(host.executable,'sha256:'+host.sha256);}catch{reject('HOST_IDENTITY_CHANGED','Selected Codex executable changed');}};verify();
   await new Promise<void>((resolve,rejectPromise)=>execFile(host.executable,['--version'],{encoding:'utf8',timeout:10000,maxBuffer:4096,shell:false},(error,stdout)=>{
     if(error||stdout.trim()!=='codex-cli '+host.version){rejectPromise(new ServiceError('HOST_IDENTITY_CHANGED','Selected Codex version differs from the installation plan'));return;}resolve();
   }));
+  verify();
   return new Promise((resolve,rejectPromise)=>execFile(host.executable,['-c','mcp_servers={}','plugin',...args,'--json'],{encoding:'utf8',timeout:30000,maxBuffer:2097152,shell:false},(error,stdout)=>{
     if(error){rejectPromise(new ServiceError('HOST_REGISTRATION_UNKNOWN','Inspect the existing plugin registration before repeating an installation',503));return;}
     try{resolve(record(JSON.parse(stdout)));}catch{rejectPromise(new ServiceError('HOST_RESPONSE_INVALID','Codex did not return the supported installation response',503));}
