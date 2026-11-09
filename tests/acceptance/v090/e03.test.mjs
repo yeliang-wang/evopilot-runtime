@@ -138,9 +138,71 @@ async function expertCase(run,expert,c,fields,control,initial,activeSource){
  return{entry:'expert',stage:c.parameters.stage,field:spec.path,inputRepresentation:missing?'missing-yaml-key':'yaml-null',actualModelTurn:true,actualInstalledExpert:true,actualInstalledHttpMcp:true,model:observed.model,provider:observed.provider,threadId:observed.threadId,turnId:observed.turnId,originalDraftRequestId:requestId,exactDraftApprovalResponses:observed.approvalResponses,specificFieldRuleAndRemedy:true,invalidDraftRetained:true,activationNotAdmitted:true,existingActiveAndHistoryUnchanged:true,externalExecutionRequested:false,inputKind:'SYNTHETIC_NEGATIVE_CONFIGURATION'};
 }
 
+// EX02 consumes operator-selected real binding inputs. structuralInput() is
+// deliberately not used: syntactic validity is not owner/provider readiness.
+async function fieldClassification(run,c,fields,base,initial,activeSource){
+ const selected=run.selection.fieldClassification;assert(selected,'EX02 requires exact selected GitHub and GitLab YAML with real current bindings');
+ const policies=['LOCKED','CONFIGURABLE','CONSTRAINED','ADDITIVE'];assert.deepEqual([...new Set(fields.map(f=>f.policy))].sort(),[...policies].sort());
+ const reports=[],baseBefore=await run.read('lifecycle.base.inspect');assert.deepEqual(baseBefore,base);
+ const revisionId=value=>value.revisionId??value.id;
+ for(const provider of ['github','gitlab']){
+  const pin=selected[provider];assert(pin);const stat=fs.lstatSync(pin.yamlRef);
+  assert(path.isAbsolute(pin.yamlRef)&&fs.realpathSync(pin.yamlRef)===pin.yamlRef&&stat.isFile()&&stat.nlink===1&&stat.uid===process.getuid()&&(stat.mode&0o077)===0&&stat.size<=262144);
+  const bytes=fs.readFileSync(pin.yamlRef);assert.equal(sha(bytes),pin.yamlSha256);const legal=bytes.toString('utf8'),document=parseDocument(legal,{version:'1.2',strict:true,uniqueKeys:true,stringKeys:true});assert.deepEqual(document.errors,[]);assert.deepEqual(document.warnings,[]);
+  const data=document.toJS();assert.equal(data.projectId,run.selection.projectId);assert.deepEqual(data.extends,base.pin);assert.equal(data.config.implementation.provider,provider);
+  const chosen=fields.filter(f=>f.providers.includes(provider)),inactive=fields.filter(f=>!f.providers.includes(provider));assert(inactive.length>0);
+  for(const field of chosen.filter(f=>f.required))assert.notEqual(at(data,field.path),undefined,'Selected input must contain '+field.path);
+  for(const field of inactive)assert.equal(at(data,field.path),undefined,'Legal branch must omit the other provider field '+field.path);
+  const change=(field,value)=>{const copy=structuredClone(data);set(copy,field,value);return stringify(copy,{lineWidth:0});};
+  const locked=chosen.filter(f=>f.policy==='LOCKED'),conditional=chosen.filter(f=>f.required&&f.providers.length===1);assert(locked.length&&conditional.length);
+  const constrained=chosen.find(f=>f.policy==='CONSTRAINED'&&f.type==='integer'&&Number.isSafeInteger(f.rules.maximum));assert(constrained);
+  const additive=chosen.find(f=>f.policy==='ADDITIVE'&&Array.isArray(f.rules.contains)&&f.rules.contains.length);assert(additive);
+  const vectors=[
+   {id:'unknown',yaml:change('config.scope.unknownAcceptanceField',true),path:'config.scope.unknownAcceptanceField',code:'UNKNOWN_FIELD'},
+   {id:'duplicate',yaml:stringify(data,{lineWidth:0,collectionStyle:'block'})+'\nprojectId: '+run.selection.projectId+'\n',path:'$',code:'YAML_PARSE',message:'DUPLICATE_KEY'},
+   ...locked.map((field,i)=>({id:'locked-'+i,yaml:change(field.path,'runtime-project-lifecycle/v999'),path:field.path,code:'INVALID_VALUE'})),
+   ...conditional.map((field,i)=>({id:'missing-branch-'+i,yaml:change(field.path,undefined),path:field.path,code:'REQUIRED_FIELD'})),
+   ...inactive.map((field,i)=>({id:'inactive-branch-'+i,yaml:change(field.path,provider==='github'?'.gitlab-ci.yml':'.github/workflows/ci.yml'),path:field.path,code:'INACTIVE_PROVIDER_FIELD'})),
+   {id:'constrained',yaml:change(constrained.path,constrained.rules.maximum+1),path:constrained.path,code:'INVALID_VALUE'},
+   {id:'additive',yaml:change(additive.path,[]),path:additive.path,code:'INVALID_VALUE'}
+  ];
+  run.artifact('field-classification-selected-input.json',{provider,pin,projectId:data.projectId,base:base.pin,candidate:run.candidate,inputKind:'EXPLICIT_OPERATOR_SELECTED_BINDINGS',policies:chosen.map(f=>({path:f.path,policy:f.policy,required:f.required})),omittedOtherProviderFields:inactive.map(f=>f.path),vectors:vectors.map(v=>({id:v.id,path:v.path,code:v.code,yamlSha256:sha(v.yaml)}))});
+  for(const entry of ['http-api','http-mcp','cli']){
+   const positive=(await run.configurationEntry(entry,'lifecycle.definition.validate',{yaml:legal})).result;
+   assert.equal(positive.compilation.valid,true);assert.equal(positive.ready,true,'EX02 requires actual current owner/platform bindings, not only a structurally valid YAML');assert.equal(positive.bindings?.ready,true);assert(positive.bindings.checks.length>0);assert(positive.bindings.checks.every(check=>check.status==='VALID'));assert(/^sha256:[a-f0-9]{64}$/.test(positive.validationDigest));assert(Date.parse(positive.bindings.expiresAt)>Date.now());
+   assert.deepEqual(positive.compilation.effective.base,base.pin);
+   for(const field of chosen)assert.equal(positive.compilation.effective.fieldSources[field.path],field.policy==='LOCKED'?'base':'project');
+   for(const vector of vectors){
+    const before=await run.read('lifecycle.definition.inspect'),oldDraft=before.draft?await run.source(revisionId(before.draft)):null;assert.deepEqual(before.active,initial.active);
+    const preview=(await run.configurationEntry(entry,'lifecycle.definition.validate',{yaml:vector.yaml})).result;
+    assert.equal(preview.compilation.valid,false);assert.equal(preview.ready,false);assert.equal(preview.validationDigest,null);
+    const matches=i=>i.code===vector.code&&i.path===vector.path&&(!vector.message||i.message===vector.message);
+    const rejection=preview.compilation.issues.find(matches);assert(rejection?.rule&&rejection?.remedy,'Exact classification diagnostic required');
+    const requestId=run.requestId(c.caseInstanceId,provider+'-'+entry+'-'+vector.id);
+    const blocked=await run.configurationEntry(entry,'lifecycle.definition.save-and-activate',{yaml:vector.yaml,validationDigest:null},{requestId,expectedRevision:before.revision});
+    assert.equal(blocked.result.result.status,'BLOCKED');assert(blocked.result.result.issues.some(i=>matches(i)&&i.rule&&i.remedy));
+    const after=await run.read('lifecycle.definition.inspect');assert.deepEqual(after.active,initial.active);assert.equal(await run.source(revisionId(after.draft)),vector.yaml);assert.equal(await run.source(revisionId(initial.active)),activeSource);if(before.draft)assert.equal(await run.source(revisionId(before.draft)),oldDraft);
+    // Repair and revalidate through the same entry, without activating either
+    // provider or replacing the previously active lifecycle.
+    const recovered=(await run.configurationEntry(entry,'lifecycle.definition.validate',{yaml:legal})).result;assert.equal(recovered.ready,true);assert.equal(recovered.bindings?.ready,true);
+    reports.push({provider,entry,vector:vector.id,path:vector.path,expectedCode:vector.code,originalRequestId:requestId,actualStatus:blocked.result.result.status,recoveryValidationDigest:recovered.validationDigest});
+   }
+  }
+  assert.equal(sha(fs.readFileSync(pin.yamlRef)),pin.yamlSha256,'Selected original YAML cannot drift');
+ }
+ assert.deepEqual(await run.read('lifecycle.base.inspect'),baseBefore);assert.deepEqual((await run.read('lifecycle.definition.inspect')).active,initial.active);
+ run.artifact('field-classification-observations.json',{base:base.pin,candidate:run.candidate,reports,positiveReadiness:'ACTUAL_INSTALLED_CURRENT_BINDING_VALIDATION',sourceCompilerSubstitution:false,providerDispatch:false});
+ return{entries:['http-api','http-mcp','cli'],providers:['github','gitlab'],policies,reports,otherProviderFieldsNotRequired:true,invalidActivationBlocked:true,originalBaseAndActiveUnchanged:true,actualCurrentBindingValidation:true,externalExecutionRequested:false};
+}
+
 test('E03 fixed candidate service admission cases',async()=>{
- let run,browser,expert,fields,initial,activeSource,eventCursor;const variants=new Map();
+ let run,browser,expert,fields,base,initial,activeSource,eventCursor;const variants=new Map();
  async function collectCase(c){
+   if(c.caseInstanceId==='E03.EX02'){
+    const result=await fieldClassification(run,c,fields,base,initial,activeSource),events=[];
+    for(;;){const page=await run.read('runtime.events.read',{cursor:eventCursor});eventCursor=page.cursor;events.push(...page.events);if(page.events.length<50)break;}
+    assert.equal(events.length,result.reports.length);assert(events.every(e=>e.type==='definition-activation-blocked'),'EX02 must not activate or dispatch execution');return result;
+   }
    if(c.caseInstanceId==='E03.EX12')return extensionEntries(run,c,expert);
    assert(['REAL_SERVICE_PARAMETER','ENTRY_ADMISSION'].includes(c.kind),'This frozen journey still requires its actual collector; it may not be skipped or replaced by a field test');
    if(c.parameters.entry==='expert'){
@@ -170,12 +232,12 @@ test('E03 fixed candidate service admission cases',async()=>{
    if(before.draft)assert.equal(await run.source(before.draft.revisionId??before.draft.id),oldDraft);
    return{entry,field:spec.path,fault,specificFieldRuleAndRemedy:true,invalidDraftRetained:true,activationBlocked:true,existingActiveAndHistoryUnchanged:true,externalExecutionRequested:false,inputKind:'SYNTHETIC_NEGATIVE_CONFIGURATION',service:'ACTUAL_INSTALLED_HTTP'};
  }
- run=await openScenario('E03',{phase:'PRE_RELEASE',register:catalog=>new Map(catalog.filter(c=>c.caseInstanceId==='E03.EX12'||['REAL_SERVICE_PARAMETER','ENTRY_ADMISSION'].includes(c.kind)).map(c=>[c.caseInstanceId,()=>collectCase(c)]))});
+ run=await openScenario('E03',{phase:'PRE_RELEASE',register:catalog=>new Map(catalog.filter(c=>['E03.EX02','E03.EX12'].includes(c.caseInstanceId)||['REAL_SERVICE_PARAMETER','ENTRY_ADMISSION'].includes(c.kind)).map(c=>[c.caseInstanceId,()=>collectCase(c)]))});
  run.artifact('collector-callable-preflight.json',run.callablePreflight);
 
  try{
   fields=JSON.parse(fs.readFileSync(path.join(repository,'governance/lifecycle-contract-v090.json'))).fields;
-  const base=await run.read('lifecycle.base.inspect');assert.deepEqual(base.fields,fields);
+  base=await run.read('lifecycle.base.inspect');assert.deepEqual(base.fields,fields);
   initial=await run.read('lifecycle.definition.inspect');assert(initial.active,'Use a real previously activated isolated baseline; do not seed its database');
   activeSource=await run.source(initial.active.revisionId??initial.active.id);
   for(;;){const page=await run.read('runtime.events.read',eventCursor?{cursor:eventCursor}:{});eventCursor=page.cursor;if(page.events.length<50)break;}

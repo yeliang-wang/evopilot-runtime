@@ -221,3 +221,47 @@ test('actual support entry rejects selected missing E03 callback before installa
     f.cleanup();
   }
 });
+
+test('EX02 selection gates stop before installation access; valid file pins alone do not establish readiness', async t => {
+  const { openScenario, sha } = await import('../acceptance/v090/support.mjs');
+  const f = collectorFixture(), previous = process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;
+  const selectionRef = path.join(f.root, 'ex02-selection.json');
+  function selected() {
+    const fieldClassification = Object.fromEntries(['github', 'gitlab'].map(provider => {
+      const yamlRef = path.join(f.root, provider + '.yaml');
+      // Intentionally not a legal lifecycle. This test ends before YAML/service
+      // validation and cannot claim that provider/owner bindings are ready.
+      fs.writeFileSync(yamlRef, `provider: ${provider}\n`, { mode: 0o600 }); fs.chmodSync(yamlRef, 0o600);
+      return [provider, { yamlRef, yamlSha256: sha(fs.readFileSync(yamlRef)) }];
+    }));
+    return { schema: 'runtime-v090-acceptance-selection/v1', installedRoot: path.join(f.root, 'absent-installation'), expectedManifestDigest: 'a'.repeat(64), connectionRef: path.join(f.root, 'absent-connection'), workspaceId: 'test', projectId: 'test', runId: 'ex02-boundary-test', outputRoot: path.join(f.root, 'must-not-exist'), qualification: 'DEVELOPMENT', caseIds: ['E03.EX02'], fieldClassification };
+  }
+  const checks = [
+    { name: 'EX02 requires both selected inputs', change: s => { delete s.fieldClassification; }, error: /E03.EX02 requires selected fieldClassification inputs/ },
+    { name: 'provider keys are exact', change: s => { s.fieldClassification.gitLab = s.fieldClassification.gitlab; delete s.fieldClassification.gitlab; }, error: { code: 'ERR_ASSERTION' } },
+    { name: 'null provider cannot stand in for a pin', change: s => { s.fieldClassification.github = null; }, error: { code: 'ERR_ASSERTION' } },
+    { name: 'original byte drift invalidates the digest', change: s => fs.appendFileSync(s.fieldClassification.github.yamlRef, 'changed'), error: /Selected provider YAML digest mismatch/ },
+    { name: 'public input permissions are unsafe', change: s => fs.chmodSync(s.fieldClassification.github.yamlRef, 0o644), error: { code: 'UNSAFE_FILE' } },
+    { name: 'another scenario cannot supply EX02 inputs', scenario: 'E04', change: s => { s.caseIds = ['E04.EX02']; }, error: /fieldClassification is scoped to E03.EX02/ },
+    { name: 'another E03 case cannot supply EX02 inputs', change: s => { s.caseIds = ['E03.EX12']; }, error: /fieldClassification requires E03.EX02 selected/ }
+  ];
+  try {
+    process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION = selectionRef;
+    for (const check of checks) await t.test(check.name, async () => {
+      const selection = selected(); check.change(selection);
+      fs.writeFileSync(selectionRef, JSON.stringify(selection), { mode: 0o600 });
+      await assert.rejects(openScenario(check.scenario ?? 'E03'), check.error);
+      assert.equal(fs.existsSync(selection.outputRoot), false);
+      assert.equal(fs.existsSync(selection.installedRoot), false);
+    });
+    await t.test('protected exact pins reach only the original installation read boundary', async () => {
+      const selection = selected(); fs.writeFileSync(selectionRef, JSON.stringify(selection), { mode: 0o600 });
+      await assert.rejects(openScenario('E03'), error => error.code === 'ENOENT' && typeof error.path === 'string' && (error.path === selection.installedRoot || error.path.startsWith(selection.installedRoot + path.sep)));
+      assert.equal(fs.existsSync(selection.outputRoot), false);
+      assert.equal(fs.existsSync(selection.installedRoot), false);
+    });
+  } finally {
+    if (previous === undefined) delete process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION; else process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION = previous;
+    f.cleanup();
+  }
+});

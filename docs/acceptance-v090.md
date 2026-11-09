@@ -45,6 +45,23 @@ response reuses existing test authority; it never supplies a domain/release
 decision or changes daily Codex configuration. Unexpected shell use or an
 uncertain write fails the case and retains the original request for inspection.
 
+E03.EX02 requires `fieldClassification: {github: {yamlRef, yamlSha256},
+gitlab: {yamlRef, yamlSha256}}` in its protected selection. Both files must be
+distinct, canonical, private, owner-held regular files, nonempty and at most
+256 KiB, with exact SHA-256 pins. This selection is rejected for other scenarios
+or when EX02 is not selected. Each YAML must target the same selected project and
+current Base, contain its provider's required fields and omit the other provider's
+fields. The installed HTTP API, HTTP MCP and CLI must all return current, valid
+binding readiness before any negative control is credited. The collector checks
+unknown fields, duplicate keys, locked values, conditional required fields and
+constrained/additive values; invalid activation retains the draft and leaves the
+original active revision, history and publisher Base unchanged. Revalidation of
+the exact legal input uses the same entry. The original input pins are checked
+again at completion. Structural templates and local compiler tests cannot supply
+positive provider or owner readiness. This case validates configuration; it does
+not dispatch CI or activate a replacement lifecycle. Its implementation is not
+evidence that the installed-service case has passed.
+
 Other E03 journeys and entry cases remain required. Selecting one without its
 implementation fails; it is not skipped or represented by a field test. A
 bounded subset report retains the complete 448-instance E03 denominator and
