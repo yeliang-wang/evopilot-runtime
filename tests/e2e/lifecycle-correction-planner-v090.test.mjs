@@ -359,3 +359,76 @@ test('E05 live parent campaign defers native EX11 fixture validation to its exac
   assert.equal(fs.existsSync(selection.outputRoot),false);
  }finally{if(prior===undefined)delete process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;else process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION=prior;f.cleanup();}
 });
+
+// Guard regressions only: these synthetic inputs never establish native journeys.
+test('E05 journey preserves original Host stdout and rejects unrecognized output',async()=>{
+ const {parseOriginalCodingHostStdout:parse}=await import('../acceptance/v090/execution.mjs');
+ const line='{"phase":"propose"}\n',notice='(node:1234) ExperimentalWarning: SQLite is an experimental feature and might change at any time\n(Use `node --trace-warnings ...` to show where the warning was created)\n';
+ assert.deepEqual(parse(line,'propose').value,{phase:'propose'});
+ for(const stdout of [notice+line,line+notice]){const proof=parse(stdout,'propose');assert.equal(proof.interpretation.originalToolOutputRetained,true);assert.equal(proof.interpretation.rawStdoutBytes,Buffer.byteLength(stdout));assert.equal(proof.interpretation.unknownOutputIgnored,false);assert.equal(proof.interpretation.notice.pid,1234);}
+ for(const [stdout,phase]of [[notice+line,'submit'],[notice+notice+line,'propose'],['unrecognized log\n'+line,'propose'],[line+'{}\n','propose'],['{"ph'+notice+'ase":"propose"}\n','propose']])assert.throws(()=>parse(stdout,phase));
+});
+test('E05 journey binds selected Host identity to actual original session metadata',async()=>{
+ const {assertOriginalCodingHostIdentity:check}=await import('../acceptance/v090/execution.mjs'),{sha}=await import('../acceptance/v090/support.mjs');
+ const header=Buffer.from(JSON.stringify({type:'session_meta',payload:{id:'session-a',session_id:'session-a',originator:'Codex Desktop',source:'vscode',cli_version:'pinned',model_provider:'original-provider'}})+'\n'),selected={selection:{sessionId:'session-a'},metadata:{sessionId:'session-a',hostVersion:'pinned',originator:'Codex Desktop',source:'vscode',provider:'original-provider'},startOffset:header.length,metaBytes:header.length,metaSha256:sha(header)};
+ check(selected,header);
+ for(const change of [s=>s.metadata.provider='other-provider',s=>s.metadata.hostVersion='other-version',s=>s.selection.sessionId='other-session',s=>s.startOffset=-1,s=>s.metaSha256='0'.repeat(64)]){const forged=structuredClone(selected);change(forged);assert.throws(()=>check(forged,header));}
+});
+test('E05 journey ignores only monotonic current project revision in historical readback',async()=>{
+ const {assertHistoricalInspection:check}=await import('../acceptance/v090/execution.mjs'),original={projectRevision:3,request:{id:'original',inputDigest:'retained'},progress:{phase:'COMPLETE',observation:{checks:[{id:'required',status:'PASS'}]}},workerError:null,automaticRedispatch:false};
+ check(original,{...structuredClone(original),projectRevision:4});
+ for(const change of [v=>v.projectRevision=2,v=>delete v.projectRevision,v=>v.request.id='replacement',v=>v.progress.observation.checks=[],v=>v.workerError='hidden',v=>v.automaticRedispatch=true,v=>v.extraHistoricalField='invented']){const current=structuredClone(original);change(current);assert.throws(()=>check(original,current));}
+});
+test('E05 journey candidate comparison requires real identity changes and all old checks',async()=>{
+ const {candidateEvolution}=await import('../acceptance/v090/execution.mjs');
+ const before={id:'before',candidateDigest:'old',candidate:{sourceDigest:'source-a',buildDigest:'build-a',artifacts:[{name:'archive',digest:'a',bytes:1}]},definition:{nodes:[{id:'verification',checks:['required']}]},stages:{candidate:{requestId:'candidate-a'},verification:{requestId:'verification-a',inputDigest:'input-a'}}};
+ const after={...structuredClone(before),id:'after',candidateDigest:'new',stages:{candidate:{requestId:'candidate-b'},verification:{requestId:'verification-b',inputDigest:'input-b'}}};after.candidate.sourceDigest='source-b';
+ assert.equal(candidateEvolution(before,after).changed.source,true);
+ for(const change of [v=>v.candidate=structuredClone(before.candidate),v=>v.definition.nodes[0].checks=[],v=>v.stages.verification.requestId='verification-a',v=>v.stages.verification.inputDigest='input-a',v=>v.candidateDigest='old']){const invalid=structuredClone(after);change(invalid);assert.throws(()=>candidateEvolution(before,invalid));}
+});
+test('E05 journey selects its exact protected before/after fixture and provider',async()=>{
+ const {lifecycleReadbackPlan}=await import('../acceptance/v090/execution.mjs'),{sha}=await import('../acceptance/v090/support.mjs'),f=collectorFixture();
+ try{
+  const pin=(name,value)=>{const ref=path.join(f.root,name),bytes=Buffer.from(JSON.stringify(value));fs.writeFileSync(ref,bytes,{mode:0o600});return{ref,sha256:sha(bytes)};},a=path.join(f.root,'before'),b=path.join(f.root,'after');fs.mkdirSync(a,{mode:0o700});fs.mkdirSync(b,{mode:0o700});
+  const record=(id,exchangeRoot)=>({instanceId:id,expectedVersion:'0.9.0-preview.1',preparation:pin(id+'-preparation.json',{}),ownerFixture:pin(id+'-owner.json',{}),codingSourceSelection:{kind:'ORIGINAL_RECORD',...pin(id+'-host.json',{})},exchangeRoot}),fixture={schema:'runtime-v090-lifecycle-variants-fixture/v1',candidateDigest:'sha256:'+'a'.repeat(64),workspaceId:'test',projectId:'test',provider:'github',syntheticAssets:true,syntheticDecisions:true,casePlans:{'E05.journey':{before:record('before',a),after:record('after',b)}}};
+  let index=0;const run=value=>({candidateDigest:fixture.candidateDigest,selection:{workspaceId:'test',projectId:'test',lifecycleVariants:pin('fixture-'+(++index)+'.json',value)},all:[{caseInstanceId:'E05.journey'}],artifact(){}}),c={caseInstanceId:'E05.journey'};
+  assert.deepEqual(lifecycleReadbackPlan(run(fixture),c,'github'),fixture.casePlans['E05.journey']);
+  for(const change of [v=>v.provider='gitlab',v=>v.casePlans['E05.journey'].after.instanceId='before',v=>v.casePlans['E05.journey'].after.exchangeRoot=a,v=>v.casePlans={'E01.variant.02':v.casePlans['E05.journey']},v=>v.casePlans['E05.journey'].after.claimedPass=true]){const invalid=structuredClone(fixture);change(invalid);assert.throws(()=>lifecycleReadbackPlan(run(invalid),c,'github'));}
+ }finally{f.cleanup();}
+});
+test('E05 journey requires original lifecycle evidence before installation reads',async()=>{
+ const {openScenario,sha}=await import('../acceptance/v090/support.mjs'),f=collectorFixture(),prior=process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;
+ try{
+  const selection={schema:'runtime-v090-acceptance-selection/v1',installedRoot:path.join(f.root,'absent-installation'),expectedManifestDigest:'a'.repeat(64),connectionRef:path.join(f.root,'absent-connection'),workspaceId:'test',projectId:'test',runId:'e05-journey-source-guard',outputRoot:path.join(f.root,'must-not-exist'),qualification:'DEVELOPMENT',caseIds:['E05.journey']},filename=path.join(f.root,'selection.json');
+  fs.writeFileSync(filename,JSON.stringify(selection),{mode:0o600});process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION=filename;
+  await assert.rejects(openScenario('E05'),/E05\.journey requires exact original before\/after lifecycle records/);
+  const ref=path.join(f.root,'original-records.json'),bytes=Buffer.from('{}\n');fs.writeFileSync(ref,bytes,{mode:0o600});selection.lifecycleVariants={ref,sha256:sha(bytes)};selection.caseIds=['E05.variant.01'];fs.writeFileSync(filename,JSON.stringify(selection),{mode:0o600});
+  await assert.rejects(openScenario('E05'),/E05 lifecycle readback belongs only to its fixed journey/);assert.equal(fs.existsSync(selection.outputRoot),false);
+ }finally{if(prior===undefined)delete process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;else process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION=prior;f.cleanup();}
+});
+
+test('E05 RC missing-artifact case requires an actual candidate request after passed prerequisites',async()=>{
+ const {requireMissingRcLifecycle:check}=await import('../acceptance/v090/execution.mjs'),h='sha256:'+'a'.repeat(64),stages={};
+ for(const id of ['scope','plan','implementation','candidate','verification','release-decision','publication','closure'])stages[id]=['scope','plan','implementation','candidate'].includes(id)?{status:id==='candidate'?'UNKNOWN':'PASSED',attempts:1,requestId:'original-'+id,inputDigest:h,outcomeDigest:h}:{status:'PENDING',attempts:0,requestId:null};
+ const instance={id:'rc-missing',stages,candidate:null,candidateDigest:null},plan={instanceId:instance.id,expectedVersion:'0.9.0-rc.1'};assert.deepEqual(check(instance,plan),['scope','plan','implementation','candidate']);
+ for(const change of [v=>v.stages.implementation.status='PENDING',v=>v.stages.candidate.status='PENDING',v=>v.stages.candidate.requestId=null,v=>v.stages.candidate.attempts=0,v=>v.stages.candidate.outcomeDigest=null,v=>v.stages.verification.attempts=1,v=>v.candidate={version:plan.expectedVersion},v=>v.candidateDigest=h]){const invalid=structuredClone(instance);change(invalid);assert.throws(()=>check(invalid,plan));}
+ assert.throws(()=>check(instance,{...plan,expectedVersion:'0.9.0-preview.1'}));
+});
+test('E05 RC archive guard distinguishes missing candidate payload from unrelated or forged failures',async()=>{
+ const {assertMissingRcPayload:check}=await import('../acceptance/v090/execution.mjs'),{sha}=await import('../acceptance/v090/support.mjs'),{candidateDigest}=await import('../../dist/lifecycle/instance.js'),artifactApi=await import('../../dist/adapters/artifacts.js');
+ const request={requestId:'stage-original',inputDigest:'sha256:'+'a'.repeat(64),bindingDigest:'sha256:'+'b'.repeat(64),commit:'c'.repeat(40),workflowDigest:'sha256:'+'d'.repeat(64),stageId:'candidate',candidateDigest:null},archive={provider:'github',repositoryId:'123',runId:'456'},payload=Buffer.from('built payload'),evidence=Buffer.from('required-check evidence'),version='0.9.0-rc.1';
+ const result={schema:'runtime-ci/v1',requestId:request.requestId,inputDigest:request.inputDigest,provider:archive.provider,repositoryId:archive.repositoryId,runId:archive.runId,sourceCommit:request.commit,workflowDigest:request.workflowDigest,stageId:'candidate',candidateDigest:null,checks:[{id:'required',status:'PASS',evidence:[{path:'evidence/check.txt',digest:'sha256:'+sha(evidence),bytes:evidence.length}]}],candidate:{schema:'runtime-candidate/v1',version,profile:'candidate-verification',sourceDigest:artifactApi.ciSourceDigest(request,archive.provider,archive.repositoryId),buildDigest:artifactApi.ciBuildDigest(request,archive.runId),artifacts:[{name:'runtime.tgz',digest:'sha256:'+sha(payload),bytes:payload.length}]}};
+ const files=new Map([['evidence/check.txt',evidence]]),verify=(r,m=files)=>check(r,m,version,request,archive,['required'],candidateDigest,artifactApi);
+ assert.deepEqual(verify(result),['artifacts/runtime.tgz']);
+ for(const change of [v=>v.candidate.version='0.9.0-preview.1',v=>v.requestId='another-request',v=>v.runId='another-run',v=>v.candidate.sourceDigest='sha256:'+'f'.repeat(64),v=>v.candidate.buildDigest='sha256:'+'f'.repeat(64),v=>v.checks=[],v=>v.checks[0].status='UNKNOWN',v=>v.candidate.artifacts=[],v=>v.candidateDigest='sha256:'+'f'.repeat(64)]){const invalid=structuredClone(result);change(invalid);assert.throws(()=>verify(invalid));}
+ assert.throws(()=>verify(result,new Map()),/Missing prerequisite\/check evidence/);
+ assert.throws(()=>verify(result,new Map([...files,['artifacts/runtime.tgz',payload]])),/complete RC payload/);
+ assert.throws(()=>verify(result,new Map([...files,['artifacts/runtime.tgz',Buffer.from('corrupt payload')]])));
+});
+test('E05 RC missing-artifact callback rejects absent original evidence before installation access',async()=>{
+ const {openScenario}=await import('../acceptance/v090/support.mjs'),f=collectorFixture(),prior=process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;
+ try{
+  const selection={schema:'runtime-v090-acceptance-selection/v1',installedRoot:path.join(f.root,'absent-installation'),expectedManifestDigest:'a'.repeat(64),connectionRef:path.join(f.root,'absent-connection'),workspaceId:'test',projectId:'test',runId:'e05-rc-source-guard',outputRoot:path.join(f.root,'must-not-exist'),qualification:'DEVELOPMENT',caseIds:['E05.variant.02']},filename=path.join(f.root,'selection.json');fs.writeFileSync(filename,JSON.stringify(selection),{mode:0o600});process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION=filename;
+  await assert.rejects(openScenario('E05'),/E05\.variant\.02 requires exact original RC candidate missing-artifact records/);assert.equal(fs.existsSync(selection.outputRoot),false);
+ }finally{if(prior===undefined)delete process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;else process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION=prior;f.cleanup();}
+});

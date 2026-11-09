@@ -10,11 +10,9 @@ import {chromium,expect} from '@playwright/test';
 import {collectCaseCampaign,caseCampaignTestOptions,openScenario,sha} from './support.mjs';
 import {collectInstalledBaseUpgrade} from './maintenance.mjs';
 import {openBrowser} from './browser.mjs';
-import {ownerObligations} from './execution.mjs';
+import {ownerObligations,collectE05Journey,collectE05MissingCandidate} from './execution.mjs';
 
 const missing={
- 'E05.journey':'Requires actual changed-candidate rebuild/revalidation and rejection of old evidence, in addition to immutable definition pins.',
- 'E05.variant.02':'Requires an actual RC-named candidate action with missing artifact evidence; predecessor-only rejection is insufficient.',
  'E05.CV06':'Requires actual published-owner REUSE and DELIVER decisions, expiration/scope/known-defect variants and partial feedback recovery.',
 };
 
@@ -23,7 +21,7 @@ test('E05 installed revision isolation and actual candidate evidence',caseCampai
  try{
   if(run.selection.caseCampaign){await collectCaseCampaign(run,'E05');return;}
   const cfg=run.selection.revisionEvolution;let baseline;
-  if(run.cases.some(c=>!['E05.EX10','E05.EX11'].includes(c.caseInstanceId))){
+  if(run.cases.some(c=>!['E05.journey','E05.variant.02','E05.EX10','E05.EX11'].includes(c.caseInstanceId))){
    assert(cfg&&Object.keys(cfg).sort().join(',')==='allowSyntheticDecisions,instanceId');
    assert.equal(cfg.allowSyntheticDecisions,true,'Native synthetic test decisions must be explicitly selected, never inferred as human authority');
    assert(/^[a-z0-9][a-z0-9-]{0,63}$/.test(cfg.instanceId));
@@ -145,6 +143,8 @@ test('E05 installed revision isolation and actual candidate evidence',caseCampai
    return{addedAndRemovedDraftChecks:true,layoutAndCommentsPreserved:true,semanticAndPresentationDigestsSeparate:true,oneConcurrentWriterRejected:true,oldInstanceAndActiveUnchanged:true,newCheckNotActivated:true};
   }
   for(const c of run.cases)await run.collect(c,async()=>{
+   if(c.caseInstanceId==='E05.journey')return collectE05Journey(run,c);
+   if(c.caseInstanceId==='E05.variant.02')return collectE05MissingCandidate(run,c);
    if(c.caseInstanceId==='E05.EX11'){browser??=await chromium.launch({headless:true});return ownerObligations(run,c,browser);}
    if(c.caseInstanceId==='E05.EX10')return collectInstalledBaseUpgrade(run,c,{chromium,expect,openBrowser});
    if(missing[c.caseInstanceId])assert.fail('UNIMPLEMENTED_FIXED_CASE: '+missing[c.caseInstanceId]);

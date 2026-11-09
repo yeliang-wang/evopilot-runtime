@@ -88,7 +88,7 @@ export async function openScenario(scenario,callableRegistration){
  if(selection.packageCompatibility)assert.equal(scenario,'E08','Package compatibility inputs are scoped to E08');
  if(selection.expertConfiguration)assert(['E01','E02','E10'].includes(scenario),'Expert configuration inputs are scoped to E01/E02/E10');
  if(selection.lifecycleExecution)assert(['E01','E02'].includes(scenario),'Execution collection inputs are scoped to E01/E02');
- if(selection.lifecycleVariants){assert(['E01','E02'].includes(scenario));keys(selection.lifecycleVariants,['ref','sha256']);assert(/^[a-f0-9]{64}$/.test(selection.lifecycleVariants.sha256));assert.equal(sha(readRegular(selection.lifecycleVariants.ref,1048576,true)),selection.lifecycleVariants.sha256);}
+ if(selection.lifecycleVariants){assert(['E01','E02','E05'].includes(scenario));keys(selection.lifecycleVariants,['ref','sha256']);assert(/^[a-f0-9]{64}$/.test(selection.lifecycleVariants.sha256));assert.equal(sha(readRegular(selection.lifecycleVariants.ref,1048576,true)),selection.lifecycleVariants.sha256);}
  assert.equal(selection.schema,'runtime-v090-acceptance-selection/v1');assert(['DEVELOPMENT','FINAL_CANDIDATE'].includes(selection.qualification));
  assert(/^[a-z][a-z0-9-]{0,47}$/.test(selection.runId));assert(/^[a-f0-9]{64}$/.test(selection.expectedManifestDigest));
  const target=json(path.join(repository,'governance/target-v090.json'));
@@ -99,6 +99,8 @@ export async function openScenario(scenario,callableRegistration){
  assert(Array.isArray(selectedIds)&&selectedIds.length&&new Set(selectedIds).size===selectedIds.length);
  assert(selectedIds.every(id=>all.some(c=>c.caseInstanceId===id)),'The selection may not create or replace a frozen case');
  const cases=all.filter(c=>selectedIds.includes(c.caseInstanceId));
+ if(scenario==='E05'&&!selection.caseCampaign)for(const caseId of ['E05.journey','E05.variant.02'])if(selectedIds.includes(caseId))assert(selection.lifecycleVariants,caseId+' requires exact original '+(caseId==='E05.journey'?'before/after lifecycle records':'RC candidate missing-artifact records'));
+ if(scenario==='E05'&&selection.lifecycleVariants)assert(selectedIds.some(id=>['E05.journey','E05.variant.02'].includes(id)),'E05 lifecycle readback belongs only to its fixed journey or RC missing-artifact case');
  if(['E04','E05'].includes(scenario)&&selectedIds.includes(scenario+'.EX11')&&!selection.caseCampaign){
   const caseId=scenario+'.EX11';
   assert(selection.extensionExecution,caseId+' requires protected actual owner obligations fixture');keys(selection.extensionExecution,['ref','sha256']);assert(/^[a-f0-9]{64}$/.test(selection.extensionExecution.sha256));
@@ -198,7 +200,7 @@ export async function openScenario(scenario,callableRegistration){
   const envelope={operation,projectId:chosen.projectId,input,...meta},id=String(++sequence).padStart(5,'0'),ref=id+'-request.json';
   write(ref,{caseInstanceId:currentCase,envelope,principalId:chosen.principalId});
   let response,raw;
-  try{response=await fetch(chosen.origin+'/api/v1/request',{method:'POST',headers:{...hostHeaders(chosen),'content-type':'application/json'},body:JSON.stringify(envelope),signal:AbortSignal.timeout(30000),redirect:'error'});raw=await bounded(response,['E01','E02'].includes(scenario)||(['E04.EX11','E05.EX11'].includes(currentCase)&&operation==='lifecycle.extension.evidence.read')?1048576:262144);}
+  try{response=await fetch(chosen.origin+'/api/v1/request',{method:'POST',headers:{...hostHeaders(chosen),'content-type':'application/json'},body:JSON.stringify(envelope),signal:AbortSignal.timeout(30000),redirect:'error'});raw=await bounded(response,['E01','E02'].includes(scenario)||['E05.journey','E05.variant.02'].includes(currentCase)||(['E04.EX11','E05.EX11'].includes(currentCase)&&operation==='lifecycle.extension.evidence.read')?1048576:262144);}
   catch(error){uncertain=!!meta.requestId;write(id+'-transport-failure.json',{caseInstanceId:currentCase,operation,requestId:meta.requestId??null,outcome:uncertain?'UNKNOWN':'READ_FAILED',automaticRetry:false});throw error;}
   const body=JSON.parse(raw),responseRef=id+'-response.json';write(responseRef,{caseInstanceId:currentCase,status:response.status,rawBody:raw,body});evidence.push({caseInstanceId:currentCase,request:ref,requestDigest:sha(fs.readFileSync(path.join(selection.outputRoot,ref))),response:responseRef,responseDigest:sha(raw),fileDigest:sha(fs.readFileSync(path.join(selection.outputRoot,responseRef)))});
   return{status:response.status,body};

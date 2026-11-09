@@ -1,4 +1,5 @@
 import { CORRECTION_READS, CORRECTION_WRITES } from '../lifecycle/correction.js';
+import {QUALIFICATION_READS,QUALIFICATION_WRITES} from '../lifecycle/evidence-qualification.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -16,8 +17,8 @@ import {LEGACY_READ,LEGACY_WRITE} from '../compat/catalog.js';
 import {USAGE_READS,USAGE_WRITES} from '../usage/service.js';
 
 export const HTTP_PROTOCOLS = ['2025-06-18','2025-11-25'] as const;
-export const READ_OPERATIONS = ['runtime.status','runtime.projects.list','runtime.events.read','runtime.receipt.read',LEGACY_READ,...DEFINITION_READS,...AUTHORITY_READS,...EXECUTION_READS,...PREPARATION_READS,...AGENT_READS,...IMPLEMENTATION_REVIEW_READS,...EXTENSION_REVIEW_READS,...USAGE_READS,...CORRECTION_READS] as const;
-export const WRITE_OPERATIONS=[LEGACY_WRITE,...DEFINITION_WRITES,...AUTHORITY_WRITES,...EXECUTION_WRITES,...PREPARATION_WRITES,...AGENT_WRITES,...IMPLEMENTATION_REVIEW_WRITES,...EXTENSION_REVIEW_WRITES,...USAGE_WRITES,...CORRECTION_WRITES] as const;
+export const READ_OPERATIONS = ['runtime.status','runtime.projects.list','runtime.events.read','runtime.receipt.read',LEGACY_READ,...DEFINITION_READS,...AUTHORITY_READS,...EXECUTION_READS,...PREPARATION_READS,...AGENT_READS,...IMPLEMENTATION_REVIEW_READS,...EXTENSION_REVIEW_READS,...USAGE_READS,...CORRECTION_READS,...QUALIFICATION_READS] as const;
+export const WRITE_OPERATIONS=[LEGACY_WRITE,...DEFINITION_WRITES,...AUTHORITY_WRITES,...EXECUTION_WRITES,...PREPARATION_WRITES,...AGENT_WRITES,...IMPLEMENTATION_REVIEW_WRITES,...EXTENSION_REVIEW_WRITES,...USAGE_WRITES,...CORRECTION_WRITES,...QUALIFICATION_WRITES] as const;
 /** The same scoped dispatcher serves HTTP and MCP; the transport never opens state itself. */
 export function runtimeToolDefinitions():Tool[]{return [{
     name: 'runtime_read', description: 'Read authenticated project lifecycle service state. This operation cannot activate definitions, execute work, or authorize a release.',

@@ -77,6 +77,17 @@ export interface VerifiedCiArtifact {
  * reader is called only after registered-provider capture and archive retention.
  * Its integrity findings do not authenticate arbitrary caller-supplied bytes. */
 export const CI_ACCEPTANCE_REPORT_PATH='evidence/acceptance-report.json';
+/** Fixed actual collector protocol. This parser establishes structure only;
+ * registered provider provenance and published collector approval are checked
+ * by the protected stage reader before any EXECUTED capture is retained. */
+export function readCurrentCaseReceipt(bytes:Buffer,expected:{caseId:string;sourceCommit:string;candidateDigest:string;requestId:string;inputDigest:string}){
+  if(bytes.length<1||bytes.length>131072)reject('CI_CASE_RECEIPT_INVALID','Bounded original case receipt required',409);
+  let r:Record<string,unknown>;try{r=record(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)));}catch{return reject('CI_CASE_RECEIPT_INVALID','Original case receipt must be UTF-8 JSON',409);}
+  exact(r,['schema','caseId','sourceCommit','candidateDigest','requestId','inputDigest','startedAt','completedAt','outcome','assertions']);
+  if(r.schema!=='runtime-case-execution-receipt/v1'||Object.entries(expected).some(([key,value])=>r[key]!==value)||r.outcome!=='PASS'||!Object.keys(record(r.assertions)).length)reject('CI_CASE_RECEIPT_INVALID','Original executed case and candidate differ',409);
+  const start=Date.parse(string(r.startedAt,64)),end=Date.parse(string(r.completedAt,64));if(!Number.isFinite(start)||!Number.isFinite(end)||end<start||end>Date.now())reject('CI_CASE_RECEIPT_INVALID','Actual execution times required',409);
+  return{startedAt:String(r.startedAt),completedAt:String(r.completedAt),rawReceiptDigest:byteDigest(bytes)};
+}
 export interface CiAcceptanceReportCapture {
   status:'ABSENT'|'INVALID'|'OBSERVED'|'UNAVAILABLE'; reasons:string[];
   report:CiEvidenceFile|null;

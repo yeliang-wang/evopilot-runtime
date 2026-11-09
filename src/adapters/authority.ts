@@ -10,6 +10,65 @@ import { validateResourceDefinition } from './bindings.js';
 import { isPreparationRef, readPreparationPacket, type PreparationVerifier } from '../lifecycle/preparation.js';
 import type { StageRequest, StageProgress } from '../lifecycle/execution.js';
 import { readReleaseMaterial, releasePredecessors, type ReleaseMaterial } from './release-stages.js';
+import type {QualificationSelection} from '../lifecycle/correction-contract.js';
+
+export interface QualificationAssessmentPlan {
+  schema:'runtime-qualification-assessment-plan/v2';ref:string;digest:string;projectId:string;
+  selection:QualificationSelection;protectedPlanDigest:string;registrationDigest:string;
+  requestId:string;deadlineAt:string;principalIds:string[];initiatedBy:{id:string;revision:number};
+}
+export const QUALIFICATION_AUTHORITY_READS=['lifecycle.qualification.assessment.preview','lifecycle.qualification.assessment.inspect'] as const;
+export const QUALIFICATION_AUTHORITY_WRITES=['lifecycle.qualification.assessment.authorize','lifecycle.qualification.assessment.revoke'] as const;
+/** Independent exact assessment permission. It neither resets a stage nor
+ * amends an execution/release decision. Plan digests exclude their later grant,
+ * so the immutable action can bind both without a circular digest. */
+export function createQualificationAssessmentAuthority(store:RuntimeStore,principals:PrincipalLookup,plans:(projectId:string,ref:string,actor:Principal)=>QualificationAssessmentPlan){
+  const objectKind='lifecycle-evidence-qualification';
+  type Grant={schema:'runtime-qualification-assessment-grant/v2';ref:string;digest:string;plan:QualificationAssessmentPlan;reviewDigest:string;evidenceRef:string;principalId:string;principalRevision:number;at:string};
+  const currentActor=(actor:Principal,projectId:string,permission:'read'|'decision.record'|'execution.request')=>{const fresh=principals(actor.id);if(!fresh||fresh.revision!==actor.revision)reject('QUALIFICATION_PRINCIPAL_CHANGED','Current exact principal required',403);authorize(fresh,projectId,permission);return fresh;};
+  function preview(actor:Principal,projectId:string,planRef:string){
+    const fresh=currentActor(actor,projectId,'read'),plan=plans(projectId,planRef,fresh);
+    const body={schema:'runtime-qualification-assessment-review/v2',workspaceId:store.workspaceId,projectId,plan,operation:'native.package.validate',maximumDispatches:1,releaseAuthorized:false};
+    return{...body,reviewDigest:evidenceValueDigest(body)};
+  }
+  function resolve(projectId:string,planRef:string,actor:Principal){
+    const fresh=currentActor(actor,projectId,'read'),review=preview(fresh,projectId,planRef),pointer=store.object(projectId,objectKind,'assessment-authority:'+planRef) as {authorityRef:string}|null;
+    const grant=pointer&&store.object(projectId,objectKind,pointer.authorityRef) as Grant|null;
+    if(!grant||grant.schema!=='runtime-qualification-assessment-grant/v2'||grant.ref!==pointer?.authorityRef||store.object(projectId,objectKind,'revoked:'+grant.ref))reject('QUALIFICATION_AUTHORITY_REQUIRED','Current independent assessment grant required',403);
+    const {ref:unused,digest,...body}=grant;
+    if(valueDigest(body)!==digest||grant.ref!=='qualification-authority:'+digest||grant.reviewDigest!==review.reviewDigest||canonical(grant.plan)!==canonical(review.plan)||Date.parse(grant.plan.deadlineAt)<=Date.now())reject('QUALIFICATION_AUTHORITY_CHANGED','Original assessment plan or exact grant changed',409);
+    const deciding=principals(grant.principalId);if(!deciding||deciding.revision!==grant.principalRevision||!review.plan.principalIds.includes(deciding.id))reject('QUALIFICATION_AUTHORITY_CHANGED','Assessment grantor changed',403);authorize(deciding,projectId,'decision.record');
+    const initiator=principals(review.plan.initiatedBy.id);if(!initiator||initiator.revision!==review.plan.initiatedBy.revision)reject('QUALIFICATION_AUTHORITY_CHANGED','Original assessment initiator changed',403);authorize(initiator,projectId,'execution.request');
+    verifyDecisionEvidence(grant.evidenceRef,{owner:'runtime',operation:'lifecycle.qualification.assessment',workspaceId:store.workspaceId,scope:{visibility:'private',projectId},reviewDigest:grant.reviewDigest,decision:'APPROVE'});
+    return{requestId:grant.plan.requestId,authorityRef:grant.ref,authorityDigest:grant.digest,deadlineAt:grant.plan.deadlineAt};
+  }
+  function read(actor:Principal,projectId:string,operation:string,input:Record<string,unknown>){
+    exact(input,['planRef']);const planRef=string(input.planRef,512),review=preview(actor,projectId,planRef);
+    if(operation==='lifecycle.qualification.assessment.preview')return{...review,authorityGranted:false};
+    if(operation!=='lifecycle.qualification.assessment.inspect')reject('UNKNOWN_OPERATION','Unsupported assessment operation',404);
+    return{...resolve(projectId,planRef,actor),executionDispatched:false};
+  }
+  function write(actor:Principal,projectId:string,operation:string,input:Record<string,unknown>,requestId:string,expectedRevision:number,reauthorize:()=>Principal):Receipt{
+    if(!QUALIFICATION_AUTHORITY_WRITES.includes(operation as typeof QUALIFICATION_AUTHORITY_WRITES[number]))reject('UNKNOWN_OPERATION','Unsupported assessment authority operation',404);
+    exact(input,operation.endsWith('.authorize')?['planRef','reviewDigest','evidenceRef']:['planRef','reason']);const planRef=string(input.planRef,512),mutation={projectId,operation,input,requestId,expectedRevision,permission:'decision.record' as const};
+    return store.mutate(actor,mutation,()=>{
+      const fresh=currentActor(reauthorize(),projectId,'decision.record'),review=preview(fresh,projectId,planRef);
+      if(!review.plan.principalIds.includes(fresh.id))reject('DECISION_PRINCIPAL','Principal cannot decide this registered assessment policy',403);
+      const pointer=store.object(projectId,objectKind,'assessment-authority:'+planRef) as {authorityRef:string}|null;
+      if(operation.endsWith('.revoke')){
+        if(!pointer)reject('QUALIFICATION_AUTHORITY_REQUIRED','Original assessment authority not found',404);
+        const reason=string(input.reason,2048);if(containsInlineSecret(reason))reject('INLINE_SECRET','Use a nonsecret reason');
+        return{objects:[{kind:objectKind,id:'revoked:'+pointer.authorityRef,value:{authorityRef:pointer.authorityRef,reason,by:fresh.id,at:new Date().toISOString()}}],value:{authorityRef:pointer.authorityRef,revoked:true},event:{type:'qualification-authority-revoked',data:{authorityRef:pointer.authorityRef}}};
+      }
+      if(pointer)reject('QUALIFICATION_AUTHORITY_EXISTS','An original grant cannot be replaced or revived; prepare a new exact plan',409);
+      if(input.reviewDigest!==review.reviewDigest)reject('QUALIFICATION_REVIEW_CHANGED','Review this exact current assessment plan',409);
+      const evidenceRef=string(input.evidenceRef,8192);verifyDecisionEvidence(evidenceRef,{owner:'runtime',operation:'lifecycle.qualification.assessment',workspaceId:store.workspaceId,scope:{visibility:'private',projectId},reviewDigest:review.reviewDigest,decision:'APPROVE'});
+      const body={schema:'runtime-qualification-assessment-grant/v2' as const,plan:review.plan,reviewDigest:review.reviewDigest,evidenceRef,principalId:fresh.id,principalRevision:fresh.revision,at:new Date().toISOString()},digest=valueDigest(body),ref='qualification-authority:'+digest,grant={...body,ref,digest};
+      return{objects:[{kind:objectKind,id:ref,value:grant},{kind:objectKind,id:'assessment-authority:'+planRef,value:{authorityRef:ref}}],value:{authorityRef:ref,authorityDigest:digest,planRef,executionDispatched:false},event:{type:'qualification-authority-granted',data:{authorityRef:ref,planRef}}};
+    },reauthorize);
+  }
+  return{preview,resolve,read,write,currentActor};
+}
 
 export const AUTHORITY_READS=['lifecycle.authority.preview','lifecycle.authority.inspect'] as const;
 export const AUTHORITY_WRITES=['lifecycle.authority.record','lifecycle.authority.revoke'] as const;

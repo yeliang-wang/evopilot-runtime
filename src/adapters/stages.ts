@@ -14,7 +14,7 @@ import { nativeSha256, validateNativeReference, type NativeReference, type Nativ
 import { configuredPlatform, readIntegrationConfiguration, type IntegrationConfiguration, type PlatformRegistration } from './config.js';
 import { validateResourceDefinition, type BindingConnections } from './bindings.js';
 import { ciSourceRef, type PlatformArtifactArchive, type PlatformClient, type PlatformRunObservation, type PlatformRunRequest } from './platforms.js';
-import { MAX_ARCHIVE_BYTES, ciSourceDigest, readArtifactArchive, verifyCiArtifact, validateCandidateInput, inspectCiAcceptanceReport, unavailableCiAcceptanceReport, type CiAcceptanceReportCapture, type CandidateInput, type VerifiedCiArtifact } from './artifacts.js';
+import { MAX_ARCHIVE_BYTES, CI_ACCEPTANCE_REPORT_PATH, ciSourceDigest, readArtifactArchive, readCurrentCaseReceipt, verifyCiArtifact, validateCandidateInput, inspectCiAcceptanceReport, unavailableCiAcceptanceReport, type CiAcceptanceReportCapture, type CandidateInput, type VerifiedCiArtifact } from './artifacts.js';
 import { ownerRequestDigest, type Owner, type OwnerRequest, type PublishedOwnerAdapter } from './published-owners.js';
 import type {SourceTreeObservation} from './source-tree.js';
 import type {NativeSourceScope} from '../native-types.js';
@@ -112,6 +112,43 @@ export function readCiRepairEvidence(store:RuntimeStore,r:StageRequest){
     const receipt=record(raw),result=verifyNativeStageResult(receipt,comparison?'harness':kind,pin,a,p.toolchainLockDigest,effective);return{action:a,receipt,result};
   };
   return{plan:p,ci,harness:read('harness'),ontology:read('ontology'),comparison:read('comparison')};
+}
+
+export interface PublishedExecutionProducer {
+  caseId:string;phase:'PRE_RELEASE'|'POST_RELEASE';collectorPath:string;collectorDigest:string;
+  workflowDigest:string;catalogDigest:string;maxAgeSeconds:number;
+}
+/** Original store records and original ZIP bytes only; no caller observation
+ * or future completeness declaration is accepted at this boundary. */
+export function protectedCiExecutionState(store:RuntimeStore,projectId:string,captureRef:string,caseId:string){
+  const original=record(store.object(projectId,'ci-acceptance-capture',captureRef)),{digest,...captureBody}=original;
+  if(original.schema!=='runtime-ci-acceptance-capture/v1'||valueDigest(captureBody)!==digest||original.projectId!==projectId||original.workspaceId!==store.workspaceId)reject('QUALIFICATION_ORIGINAL_UNAVAILABLE','Original registered CI capture required',409);
+  const request=store.object(projectId,'stage-request',string(original.stageRequestId)) as StageRequest|null;
+  if(!request||request.digest!==original.stageRequestDigest||request.planDigest!==original.planDigest||request.pinsDigest!==original.pinsDigest)reject('QUALIFICATION_ORIGINAL_CHANGED','Original stage/capture binding changed',409);
+  const view=readCiRepairEvidence(store,request),progress=store.object(projectId,'stage-progress',request.id) as StageProgress|null;
+  const observed=progress?.observationRef?store.object(projectId,'stage-observation',progress.observationRef):null;
+  const run=store.object(projectId,'ci-stage-observation',request.id) as PlatformRunObservation|null;
+  if(!progress||!observed||valueDigest(observed)!==progress.observationRef||!same(record(observed).observation,progress.observation)||!run)reject('QUALIFICATION_ORIGINAL_CHANGED','Exact retained original observation required',409);
+  const report=original.report as CiAcceptanceReportCapture,entry=report.cases.find(c=>c.caseId===caseId);
+  if(!entry)reject('QUALIFICATION_ORIGINAL_UNAVAILABLE','Original report did not execute this case',409);
+  const history:unknown[]=[];let cursor='';
+  for(;;){const page=store.objectsPage(projectId,'stage-request',cursor,200);for(const row of page){const r=row.value as StageRequest;if(r.plan?.parameters&&record(r.plan.parameters).workflowDigest===view.plan.workflowDigest&&record(r.plan.parameters).candidateDigest===view.plan.candidateDigest)history.push({id:row.id,request:r,progress:store.object(projectId,'stage-progress',row.id)});if(history.length>4096)reject('QUALIFICATION_HISTORY_LIMIT','Bounded original stage history exceeded',409);}if(page.length<200)break;cursor=page.at(-1)!.id;}
+  const archive=view.ci?.archiveDigest;if(!archive)reject('QUALIFICATION_ORIGINAL_UNAVAILABLE','Original retained CI artifact required',409);
+  const path=join(store.root,'stage-ci-artifacts',hash(archive).slice(7)+'.zip');privateFile(path);if(realpathSync(path)!==path||lstatSync(path).size>MAX_ARCHIVE_BYTES)reject('CI_ARCHIVE_LIMIT','Original bounded archive required',409);const bytes=readFileSync(path);if(byteDigest(bytes)!==archive)reject('QUALIFICATION_ORIGINAL_CHANGED','Original archive bytes changed',409);
+  const facts={original,request,view,progress,observed,run,history,archiveDigest:archive};return{...facts,entry,bytes,stateDigest:valueDigest(facts),historyWatermark:valueDigest(history)};
+}
+export async function readProtectedCiExecution(store:RuntimeStore,projectId:string,captureRef:string,producer:PublishedExecutionProducer,signal:AbortSignal){
+  const state=protectedCiExecutionState(store,projectId,captureRef,producer.caseId),{request,view,progress,run}=state,report=state.original.report as CiAcceptanceReportCapture,origin=record(state.original.origin);
+  if(progress.phase!=='COMPLETE'||!progress.terminal||run.status!=='PASSED'||view.ci?.status!=='PASSED'||view.harness?.result?.status!=='PASS'||view.ontology?.result?.status!=='PASS'||report.status!=='OBSERVED'||report.producerBinding!=='MATCHED_ORIGINAL_JOB'||report.workflowSource!=='COMMITTED_BYTES_MATCHED'||report.collectorSource!=='COMMITTED_BYTES_MATCHED'||state.entry.observedOutcome!=='PASS'||!report.report||!view.ci.candidateDigest)reject('QUALIFICATION_EXECUTION_REQUIRED','Actual completed original provider and native evaluations required',409);
+  if(origin.ciRequestId!==view.ci.requestId||origin.inputDigest!==request.inputDigest||origin.runId!==run.runId||view.ci.runId!==run.runId||origin.resultDigest!==view.ci.resultDigest||producer.workflowDigest!==view.plan.workflowDigest)reject('QUALIFICATION_ORIGINAL_CHANGED','Original run/candidate/workflow differs',409);
+  const files=await readArtifactArchive(state.bytes,signal),reportBytes=files.get(CI_ACCEPTANCE_REPORT_PATH),raw=files.get(state.entry.rawReceipt.path);
+  if(!reportBytes||byteDigest(reportBytes)!==report.report.digest||!raw||raw.length!==state.entry.rawReceipt.bytes||byteDigest(raw)!==state.entry.rawReceipt.digest)reject('QUALIFICATION_ORIGINAL_CHANGED','Exact original case/report bytes required',409);
+  const parsed=record(JSON.parse(reportBytes.toString('utf8'))),collector=record(parsed.collector),collectorFile=record(collector.file),collectorBytes=files.get(string(collectorFile.path));
+  if(collector.sourcePath!==producer.collectorPath||!collectorBytes||byteDigest(collectorBytes)!==producer.collectorDigest||collectorFile.digest!==producer.collectorDigest)reject('QUALIFICATION_COLLECTOR_UNAPPROVED','Actual collector differs from the published producer contract',409);
+  const receipt=readCurrentCaseReceipt(raw,{caseId:producer.caseId,sourceCommit:view.plan.commit,candidateDigest:view.ci.candidateDigest,requestId:view.ci.requestId,inputDigest:request.inputDigest});
+  if(Date.parse(receipt.startedAt)<Date.parse(request.requestedAt)||Date.parse(receipt.completedAt)>Date.parse(request.deadlineAt))reject('QUALIFICATION_ORIGINAL_CHANGED','Case execution is outside its original request',409);
+  signal.throwIfAborted();if(protectedCiExecutionState(store,projectId,captureRef,producer.caseId).stateDigest!==state.stateDigest)reject('QUALIFICATION_ORIGINAL_CHANGED','Original execution changed during byte inspection',409);
+  return{stateDigest:state.stateDigest,historyWatermark:state.historyWatermark,request,candidateDigest:view.ci.candidateDigest,rawReceipt:raw.toString('utf8'),...receipt,origin:{kind:'REGISTERED_CI' as const,stageRequestId:request.id,stageRequestDigest:request.digest,provider:view.plan.binding.provider,runId:run.runId!,archiveDigest:view.ci.archiveDigest,reportDigest:report.report.digest,collectorDigest:producer.collectorDigest,catalogDigest:producer.catalogDigest}};
 }
 
 function comparisonStatuses(p:RepairComparisonPlan,receipt:Record<string,unknown>|null){

@@ -76,6 +76,21 @@ export interface NativeEvidenceQualification extends Omit<EvidenceQualification,
   releaseAuthorized:false; formalAcceptanceEligible:boolean;
 }
 
+/** Current execution is a different proof from cross-candidate applicability.
+ * Only a registered original producer can retain this record; public callers
+ * select its reference and never submit these fields as evidence. */
+export interface TypedCurrentExecutionCapture {
+  schema:'runtime-current-execution-capture/v2'; captureRef:string; captureDigest:string;
+  scope:EvidenceScope; caseId:string; phase:'PRE_RELEASE'|'POST_RELEASE'; candidateDigest:string;
+  mode:'EXECUTED'; outcome:'PASS'; originalExecutionDigest:string;
+  originalReceiptRef:string; originalRawBytesRef:string; rawReceiptDigest:string;
+  protectedFactsDigest:string; historyWatermark:string; expiresAt:string; formalAcceptanceEligible:true;
+  requirement:'ALWAYS_MUST_EXECUTE'|'AFFECTED_OR_UNKNOWN_MUST_EXECUTE';
+  policy:{referenceDigest:string;profileDigest:string;catalogScopeDigest:string};
+  origin:{kind:'REGISTERED_CI';stageRequestId:string;stageRequestDigest:string;provider:'github'|'gitlab';runId:string;archiveDigest:string;reportDigest:string;collectorDigest:string;catalogDigest:string};
+  establishesEnvironmentState:false; executionAuthorized:false; releaseAuthorized:false;
+}
+
 export interface RecoveryRoot {
   schema:'runtime-recovery-root/v1'; workspaceId:string; projectId:string;
   /** Stable owner-resolved lineage, never derived from Host, path or new request. */

@@ -1,4 +1,7 @@
 import { createCorrectionService, CORRECTION_READS, CORRECTION_WRITES } from '../lifecycle/correction.js';
+import { QUALIFICATION_READS, QUALIFICATION_WRITES } from '../lifecycle/evidence-qualification.js';
+import type {RegisteredQualificationService} from '../adapters/bindings.js';
+import type {PrincipalLookup} from '../adapters/authority.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -29,7 +32,7 @@ import {acquireUpgradeSourceLease,loadServiceUpgradeContext,verifyHistoricalReco
 
 const VERSION = String(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version);
 export interface ServerOptions { stateRoot: string; workspaceId: string; port?: number; legacyBindingRef?:string; }
-export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver, trustedPolicy?:AuthorityPolicyProvider, trustedExecutor?:StageAdapter|((store:RuntimeStore,services:StageServices)=>StageAdapter), trustedPreparation?:PreparationValidator, trustedImplementationReview?:ImplementationReviewBindings, trustedExtensionReview?:((store:RuntimeStore)=>ExtensionReviewBindings), trustedLegacyProviders?:LegacyProviders|LegacyProviderFactory) {
+export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver, trustedPolicy?:AuthorityPolicyProvider, trustedExecutor?:StageAdapter|((store:RuntimeStore,services:StageServices)=>StageAdapter), trustedPreparation?:PreparationValidator, trustedImplementationReview?:ImplementationReviewBindings, trustedExtensionReview?:((store:RuntimeStore)=>ExtensionReviewBindings), trustedLegacyProviders?:LegacyProviders|LegacyProviderFactory, trustedQualification?:((store:RuntimeStore,principals:PrincipalLookup)=>RegisteredQualificationService)) {
   const config = record(options); exact(config,['stateRoot','workspaceId'],['port','legacyBindingRef']);
   string(options.stateRoot,4096); slug(options.workspaceId);
   if(options.legacyBindingRef!==undefined)string(options.legacyBindingRef,4096);
@@ -58,6 +61,8 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     initialServices={preparations,authorities,definitions,extensionReviews};
   }catch(error){closeStore([error]);throw error;}
   const {preparations,authorities,definitions,extensionReviews}=initialServices;
+  let qualifications:RegisteredQualificationService|undefined;
+  try{qualifications=trustedQualification?.(store,id=>currentPrincipal(options.stateRoot,options.workspaceId,id));}catch(error){closeStore([error]);throw error;}
   let execution:ReturnType<typeof createExecutionService>;
   try{execution=createExecutionService(store,{bindings:trustedBindings,authorities:trustedAuthorities??authorities.resolveExecution,verifyAuthority:trustedAuthorities?undefined:authorities.verifyExecution,recovery:trustedAuthorities?undefined:authorities.recovery,releaseAuthority:authorities.resolveRelease,principal:id=>currentPrincipal(options.stateRoot,options.workspaceId,id),verifyProjectReviews:extensionReviews.verifyPassed,verifyProjectReviewState:extensionReviews.verifyCurrentDecisions,adapter:typeof trustedExecutor==='function'?trustedExecutor(store,{releaseAuthority:authorities.resolveRelease,authorityPolicy:trustedPolicy,extensionReviews}):trustedExecutor});}
   catch(e){closeStore([e]);throw e;}
@@ -95,11 +100,13 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     }
     if(WRITE_OPERATIONS.includes(operation as typeof WRITE_OPERATIONS[number])){
       exact(envelope,['operation','projectId','input','requestId','expectedRevision']);if(!Number.isSafeInteger(envelope.expectedRevision)||Number(envelope.expectedRevision)<0)reject('INVALID_REVISION','Expected a nonnegative revision');
+      if(QUALIFICATION_WRITES.includes(operation as typeof QUALIFICATION_WRITES[number])){if(!qualifications)reject('QUALIFICATION_UNAVAILABLE','No registered qualification service is configured',409);return qualifications.write(actor,projectId,operation,input,string(envelope.requestId),Number(envelope.expectedRevision),reauthenticate);}
       if(USAGE_WRITES.includes(operation as typeof USAGE_WRITES[number]))return usage.write(actor,projectId,operation,input,string(envelope.requestId),Number(envelope.expectedRevision),reauthenticate);
       const service=CORRECTION_WRITES.includes(operation as typeof CORRECTION_WRITES[number])?corrections:EXTENSION_REVIEW_WRITES.includes(operation as typeof EXTENSION_REVIEW_WRITES[number])?extensionReviews:IMPLEMENTATION_REVIEW_WRITES.includes(operation as typeof IMPLEMENTATION_REVIEW_WRITES[number])?implementationReviews:AGENT_WRITES.includes(operation as typeof AGENT_WRITES[number])?agents:PREPARATION_WRITES.includes(operation as typeof PREPARATION_WRITES[number])?preparations:AUTHORITY_WRITES.includes(operation as typeof AUTHORITY_WRITES[number])?authorities:EXECUTION_WRITES.includes(operation as typeof EXECUTION_WRITES[number])?execution:definitions;
       return service.write(actor,projectId,operation,input,string(envelope.requestId),Number(envelope.expectedRevision),reauthenticate);
     }
     exact(envelope,['operation','projectId','input']);
+    if(QUALIFICATION_READS.includes(operation as typeof QUALIFICATION_READS[number])){if(!qualifications)reject('QUALIFICATION_UNAVAILABLE','No registered qualification service is configured',409);return qualifications.read(actor,projectId,operation,input);}
     if(CORRECTION_READS.includes(operation as typeof CORRECTION_READS[number]))return corrections.read(actor,projectId,operation,input);
     if(USAGE_READS.includes(operation as typeof USAGE_READS[number]))return usage.read(actor,projectId,operation,input);
     if(DEFINITION_READS.includes(operation as typeof DEFINITION_READS[number]))return definitions.read(actor,projectId,operation,input);
@@ -258,7 +265,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
   }
   port=address.port;
   const legacyIntentSource=legacy?.intentSource(actor=>{const current=currentPrincipal(options.stateRoot,options.workspaceId,actor.id);if(!current)reject('UNAUTHENTICATED','Original principal is no longer available',401);return current;});
-  return Object.freeze({ url:'http://127.0.0.1:'+port,port,identity:status(),legacyIntentSource, async close(){
+  return Object.freeze({ url:'http://127.0.0.1:'+port,port,identity:status(),legacyIntentSource,qualification:qualifications?.native, async close(){
     if(closing)return;closing=true;const errors:unknown[]=[];
     try{usageWorker.close();}catch(error){errors.push(error);}
     finally{

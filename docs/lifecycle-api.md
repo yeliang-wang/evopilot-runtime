@@ -115,3 +115,81 @@ failures include `UNAUTHENTICATED`, `FORBIDDEN`, `REVISION_CONFLICT`,
 `VALIDATION_STALE`, `BINDINGS_NOT_CURRENT`, `INLINE_SECRET` and `INPUT_LIMIT`.
 Structural issue codes may appear inside an HTTP-successful `BLOCKED` result.
 Do not log raw tokens, browser codes, cookies or private credential files.
+
+### Registered evidence qualification (v2)
+
+The optional `runtime.qualification` resource in the protected integrations file
+selects an existing published Harness policy, its original publication request,
+allowed assessment decision principals, and explicitly registered closed probes.
+`serve --integrations-ref` connects the same implementation to HTTP, MCP, and the
+CLI request adapter. Registration does not grant permission to run a native
+assessment. API inputs never accept facts, a verifier, a permit, an input-closure
+claim, a passing observation, or a policy verdict.
+
+The policy package supplies `sources/runtime-profile.json` and
+`data/qualification.json`. Their exact published inventory must contain 709 cases,
+698 PRE and 11 POST, with 681 always-execute and 28 conditional cases. Current
+registration, original publication receipt, owner registration, profile digest,
+phase and policy bounds are checked again at consumption. This capability does
+not publish or activate the pending Runtime policy proposal.
+
+Authenticated `runtime_read` operations:
+
+- `lifecycle.qualification.origin.inspect`: `{registrationRef, caseId}` reads
+  retained closed-probe attempts; optional `afterRequestId` and `limit` (1–50)
+  page the public summary. Internal qualification still checks every attempt.
+  `{registrationRef, caseId, originRef}` reads an original registered CI capture.
+  Unknown closure/history remain `EXECUTION_REQUIRED`, with `fallback: FULL`.
+- `lifecycle.qualification.assessment.preview` and `.inspect`: `{planRef}`.
+- `lifecycle.qualification.inspect`: `{actionRef}` reads the original owner
+  receipt and returns a fresh applicability record without dispatching or writing.
+- `lifecycle.qualification.execution.inspect`: `{captureRef}` reads a typed
+  current execution. It is not cross-candidate reuse.
+
+All writes use the ordinary `requestId` and `expectedRevision` envelope:
+
+1. `lifecycle.qualification.probe.execute` takes
+   `{registrationRef,caseId,candidateDigest,expiresAt}`. It runs the fixed closed
+   JSON evaluator against registered original files, with a durable start before
+   evaluation. Probe results always have `formalAcceptanceEligible: false`.
+2. `lifecycle.qualification.plan` takes
+   `{registrationRef,caseId,currentCandidateDigest,originalExecutionDigest,phase,deadlineAt}`.
+   It retains exact protected inputs and an immutable native request identity.
+   The deadline is at most ten minutes and cannot outlive the original evidence,
+   credential or registration. No grant or native effect is created.
+3. `.assessment.authorize` takes `{planRef,reviewDigest,evidenceRef}` after an
+   exact preview. Existing authenticated decision-record policy and pinned
+   decision evidence apply to the separate
+   `lifecycle.qualification.assessment` decision subject. `.assessment.revoke`
+   takes `{planRef,reason}`. A revoked grant cannot be revived or reset.
+4. `.prepare` takes `{planRef}` and retains the exact native validation request.
+   `.dispatch` takes `{actionRef}`. Dispatch retains its original marker and
+   receipt before invoking the published owner. Current authorization is checked
+   before and after that marker. Unknown outcomes require original receipt
+   inspection; a different client request cannot redispatch that action.
+
+`lifecycle.qualification.execution.capture` takes
+`{registrationRef,caseId,originRef}`. This registered CI path requires an exact
+completed original request, native owner evaluations, original archive and raw
+case bytes, and a collector mapping in the published policy's optional
+`sources/execution-producers.json`. The fixed mapping is
+`{schema:"runtime-execution-producers/v1",cases:[{caseId,phase,collectorPath,collectorDigest,workflowDigest,catalogDigest,maxAgeSeconds}]}`;
+`maxAgeSeconds` is 1–86400. The collector must emit
+`runtime-case-execution-receipt/v1` with exact case/source/candidate/request/input,
+actual start/completion timestamps, PASS outcome and nonempty assertions. An
+unapproved collector, generic JSON PASS, missing native receipt or old UNKNOWN
+capture is insufficient. Capture does not assert complete reuse dependencies.
+
+Final consumers use the same service instance's synchronous `assertCurrent` or
+`assertExecutionCurrent` after their final await. Copied API JSON is not that
+capability. These checks reload current read permission, protected source bytes,
+history, policy and expiry without native mutations or store writes. The reader
+needs read permission; the original assessment grant and its initiator remain
+independently current.
+
+`lifecycle.qualification.action.inspect` takes `{actionRef}` and observes only
+that action's original native receipt. It remains available after assessment
+expiry or revocation when the observer still has read permission and the original
+owner registration is intact. Its `observedStatus` is historical evidence;
+`qualification: NOT_ASSESSED` grants no current applicability or permission.
+An absent receipt stays UNKNOWN. This read never dispatches or writes.

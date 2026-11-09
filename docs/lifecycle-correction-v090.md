@@ -190,3 +190,27 @@ source/patches/evidence without reviving expired budgets, and exercise an actual
 subsequent Ontology correction through the delivered Runtime. They do not add
 three cases to the Runtime product denominator or require Ontology release
 before Runtime release.
+
+The registered qualification service now separates a protected plan, independent
+single-assessment grant, exact durable native request, and read-only consumption.
+The grant hashes the plan before the action exists, avoiding a circular action /
+authority digest. Revocation after the dispatch marker leaves that marker in
+place and cannot trigger another native request. HTTP, MCP and CLI requests use
+the same current credentials, CAS and original request receipts.
+
+Current execution and cross-candidate reuse have different evidence requirements.
+The registered CI current-execution producer authenticates original job/archive,
+case bytes, published collector/catalog mapping and original native evaluations;
+it does not invent a COMPLETE dependency closure. Other original Host/browser/
+installation evidence retains its explicit original-source review and actual
+source-authentication obligation in the release auditor. Neither branch makes a
+caller-provided PASS trustworthy.
+
+The registered closed probe remains a functionality/protocol probe with formal
+case credit zero. This integration does not yet supply a formal cross-candidate
+producer for the 28 conditional Runtime cases. Unknown actual Host/prestate
+inputs still require full execution. A subsequent bounded producer must cover an
+entire accepted case, its complete original inputs and attempt history; LC20's
+six-case dependency fixture and all four vectors are a candidate scope, not a
+completed or approved execution result. Existing LC14/LC20 acceptance must still
+run against the final integrated candidate.

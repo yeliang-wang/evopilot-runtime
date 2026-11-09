@@ -6,7 +6,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { release as osRelease } from 'node:os';
 import { canonical } from '../server/errors.js';
 import { authorize, type Principal } from '../server/security.js';
-import { RuntimeStore } from '../server/store.js';
+import { RuntimeStore, type Receipt } from '../server/store.js';
 import { ownerRequestDigest, type PublishedOwnerAdapter, type OwnerMutationPermit } from '../adapters/published-owners.js';
 import { nativeInventory, verifyNativeStageResult, type NativeAction, type OwnerPin } from '../adapters/stages.js';
 import { nativeSha256, type NativeValidationContext } from '../../vendor/compatibility/v1/native.mjs';
@@ -14,8 +14,11 @@ import {
   EVIDENCE_INPUT_KINDS, correctionDigest, correctionEnum, correctionTime, immutableCorrection,
   type EvidenceInputManifest, type EvidenceQualification, type EvidenceScope,
   type HarnessQualificationAssessment, type QualificationInput, type TrustedQualificationVerifier,
-  type QualificationSelection, type NativeEvidenceQualification,
+  type QualificationSelection, type NativeEvidenceQualification, type TypedCurrentExecutionCapture,
 } from './correction-contract.js';
+export type {TypedCurrentExecutionCapture} from './correction-contract.js';
+export const QUALIFICATION_READS=['lifecycle.qualification.origin.inspect','lifecycle.qualification.action.inspect','lifecycle.qualification.inspect','lifecycle.qualification.execution.inspect','lifecycle.qualification.assessment.preview','lifecycle.qualification.assessment.inspect'] as const;
+export const QUALIFICATION_WRITES=['lifecycle.qualification.probe.execute','lifecycle.qualification.plan','lifecycle.qualification.prepare','lifecycle.qualification.dispatch','lifecycle.qualification.execution.capture','lifecycle.qualification.assessment.authorize','lifecycle.qualification.assessment.revoke'] as const;
 
 const outcomes=['PASS','FAIL','NOT_RUN','CANCELLED','UNKNOWN','SKIPPED'] as const;
 const ordinal=(a:string,b:string):number=>a<b?-1:a>b?1:0;
@@ -178,6 +181,9 @@ export interface NativeQualificationBindings {
    * exact subject. Reject when synchronous current authentication is unavailable.
    * Never grant execution or require execution.request. No cached principal. */
   authorizeInspect(subject:Readonly<QualificationInspectionSubject>,observer:Principal):Principal;
+  /** Internal registered producer only. Absence is unsupported, never a PASS. */
+  readExecution?(projectId:string,captureRef:string,actor:Principal,signal:AbortSignal):Promise<TypedCurrentExecutionCapture>;
+  authorizeExecution?(projectId:string,capture:Readonly<TypedCurrentExecutionCapture>,observer:Principal):Principal;
 }
 export interface QualificationDispatchSubject {
   projectId:string;actionRef:string;actionDigest:string;requestDigest:string;
@@ -186,10 +192,14 @@ export interface QualificationDispatchSubject {
 export interface QualificationInspectionSubject extends QualificationDispatchSubject {
   selection:QualificationSelection;protectedFactsDigest:string;ownerRegistrationDigest:string;trustRevision:string;historyWatermark:string;
 }
-interface QualificationAction {
+export interface QualificationAction {
   schema:'runtime-native-qualification-action/v2'; selection:QualificationSelection;
   facts:ProtectedQualificationFacts; factsDigest:string; action:NativeAction;
   assessedAt:string; expiresAt:string; digest:string;
+}
+/** Supplied by the same authenticated service dispatcher, never by JSON. */
+export interface QualificationMutationContext {
+  operation:string; requestId:string; expectedRevision:number; input:Record<string,unknown>; reauthorize:()=>Principal;
 }
 const sameQualification=(a:unknown,b:unknown):boolean=>valueDigest(a)===valueDigest(b);
 const boundedText=(v:unknown):string=>string(v,512);
@@ -238,12 +248,14 @@ function policyObservation(selection:QualificationSelection,facts:ProtectedQuali
 }
 const nativeServices=new WeakSet<object>();
 export interface NativeQualificationService {
-  prepare(selection:QualificationSelection,actor:Principal,signal:AbortSignal):Promise<{actionRef:string;actionDigest:string;requestDigest:string;authorityRef:string;expiresAt:string}>;
-  dispatch(projectId:string,actionRef:string,actor:Principal,signal:AbortSignal):Promise<void>;
+  prepare(selection:QualificationSelection,actor:Principal,signal:AbortSignal,mutation?:QualificationMutationContext):Promise<{actionRef:string;actionDigest:string;requestDigest:string;authorityRef:string;expiresAt:string}>;
+  dispatch(projectId:string,actionRef:string,actor:Principal,signal:AbortSignal,mutation?:QualificationMutationContext):Promise<void>;
   inspect(projectId:string,actionRef:string,actor:Principal,signal:AbortSignal):Promise<NativeEvidenceQualification>;
   /** Synchronous final/batch guard, only for this service's actual inspections.
    * It performs no owner calls, asynchronous work or mutations. */
   assertCurrent(projectId:string,qualification:NativeEvidenceQualification,actor:Principal,signal:AbortSignal):void;
+  inspectExecution(projectId:string,captureRef:string,actor:Principal,signal:AbortSignal):Promise<TypedCurrentExecutionCapture>;
+  assertExecutionCurrent(projectId:string,capture:TypedCurrentExecutionCapture,actor:Principal,signal:AbortSignal):void;
 }
 /** Internal composition capability. JSON, a v1 verifier and self-signed files
  * cannot supply this service to release auditing. */
@@ -251,9 +263,10 @@ export function assertNativeQualificationService(service:NativeQualificationServ
 export function createNativeQualificationService(store:RuntimeStore,bindings:NativeQualificationBindings):NativeQualificationService {
   const kind='lifecycle-evidence-qualification';
   const inspections=new WeakMap<NativeEvidenceQualification,{subject:QualificationInspectionSubject;observer:{id:string;revision:number}}>();
-  function retain(projectId:string,id:string,value:unknown,actor:Principal):void {
-    const old=store.object(projectId,kind,id);if(old){if(!sameQualification(old,value))reject('QUALIFICATION_IMMUTABLE','Original qualification action cannot change',409);return;}
-    store.mutate(actor,{projectId,operation:'lifecycle.qualification.retain',requestId:'qualification-'+randomUUID(),expectedRevision:store.revision(projectId),input:{id,digest:valueDigest(value)},permission:'execution.request'},()=>({objects:[{kind,id,value}],value:{id},event:{type:'qualification-native-action',data:{id,digest:valueDigest(value)}}}));
+  const executions=new WeakMap<TypedCurrentExecutionCapture,{id:string;revision:number}>();
+  function retain(projectId:string,id:string,value:unknown,actor:Principal,mutation?:QualificationMutationContext):Receipt|undefined {
+    const old=store.object(projectId,kind,id);if(old){if(!sameQualification(old,value))reject('QUALIFICATION_IMMUTABLE','Original qualification action cannot change',409);if(!mutation)return;}
+    return store.mutate(actor,{projectId,...(mutation??{operation:'lifecycle.qualification.retain',requestId:'qualification-'+randomUUID(),expectedRevision:store.revision(projectId),input:{id,digest:valueDigest(value)}}),permission:'execution.request'},()=>({objects:[{kind,id,value}],value:{actionRef:id.startsWith('dispatch:')?id.slice(9):id,retained:true,automaticRedispatch:false},event:{type:'qualification-native-action',data:{id,digest:valueDigest(value)}}}),mutation?.reauthorize);
   }
   function load(projectId:string,ref:string,actor:Principal):QualificationAction {
     authorize(actor,projectId,'read');const a=store.object(projectId,kind,boundedText(ref)) as QualificationAction|null;
@@ -275,18 +288,32 @@ export function createNativeQualificationService(store:RuntimeStore,bindings:Nat
     signal.throwIfAborted();return{facts,owner};
   }
   const service:NativeQualificationService={
-    async prepare(raw,actor,signal){
+    async inspectExecution(projectId,captureRef,actor,signal){
+      authorize(actor,projectId,'read');signal.throwIfAborted();
+      if(!bindings.readExecution||!bindings.authorizeExecution)reject('QUALIFICATION_EXECUTION_REQUIRED','No registered current execution producer is available',409);
+      const output=immutableCorrection(await bindings.readExecution(projectId,boundedText(captureRef),actor,signal));
+      if(output.schema!=='runtime-current-execution-capture/v2'||output.captureRef!==captureRef||output.scope.workspaceId!==store.workspaceId||output.scope.projectId!==projectId||output.mode!=='EXECUTED'||output.outcome!=='PASS'||output.formalAcceptanceEligible!==true)reject('QUALIFICATION_EXECUTION_REQUIRED','Exact current registered execution capture required',409);
+      const {captureDigest,...body}=output;if(valueDigest(body)!==captureDigest)reject('QUALIFICATION_EXECUTION_CHANGED','Execution capture integrity changed',409);
+      executions.set(output,{id:actor.id,revision:actor.revision});service.assertExecutionCurrent(projectId,output,actor,signal);return output;
+    },
+    assertExecutionCurrent(projectId,capture,actor,signal){
+      signal.throwIfAborted();const proof=executions.get(capture);
+      if(!proof||proof.id!==actor.id||proof.revision!==actor.revision||capture.scope.projectId!==projectId||!bindings.authorizeExecution)reject('QUALIFICATION_INSPECTION_REQUIRED','Reinspect the original execution through this service',409);
+      const fresh=bindings.authorizeExecution(projectId,capture,actor);authorize(fresh,projectId,'read');
+      if(fresh.id!==proof.id||fresh.revision!==proof.revision||correctionTime(capture.expiresAt)<=Date.now())reject('QUALIFICATION_EXECUTION_CHANGED','Execution, observer or validity changed',409);signal.throwIfAborted();
+    },
+    async prepare(raw,actor,signal,mutation){
       const selection=immutableCorrection(raw);authorize(actor,selection.scope.projectId,'execution.request');const{facts,owner}=await current(selection,actor,signal),id=facts.assessmentAuthority.requestId;
-      const prior=store.object(selection.scope.projectId,kind,id);if(prior){const a=load(selection.scope.projectId,id,actor);if(!sameQualification(a.selection,selection)||!sameQualification(a.facts,facts))reject('QUALIFICATION_ACTION_CHANGED','Use the exact original assessment request');return{actionRef:id,actionDigest:a.digest,requestDigest:a.action.requestDigest,authorityRef:facts.assessmentAuthority.authorityRef,expiresAt:a.expiresAt};}
+      const prior=store.object(selection.scope.projectId,kind,id);if(prior){const a=load(selection.scope.projectId,id,actor);if(!sameQualification(a.selection,selection)||!sameQualification(a.facts,facts))reject('QUALIFICATION_ACTION_CHANGED','Use the exact original assessment request');retain(selection.scope.projectId,id,a,actor,mutation);return{actionRef:id,actionDigest:a.digest,requestDigest:a.action.requestDigest,authorityRef:facts.assessmentAuthority.authorityRef,expiresAt:a.expiresAt};}
       const assessedAt=new Date().toISOString(),expiresAt=new Date(qualificationFacts(selection,facts,Date.now())).toISOString(),observation=policyObservation(selection,facts,assessedAt),p=facts.policy;
       const state=record(await owner.read(actor,selection.scope.projectId,{operation:'workspace.inspect',scope:p.owner.scope,input:{}}));if(!Number.isSafeInteger(state.revision)||Number(state.revision)<0)reject('QUALIFICATION_OWNER_REVISION','Current owner revision required');
       const context:NativeValidationContext={workspaceId:store.workspaceId,scope:p.owner.scope,projectCandidateDigest:selection.currentCandidateDigest,claimId:id,inputDigest:valueDigest(facts.input),effectiveConfigDigest:p.effectiveConfigDigest,sourceScopeDigest:valueDigest(selection.scope),requirementSetDigest:p.caseInventoryDigest};
       const request={operation:'native.package.validate',scope:p.owner.scope,input:{id:p.owner.reference.id,version:p.owner.reference.version,context,observation},requestId:id,expectedRevision:Number(state.revision)};
       const actionBody={request,requestDigest:ownerRequestDigest('harness',request),context,observationDigest:nativeSha256(observation)},action={...actionBody,digest:valueDigest(actionBody)};
       const body={schema:'runtime-native-qualification-action/v2' as const,selection,facts,factsDigest:valueDigest(facts),action,assessedAt,expiresAt},a={...body,digest:valueDigest(body)};
-      signal.throwIfAborted();retain(selection.scope.projectId,id,a,actor);return{actionRef:id,actionDigest:a.digest,requestDigest:action.requestDigest,authorityRef:facts.assessmentAuthority.authorityRef,expiresAt};
+      signal.throwIfAborted();retain(selection.scope.projectId,id,a,actor,mutation);return{actionRef:id,actionDigest:a.digest,requestDigest:action.requestDigest,authorityRef:facts.assessmentAuthority.authorityRef,expiresAt};
     },
-    async dispatch(projectId,ref,actor,signal){
+    async dispatch(projectId,ref,actor,signal,mutation){
       const a=load(projectId,ref,actor);authorize(actor,projectId,'execution.request');signal.throwIfAborted();
       const marker='dispatch:'+ref;if(store.object(projectId,kind,marker))reject('QUALIFICATION_OBSERVE_ORIGINAL','Original dispatch may have happened; inspect its exact native receipt without redispatch',409);
       await current(a.selection,actor,signal);
@@ -310,7 +337,7 @@ export function createNativeQualificationService(store:RuntimeStore,bindings:Nat
       if(store.object(projectId,kind,marker))reject('QUALIFICATION_OBSERVE_ORIGINAL','Original dispatch may have happened; inspect its exact native receipt without redispatch',409);
       // Commit before external mutation. Timeout or interruption never creates a
       // second owner request or silently extends its original authority.
-      retain(projectId,marker,{actionRef:ref,actionDigest:a.digest,requestDigest:a.action.requestDigest},beforeMarker.actor);
+      retain(projectId,marker,{actionRef:ref,actionDigest:a.digest,requestDigest:a.action.requestDigest},beforeMarker.actor,mutation);
       const final=authorizeBoundary(await freshFacts());signal.throwIfAborted();await final.owner.mutate(final.actor,projectId,a.action.request,final.permit);
     },
     async inspect(projectId,ref,actor,signal){
@@ -395,8 +422,8 @@ export function createClosedFixtureQualificationProducer(store:RuntimeStore,conf
   scope(config.scope);boundedText(config.caseId);if(config.scope.workspaceId!==store.workspaceId)reject('QUALIFICATION_SCOPE_CHANGED','Closed fixture must belong to this workspace');
   const kind='lifecycle-evidence-qualification',key='closed-fixture:'+valueDigest({scope:config.scope,caseId:config.caseId}),projectId=config.scope.projectId;
   function ledger():ClosedFixtureAttempt[]{const value=store.object(projectId,kind,key);if(value===null)return[];const r=record(value);if(r.schema!=='runtime-closed-fixture-history/v2'||!Array.isArray(r.attempts)||r.attempts.length>4096)reject('QUALIFICATION_HISTORY_CHANGED','Complete closed producer history unavailable');return r.attempts as ClosedFixtureAttempt[];}
-  function save(attempts:ClosedFixtureAttempt[],actor:Principal):void {
-    const value={schema:'runtime-closed-fixture-history/v2',attempts};store.mutate(actor,{projectId,operation:'lifecycle.qualification.fixture.execute',requestId:'fixture-'+randomUUID(),expectedRevision:store.revision(projectId),input:{historyDigest:valueDigest(value)},permission:'execution.request'},()=>({objects:[{kind,id:key,value}],value:{historyDigest:valueDigest(value)},event:{type:'closed-fixture-execution',data:{historyDigest:valueDigest(value),formalCaseCredit:0}}}));
+  function save(attempts:ClosedFixtureAttempt[],actor:Principal,mutation?:QualificationMutationContext):void {
+    const value={schema:'runtime-closed-fixture-history/v2',attempts};store.mutate(actor,{projectId,...(mutation??{operation:'lifecycle.qualification.fixture.execute',requestId:'fixture-'+randomUUID(),expectedRevision:store.revision(projectId),input:{historyDigest:valueDigest(value)}}),permission:'execution.request'},()=>({objects:[{kind,id:key,value}],value:{historyRef:key,historyDigest:valueDigest(value),formalCaseCredit:0},event:{type:'closed-fixture-execution',data:{historyDigest:valueDigest(value),formalCaseCredit:0}}}),mutation?.reauthorize);
   }
   function inventory(candidateDigest:string,p:ProtectedQualificationFacts['policy']):{manifest:EvidenceInputManifest;input:string;expected:string} {
     if(!sameQualification(readdirSync(config.fixtureRoot).sort(),['expected.json','input.json']))reject('QUALIFICATION_FIXTURE_INVENTORY','Closed fixture contains exactly input.json and expected.json');
@@ -407,11 +434,23 @@ export function createClosedFixtureQualificationProducer(store:RuntimeStore,conf
     const nodes=EVIDENCE_INPUT_KINDS.map(id=>({id,kind:id,digest:values[id],dependsOn:id==='test'?EVIDENCE_INPUT_KINDS.filter(k=>k!=='test'):[]}));
     return{manifest:{schema:'runtime-evidence-input-manifest/v1',candidateDigest,completeness:'COMPLETE',dynamicInputs:'RESOLVED',externalInputs:'RESOLVED',roots:['test'],nodes,notApplicable:[]},input,expected};
   }
+  function snapshot(selection:Readonly<QualificationSelection>,actor:Principal,policy:ProtectedQualificationFacts['policy'],assessmentAuthority:ProtectedQualificationFacts['assessmentAuthority']):ProtectedQualificationFacts {
+    validateSelection(selection);authorize(actor,projectId,'read');if(!sameQualification(selection.scope,config.scope)||selection.caseId!==config.caseId)reject('QUALIFICATION_SCOPE_CHANGED','Closed producer scope differs');
+    const attempts=ledger(),a=attempts.find(a=>a.original&&valueDigest(a.original)===selection.originalExecutionDigest);
+    if(!a?.original||!a.inputs||!a.rawReceipt)reject('QUALIFICATION_ORIGINAL_UNAVAILABLE','Original actual fixture execution is missing');
+    const current=inventory(selection.currentCandidateDigest,policy),history=attempts.map(h=>h.original?{executionDigest:valueDigest(h.original),candidateDigest:h.candidateDigest,rawReceiptDigest:h.original.rawReceiptDigest,outcome:h.original.outcome,executedAt:h.startedAt}:{executionDigest:valueDigest(h),candidateDigest:h.candidateDigest,rawReceiptDigest:valueDigest({requestId:h.requestId,outcome:'UNKNOWN'}),outcome:'UNKNOWN' as const,executedAt:h.startedAt});
+    const input:QualificationInput={schema:'runtime-evidence-qualification-input/v1',scope:config.scope,caseId:config.caseId,currentCandidateDigest:selection.currentCandidateDigest,original:a.original,originalExecutionDigest:selection.originalExecutionDigest,rawReceipt:a.rawReceipt,originalInputs:a.inputs,currentInputs:current.manifest,history,executionRule:policy.requirement.executionRequirement==='ALWAYS_MUST_EXECUTE'?'MUST_EXECUTE':'OWNER_POLICY'};
+    if(!sameQualification(ledger(),attempts))reject('QUALIFICATION_HISTORY_CHANGED','History changed during protected read');
+    const originalRef='runtime:closed-fixture/'+a.requestId,historyRef='runtime:closed-fixture-history/'+key;
+    return{schema:'runtime-protected-qualification-facts/v2',input,formalAcceptanceEligible:false,original:{receiptRef:originalRef,rawBytesRef:originalRef+'/raw',revision:a.requestId,readbackDigest:valueDigest(a)},history:{receiptRef:historyRef,watermark:valueDigest(attempts)},inventories:{original:{receiptRef:originalRef+'/inputs',revision:valueDigest(a.inputs)},current:{receiptRef:historyRef+'/current-inputs',revision:valueDigest(current.manifest)}},policy,validity:{receiptRef:historyRef+'/validity',revision:valueDigest({expiresAt:a.expiresAt,trust:policy.trust}),recordDigest:valueDigest({expiresAt:a.expiresAt,trust:policy.trust}),originalPolicy:null,originalPolicyApplicability:'VERIFIED_NOT_APPLICABLE'},assessmentAuthority};
+  }
   return Object.freeze({
-    async execute(candidateDigest:string,requestId:string,expiresAt:string,actor:Principal,signal:AbortSignal) {
+    snapshot,
+    history(actor:Principal){authorize(actor,projectId,'read');return immutableCorrection(ledger());},
+    async execute(candidateDigest:string,requestId:string,expiresAt:string,actor:Principal,signal:AbortSignal,mutation?:QualificationMutationContext) {
       authorize(actor,projectId,'execution.request');correctionDigest(candidateDigest);boundedText(requestId);if(correctionTime(expiresAt)<=Date.now())reject('QUALIFICATION_EXPIRED','Use the original explicit fixture execution deadline');
       const policy=await config.policy(actor,signal);signal.throwIfAborted();const history=ledger();if(history.some(a=>a.requestId===requestId))reject('QUALIFICATION_OBSERVE_ORIGINAL','An existing fixture attempt cannot be rerun under the same identity',409);if(history.length>=4096)reject('QUALIFICATION_HISTORY_LIMIT','The complete history reached its fixed bound');
-      const attempt:ClosedFixtureAttempt={requestId,candidateDigest,startedAt:new Date().toISOString(),expiresAt,original:null,inputs:null,rawReceipt:null};history.push(attempt);save(history,actor);
+      const attempt:ClosedFixtureAttempt={requestId,candidateDigest,startedAt:new Date().toISOString(),expiresAt,original:null,inputs:null,rawReceipt:null};history.push(attempt);save(history,actor,mutation);
       // The start is durable before touching the oracle. Interrupted/malformed
       // attempts remain visible as UNKNOWN; they can never disappear on retry.
       try{const captured=inventory(candidateDigest,policy),result=closedFixtureEvaluate(captured.input,captured.expected);signal.throwIfAborted();const current=inventory(candidateDigest,policy);if(!sameQualification(captured,current))reject('QUALIFICATION_FIXTURE_CHANGED','Inputs changed during actual execution');
@@ -421,15 +460,7 @@ export function createClosedFixtureQualificationProducer(store:RuntimeStore,conf
       }catch(error){save(history,actor);throw error;}
     },
     async read(selection:Readonly<QualificationSelection>,actor:Principal,signal:AbortSignal):Promise<ProtectedQualificationFacts> {
-      validateSelection(selection);authorize(actor,projectId,'read');if(!sameQualification(selection.scope,config.scope)||selection.caseId!==config.caseId)reject('QUALIFICATION_SCOPE_CHANGED','Closed producer scope differs');
-      const attempts=ledger(),a=attempts.find(a=>a.original&&valueDigest(a.original)===selection.originalExecutionDigest);
-      if(!a?.original||!a.inputs||!a.rawReceipt)reject('QUALIFICATION_ORIGINAL_UNAVAILABLE','Original actual fixture execution is missing');
-      const policy=await config.policy(actor,signal),assessmentAuthority=await config.authority(actor,selection,signal),current=inventory(selection.currentCandidateDigest,policy);signal.throwIfAborted();
-      const history=attempts.map(h=>h.original?{executionDigest:valueDigest(h.original),candidateDigest:h.candidateDigest,rawReceiptDigest:h.original.rawReceiptDigest,outcome:h.original.outcome,executedAt:h.startedAt}:{executionDigest:valueDigest(h),candidateDigest:h.candidateDigest,rawReceiptDigest:valueDigest({requestId:h.requestId,outcome:'UNKNOWN'}),outcome:'UNKNOWN' as const,executedAt:h.startedAt});
-      const input:QualificationInput={schema:'runtime-evidence-qualification-input/v1',scope:config.scope,caseId:config.caseId,currentCandidateDigest:selection.currentCandidateDigest,original:a.original,originalExecutionDigest:selection.originalExecutionDigest,rawReceipt:a.rawReceipt,originalInputs:a.inputs,currentInputs:current.manifest,history,executionRule:'OWNER_POLICY'};
-      if(!sameQualification(ledger(),attempts))reject('QUALIFICATION_HISTORY_CHANGED','History changed during the protected read');
-      const originalRef='runtime:closed-fixture/'+a.requestId,historyRef='runtime:closed-fixture-history/'+key;
-      return{schema:'runtime-protected-qualification-facts/v2',input,formalAcceptanceEligible:false,original:{receiptRef:originalRef,rawBytesRef:originalRef+'/raw',revision:a.requestId,readbackDigest:valueDigest(a)},history:{receiptRef:historyRef,watermark:valueDigest(attempts)},inventories:{original:{receiptRef:originalRef+'/inputs',revision:valueDigest(a.inputs)},current:{receiptRef:historyRef+'/current-inputs',revision:valueDigest(current.manifest)}},policy,validity:{receiptRef:historyRef+'/validity',revision:valueDigest({expiresAt:a.expiresAt,trust:policy.trust}),recordDigest:valueDigest({expiresAt:a.expiresAt,trust:policy.trust}),originalPolicy:null,originalPolicyApplicability:'VERIFIED_NOT_APPLICABLE'},assessmentAuthority};
+      const policy=await config.policy(actor,signal),authority=await config.authority(actor,selection,signal);signal.throwIfAborted();return snapshot(selection,actor,policy,authority);
     },
   });
 }

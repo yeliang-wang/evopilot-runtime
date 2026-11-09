@@ -61,7 +61,7 @@ export async function serviceMain(argv: string[], output: { write(value: string)
       try{
         if(flags['legacy-providers-ref'])legacyProviders=await openRegisteredLegacyProviders(flags['legacy-providers-ref'],flags['legacy-ref'],flags['workspace-id'],flags['legacy-providers-digest']);
         const policy=flags['integrations-ref']?registeredAuthorityPolicy(flags['integrations-ref'],flags['workspace-id']):undefined;
-        const server=await startRuntimeServer({stateRoot:flags['state-root'],workspaceId:flags['workspace-id'],port:flags.port===undefined?0:Number(flags.port),...(flags['legacy-ref']?{legacyBindingRef:flags['legacy-ref']}:{})},integrations?.provider,undefined,policy,integrations?.executor,integrations?.preparation,integrations?.implementationReview,integrations?.extensionReview,legacyProviders?.bind);
+        const server=await startRuntimeServer({stateRoot:flags['state-root'],workspaceId:flags['workspace-id'],port:flags.port===undefined?0:Number(flags.port),...(flags['legacy-ref']?{legacyBindingRef:flags['legacy-ref']}:{})},integrations?.provider,undefined,policy,integrations?.executor,integrations?.preparation,integrations?.implementationReview,integrations?.extensionReview,legacyProviders?.bind,integrations?.qualification);
         legacyIntentSource=server.legacyIntentSource;
         print({ready:true,url:server.url,...server.identity});
         await new Promise<void>(resolve=>{
