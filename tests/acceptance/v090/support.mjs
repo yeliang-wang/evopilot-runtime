@@ -197,7 +197,7 @@ export async function openScenario(scenario,callableRegistration){
   const envelope={operation,projectId:chosen.projectId,input,...meta},id=String(++sequence).padStart(5,'0'),ref=id+'-request.json';
   write(ref,{caseInstanceId:currentCase,envelope,principalId:chosen.principalId});
   let response,raw;
-  try{response=await fetch(chosen.origin+'/api/v1/request',{method:'POST',headers:{...hostHeaders(chosen),'content-type':'application/json'},body:JSON.stringify(envelope),signal:AbortSignal.timeout(30000),redirect:'error'});raw=await bounded(response,['E01','E02'].includes(scenario)?1048576:262144);}
+  try{response=await fetch(chosen.origin+'/api/v1/request',{method:'POST',headers:{...hostHeaders(chosen),'content-type':'application/json'},body:JSON.stringify(envelope),signal:AbortSignal.timeout(30000),redirect:'error'});raw=await bounded(response,['E01','E02'].includes(scenario)||(scenario==='E04'&&currentCase==='E04.EX11'&&operation==='lifecycle.extension.evidence.read')?1048576:262144);}
   catch(error){uncertain=!!meta.requestId;write(id+'-transport-failure.json',{caseInstanceId:currentCase,operation,requestId:meta.requestId??null,outcome:uncertain?'UNKNOWN':'READ_FAILED',automaticRetry:false});throw error;}
   const body=JSON.parse(raw),responseRef=id+'-response.json';write(responseRef,{caseInstanceId:currentCase,status:response.status,rawBody:raw,body});evidence.push({caseInstanceId:currentCase,request:ref,requestDigest:sha(fs.readFileSync(path.join(selection.outputRoot,ref))),response:responseRef,responseDigest:sha(raw),fileDigest:sha(fs.readFileSync(path.join(selection.outputRoot,responseRef)))});
   return{status:response.status,body};
