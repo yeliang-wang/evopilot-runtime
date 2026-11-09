@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { constants, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import {AsyncLocalStorage} from 'node:async_hooks';
+import { constants, closeSync, fstatSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, writeFileSync, type Stats } from 'node:fs';
 import { join } from 'node:path';
 import { canonicalEvidence as canonical, canonical as canonicalState, exact, record, reject, ServiceError, string } from '../server/errors.js';
 import { authorize, privateFile, type Principal } from '../server/security.js';
@@ -181,6 +182,54 @@ export function lc20ManagedHistoryState(store:RuntimeStore,projectId:string,acto
   claims.sort((a,b)=>a.request.requestedAt<b.request.requestedAt?-1:a.request.requestedAt>b.request.requestedAt?1:a.request.id<b.request.id?-1:1);
   return{claims,watermark:valueDigest(claims)};
 }
+/** One trusted observation invocation only. No original record, permission or
+ * negative result is cached. Exact native records/history are still reread by
+ * every consumer, and close verifies all original bytes before success. */
+export interface ProtectedCiObservationScope {run<T>(read:()=>T):T;close():void;}
+type OriginalArchive={path:string;digest:string;stat:Stats;bytes?:Buffer;files?:Promise<ReadonlyMap<string,Buffer>>;expanded:number;entries:number;pending:boolean;distributions:Map<string,ReturnType<typeof readRuntimeDistributionCandidate>>};
+type CiObservationScope=ProtectedCiObservationScope&{signal:AbortSignal;deadline:number;closed:boolean;archives:Map<string,OriginalArchive>;bytes:number;expanded:number;entries:number};
+const ciObservationScopes=new AsyncLocalStorage<CiObservationScope>();
+function checkCiScope(scope:CiObservationScope){scope.signal.throwIfAborted();if(scope.closed||performance.now()>=scope.deadline)reject('QUALIFICATION_OBSERVATION_EXPIRED','Original CI observation is closed or expired',409);}
+function sameArchiveStat(a:Stats,b:Stats){return ['dev','ino','uid','gid','mode','nlink','size','mtimeMs','ctimeMs'].every(k=>a[k as keyof typeof a]===b[k as keyof typeof b]);}
+function archiveStat(path:string){privateFile(path);const stat=lstatSync(path);if(realpathSync(path)!==path||stat.size>MAX_ARCHIVE_BYTES)reject('CI_ARCHIVE_LIMIT','Original bounded archive required',409);return stat;}
+function readArchiveBytes(path:string,digest:string,stat:Stats){const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW);try{if(!sameArchiveStat(stat,fstatSync(fd)))reject('QUALIFICATION_ORIGINAL_CHANGED','Original archive identity changed',409);const bytes=Buffer.allocUnsafe(stat.size);let offset=0;while(offset<bytes.length){const n=readSync(fd,bytes,offset,bytes.length-offset,offset);if(!n)break;offset+=n;}const extra=Buffer.allocUnsafe(1),grew=readSync(fd,extra,0,1,stat.size)!==0;if(offset!==stat.size||grew||!sameArchiveStat(stat,fstatSync(fd))||!sameArchiveStat(stat,archiveStat(path))||byteDigest(bytes)!==digest)reject('QUALIFICATION_ORIGINAL_CHANGED','Original archive bytes changed',409);return bytes;}finally{closeSync(fd);}}
+function discardArchive(scope:CiObservationScope,archive:OriginalArchive){scope.bytes-=archive.bytes?.length??0;scope.expanded-=archive.expanded;scope.entries-=archive.entries;delete archive.bytes;delete archive.files;archive.expanded=0;archive.entries=0;archive.distributions.clear();}
+function reserveArchive(scope:CiObservationScope,keep:OriginalArchive,bytes:number,expanded:number,entries:number){
+  // LRU residency, not cumulative transferred bytes. Eviction retains each
+  // original path/digest/stat for the mandatory final independent byte read.
+  for(const old of scope.archives.values()){if(scope.bytes+bytes<=MAX_ARCHIVE_BYTES&&scope.expanded+expanded<=268435456&&scope.entries+entries<=4096)return;if(old!==keep&&!old.pending)discardArchive(scope,old);}
+  if(scope.bytes+bytes>MAX_ARCHIVE_BYTES||scope.expanded+expanded>268435456||scope.entries+entries>4096)reject('QUALIFICATION_OBSERVATION_LIMIT','Bounded original byte observation is busy or exceeds its resident limit',409);
+}
+export function openProtectedCiObservationScope(signal:AbortSignal):ProtectedCiObservationScope {
+  const inherited=ciObservationScopes.getStore();if(inherited)return{run:read=>{signal.throwIfAborted();checkCiScope(inherited);return inherited.run(read);},close(){}};
+  const clear=()=>{scope.closed=true;for(const archive of scope.archives.values())discardArchive(scope,archive);scope.archives.clear();signal.removeEventListener('abort',clear);};
+  const scope:CiObservationScope={signal,deadline:performance.now()+30000,closed:false,archives:new Map(),bytes:0,expanded:0,entries:0,
+    run:read=>{checkCiScope(scope);return ciObservationScopes.run(scope,read);},
+    close:()=>{if(scope.closed){signal.throwIfAborted();return;}try{checkCiScope(scope);for(const archive of scope.archives.values())discardArchive(scope,archive);for(const archive of scope.archives.values()){checkCiScope(scope);if(!sameArchiveStat(archive.stat,archiveStat(archive.path)))reject('QUALIFICATION_ORIGINAL_CHANGED','Original archive identity changed before consumption',409);readArchiveBytes(archive.path,archive.digest,archive.stat);}checkCiScope(scope);}finally{clear();}}};
+  signal.addEventListener('abort',clear,{once:true});if(signal.aborted)clear();return scope;
+}
+function protectedArchive(path:string,digest:string){
+  const scope=ciObservationScopes.getStore(),stat=archiveStat(path);if(scope)checkCiScope(scope);let archive=scope?.archives.get(path);
+  if(archive){if(archive.digest!==digest||!sameArchiveStat(archive.stat,stat))reject('QUALIFICATION_ORIGINAL_CHANGED','Original archive changed within this observation',409);scope!.archives.delete(path);scope!.archives.set(path,archive);}
+  else{if(scope&&scope.archives.size>=709)reject('QUALIFICATION_OBSERVATION_LIMIT','One observation exceeds 709 distinct originals',409);archive={path,digest,stat,expanded:0,entries:0,pending:false,distributions:new Map()};scope?.archives.set(path,archive);}
+  if(!archive.bytes){if(scope)reserveArchive(scope,archive,stat.size,0,0);archive.bytes=readArchiveBytes(path,digest,stat);if(scope)scope.bytes+=archive.bytes.length;}return archive;
+}
+async function protectedArchiveFiles(state:ReturnType<typeof protectedCiExecutionState>,signal:AbortSignal){
+  const scope=ciObservationScopes.getStore();if(!scope)return readArtifactArchive(state.bytes,signal);checkCiScope(scope);
+  const path=join(state.root,'stage-ci-artifacts',state.archiveDigest.slice(7)+'.zip'),archive=protectedArchive(path,state.archiveDigest);
+  if(!archive.files){
+    // Reserve the parser's existing maximum before awaiting it, so a second
+    // archive cannot transiently exceed the expanded-byte resident bound.
+    reserveArchive(scope,archive,0,268435456,512);archive.pending=true;
+    archive.files=(async()=>{try{const files=await readArtifactArchive(archive.bytes!,AbortSignal.any([signal,scope.signal]));checkCiScope(scope);archive.expanded=[...files.values()].reduce((n,b)=>n+b.length,0);archive.entries=files.size;scope.expanded+=archive.expanded;scope.entries+=archive.entries;return files;}finally{archive.pending=false;}})();
+  }
+  const files=await archive.files;signal.throwIfAborted();checkCiScope(scope);return files;
+}
+function protectedDistribution(files:ReadonlyMap<string,Buffer>,state:ReturnType<typeof protectedCiExecutionState>){
+  const manifest=state.view.ci!.candidate??state.view.plan.candidateInput!.manifest,commit=state.view.plan.commit,scope=ciObservationScopes.getStore();if(!scope)return readRuntimeDistributionCandidate(files,manifest,commit);checkCiScope(scope);
+  const archive=protectedArchive(join(state.root,'stage-ci-artifacts',state.archiveDigest.slice(7)+'.zip'),state.archiveDigest),key=valueDigest({manifest,commit}),old=archive.distributions.get(key);if(old)return old;
+  if(archive.distributions.size>=709)reject('QUALIFICATION_OBSERVATION_LIMIT','One original exceeds the fixed candidate bound',409);const result=readRuntimeDistributionCandidate(files,manifest,commit);archive.distributions.set(key,result);return result;
+}
 /** Original store records and original ZIP bytes only; no caller observation
  * or future completeness declaration is accepted at this boundary. */
 export function protectedCiExecutionState(store:RuntimeStore,projectId:string,captureRef:string,caseId:string){
@@ -197,18 +246,18 @@ export function protectedCiExecutionState(store:RuntimeStore,projectId:string,ca
   const history:unknown[]=[];let cursor='';
   for(;;){const page=store.objectsPage(projectId,'stage-request',cursor,200);for(const row of page){const r=row.value as StageRequest;if(r.plan?.parameters&&record(r.plan.parameters).workflowDigest===view.plan.workflowDigest&&record(r.plan.parameters).candidateDigest===view.plan.candidateDigest)history.push({id:row.id,request:r,progress:store.object(projectId,'stage-progress',row.id)});if(history.length>4096)reject('QUALIFICATION_HISTORY_LIMIT','Bounded original stage history exceeded',409);}if(page.length<200)break;cursor=page.at(-1)!.id;}
   const archive=view.ci?.archiveDigest;if(!archive)reject('QUALIFICATION_ORIGINAL_UNAVAILABLE','Original retained CI artifact required',409);
-  const path=join(store.root,'stage-ci-artifacts',hash(archive).slice(7)+'.zip');privateFile(path);if(realpathSync(path)!==path||lstatSync(path).size>MAX_ARCHIVE_BYTES)reject('CI_ARCHIVE_LIMIT','Original bounded archive required',409);const bytes=readFileSync(path);if(byteDigest(bytes)!==archive)reject('QUALIFICATION_ORIGINAL_CHANGED','Original archive bytes changed',409);
-  const facts={original,request,view,progress,observed,run,history,archiveDigest:archive};return{...facts,entry,bytes,stateDigest:valueDigest(facts),historyWatermark:valueDigest(history)};
+  const path=join(store.root,'stage-ci-artifacts',hash(archive).slice(7)+'.zip'),bytes=protectedArchive(path,archive).bytes!;
+  const facts={original,request,view,progress,observed,run,history,archiveDigest:archive};return{...facts,root:store.root,entry,bytes,stateDigest:valueDigest(facts),historyWatermark:valueDigest(history)};
 }
 export async function readProtectedCiExecution(store:RuntimeStore,projectId:string,captureRef:string,producer:PublishedExecutionProducer,signal:AbortSignal){
   const state=protectedCiExecutionState(store,projectId,captureRef,producer.caseId),{request,view,progress,run}=state,report=state.original.report as CiAcceptanceReportCapture,origin=record(state.original.origin);
   if(progress.phase!=='COMPLETE'||!progress.terminal||run.status!=='PASSED'||view.ci?.status!=='PASSED'||view.harness?.result?.status!=='PASS'||view.ontology?.result?.status!=='PASS'||report.status!=='OBSERVED'||report.producerBinding!=='MATCHED_ORIGINAL_JOB'||report.workflowSource!=='COMMITTED_BYTES_MATCHED'||report.collectorSource!=='COMMITTED_BYTES_MATCHED'||state.entry.observedOutcome!=='PASS'||!report.report||!view.ci.candidateDigest)reject('QUALIFICATION_EXECUTION_REQUIRED','Actual completed original provider and native evaluations required',409);
   if(origin.ciRequestId!==view.ci.requestId||origin.inputDigest!==request.inputDigest||origin.runId!==run.runId||view.ci.runId!==run.runId||origin.resultDigest!==view.ci.resultDigest||producer.workflowDigest!==view.plan.workflowDigest)reject('QUALIFICATION_ORIGINAL_CHANGED','Original run/candidate/workflow differs',409);
-  const files=await readArtifactArchive(state.bytes,signal),reportBytes=files.get(CI_ACCEPTANCE_REPORT_PATH),raw=files.get(state.entry.rawReceipt.path);
+  const files=await protectedArchiveFiles(state,signal),reportBytes=files.get(CI_ACCEPTANCE_REPORT_PATH),raw=files.get(state.entry.rawReceipt.path);
   if(!reportBytes||byteDigest(reportBytes)!==report.report.digest||!raw||raw.length!==state.entry.rawReceipt.bytes||byteDigest(raw)!==state.entry.rawReceipt.digest)reject('QUALIFICATION_ORIGINAL_CHANGED','Exact original case/report bytes required',409);
   const parsed=record(JSON.parse(reportBytes.toString('utf8'))),collector=record(parsed.collector),collectorFile=record(collector.file),collectorBytes=files.get(string(collectorFile.path));
   if(collector.sourcePath!==producer.collectorPath||!collectorBytes||byteDigest(collectorBytes)!==producer.collectorDigest||collectorFile.digest!==producer.collectorDigest)reject('QUALIFICATION_COLLECTOR_UNAPPROVED','Actual collector differs from the published producer contract',409);
-  const distribution=readRuntimeDistributionCandidate(files,view.ci.candidate??view.plan.candidateInput!.manifest,view.plan.commit);
+  const distribution=protectedDistribution(files,state);
   const receipt=readCurrentCaseReceipt(raw,{caseId:producer.caseId,sourceCommit:view.plan.commit,candidateDigest:distribution.candidateDigest,lifecycleCandidateDigest:view.ci.candidateDigest,requestId:view.ci.requestId,inputDigest:request.inputDigest});
   if(Date.parse(receipt.startedAt)<Date.parse(request.requestedAt)||Date.parse(receipt.completedAt)>Date.parse(request.deadlineAt))reject('QUALIFICATION_ORIGINAL_CHANGED','Case execution is outside its original request',409);
   signal.throwIfAborted();if(protectedCiExecutionState(store,projectId,captureRef,producer.caseId).stateDigest!==state.stateDigest)reject('QUALIFICATION_ORIGINAL_CHANGED','Original execution changed during byte inspection',409);

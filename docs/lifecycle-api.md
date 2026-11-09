@@ -189,6 +189,30 @@ Authenticated `runtime_read` operations:
   receipt and returns a fresh applicability record without dispatching or writing.
 - `lifecycle.qualification.execution.inspect`: `{captureRef}` reads a typed
   current execution. It is not cross-candidate reuse.
+- `lifecycle.qualification.execution-set.inspect` takes
+  `{registrationRef, currentCandidateDigest, phase, qualifications, executions}`.
+  `qualifications` contains `{caseId, actionRef}` references; `executions`
+  contains `{caseId, captureRef}` references. Select at most the complete fixed
+  catalog of 709 references, without duplicate or overlapping cases. The input
+  does not accept outcomes, input-closure claims or a supplied policy verdict.
+
+The execution-set read partitions the entire published phase catalog: 698 PRE
+or 11 POST obligations into `currentExecuted`, `reusable` and
+`requiredExecution`. Their disjoint union must equal that catalog. An omitted
+reference remains required; omission is not evidence that a case is NEW. Native
+claim, stage and capture inventory supplies history and absence checks. Raw CI
+PASS labels cannot replace authenticated current-execution captures or current
+owner-qualified reuse. Always-execute cases cannot enter the reused set.
+UNKNOWN originals remain required with `observeOriginal` request references;
+the next action is to inspect those originals, not dispatch another attempt.
+
+Without any matching authenticated current evidence, the response reports
+`CANDIDATE_UNPROVEN`. All responses keep `dispatchAuthorized: false`,
+`releaseAuthorized: false` and `establishesEnvironmentState: false`. Policy,
+inventory and observer changes during the read reject the observation. A saved
+partition does not replace a fresh eligibility check or final release auditing.
+Its `expiresAt` cannot exceed the earliest expiry of the catalog, observer or
+any original execution/qualification actually credited to the partition.
 
 All writes use the ordinary `requestId` and `expectedRevision` envelope:
 

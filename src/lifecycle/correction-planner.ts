@@ -1,3 +1,4 @@
+import type {DifferentialEvidenceCatalog,DifferentialEvidencePlan} from './correction-contract.js';
 import { canonical, exact, record, reject, string } from '../server/errors.js';
 
 export type CorrectionPhase = 'PRE_RELEASE' | 'POST_RELEASE';
@@ -198,4 +199,28 @@ export function planCorrectionBranches(input: unknown): CorrectionBranchPlan {
     const unit = groupFor.get(d.id) ?? [d.id]; readyUnits.push([...unit]); unit.forEach(id => included.add(id));
   }
   return { schema: 'runtime-correction-branch-plan/v1', phase: currentPhase, decisions, readyUnits, requiredFailures: nodes.filter(n => n.status === 'FAIL').map(n => n.id), dispatchAuthorized: false };
+}
+
+/** Trusted composition supplies authenticated observations. This pure reducer
+ * grants nothing and is not an API for importing evidence or case statuses. */
+export function planDifferentialEvidence(catalog:DifferentialEvidenceCatalog,candidateDigest:string,
+  executed:ReadonlySet<string>,reused:ReadonlySet<string>,refusals:ReadonlyMap<string,readonly string[]>,now=Date.now()):DifferentialEvidencePlan {
+  const ids=catalog.cases.map(c=>c.caseId),known=new Set(ids);
+  if(!ids.length||ids.length>709||known.size!==ids.length||[...executed,...reused,...refusals.keys()].some(id=>!known.has(id))||[...executed].some(id=>reused.has(id)))reject('DIFFERENTIAL_INVENTORY','Exact disjoint bounded catalog partition required',409);
+  if(!/^sha256:[a-f0-9]{64}$/.test(candidateDigest)||!Number.isFinite(now)||Date.parse(catalog.expiresAt)<=now)reject('DIFFERENTIAL_EXPIRED','Current candidate and catalog validity required',409);
+  const candidateAuthenticated=executed.size+reused.size>0,currentExecuted:string[]=[],reusable:string[]=[],requiredExecution:string[]=[],observeOriginal:DifferentialEvidencePlan['observeOriginal']=[];
+  const decisions=catalog.cases.map(c=>{
+    const reasons=[...(refusals.get(c.caseId)??[])],unknown=c.observeOriginalRequestIds.length>0;
+    if(unknown)reasons.push('OBSERVE_ORIGINAL');
+    for(const outcome of c.observedOutcomes)if(outcome!=='PASS')reasons.push('ORIGINAL_'+outcome);
+    if(c.absence==='PROVEN_NATIVE_ABSENCE')reasons.push('NEW');else if(c.absence==='UNPROVEN')reasons.push('HISTORY_UNPROVEN');
+    if(c.executionRequirement==='ALWAYS_MUST_EXECUTE')reasons.push('FINAL_MUST_RUN');
+    let coverage:'EXECUTED'|'PASS_REUSED'|'REQUIRED'='REQUIRED';
+    if(!unknown&&executed.has(c.caseId)){coverage='EXECUTED';currentExecuted.push(c.caseId);}
+    else if(!unknown&&reused.has(c.caseId)&&c.executionRequirement==='AFFECTED_OR_UNKNOWN_MUST_EXECUTE'&&!c.observedOutcomes.some(v=>v!=='PASS')){coverage='PASS_REUSED';reusable.push(c.caseId);}
+    else{requiredExecution.push(c.caseId);if(!reasons.length)reasons.push('CURRENT_EVIDENCE_REQUIRED');}
+    if(unknown)observeOriginal.push({caseId:c.caseId,requestIds:[...c.observeOriginalRequestIds]});
+    return{caseId:c.caseId,coverage,reasons:[...new Set(reasons)].sort(),originalRequestIds:[...c.originalRequestIds],nextAction:coverage!=='REQUIRED'?'RETAIN' as const:unknown?'OBSERVE_ORIGINAL' as const:'REVIEW_EXECUTION' as const};
+  });
+  return{schema:'runtime-differential-execution-plan/v1',scope:catalog.scope,currentCandidateDigest:candidateDigest,candidateAuthenticated,phase:catalog.phase,status:candidateAuthenticated?'OBSERVED':'CANDIDATE_UNPROVEN',policyDigest:catalog.policyDigest,profileDigest:catalog.profileDigest,inventoryDigest:catalog.inventoryDigest,historyWatermark:catalog.historyWatermark,observedAt:new Date(now).toISOString(),expiresAt:catalog.expiresAt,required:ids.length,currentExecuted:currentExecuted.sort(),reusable:reusable.sort(),requiredExecution:requiredExecution.sort(),observeOriginal,decisions,dispatchAuthorized:false,releaseAuthorized:false,establishesEnvironmentState:false};
 }

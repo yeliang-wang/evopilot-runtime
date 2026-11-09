@@ -1,3 +1,4 @@
+import {AsyncLocalStorage} from 'node:async_hooks';
 import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { canonical, exact, record, reject, slug, string, ServiceError } from '../server/errors.js';
@@ -21,11 +22,11 @@ import { createImplementationStageAdapters } from './implementation-stages.js';
 import { releaseDocuments } from './documents.js';
 import type { RuntimeStore, Receipt } from '../server/store.js';
 import {createNativeQualificationService,createClosedFixtureQualificationProducer,qualifyEvidence,type NativeQualificationService,type NativeQualificationBindings,type ProtectedQualificationFacts,type QualificationAction,type QualificationMutationContext} from '../lifecycle/evidence-qualification.js';
-import {LC20_CHILDREN,type QualificationSelection,type TypedCurrentExecutionCapture,type Lc20ProducerContract,type OriginalEvidenceExecution,type EvidenceInputManifest} from '../lifecycle/correction-contract.js';
+import {LC20_CHILDREN,type QualificationSelection,type TypedCurrentExecutionCapture,type Lc20ProducerContract,type OriginalEvidenceExecution,type EvidenceInputManifest,type DifferentialEvidenceSelection,type DifferentialEvidenceCatalog,type DifferentialEvidenceCase,type RawEvidenceOutcome} from '../lifecycle/correction-contract.js';
 import {createQualificationAssessmentAuthority,QUALIFICATION_AUTHORITY_READS,QUALIFICATION_AUTHORITY_WRITES,type QualificationAssessmentPlan,type PrincipalLookup} from './authority.js';
-import {nativeInventory,verifyNativeStageResult,protectedCiExecutionState,readProtectedCiExecution,readProtectedLc20Candidate,lc20ManagedHistoryState,type ProtectedLc20Candidate,type PublishedExecutionProducer} from './stages.js';
+import {openProtectedCiObservationScope,nativeInventory,verifyNativeStageResult,protectedCiExecutionState,readProtectedCiExecution,readProtectedLc20Candidate,lc20ManagedHistoryState,type ProtectedLc20Candidate,type PublishedExecutionProducer} from './stages.js';
 import {readCurrentCaseReceipt,readLc20ProducerContract,observeLc20Protocol,openLc20ObservationScope,prepareLc20Protocol} from './artifacts.js';
-import type { StageAdapter, StageServices } from '../lifecycle/execution.js';
+import type { StageAdapter, StageServices, StageRequest } from '../lifecycle/execution.js';
 import { createReleaseStageAdapter } from './release-stages.js';
 import { publicationTarget } from './distribution.js';
 import { createPublicationStageAdapter } from './publication-stage.js';
@@ -387,6 +388,22 @@ export function createRegisteredQualificationService(store:RuntimeStore,configPa
   type PlanRecord={plan:QualificationAssessmentPlan;registrationRef:string;facts:Omit<ProtectedQualificationFacts,'assessmentAuthority'>;sources?:{originalOriginRef:string;currentInputRef:string}};
   type ExecutionRecord={schema:'runtime-current-execution-source/v3';registrationRef:string;originRef:string;producer:PublishedExecutionProducer;originStateDigest:string;policyStamp:string;rawReceipt:string;capture:TypedCurrentExecutionCapture};
   const policies=new Map<string,Policy>(),verifiedExecutionSources=new Map<string,string>();
+  type Invocation={closed:boolean;failed:boolean;finalizers:{check:()=>void;dispose:()=>void}[];policies:Map<string,{policy:Policy;observer:{id:string;revision:number}}>};
+  const invocations=new AsyncLocalStorage<Invocation>();
+  function openObservationScope(signal:AbortSignal){
+    const inherited=invocations.getStore(),lc20=openLc20ObservationScope(signal),ci=openProtectedCiObservationScope(signal),invocation:Invocation=inherited??{closed:false,failed:false,finalizers:[],policies:new Map()};
+    return{run<T>(read:()=>T):T{signal.throwIfAborted();if(invocation.closed)reject('QUALIFICATION_OBSERVATION_EXPIRED','Original qualification observation closed',409);return invocations.run(invocation,()=>ci.run(()=>lc20.run(read)));},
+      onFinalCheck(check:()=>void,dispose:()=>void){if(invocation.closed)reject('QUALIFICATION_OBSERVATION_EXPIRED','Observation already closed',409);invocation.finalizers.push({check,dispose});},
+      close(){try{ci.close();}catch(error){invocation.failed=true;throw error;}finally{try{lc20.close();}finally{if(!inherited){invocation.closed=true;invocation.policies.clear();}}}},
+      async drain(){try{await lc20.drain();}catch(error){invocation.failed=true;throw error;}},
+      finish(){if(inherited)return;try{if(!invocation.closed||invocation.failed)return;for(const final of invocation.finalizers)final.check();}finally{for(const final of invocation.finalizers)final.dispose();invocation.finalizers=[];}},cacheDependent:()=>lc20.cacheDependent()};
+  }
+  async function executionPolicy(projectId:string,refValue:string,actor:Principal,signal:AbortSignal){
+    signal.throwIfAborted();const entry=invocations.getStore()?.policies.get(projectId+'\0'+refValue);
+    if(!entry)return policy(projectId,refValue,actor,signal);
+    const current=authority.currentActor(actor,projectId,'read');if(entry.observer.id!==current.id||entry.observer.revision!==current.revision||entry.policy.stamp!==policyCurrent(projectId,refValue).stamp)reject('QUALIFICATION_POLICY_CHANGED','Current original policy observer required',409);return entry.policy;
+  }
+
   const same=(a:unknown,b:unknown)=>valueDigest(a)===valueDigest(b);
   function registration(projectId:string,refValue:string){
     const c=readIntegrationConfiguration(configPath,workspaceId),r=c.resources.find(r=>r.ref===refValue&&r.projectId===projectId&&r.role==='runtime.qualification');
@@ -471,19 +488,86 @@ export function createRegisteredQualificationService(store:RuntimeStore,configPa
     if(!same(r.capture,capture)||p.stamp!==r.policyStamp||!same(p.producers.get(capture.caseId),r.producer)||source.stateDigest!==r.originStateDigest||source.historyWatermark!==capture.historyWatermark||source.entry.rawReceipt.digest!==capture.rawReceiptDigest||raw.rawReceiptDigest!==source.entry.rawReceipt.digest||capture.origin.distributionIdentity?.lifecycleCandidateDigest!==ci.candidateDigest||capture.origin.distributionIdentity.manifestDigest!==capture.candidateDigest||capture.originalReceiptRef!==r.originRef||capture.protectedFactsDigest!==valueDigest({origin:source.stateDigest,policy:p.stamp,producer:r.producer})||capture.phase!==rule.phase||capture.requirement!==rule.executionRequirement||!same(capture.policy,{referenceDigest:p.base.owner.reference.digest,profileDigest:p.base.profileDigest,catalogScopeDigest:p.base.catalogScopeDigest})||capture.expiresAt!==expectedExpiry||Date.parse(capture.expiresAt)<=Date.now())reject('QUALIFICATION_EXECUTION_CHANGED','Current original execution or policy changed',409);
     policyCurrent(projectId,r.registrationRef);return authority.currentActor(actor,projectId,'read');
   }
+  /** Enumerate native originals, not caller-selected status JSON. Missing
+   * selectors are not absence proof. Only an entirely checked registered
+   * native producer inventory may identify a case with no retained origin. */
+  function executionSetInventory(projectId:string,p:Policy,phase:'PRE_RELEASE'|'POST_RELEASE',actor:Principal,signal?:AbortSignal){
+    const revision=store.revision(projectId),events=new Map<string,Record<string,unknown>>(),requests=new Map<string,StageRequest>(),snapshots:unknown[]=[];
+    let cursor:string|undefined,eventCount=0;
+    for(;;){signal?.throwIfAborted();const page=store.events(actor,projectId,cursor);for(const raw of page.events){if(++eventCount>32768)reject('DIFFERENTIAL_HISTORY_LIMIT','Native claim audit exceeds bounded observation',409);const e=record(raw);if(e.type==='stage-requested'){const d=record(e.data),id=string(d.stageRequestId);if(events.has(id))reject('DIFFERENTIAL_HISTORY_UNAVAILABLE','Duplicate original native claim',409);events.set(id,d);}}if(!page.events.length)break;cursor=page.cursor;}
+    const selected=[...p.cases.values()].filter(c=>c.phase===phase).sort((a,b)=>a.caseId<b.caseId?-1:1),rows=new Map<string,DifferentialEvidenceCase>(selected.map(c=>[c.caseId,{caseId:c.caseId,executionRequirement:c.executionRequirement,observedOutcomes:[],originalRequestIds:[],observeOriginalRequestIds:[],absence:p.producers.has(c.caseId)||c.caseId==='LC20'&&p.completeProducer?'PROVEN_NATIVE_ABSENCE':'UNPROVEN'}]));
+    const addRequest=(row:DifferentialEvidenceCase,id:string,unknown:boolean)=>{row.absence='NOT_ABSENT';if(!row.originalRequestIds.includes(id))row.originalRequestIds.push(id);if(unknown&&!row.observeOriginalRequestIds.includes(id))row.observeOriginalRequestIds.push(id);};
+    let unmappedOriginal=false,after='';for(;;){signal?.throwIfAborted();const page=store.objectsPage(projectId,'stage-request',after,200);for(const item of page){
+      if(requests.size>=4096)reject('DIFFERENTIAL_HISTORY_LIMIT','Native stage inventory exceeds bounded observation',409);const r=item.value as StageRequest,{digest,...body}=r,claim=events.get(item.id),instance=store.object(projectId,'lifecycle-instance',r.instanceId) as LifecycleInstance|null;
+      if(r.schema!=='runtime-stage-request/v1'||r.id!==item.id||r.projectId!==projectId||r.workspaceId!==workspaceId||valueDigest(body)!==digest||valueDigest(r.plan)!==r.planDigest||!claim||claim.planDigest!==r.planDigest||claim.inputDigest!==r.inputDigest||claim.instanceId!==r.instanceId||claim.stageId!==r.stageId||instance?.schema!=='runtime-lifecycle-instance/v1'||instance.id!==r.instanceId||instance.pins.projectId!==projectId||!instance.requestIds.includes(r.id)||instance.pinsDigest!==r.pinsDigest)reject('DIFFERENTIAL_HISTORY_UNAVAILABLE','Native requests, immutable plans and claim inventory differ',409);
+      requests.set(r.id,r);const progress=store.object(projectId,'stage-progress',r.id),v=progress===null?null:record(progress),observation=v?.observationRef?store.object(projectId,'stage-observation',string(v.observationRef)):null;
+      if(!v||v.requestId!==r.id||!Number.isFinite(Date.parse(r.deadlineAt))||!Number.isFinite(Date.parse(String(v.observedAt))))reject('DIFFERENTIAL_HISTORY_UNAVAILABLE','Original native progress and time are required',409);
+      exact(v,['requestId','phase','terminal','handle','observation','observationRef','reason','observedAt']);
+      if(v.phase==='DISPATCHING'){
+        if(v.terminal!==false||v.observation!==null||v.observationRef!==null||v.reason!==null||v.handle!==null)reject('DIFFERENTIAL_HISTORY_UNAVAILABLE','Initial native progress contains unverified facts',409);
+      }else{
+        if(!['WAITING_AGENT','CI_PENDING','CI_RUNNING','RUNNING','UNKNOWN','COMPLETE','FAILED'].includes(String(v.phase))||!v.observation||!v.observationRef||!observation)reject('DIFFERENTIAL_HISTORY_UNAVAILABLE','Immutable original native observation required',409);
+        const envelope=record(observation),actual=record(v.observation),outcome=record(actual.outcome);exact(envelope,['schema','requestId','observation','reason','observedAt']);
+        if(envelope.schema!=='runtime-stage-observation/v1'||envelope.requestId!==r.id||valueDigest(envelope)!==v.observationRef||!same(envelope.observation,v.observation)||envelope.reason!==v.reason||envelope.observedAt!==v.observedAt||actual.phase!==v.phase||!same(v.handle,actual.handle)||v.terminal!==['COMPLETE','FAILED'].includes(String(v.phase))||actual.requestId!==r.id||actual.inputDigest!==r.inputDigest||actual.adapterDigest!==r.plan.adapterDigest||outcome.requestId!==r.id||outcome.inputDigest!==r.inputDigest||outcome.status!==(v.phase==='COMPLETE'?'COMPLETE':v.phase==='FAILED'?'FAILED':v.phase==='UNKNOWN'?'UNKNOWN':'RUNNING'))reject('DIFFERENTIAL_HISTORY_UNAVAILABLE','Mutable progress differs from its immutable original observation',409);
+      }
+      const unknown=!v||!['COMPLETE','FAILED'].includes(String(v.phase)),params=record(r.plan.parameters);
+      let mapped=false;for(const c of p.cases.values()){const producer=p.producers.get(c.caseId),pin=params.qualificationProducer;const matches=producer&&params.workflowDigest===producer.workflowDigest||c.caseId==='LC20'&&pin&&record(record(pin).contract).caseId==='LC20';if(matches){mapped=true;const row=rows.get(c.caseId);if(row){addRequest(row,r.id,unknown);if(v.phase==='FAILED'&&!row.observedOutcomes.includes('FAIL'))row.observedOutcomes.push('FAIL');}}}
+      // An older or unclassified producer claim may belong to a current case.
+      // Its absence cannot be guessed from today's producer mapping.
+      const knownPredecessor=r.plan.bindingDigest===valueDigest(params)&&!Object.hasOwn(params,'workflowDigest')&&!Object.hasOwn(params,'qualificationProducer')&&(
+        r.stageId==='scope'&&r.plan.adapterId==='runtime-scope-stage-v1'&&r.plan.action==='base.scope'&&r.plan.adapterDigest===valueDigest({id:'runtime-scope-stage-v1',preparation:'runtime-preparation/v1',checks:['target-scope','requirements-mapping'],continuation:'explicit-local-commit'})||
+        r.stageId==='plan'&&r.plan.adapterId==='runtime-plan-stage-v1'&&r.plan.action==='base.plan'&&r.plan.adapterDigest===valueDigest({id:'runtime-plan-stage-v1',preparation:'runtime-preparation/v1',observation:'runtime-plan-observation/v1',owners:'native/v1',recovery:'inspect-original'}));
+      // These two fixed preparation-stages.ts contracts produce scope/plan
+      // evidence only. Unknown adapters or historical CI workflows stay unknown.
+      if(!mapped&&!knownPredecessor)unmappedOriginal=true;
+      snapshots.push({request:r.digest,progress,observation});
+    }if(page.length<200)break;after=page.at(-1)!.id;}
+    if(requests.size!==events.size)reject('DIFFERENTIAL_HISTORY_UNAVAILABLE','A native stage claim is missing from protected inventory',409);
+    let captures=0;const archives=new Set<string>();after='';for(;;){signal?.throwIfAborted();const page=store.objectsPage(projectId,'ci-acceptance-capture',after,200);for(const item of page){
+      if(++captures>4096)reject('DIFFERENTIAL_HISTORY_LIMIT','Native capture inventory exceeds bounded observation',409);const original=record(item.value),{digest,...body}=original,report=record(original.report),requestId=string(original.stageRequestId);
+      if(original.schema!=='runtime-ci-acceptance-capture/v1'||valueDigest(body)!==digest||original.workspaceId!==workspaceId||original.projectId!==projectId||!requests.has(requestId)||original.stageRequestDigest!==requests.get(requestId)!.digest||!Array.isArray(report.cases))reject('DIFFERENTIAL_HISTORY_UNAVAILABLE','Original captured cases differ from native claim',409);
+      const entries=report.cases.map(record).filter(c=>rows.has(String(c.caseId)));
+      if(entries.length){const source=protectedCiExecutionState(store,projectId,item.id,String(entries[0].caseId));archives.add(source.root+'\0'+source.archiveDigest);if(archives.size>709)reject('DIFFERENTIAL_HISTORY_LIMIT','Original archive observation exceeds 709 unique originals',409);snapshots.push({capture:item.id,digest,sourceDigest:source.stateDigest,archiveDigest:source.archiveDigest});
+        for(const entry of entries){const outcome=string(entry.observedOutcome) as RawEvidenceOutcome;if(!['PASS','FAIL','NOT_RUN','CANCELLED','UNKNOWN','SKIPPED'].includes(outcome))reject('DIFFERENTIAL_HISTORY_UNAVAILABLE','Unknown original captured outcome',409);const row=rows.get(String(entry.caseId))!;addRequest(row,requestId,outcome==='UNKNOWN');if(!row.observedOutcomes.includes(outcome))row.observedOutcomes.push(outcome);}
+      }else snapshots.push({capture:item.id,digest});
+    }if(page.length<200)break;after=page.at(-1)!.id;}
+    // Closed probes are observations only. They never make a formal case NEW,
+    // executed or reusable; their existence prevents a false absence claim.
+    for(const configured of (p.registration.definition.probes as {caseId:string}[])){const row=rows.get(configured.caseId);if(!row)continue;const history=probe(p,configured.caseId).history(actor);if(history.length){row.absence='NOT_ABSENT';snapshots.push({probe:configured.caseId,historyDigest:valueDigest(history)});}}
+    if(store.revision(projectId)!==revision)reject('DIFFERENTIAL_FACTS_CHANGED','Complete native inventory changed while reading',409);
+    for(const row of rows.values()){if(unmappedOriginal&&row.absence==='PROVEN_NATIVE_ABSENCE')row.absence='UNPROVEN';row.observedOutcomes.sort();row.originalRequestIds.sort();row.observeOriginalRequestIds.sort();}
+    return{cases:[...rows.values()],historyWatermark:valueDigest(snapshots),projectRevision:revision};
+  }
+  async function executionSetCatalog(projectId:string,registrationRef:string,phase:'PRE_RELEASE'|'POST_RELEASE',actor:Principal,signal:AbortSignal):Promise<DifferentialEvidenceCatalog>{
+    const p=await policy(projectId,registrationRef,actor,signal),fresh=authority.currentActor(actor,projectId,'read'),inventory=executionSetInventory(projectId,p,phase,fresh,signal);
+    signal.throwIfAborted();policyCurrent(projectId,registrationRef);authority.currentActor(actor,projectId,'read');
+    invocations.getStore()?.policies.set(projectId+'\0'+registrationRef,{policy:p,observer:{id:fresh.id,revision:fresh.revision}});
+    return{scope:{workspaceId,projectId,acceptanceScopeDigest:p.base.catalogScopeDigest},phase,registrationRef,policyDigest:p.base.owner.reference.digest,profileDigest:p.base.profileDigest,registrationDigest:p.stamp,inventoryDigest:p.base.caseInventoryDigest,expiresAt:new Date(Math.min(Date.parse(p.registration.expiresAt),Date.parse(fresh.expiresAt))).toISOString(),...inventory};
+  }
   const bindings:NativeQualificationBindings={
+    executionSetFinalizer(catalog,observer,subjects){const configurationDigest=valueDigest(readIntegrationConfiguration(configPath,workspaceId)),plans=new Map(subjects.map(subject=>{const r=selectedPlan(subject.selection);return[r.plan.ref,r.plan];}));
+      const unchanged=()=>{const p=policyCurrent(catalog.scope.projectId,catalog.registrationRef);if(store.revision(catalog.scope.projectId)!==catalog.projectRevision||p.stamp!==catalog.registrationDigest||p.base.owner.reference.digest!==catalog.policyDigest||p.base.profileDigest!==catalog.profileDigest||valueDigest(readIntegrationConfiguration(configPath,workspaceId))!==configurationDigest||Date.parse(catalog.expiresAt)<=Date.now())reject('DIFFERENTIAL_FACTS_CHANGED','Original protected inventory, configuration or policy changed during final observation',409);};
+      // Reuse the original grant reader, including independent grantor and
+      // initiator credentials and original decision bytes. Only plans already
+      // authenticated in this observation can use its closed-byte proof.
+      const grants=createQualificationAssessmentAuthority(store,principals,(projectId,ref)=>{unchanged();const expected=plans.get(ref),actual=storedPlan(projectId,ref).plan;if(projectId!==catalog.scope.projectId||!expected||!same(expected,actual))reject('QUALIFICATION_PLAN_CHANGED','Original authenticated plan required at final consumption',409);return actual;});
+      return()=>{unchanged();for(const subject of subjects){const r=selectedPlan(subject.selection),grant=grants.resolve(catalog.scope.projectId,r.plan.ref,observer);if(grant.authorityRef!==subject.authorityRef||grant.authorityDigest!==subject.authorityDigest)reject('QUALIFICATION_AUTHORITY_CHANGED','Original assessment authority changed after byte cleanup',409);}unchanged();return authority.currentActor(observer,catalog.scope.projectId,'read');};},
+    readExecutionSetCatalog:executionSetCatalog,
+    authorizeExecutionSet(catalog,observer){const fresh=authority.currentActor(observer,catalog.scope.projectId,'read'),p=policyCurrent(catalog.scope.projectId,catalog.registrationRef),inventory=executionSetInventory(catalog.scope.projectId,p,catalog.phase,fresh);
+      if(catalog.scope.workspaceId!==workspaceId||catalog.registrationDigest!==p.stamp||catalog.policyDigest!==p.base.owner.reference.digest||catalog.profileDigest!==p.base.profileDigest||catalog.inventoryDigest!==p.base.caseInventoryDigest||catalog.scope.acceptanceScopeDigest!==p.base.catalogScopeDigest||catalog.projectRevision!==inventory.projectRevision||catalog.historyWatermark!==inventory.historyWatermark||!same(catalog.cases,inventory.cases)||Date.parse(catalog.expiresAt)<=Date.now())reject('DIFFERENTIAL_FACTS_CHANGED','Current catalog, protected inventory and original observer are required',409);return fresh;},
     async read(selection,actor,signal){const r=selectedPlan(selection);const p=await policy(selection.scope.projectId,r.registrationRef,actor,signal);if(r.sources)await refreshComplete(selection.scope.projectId,r.sources,p,actor,signal);signal.throwIfAborted();return factsSync(selection,actor);},
     owner(refValue){return connections.owner(refValue,readIntegrationConfiguration(configPath,workspaceId));},
     authorizeDispatch(subject,actor){const fresh=authority.currentActor(actor,subject.projectId,'execution.request'),a=store.object(subject.projectId,kind,subject.actionRef) as QualificationAction|null;if(!a||a.digest!==subject.actionDigest||a.action.requestDigest!==subject.requestDigest)reject('QUALIFICATION_ACTION_CHANGED','Exact original native action required',409);const r=planForSelection(a.selection,fresh);if(r.plan.initiatedBy.id!==fresh.id||r.plan.initiatedBy.revision!==fresh.revision)reject('QUALIFICATION_PRINCIPAL_CHANGED','Original current initiator required',403);const f=factsSync(a.selection,fresh);if(!same(f,a.facts)||f.assessmentAuthority.authorityRef!==subject.authorityRef||f.assessmentAuthority.authorityDigest!==subject.authorityDigest||a.expiresAt!==subject.expiresAt)reject('QUALIFICATION_AUTHORITY_CHANGED','Exact grant and protected action facts required',409);return{actor:fresh,permit:{projectId:subject.projectId,owner:'harness',requestDigest:subject.requestDigest,authorityRef:subject.authorityRef,expiresAt:subject.expiresAt}};},
     authorizeInspect(subject,actor){const fresh=authority.currentActor(actor,subject.projectId,'read'),facts=factsSync(subject.selection,fresh);if(valueDigest(facts)!==subject.protectedFactsDigest||facts.assessmentAuthority.authorityRef!==subject.authorityRef||facts.assessmentAuthority.authorityDigest!==subject.authorityDigest||facts.history.watermark!==subject.historyWatermark||facts.policy.trust.revision!==subject.trustRevision||facts.policy.owner.registrationDigest!==subject.ownerRegistrationDigest)reject('QUALIFICATION_FACTS_CHANGED','Current complete qualification facts required',409);return fresh;},
-    async readExecution(projectId,refValue,actor,signal){const r=executionRecord(projectId,refValue);await policy(projectId,r.registrationRef,actor,signal);const original=await readProtectedCiExecution(store,projectId,r.originRef,r.producer,signal);if(original.candidateDigest!==r.capture.candidateDigest||original.rawReceipt!==r.rawReceipt||!same(original.origin,r.capture.origin)||original.stateDigest!==r.originStateDigest)reject('QUALIFICATION_EXECUTION_CHANGED','Original Runtime distribution and actual case bytes changed',409);verifiedExecutionSources.set(refValue,valueDigest(r));executionCurrent(projectId,r.capture,actor);return r.capture;},
+    async readExecution(projectId,refValue,actor,signal){const r=executionRecord(projectId,refValue);await executionPolicy(projectId,r.registrationRef,actor,signal);const original=await readProtectedCiExecution(store,projectId,r.originRef,r.producer,signal);if(original.candidateDigest!==r.capture.candidateDigest||original.rawReceipt!==r.rawReceipt||!same(original.origin,r.capture.origin)||original.stateDigest!==r.originStateDigest)reject('QUALIFICATION_EXECUTION_CHANGED','Original Runtime distribution and actual case bytes changed',409);verifiedExecutionSources.set(refValue,valueDigest(r));executionCurrent(projectId,r.capture,actor);return r.capture;},
     authorizeExecution:executionCurrent,
   };
-  bindings.openObservationScope=openLc20ObservationScope;
+  bindings.openObservationScope=openObservationScope;
   const native=createNativeQualificationService(store,bindings),signal=()=>AbortSignal.timeout(30000);
   const registered:RegisteredQualificationService={native,
     async read(actor,projectId,operation,input){
       authorize(actor,projectId,'read');
+      if(operation==='lifecycle.qualification.execution-set.inspect')return native.inspectExecutionSet(projectId,input as unknown as DifferentialEvidenceSelection,actor,signal());
       if(operation==='lifecycle.qualification.action.inspect'){
         exact(input,['actionRef']);const actionRef=string(input.actionRef,512),a=store.object(projectId,kind,actionRef) as QualificationAction|null;
         if(!a||a.schema!=='runtime-native-qualification-action/v2'||a.selection.scope.projectId!==projectId||a.selection.scope.workspaceId!==workspaceId||a.factsDigest!==valueDigest(a.facts))reject('QUALIFICATION_ACTION_REQUIRED','Original native action required',404);
@@ -560,5 +644,5 @@ export function createRegisteredQualificationService(store:RuntimeStore,configPa
   };
   // HTTP/MCP currently supply no disconnect signal. This local operation limit
   // bounds observation work; it must not be described as transport cancellation.
-  return{native,async read(...args){const scope=openLc20ObservationScope(signal());try{return await scope.run(()=>registered.read(...args));}finally{scope.close();await scope.drain();}},async write(...args){const scope=openLc20ObservationScope(signal());try{return await scope.run(()=>registered.write(...args));}finally{scope.close();await scope.drain();}}};
+  return{native,async read(...args){const scope=openObservationScope(signal());try{return await scope.run(()=>registered.read(...args));}finally{try{scope.close();}finally{try{await scope.drain();}finally{scope.finish();}}}},async write(...args){const scope=openObservationScope(signal());try{return await scope.run(()=>registered.write(...args));}finally{try{scope.close();}finally{try{await scope.drain();}finally{scope.finish();}}}}};
 }

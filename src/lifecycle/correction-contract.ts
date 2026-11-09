@@ -95,6 +95,35 @@ export interface RuntimeDistributionIdentity {
   manifestDigest:string;archiveDigest:string;sourceRevisionDigest:string;sourceCommit:string;
 }
 
+/** Read-only coverage planning. References select native records; public callers
+ * cannot supply statuses, history completeness, policy or impact decisions. */
+export interface DifferentialEvidenceSelection {
+  registrationRef:string; currentCandidateDigest:string; phase:'PRE_RELEASE'|'POST_RELEASE';
+  qualifications:{caseId:string;actionRef:string}[];
+  executions:{caseId:string;captureRef:string}[];
+}
+export interface DifferentialEvidenceCase {
+  caseId:string; executionRequirement:'ALWAYS_MUST_EXECUTE'|'AFFECTED_OR_UNKNOWN_MUST_EXECUTE';
+  observedOutcomes:RawEvidenceOutcome[]; originalRequestIds:string[];
+  observeOriginalRequestIds:string[]; absence:'PROVEN_NATIVE_ABSENCE'|'NOT_ABSENT'|'UNPROVEN';
+}
+export interface DifferentialEvidenceCatalog {
+  scope:EvidenceScope; phase:'PRE_RELEASE'|'POST_RELEASE'; registrationRef:string;
+  policyDigest:string; profileDigest:string; registrationDigest:string; inventoryDigest:string;
+  historyWatermark:string; projectRevision:number; expiresAt:string; cases:DifferentialEvidenceCase[];
+}
+export interface DifferentialEvidencePlan {
+  schema:'runtime-differential-execution-plan/v1'; scope:EvidenceScope;
+  currentCandidateDigest:string; candidateAuthenticated:boolean; phase:'PRE_RELEASE'|'POST_RELEASE';
+  status:'OBSERVED'|'CANDIDATE_UNPROVEN'; policyDigest:string; profileDigest:string;
+  inventoryDigest:string; historyWatermark:string; observedAt:string; expiresAt:string;
+  required:number; currentExecuted:string[]; reusable:string[]; requiredExecution:string[];
+  observeOriginal:{caseId:string;requestIds:string[]}[];
+  decisions:{caseId:string;coverage:'EXECUTED'|'PASS_REUSED'|'REQUIRED';reasons:string[];
+    originalRequestIds:string[];nextAction:'RETAIN'|'OBSERVE_ORIGINAL'|'REVIEW_EXECUTION'}[];
+  dispatchAuthorized:false; releaseAuthorized:false; establishesEnvironmentState:false;
+}
+
 /** One reviewed, finite producer. Its nodes are an owner-reviewed protocol,
  * never a public caller's assertion that an arbitrary program is hermetic. */
 export const LC20_VECTORS=['unrelated','direct','transitive','missing-edge-fallback'] as const;

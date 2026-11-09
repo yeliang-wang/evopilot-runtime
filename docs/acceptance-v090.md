@@ -1,10 +1,12 @@
 # Runtime v0.9 acceptance collectors / 验收入口
 
-The fixed catalog contains 64 requirement groups, 22 scenarios and 664 instances
-(655 before release, 9 after delivery). Development regressions are separate.
-The approved Runtime-only usage addendum adds UT01–UT24 independently: 23 before
-release and one after delivery. The original catalog plus usage obligation is **688 instances:
-678 pre-release and 10 post-release**. It does not replace any original scenario.
+The current fixed acceptance denominator is **709 instances: 698 before release
+and 11 after delivery**. HO01–HO03 are three separate handoff obligations.
+Development regressions and a callable collector do not count as completed
+acceptance. The original catalog contains 64 requirement groups, 22 scenarios and
+664 instances (655 PRE, 9 POST). UT01–UT24 add 23 PRE and one POST; LC01–LC21
+add 20 PRE and one POST. Neither addendum replaces an original scenario. The
+678 PRE / 10 POST usage subtotal is not the final release denominator.
 The E03 collector, `tests/acceptance/v090/e03.test.mjs`, executes the 332
 required-field HTTP instances, 48 fixed HTTP/MCP/CLI stage-entry instances and
 32 actual browser graph/YAML stage-entry instances and 16 actual Codex Expert
@@ -104,7 +106,7 @@ the exact enabled Skill path before a model turn; plugin metadata alone is
 insufficient. This fixture dispatches no CI and cannot satisfy the
 separate CV05 requirement for an already dispatched task across exit/reentry.
 
-E13 currently implements five interruption/measurement/concurrency branches. Its protected
+E13's protected
 `interruptionFixture` selects original native instances and records; it cannot
 supply stage outcomes or Host reports. The two interruption cases require actual
 native scope and plan completion and distinct PENDING implementation stages.
@@ -119,14 +121,54 @@ activation response is deliberately lost. Both clients must read the same
 recovered active definition. Exact request replay, changed-content refusal,
 one activation event, unchanged historical sources and unchanged instances are
 verified independently. No result from another scenario is reused as a pass.
-The remaining seven E13 instances remain required, including variant 05. That
-variant needs original real Host availability evidence correlated with the exact
+Variant 05 needs original real Host availability evidence correlated with the exact
 report, task and Target version; an authenticated report containing null alone
 does not establish unavailability. An actual unsupported or unavailable source
 can qualify once evidenced; a manufactured collection failure is not required.
 Both the collector and its `execution.mjs` helper are pinned and rechecked; none
 of these branches substitutes for the complete interruption journey or two-client
 acceptance.
+
+The E13 primary journey selects a fresh case on one original implementation
+request. It combines both request-channel interruptions, an owned observing Host
+that exits, a second owned coding Host with exact claim/edit/validation/report
+phases, and the first derived GitHub CI dispatch whose response is lost. The
+same native request and provider run must survive Host exit, event-stream
+cancellation and exhausted attempt, concurrency, loop and time budgets. After
+the deadline, only observation of that original execution is permitted. Separate
+passing variant reports cannot be stitched into this journey.
+
+The source-review decision belongs to an independent reviewer and must bind the
+actual submitted report. A protected reviewer connection reads that principal's
+original receipt; the coding connection cannot read or create it. The collector
+uses no Runtime LLM profile, grants no broad command permissions, and must stop
+its own Host processes on failure. Exact installed Host/protocol identity,
+reviewed fixture bindings, existing authority and the original budget remain
+actual-execution prerequisites. Generated protocol definitions and local guards
+prove implementation properties, not a real Host or CI journey.
+
+E18's provider journeys also require original credential-loss observations from
+real CI. The `forkCredential` selector binds the original fork and upstream
+`stageRequestId`, `runId` and `jobId`, plus one dedicated `credentialName`.
+Both repositories must have an authenticated fork relationship, the same source
+commit and exact workflow bytes, and distinct native requests. The committed
+probe records only whether that credential is available: upstream PRESENT with
+exit 0, fork ABSENT with exit 78. Original job outcomes, the fixed probe source,
+stdout/stderr and downloaded artifact bytes must agree. A generic API 403, an
+invented variable name or a caller-supplied absence flag is insufficient.
+The dedicated GitHub workflow must not inherit top-level `env` or `defaults`;
+the GitLab source must not use unverified `include` merging. Checking only the
+literal job body would allow inherited configuration to alter the probe before
+it measures the credential.
+
+This collector reads existing provider/job/artifact records; it neither starts
+those pipelines nor reads secret values or variable-management APIs. The
+observation proves availability in the two actual executions, not an unread
+provider configuration flag. Missing producer workflows, original runs or
+artifacts remain NOT_READY. Those prerequisites cannot be replaced by local
+probe unit tests, and CV03 budget coverage does not satisfy this obligation.
+For GitLab, an advertised artifact expiry is not proof of deletion: retained
+artifacts still require an actual bounded download and stable original metadata.
 
 E15 binds a separate installed migrated workspace and explicit synthetic assets
 from the published Ontology/Harness 0.8.3 packages. Its actual Codex plugin exposes
@@ -271,7 +313,8 @@ Protocol checks never register an execution provider or perform business writes.
 They do not replace E10's actual Codex/Expert journey or E20's complete coverage
 qualification. CV07 in E09 requires every fixed E09 instance in the same campaign.
 
-固定验收分母为 664，开发回归与正式验收分别记账。E03 对真实安装包执行 332 个
+原 E01–E20 验收目录为 664 项；与 UT、LC 增补合并后的固定分母为 709 项，
+开发回归与正式验收分别记账。E03 对真实安装包执行 332 个
 字段缺项／非法值检查，以及 HTTP、MCP、CLI 三个入口的 48 个阶段配置检查和
 图形／YAML 两个实际浏览器入口的 32 个阶段配置检查，以及真实 Codex Expert 的
 16 个阶段配置检查，
@@ -373,9 +416,10 @@ selected installed candidate. This pure record verifier does not authenticate
 arbitrary local JSON: the caller must retain authenticated provider reads. Its
 result does not authorize publication, and it is not a replacement for E01–E20.
 
-发布前记录核验固定要求 E01–E20 的全部 655 项，逐项绑定候选、收集器、选择文件、
+原 E01–E20 发布前记录核验要求全部 655 项，逐项绑定候选、收集器、选择文件、
 原用例结果及请求／响应／附件原始摘要。开发子集、遗漏、跳过、错误候选或修改后的
-原始记录不能通过。旧报告保留原样，不补写缺失证据；后置 9 项仍待实际交付完成。
+原始记录不能通过。旧报告保留原样，不补写缺失证据；原目录的后置 9 项仍须实际
+交付验证。合并 UT、LC 后，最终门禁要求全部 698 项发布前和 11 项发布后验收。
 核验记录完整性不等于产品验收、源码 CI 或真实发布决定，更不能用合成守卫测试
 替代真实软件流程。
 

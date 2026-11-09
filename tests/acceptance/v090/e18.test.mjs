@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import {pathToFileURL} from 'node:url';
+import {pathToFileURL,fileURLToPath} from 'node:url';
 import {openScenario,sha} from './support.mjs';
 import {collectCoverageInventory,collectManagedBudget} from './execution.mjs';
 
@@ -36,8 +36,9 @@ import {collectCoverageInventory,collectManagedBudget} from './execution.mjs';
 //  publication:{stageRequestId,unknownObservationRef,allowReconciliation:true}}.
 // E18.journey selects {providers:[<github plan>,<gitlab plan>]}. No free-form
 // operations, remote commands, authority evidence or supplied PASS are accepted.
-// Fork credential loss remains a separate obligation. CV03 uses the shared
-// exact native budget collector and never closes the fork-credential gap.
+// forkCredential additionally selects an original native CI in a registered
+// isolated fork, its exact job and an original upstream PRESENT probe. It never dispatches a fork pipeline or copies a protected secret.
+// CV03 uses the shared exact native budget collector independently.
 const stages=['scope','plan','implementation','candidate','verification','release-decision','publication','closure'];
 const outcomes=['not-run','failed','unknown','missing-evidence','passed'];
 const hash=/^sha256:[a-f0-9]{64}$/;
@@ -55,7 +56,50 @@ function pinned(pin){
 function differentDigest(value){assert(hash.test(value));return 'sha256:'+(value[7]==='0'?'1':'0')+value.slice(8);}
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
-test('E18 installed CI evidence and exact release-authority mismatch',async()=>{
+export const FORK_PROBE_JOB='runtime-fork-credential-probe';
+const forkProbeFiles=['fork-credential-probe.json','fork-credential-probe.stderr','fork-credential-probe.stdout'];
+export function validateForkCredentialSelection(p){
+ assert(p,'E18_FORK_CREDENTIAL_NOT_READY: original upstream/fork CI probe bindings required');keys(p,['stageRequestId','runId','jobId','credentialName','upstream']);keys(p.upstream,['stageRequestId','runId','jobId']);for(const v of [p,p.upstream]){assert(typeof v.stageRequestId==='string'&&v.stageRequestId);for(const id of [v.runId,v.jobId])assert(/^[1-9][0-9]{0,19}$/.test(id));}assert(/^[A-Z][A-Z0-9_]{2,63}$/.test(p.credentialName));assert(!/^(GITHUB_|GITLAB_|CI_|RUNTIME_|ACTIONS_|NODE_)/.test(p.credentialName),'Select a dedicated protected business credential, not an automatic runner token');return p;
+}
+export function assertForkLineage(provider,upstream,fork,upstreamId,forkId){
+ assert.notEqual(upstreamId,forkId);assert.equal(String(upstream.id),upstreamId);assert.equal(String(fork.id),forkId);if(provider==='github'){assert.equal(fork.fork,true);assert.equal(String(fork.parent?.id),upstreamId);}else{assert.equal(provider,'gitlab');assert.equal(String(fork.forked_from_project?.id),upstreamId,'NOT_READY: provider must retain the actual fork parent');}return{provider,upstreamId,forkId};
+}
+export function forkCredentialProbeScript(name){
+ assert(/^[A-Z][A-Z0-9_]{2,63}$/.test(name));return `node --input-type=module >fork-credential-probe.stdout 2>fork-credential-probe.stderr <<'RUNTIME_FORK_CREDENTIAL_PROBE'\nimport fs from 'node:fs';\nconst e=process.env,absent=!e[${JSON.stringify(name)}],report={schema:'runtime-fork-credential-probe/v1',provider:e.PROBE_PROVIDER,repositoryId:e.PROBE_REPOSITORY_ID,runId:e.PROBE_RUN_ID,jobKey:'runtime-fork-credential-probe',requestId:e.runtime_request_id,inputDigest:e.runtime_input_digest,sourceCommit:e.runtime_source_commit,workflowDigest:e.runtime_workflow_digest,credentialName:${JSON.stringify(name)},credentialState:absent?'ABSENT':'PRESENT',exitCode:absent?78:0};\nconst text=JSON.stringify(report)+'\\n';fs.writeFileSync('fork-credential-probe.json',text,{flag:'wx'});process.stdout.write(text,()=>process.exit(report.exitCode));\nRUNTIME_FORK_CREDENTIAL_PROBE`;
+}
+export function assertForkProbeJob(provider,document,binding,name){
+ // Validate the context that actually supplies the job environment, not only
+ // the literal job body. A workflow-level NODE_OPTIONS preload can otherwise
+ // forge both credential measurements while this fixed script stays unchanged.
+ if(provider==='github'){assert(!Object.hasOwn(document,'env')&&!Object.hasOwn(document,'defaults'),'NOT_READY: the dedicated probe workflow must not inherit workflow env/defaults');}
+ else{assert.equal(provider,'gitlab');assert(!Object.hasOwn(document,'include'),'NOT_READY: unverified merged GitLab includes cannot define the fixed probe');}
+ const script=forkCredentialProbeScript(name),job=provider==='github'?document.jobs?.[FORK_PROBE_JOB]:document[FORK_PROBE_JOB];assert(job,'E18_FORK_CREDENTIAL_NOT_READY: exact fixed versioned probe job required');
+ if(provider==='github'){
+  keys(job,['name','runs-on','permissions','env','steps']);assert.equal(job.name,FORK_PROBE_JOB);assert.equal(job['runs-on'],binding.runner);assert.deepEqual(job.permissions,{});assert.deepEqual(job.env,{PROBE_PROVIDER:'github',PROBE_REPOSITORY_ID:'${{ github.repository_id }}',PROBE_RUN_ID:'${{ github.run_id }}',runtime_request_id:'${{ inputs.runtime_request_id }}',runtime_input_digest:'${{ inputs.runtime_input_digest }}',runtime_source_commit:'${{ inputs.runtime_source_commit }}',runtime_workflow_digest:'${{ inputs.runtime_workflow_digest }}',[name]:'${{ secrets.'+name+' }}'});assert.equal(job.steps.length,2);
+  assert.deepEqual(job.steps[0],{name:'Measure protected credential',shell:'bash',run:script});const upload=job.steps[1];keys(upload,['name','if','uses','with']);assert.equal(upload.name,'Upload credential measurement');assert.equal(upload.if,'always()');assert(/^actions\/upload-artifact@[a-f0-9]{40}$/.test(upload.uses));assert.deepEqual(upload.with,{name:FORK_PROBE_JOB,path:forkProbeFiles.join('\n'),'if-no-files-found':'error'});
+ }else{
+  assert.equal(provider,'gitlab');keys(job,['stage','image','inherit','before_script','after_script','script','artifacts','allow_failure']);assert.equal(job.stage,'test');assert(/^node:24\.14\.0@sha256:[a-f0-9]{64}$/.test(job.image));assert.deepEqual(job.inherit,{default:false,variables:false});assert.deepEqual(job.before_script,[]);assert.deepEqual(job.after_script,[]);assert.deepEqual(job.script,[`PROBE_PROVIDER=gitlab PROBE_REPOSITORY_ID="$CI_PROJECT_ID" PROBE_RUN_ID="$CI_PIPELINE_ID" ${script}`]);assert.deepEqual(job.artifacts,{when:'always',paths:forkProbeFiles});assert.equal(job.allow_failure,false);
+ }return job;
+}
+export function assertForkProbeJobObservation(provider,job,state){
+ const absent=state==='ABSENT';assert(['ABSENT','PRESENT'].includes(state));assert.equal(job.name,FORK_PROBE_JOB);
+ if(provider==='github'){
+  assert.equal(job.run_attempt,1);assert.equal(job.conclusion,absent?'failure':'success');assert(Array.isArray(job.steps)&&job.steps.length>=4);let prior=0;for(const step of job.steps){assert(Number.isSafeInteger(step.number)&&step.number>prior);prior=step.number;assert.equal(step.status,'completed');}
+  const names=['Set up job','Measure protected credential','Upload credential measurement','Complete job'],positions=names.map(name=>{const hits=job.steps.filter(s=>s.name===name);assert.equal(hits.length,1);return job.steps.indexOf(hits[0]);});assert(positions.every((n,i)=>i===0||n>positions[i-1]));assert.equal(positions[0],0);assert.equal(positions[3],job.steps.length-1);assert.equal(job.steps[positions[1]].conclusion,absent?'failure':'success');for(const i of [0,2,3])assert.equal(job.steps[positions[i]].conclusion,'success');
+  const posts=job.steps.filter(s=>!names.includes(s.name));assert(posts.length<=1);for(const post of posts){assert.equal(post.name,'Post Upload credential measurement');assert.equal(post.conclusion,'success');assert(job.steps.indexOf(post)>positions[2]&&job.steps.indexOf(post)<positions[3]);}
+ }else{assert.equal(provider,'gitlab');assert.equal(job.status,absent?'failed':'success');if(absent)assert.equal(job.failure_reason,'script_failure');assert.equal(job.allow_failure,false);}return job;
+}
+export function assertForkCredentialMeasurement(files,expected){
+ assert.deepEqual([...files.keys()].sort(),forkProbeFiles);const bytes=files.get('fork-credential-probe.json');assert(bytes.length>0&&bytes.length<=8192);assert.deepEqual(files.get('fork-credential-probe.stdout'),bytes);assert.equal(files.get('fork-credential-probe.stderr').length,0);const report=JSON.parse(bytes);assert.deepEqual(report,{schema:'runtime-fork-credential-probe/v1',provider:expected.provider,repositoryId:expected.repositoryId,runId:expected.runId,jobKey:FORK_PROBE_JOB,requestId:expected.request.requestId,inputDigest:expected.request.inputDigest,sourceCommit:expected.request.commit,workflowDigest:expected.request.workflowDigest,credentialName:expected.credentialName,credentialState:expected.state,exitCode:expected.state==='ABSENT'?78:0});return report;
+}
+export function assertForkGitLabArtifact(metadata){
+ // GitLab may retain latest-success/kept artifacts after the advertised expiry,
+ // or indefinitely (null). Availability is proved by the bounded download and
+ // stable original job metadata below, never by this timestamp alone.
+ const file=metadata.artifacts_file;assert(file,'NOT_READY: original probe artifact metadata required');assert.equal(file.filename,'artifacts.zip');assert(Number.isSafeInteger(file.size)&&file.size>0&&file.size<=1048576,'NOT_READY: bounded dedicated probe archive required');return metadata;
+}
+
+if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))test('E18 installed CI evidence and exact release-authority mismatch',async()=>{
  const run=await openScenario('E18');
  try{
   if(run.cases.every(c=>c.caseInstanceId==='E18.CV03')){for(const c of run.cases)await run.collect(c,()=>collectManagedBudget(run,c));return;}
@@ -312,8 +356,28 @@ test('E18 installed CI evidence and exact release-authority mismatch',async()=>{
    if(distribution.status!=='PASSED')assert.notEqual(after.progress.phase,'COMPLETE');
    return{originalUnknown:plan.unknownObservationRef,originalRequestUnchanged:true,newAttempt:false,observedDistribution:distribution.status,phase:after.progress.phase,independentProviderLookupUnique:true};
   }
+  async function forkCredentialLoss(provider,plan){
+   validateForkCredentialSelection(plan);const upstream=await providerOriginal(provider,{stageRequestId:plan.upstream.stageRequestId,runId:plan.upstream.runId}),fork=await providerOriginal(provider,{stageRequestId:plan.stageRequestId,runId:plan.runId});assert.notEqual(upstream.binding.repositoryId,fork.binding.repositoryId);assert.equal(upstream.request.commit,fork.request.commit,'NOT_READY: upstream/fork must retain the same exact source commit');assert.equal(upstream.request.workflowDigest,fork.request.workflowDigest);assert.notEqual(upstream.request.requestId,fork.request.requestId);
+   const upstreamRepo=await upstream.transport.get(actor(),'',AbortSignal.timeout(15000)),forkRepo=await fork.transport.get(actor(),'',AbortSignal.timeout(15000));assertForkLineage(provider,upstreamRepo,forkRepo,upstream.binding.repositoryId,fork.binding.repositoryId);
+   run.artifact('actual-fork-lineage.json',{provider,upstreamRepositoryId:upstream.binding.repositoryId,forkRepositoryId:fork.binding.repositoryId,upstreamRepo,forkRepo});
+   const parseDocument=(await import(pathToFileURL(path.join(installed,'node_modules/yaml/dist/index.js')).href)).parseDocument;
+   async function inspect(source,selected,state){
+    const before=await original(selected.stageRequestId),observed=await actualRun(source),unique=await source.client.run(actor(),source.request,null,AbortSignal.timeout(30000));assert.equal(unique.runId,source.runId,'NOT_READY: exact native request must resolve to this unique original provider run');assert.equal(unique.factsDigest,observed.factsDigest);assert.equal(observed.status,state==='ABSENT'?'FAILED':'PASSED');if(state==='ABSENT')assert.notEqual(before.instance.stages[before.request.stageId].status,'PASSED');
+    const workflowPath=provider==='github'?source.binding.workflowPath:source.binding.pipelinePath,route=provider==='github'?'/contents/'+workflowPath+'?ref='+source.request.commit:'/repository/files/'+encodeURIComponent(workflowPath)+'?ref='+source.request.commit,rawFile=await source.transport.get(actor(),route,AbortSignal.timeout(15000));assert.equal(rawFile.encoding,'base64');const workflow=platformApi.fileBytes(rawFile.content,rawFile.size);assert.equal('sha256:'+sha(workflow),source.request.workflowDigest);assert.equal(provider==='github'?rawFile.path:rawFile.file_path,workflowPath);if(provider==='gitlab'){assert.equal(rawFile.commit_id,source.request.commit);assert.equal('sha256:'+rawFile.content_sha256,source.request.workflowDigest);}const doc=parseDocument(workflow.toString('utf8'),{uniqueKeys:true});assert.deepEqual(doc.errors,[]);const definition=doc.toJS({maxAliasCount:32}),producer=assertForkProbeJob(provider,definition,source.binding,plan.credentialName);
+    async function inventory(){const runs=await source.transport.get(actor(),provider==='github'?'/actions/runs?head_sha='+source.request.commit+'&per_page=100':'/pipelines?sha='+source.request.commit+'&per_page=100',AbortSignal.timeout(15000)),jobs=await source.transport.get(actor(),provider==='github'?'/actions/runs/'+source.runId+'/jobs?filter=all&per_page=100':'/pipelines/'+source.runId+'/jobs?include_retried=true&per_page=100',AbortSignal.timeout(15000));const rows=provider==='github'?runs.workflow_runs:runs,jobRows=provider==='github'?jobs.jobs:jobs;assert(Array.isArray(rows)&&rows.length<100&&Array.isArray(jobRows)&&jobRows.length<100,'NOT_READY: original bounded complete inventories required');assert(rows.some(r=>String(r.id)===source.runId));const ids=rows.map(r=>[String(r.id),provider==='github'?r.run_attempt:null]).sort(),jobIds=jobRows.map(j=>[String(j.id),j.name]).sort();assert.equal(new Set(ids.map(r=>r[0])).size,ids.length);assert.equal(new Set(jobIds.map(r=>r[0])).size,jobIds.length);return{runs:ids,jobs:jobIds};}
+    const beforeInventory=await inventory(),jobRoute=provider==='github'?'/actions/jobs/'+selected.jobId:'/jobs/'+selected.jobId,job=await source.transport.get(actor(),jobRoute,AbortSignal.timeout(15000));assert.equal(String(job.id),selected.jobId);assert.equal(job.name,FORK_PROBE_JOB);assert.equal(beforeInventory.jobs.filter(j=>j[1]===FORK_PROBE_JOB).length,1);const nativeJob=await source.client.job(actor(),source.runId,selected.jobId,source.request.commit,AbortSignal.timeout(15000),platformApi.ciSourceRef(source.request));assert.equal(nativeJob.status,state==='ABSENT'?'FAILED':'PASSED');
+    assertForkProbeJobObservation(provider,job,state);
+    let metadata,downloadRoute,metadataRoute;
+    if(provider==='github'){const list=await source.transport.get(actor(),'/actions/runs/'+source.runId+'/artifacts?per_page=100',AbortSignal.timeout(15000));assert(Array.isArray(list.artifacts)&&list.artifacts.length<100);const matches=list.artifacts.filter(a=>a.name===FORK_PROBE_JOB);assert.equal(matches.length,1,'NOT_READY: original unique probe archive required');metadata=matches[0];assert.equal(metadata.expired,false);assert.equal(String(metadata.workflow_run?.id),source.runId);assert.equal(String(metadata.workflow_run?.repository_id),source.binding.repositoryId);assert.equal(metadata.workflow_run.head_sha,source.request.commit);assert.equal(metadata.workflow_run.head_branch,platformApi.ciSourceRef(source.request));assert(hash.test(metadata.digest));downloadRoute='/actions/artifacts/'+metadata.id+'/zip';metadataRoute='/actions/artifacts/'+metadata.id;}
+    else{metadata=assertForkGitLabArtifact(job);downloadRoute='/jobs/'+selected.jobId+'/artifacts';metadataRoute=jobRoute;}
+    const size=provider==='github'?metadata.size_in_bytes:metadata.artifacts_file.size;assert(Number.isSafeInteger(size)&&size>0&&size<=1048576,'NOT_READY: bounded dedicated probe archive required');const bytes=await source.transport.download(actor(),downloadRoute,AbortSignal.timeout(60000));assert.equal(bytes.length,size);const digest='sha256:'+sha(bytes);if(provider==='github')assert.equal(digest,metadata.digest);const current=await source.transport.get(actor(),metadataRoute,AbortSignal.timeout(15000));assert.deepEqual(current,metadata,'Original probe archive/job changed during read');const files=await artifactApi.readArtifactArchive(bytes,AbortSignal.timeout(15000)),measurement=assertForkCredentialMeasurement(files,{provider,repositoryId:source.binding.repositoryId,runId:source.runId,request:source.request,credentialName:plan.credentialName,state});
+    const file='actual-fork-credential-'+(++archiveSequence)+'.zip';fs.writeFileSync(path.join(run.selection.outputRoot,file),bytes,{mode:0o600,flag:'wx'});run.artifact('actual-fork-credential-probe.json',{provider,state,originalRequest:source.request,versionedWorkflow:workflow.toString('utf8'),producer,job,nativeJob,metadata,file,archiveDigest:digest,archiveBytes:size,measurement,originalStdout:files.get('fork-credential-probe.stdout').toString(),originalStderr:'',selectedCredentialValuesReturnedToCollector:false,selectedCredentialValuesRecorded:false});
+    assert.deepEqual(await inventory(),beforeInventory,'Fork credential collection changed provider run/job counts');assert.deepEqual(await original(selected.stageRequestId),before);assert.deepEqual(await source.transport.get(actor(),route,AbortSignal.timeout(15000)),rawFile);return{requestId:source.request.requestId,runId:source.runId,jobId:selected.jobId,repositoryId:source.binding.repositoryId,state,archiveDigest:digest,sideEffectCounts:{newProviderRuns:0,newProviderJobs:0,newRuntimeRequests:0}};
+   }
+   const positive=await inspect(upstream,plan.upstream,'PRESENT'),negative=await inspect(fork,plan,'ABSENT');assert.deepEqual(await upstream.transport.get(actor(),'',AbortSignal.timeout(15000)),upstreamRepo);assert.deepEqual(await fork.transport.get(actor(),'',AbortSignal.timeout(15000)),forkRepo);return{upstream:positive,fork:negative,actualOriginalCI:true,missingCredentialNotInferredFromApiDenial:true,newDispatches:0,newCredentialMetadataApiReads:0};
+  }
   async function providerMismatches(c,plan){
-   keys(plan,['provider','passing','oldCandidate','rerun','skipped','release','publication']);const provider=plan.provider;assert(['github','gitlab'].includes(provider));
+   validateForkCredentialSelection(plan?.forkCredential);keys(plan,['provider','passing','oldCandidate','rerun','skipped','release','publication','forkCredential']);const provider=plan.provider;assert(['github','gitlab'].includes(provider));
    if(c.caseInstanceId==='E18.variant.01')assert.equal(provider,'github');if(c.caseInstanceId==='E18.variant.02')assert.equal(provider,'gitlab');
    const source=await providerOriginal(provider,plan.passing),observed=await actualRun(source);assert.equal(observed.status,'PASSED');assert(observed.jobs.length>0);
    const archive=await source.client.artifact(actor(),source.request,source.runId,AbortSignal.timeout(60000));
@@ -347,11 +411,9 @@ test('E18 installed CI evidence and exact release-authority mismatch',async()=>{
    const skipped=await providerOriginal(provider,plan.skipped),skippedRun=await actualRun(skipped);
    assert.equal(skippedRun.status,'FAILED');assert(skippedRun.jobs.some(j=>j.providerStatus==='skipped'||j.providerStatus==='completed:skipped'));
    assert.notEqual(skipped.retained.instance.stages[skipped.retained.request.stageId].status,'PASSED','Runtime must not have accepted a skipped mandatory job');
-   const release=await releaseMismatch(plan.release,provider),publication=await publicationInspection(plan.publication,provider,c);
-   const covered={provider,realPlatformReads:true,archiveVerified:true,wrongCommit:true,wrongAttempt:true,skippedJob:true,reportProvenance:true,reportDigest:true,distinctOldCandidate:true,release,publication,remaining:['fork credentials unavailable during actual CI']};
+   const forkCredential=await forkCredentialLoss(provider,plan.forkCredential);const release=await releaseMismatch(plan.release,provider),publication=await publicationInspection(plan.publication,provider,c);
+   const covered={provider,realPlatformReads:true,archiveVerified:true,wrongCommit:true,wrongAttempt:true,skippedJob:true,reportProvenance:true,reportDigest:true,distinctOldCandidate:true,release,publication,forkCredential,remaining:[]};
    run.artifact('provider-mismatch-covered-branches.json',covered);
-   // An API 403 is not proof that a fork pipeline lacked its protected secrets;
-   // retain the frozen provider case as failed until that fact is executable.
    return covered;
   }
   function requireCompleteProvider(covered){
