@@ -20,7 +20,7 @@ export function hashExecutable(ref){
 function pinned(pin,max=16777216){exact(pin,['ref','sha256']);assert(/^[a-f0-9]{64}$/.test(pin.sha256));const b=regular(pin.ref,max,true);assert.equal(sha(b),pin.sha256);return b;}
 export function correctionCatalog(addendum,phase){
  assert(['PRE_RELEASE','POST_RELEASE'].includes(phase));const cases=addendum.acceptance.cases;assert.equal(cases.length,21);assert.equal(new Set(cases.map(c=>c.id)).size,21);assert.deepEqual(cases.map(c=>c.id).sort(),Array.from({length:21},(_,i)=>'LC'+String(i+1).padStart(2,'0')));
- assert.deepEqual(cases.find(c=>c.id==='LC21').vectors,vectors);assert.equal(cases.filter(c=>c.phase==='PRE_RELEASE').length,20);assert.equal(cases.filter(c=>c.phase==='POST_RELEASE').length,1);assert.equal(cases.find(c=>c.id==='LC12').phase,'POST_RELEASE');return cases.filter(c=>c.phase===phase);
+ assert.deepEqual(cases.find(c=>c.id==='LC21').vectors,vectors);assert.deepEqual(cases.find(c=>c.id==='LC01').vectors,['source','candidate','toolchain','fixture','collector','platform','permission']);assert.equal(cases.filter(c=>c.phase==='PRE_RELEASE').length,20);assert.equal(cases.filter(c=>c.phase==='POST_RELEASE').length,1);assert.equal(cases.find(c=>c.id==='LC12').phase,'POST_RELEASE');return cases.filter(c=>c.phase===phase);
 }
 export function validateCorrectionCases(catalog,ids){assert(Array.isArray(ids)&&ids.length>0&&new Set(ids).size===ids.length);assert(ids.every(id=>catalog.some(c=>c.id===id)));return ids;}
 export function parseLC21Driver(raw,vector){
@@ -112,13 +112,108 @@ export async function collectLc20Controller(config){
  const after=await read('lifecycle.qualification.origin.inspect',{registrationRef:config.registrations.a,caseId:'LC20',originRef:'stage-request:'+config.requestId,protocol:'runtime-lc20-local-installed/v1'});assert.equal(after.stageRequestDigest,protocol.stageRequestDigest);const reuseInputsProven=proven&&after.disposition==='PROVEN_FIXED_INPUTS'&&stable(after.current.inputs)===stable(protocol.original.inputs);assert.equal('sha256:'+sha(regular(inputPath,131072,true)),state.inputSnapshotDigest);const protocolAfter=retain('protocol-after',after);const result={schema:'runtime-lc20-complete-execution/v1',caseId:'LC20',phase:'PRE_RELEASE',mode:'EXECUTED',contractDigest:config.contractDigest,requestId:config.requestId,inputDigest:config.inputDigest,sourceCommit:config.sourceCommit,candidateDigest:config.candidateDigest,startedAt:state.startedAt,completedAt:new Date().toISOString(),inputSnapshotDigest:state.inputSnapshotDigest,protocol:{before:state.protocolBefore,after:protocolAfter},vectors:state.vectors,outcome:'PASS'};const final=path.join(root,'evidence/lc20-execution.json');if(!fs.existsSync(final))fs.writeFileSync(final,JSON.stringify(result)+'\n',{mode:0o600,flag:'wx'});return{status:'COMPLETE',caseId:'LC20',receipt:pin(final),rawReceipt:JSON.parse(regular(final,131072,true)),reuseInputsProven,formalSubcaseCredit:0};
  }catch(error){save();return{status:error.code==='REQUEST_OUTCOME_UNKNOWN'||error.code==='NOT_FOUND'?'OBSERVE_ORIGINAL':'INCOMPLETE',caseId:'LC20',vector:LC20_VECTORS[state.vector]??null,error:{code:error.code??'COLLECTOR_FAILURE',message:error.message},completedVectors:state.vectors.length,automaticRedispatch:false};}
 }
+// LC01's fixture is an immutable reviewed descriptor, separate from the selection
+// containing expectedBindings: no fixture can include its own expected hash.
+export const LC01_VECTORS=Object.freeze(['source','candidate','toolchain','fixture','collector','platform','permission']);
+export function verifyLc01InstalledBytes(installedRoot,expectedManifestDigest){
+ const bytes=regular(path.join(installedRoot,'distribution-manifest.json'));
+ assert.equal(sha(bytes),expectedManifestDigest,'LC01 unverified installed manifest');
+ const manifest=JSON.parse(bytes);assert.equal(manifest.schema,'runtime-standalone-distribution/v1');
+ assert(manifest.files&&Object.keys(manifest.files).length>0&&Object.keys(manifest.files).length<=10000);
+ for(const name of ['dist/lifecycle/correction-planner.js','dist/host/client.js','dist/server/security.js','dist/installation/service-control.js'])assert(manifest.files[name],'LC01 missing installed public module');
+ // Verify the entire module closure before the first installed import, including
+ // transitive dependencies. A source loader cannot substitute checkout modules.
+ for(const [name,pin]of Object.entries(manifest.files)){
+  assert(!path.isAbsolute(name)&&!name.split('/').some(p=>!p||p==='.'||p==='..'));
+  if(pin.type==='symlink'){const ref=path.join(installedRoot,'package',name);assert(fs.lstatSync(ref).isSymbolicLink());assert.equal(fs.readlinkSync(ref),pin.target);const target=path.resolve(path.dirname(ref),pin.target);assert(target.startsWith(path.join(installedRoot,'package')+path.sep));assert.equal(manifest.files[path.relative(path.join(installedRoot,'package'),target)]?.type,'file');assert.equal(fs.realpathSync(ref),target);continue;}
+  assert.equal(pin.type,'file');const actual=regular(path.join(installedRoot,'package',name));
+  assert.equal(actual.length,pin.bytes);assert.equal(sha(actual),pin.sha256,'LC01 wrong installed module bytes: '+name);
+ }
+ return manifest;
+}
+export async function runLc01Vectors(preflight,expected,observe,callback,onRow=()=>{}){
+ assert.equal(typeof preflight,'function');assert.equal(typeof observe,'function');assert.equal(typeof callback,'function');exact(expected,LC01_VECTORS);
+ for(const value of Object.values(expected))assert(/^sha256:[a-f0-9]{64}$/.test(value));
+ const cases=[{id:'LC01',phase:'PRE_RELEASE',dependsOn:[],entry:'LC01.readonly-control'}],rows=[];
+ let callbacks=0;const guarded=async()=>{callbacks++;return callback();},registry=new Map([['LC01.readonly-control',guarded]]);
+ for(const vector of LC01_VECTORS){
+  const observation=await observe(),faultExpected=structuredClone(expected);
+  faultExpected[vector]='sha256:'+sha('LC01 labelled EXPECTED mismatch: '+vector+':'+expected[vector]);
+  const input={phase:'PRE_RELEASE',expected:faultExpected,observed:observation.bindings,cases};
+  const before=callbacks,raw=preflight(input,registry);
+  // This is the same dispatch guard for positive and negative input; a product
+  // regression that incorrectly admits a mismatch invokes only a status read.
+  if(raw.ready)await guarded();
+  const row={vectorId:vector,fault:{kind:'EXPECTED_BINDING_ONLY',category:vector,original:expected[vector],replacement:faultExpected[vector]},input,observation,raw,callbackCount:callbacks-before};rows.push(row);
+  row.status=!raw.ready&&raw.dispatchAuthorized===false&&stable(raw.issues)===stable([{code:'BINDING_MISMATCH',id:vector}])&&row.callbackCount===0?'PASS':'FAILED';onRow(row);
+ }
+ const observation=await observe(),input={phase:'PRE_RELEASE',expected:structuredClone(expected),observed:observation.bindings,cases},raw=preflight(input,registry),before=callbacks;
+ const response=raw.ready?await guarded():null;
+ const positive={input,observation,raw,response,callbackCount:callbacks-before};
+ return{vectors:rows,positive,status:rows.every(r=>r.status==='PASS')&&raw.ready&&raw.dispatchAuthorized===false&&raw.issues.length===0&&positive.callbackCount===1?'PASS':'FAILED',fullCatalogCallable:'NOT_READY',productAcceptance:'NOT_EVALUATED'};
+}
+async function collectLc01(selection,catalog,installed,plan){
+ assert.deepEqual(selection.caseIds,['LC01']);assert.equal(selection.phase,'PRE_RELEASE');assert(selection.lc01,'LC01 requires real protected fixture configuration');
+ assert(!process.execArgv.some(a=>/loader|--import|--require|^-r$/.test(a))&&!process.env.NODE_OPTIONS,'LC01 installed execution forbids module substitution');
+ const config=JSON.parse(pinned(selection.lc01));exact(config,['schema','descriptor','expectedBindings']);assert.equal(config.schema,'runtime-lc01-binding-selection/v1');exact(config.expectedBindings,LC01_VECTORS);
+ const descriptorBytes=pinned(config.descriptor),descriptor=JSON.parse(descriptorBytes);
+ exact(descriptor,['schema','sourceRoot','sourceCommit','installedRoot','candidateDigest','nodeSha256','principal','service']);assert.equal(descriptor.schema,'runtime-lc01-reviewed-input/v1');
+ for(const key of ['sourceRoot','sourceCommit','installedRoot'])assert.equal(descriptor[key],selection[key]);assert.equal(descriptor.candidateDigest,'sha256:'+selection.expectedManifestDigest);assert.equal(descriptor.nodeSha256,plan.nodeSha256);
+ const root=selection.installedRoot,module=name=>pathToFileURL(path.join(root,'package',name)).href;
+ verifyLc01InstalledBytes(root,selection.expectedManifestDigest);
+ const {preflightCorrection}=await import(module('dist/lifecycle/correction-planner.js')),{createRuntimeHttpClient}=await import(module('dist/host/client.js')),{authenticate,authorize,hostHeaders}=await import(module('dist/server/security.js'));
+ const {observeAcceptanceBindings}=await import('./preflight.mjs');
+ const client=createRuntimeHttpClient(path.join(root,'connection.json'));
+ const profiles={source:[selection.sourceRevision.ref,path.join(selection.sourceRoot,'src/lifecycle/correction-planner.ts'),path.join(selection.sourceRoot,'governance/lifecycle-correction-v090.json')],candidate:[path.join(root,'distribution-manifest.json'),path.join(root,'package/dist/lifecycle/correction-planner.js')],toolchain:[path.join(root,'installation-plan.json'),path.join(selection.sourceRoot,'package-lock.json')],fixture:[config.descriptor.ref],collector:[self,path.join(selection.sourceRoot,'tests/acceptance/v090/preflight.mjs')],permission:[path.join(root,'connection.json'),path.join(root,'client.json'),path.join(root,'data/auth.json')]};
+ const observe=async()=>{
+  assert.equal(execFileSync('git',['-C',selection.sourceRoot,'rev-parse','HEAD'],{encoding:'utf8'}).trim(),selection.sourceCommit);
+  execFileSync('git',['-C',selection.sourceRoot,'diff','--quiet',selection.sourceCommit,'--'],{stdio:'pipe'});
+  verifyLc01InstalledBytes(root,selection.expectedManifestDigest);
+  assert.equal(sha(pinned(config.descriptor)),sha(descriptorBytes));
+  const node=hashExecutable(fs.realpathSync(process.execPath));assert.equal(node.sha256,descriptor.nodeSha256);
+  const bindings=observeAcceptanceBindings(profiles),principal=authenticate(path.join(root,'data'),plan.workspaceId,hostHeaders(client.connection).Authorization);
+  authorize(principal,plan.projectId,'read');assert.equal(principal.id,client.connection.principalId);assert.deepEqual(principal,descriptor.principal);
+  const live=await client.status(AbortSignal.timeout(10000)),status=live.result;
+  const service=Object.fromEntries(['product','contract','serviceId','workspaceId','projectId','version','independentLlm'].map(k=>[k,status[k]]));assert.deepEqual(service,descriptor.service);assert.equal(service.serviceId,installed.serviceId);
+  bindings.toolchain='sha256:'+sha(stable({files:bindings.toolchain,node}));bindings.permission='sha256:'+sha(stable({files:bindings.permission,principal,service}));
+  return{bindings,principal,service,live,observedAt:new Date().toISOString(),node};
+ };
+ // Fail missing/stale preparation before creating an output directory. Never
+ // repair expectations from current observations inside the execution collector.
+ const initial=await observe();assert.deepEqual(initial.bindings,config.expectedBindings,'LC01 reviewed expected bindings differ from actual protected inputs');
+ const output=selection.outputRoot;assert(path.isAbsolute(output)&&path.resolve(output)===output&&!fs.existsSync(output));assert.equal(fs.realpathSync(path.dirname(output)),path.dirname(output));assert(!output.startsWith(selection.sourceRoot+path.sep)&&!output.startsWith(root+path.sep));
+ fs.mkdirSync(output,{mode:0o700});
+ const save=(name,value)=>fs.writeFileSync(path.join(output,name),JSON.stringify(value,null,2)+'\n',{mode:0o600,flag:'wx'});
+ const manifest=JSON.parse(regular(path.join(root,'distribution-manifest.json')));
+ const candidate={manifestDigest:selection.expectedManifestDigest,archiveDigest:manifest.archiveDigest,version:manifest.version,serviceId:installed.serviceId,workspaceId:plan.workspaceId,projectId:plan.projectId};
+ const candidateDigest=descriptor.candidateDigest,setupEvidence=[];
+ const artifact=(leaf,value,caseId=null,vectorId=null)=>{save(leaf,value);return{caseInstanceId:caseId,vectorId,artifact:leaf,fileDigest:sha(regular(path.join(output,leaf)))};};
+ save('selection.json',{scenario:'LC',sourceCommit:selection.sourceCommit,phase:selection.phase,addendumDigest:sha(regular(path.join(selection.sourceRoot,'governance/lifecycle-correction-v090.json'))),qualification:selection.qualification,candidate,candidateDigest,collectorPins:{'correction.test.mjs':sha(regular(self))},selectedCaseIds:selection.caseIds});
+ setupEvidence.push(artifact('LC01-bindings.json',{selection,config,descriptor,profiles,initial,installed,productAcceptance:'NOT_EVALUATED'}));
+ const rows=[];
+ let result;try{
+  const execution=await runLc01Vectors(preflightCorrection,config.expectedBindings,observe,()=>client.status(AbortSignal.timeout(10000)),row=>{
+   const evidence=artifact('LC01-'+row.vectorId+'.json',row,'LC01',row.vectorId);
+   rows.push({vectorId:row.vectorId,phase:selection.phase,status:row.status,qualification:selection.qualification,candidateDigest,assertions:{expectedOnlyFault:row.fault.kind==='EXPECTED_BINDING_ONLY',callbackCount:row.callbackCount,observedBindingRetained:true},evidence:[evidence]});
+  });
+  setupEvidence.push(artifact('LC01-positive.json',execution.positive));
+  const final=await observe();assert.deepEqual(final.bindings,initial.bindings);setupEvidence.push(artifact('LC01-integrity.json',final));
+  result={caseInstanceId:'LC01',phase:selection.phase,status:execution.status,qualification:selection.qualification,candidateDigest,assertions:{allSevenVectorsExecuted:rows.length===7,positiveCallbackCount:execution.positive.callbackCount,integrityReadbackPassed:true,fullCatalogCallable:'NOT_READY'},vectors:rows};
+ }catch(error){
+  setupEvidence.push(artifact('LC01-failure.json',{message:error.message,code:error.code??'COLLECTOR_FAILURE',automaticRetry:false}));
+  result={caseInstanceId:'LC01',phase:selection.phase,status:'FAILED',qualification:selection.qualification,candidateDigest,assertions:{integrityReadbackPassed:false,automaticRetry:false},vectors:rows};
+ }
+ save('LC01.json',result);save('REPORT.json',{schema:'runtime-correction-acceptance-report/v1',scenario:'LC',sourceCommit:selection.sourceCommit,phase:selection.phase,candidate,candidateDigest,selectionDigest:sha(regular(path.join(output,'selection.json'))),qualification:selection.qualification,...correctionCounts(catalog,selection.caseIds,[result]),results:[result],setupEvidence,productAcceptance:'NOT_EVALUATED',releaseAuthorized:false});
+ assert.equal(result.status,'PASS','LC01 original binding observations failed');return output;
+}
 export async function collectCorrection(selectionRef){
- const selection=JSON.parse(regular(selectionRef,1048576,true));exact(selection,['schema','sourceRoot','sourceCommit','sourceRevision','phase','caseIds','installedRoot','expectedManifestDigest','qualification','outputRoot',...(selection.lc20===undefined?[]:['lc20'])]);assert.equal(selection.schema,'runtime-correction-acceptance-selection/v1');assert(/^[a-f0-9]{40}$/.test(selection.sourceCommit));assert(['DEVELOPMENT','FINAL_CANDIDATE'].includes(selection.qualification));assert.equal(process.version,'v24.14.0');assert.equal(pinned(selection.sourceRevision).toString().trim(),selection.sourceCommit);
+ const selection=JSON.parse(regular(selectionRef,1048576,true));exact(selection,['schema','sourceRoot','sourceCommit','sourceRevision','phase','caseIds','installedRoot','expectedManifestDigest','qualification','outputRoot',...(selection.lc20===undefined?[]:['lc20']),...(selection.lc01===undefined?[]:['lc01'])]);assert.equal(selection.schema,'runtime-correction-acceptance-selection/v1');assert(/^[a-f0-9]{40}$/.test(selection.sourceCommit));assert(['DEVELOPMENT','FINAL_CANDIDATE'].includes(selection.qualification));assert.equal(process.version,'v24.14.0');assert.equal(pinned(selection.sourceRevision).toString().trim(),selection.sourceCommit);
  const sourceRoot=fs.realpathSync(selection.sourceRoot);assert.equal(sourceRoot,selection.sourceRoot);const git=args=>execFileSync('git',['-C',sourceRoot,...args],{maxBuffer:33554432,encoding:null});assert.equal(git(['rev-parse','HEAD']).toString().trim(),selection.sourceCommit);
  const sourceFiles=git(['ls-files','-z']).toString().split('\0').filter(Boolean),sourcePins={};assert(sourceFiles.length>0&&sourceFiles.length<=10000);for(const f of sourceFiles){assert(!path.isAbsolute(f)&&!f.split('/').includes('..'));const bytes=regular(path.join(sourceRoot,f));assert.equal(sha(bytes),sha(git(['show',selection.sourceCommit+':'+f])),'Source differs from exact selected commit: '+f);sourcePins[f]=sha(bytes);}
  assert.equal(sha(regular(self)),sourcePins['tests/acceptance/v090/correction.test.mjs']);const addendumBytes=regular(path.join(sourceRoot,'governance/lifecycle-correction-v090.json')),catalog=correctionCatalog(JSON.parse(addendumBytes),selection.phase);validateCorrectionCases(catalog,selection.caseIds);
- const installedRoot=fs.realpathSync(selection.installedRoot);assert.equal(installedRoot,selection.installedRoot);const {inspectInstalledServiceSelection}=await import(pathToFileURL(path.join(installedRoot,'package/dist/installation/service-control.js')).href),installed=inspectInstalledServiceSelection(installedRoot),manifestBytes=regular(path.join(installedRoot,'distribution-manifest.json')),manifest=JSON.parse(manifestBytes),plan=JSON.parse(regular(path.join(installedRoot,'installation-plan.json'),1048576,true));assert.equal(sha(manifestBytes),selection.expectedManifestDigest);assert.equal(installed.distributionManifestDigest,selection.expectedManifestDigest);assert.equal(plan.distribution.manifestDigest,selection.expectedManifestDigest);assert.equal(plan.nodeExecutable,fs.realpathSync(process.execPath));assert.equal(plan.nodeSha256,hashExecutable(fs.realpathSync(process.execPath)).sha256);if(selection.qualification==='FINAL_CANDIDATE')assert.equal(manifest.version,'0.9.0');
+ const installedRoot=fs.realpathSync(selection.installedRoot);assert.equal(installedRoot,selection.installedRoot);if(selection.caseIds.includes('LC01')){assert(!process.execArgv.some(a=>/loader|--import|--require|^-r$/.test(a))&&!process.env.NODE_OPTIONS,'LC01 installed execution forbids module substitution');assert(selection.lc01,'LC01 requires real protected fixture configuration');verifyLc01InstalledBytes(installedRoot,selection.expectedManifestDigest);}const {inspectInstalledServiceSelection}=await import(pathToFileURL(path.join(installedRoot,'package/dist/installation/service-control.js')).href),installed=inspectInstalledServiceSelection(installedRoot),manifestBytes=regular(path.join(installedRoot,'distribution-manifest.json')),manifest=JSON.parse(manifestBytes),plan=JSON.parse(regular(path.join(installedRoot,'installation-plan.json'),1048576,true));assert.equal(sha(manifestBytes),selection.expectedManifestDigest);assert.equal(installed.distributionManifestDigest,selection.expectedManifestDigest);assert.equal(plan.distribution.manifestDigest,selection.expectedManifestDigest);assert.equal(plan.nodeExecutable,fs.realpathSync(process.execPath));assert.equal(plan.nodeSha256,hashExecutable(fs.realpathSync(process.execPath)).sha256);if(selection.qualification==='FINAL_CANDIDATE')assert.equal(manifest.version,'0.9.0');
  for(const [f,pin]of Object.entries(manifest.files))if(f.startsWith('src/'))assert.equal(sourcePins[f],pin.sha256,'Installed candidate source differs from selected owner repository');
+ if(selection.caseIds.includes('LC01'))return collectLc01(selection,catalog,installed,plan);
  if(selection.caseIds.includes('LC20')){
   assert.deepEqual(selection.caseIds,['LC20'],'The resumable LC20 lane has its own original claim; run other fixed cases in their retained lanes');assert.equal(selection.phase,'PRE_RELEASE');assert(selection.lc20,'Select the exact protected controller configuration');const config=JSON.parse(pinned(selection.lc20));for(const key of ['sourceRoot','sourceCommit','installedRoot','outputRoot'])assert.equal(config[key],selection[key]);assert.equal(config.candidateDigest,'sha256:'+selection.expectedManifestDigest);const result=await collectLc20Controller(config),results=result.status==='COMPLETE'?[{schema:'runtime-correction-case-result/v1',scenario:'LC',caseInstanceId:'LC20',sourceCommit:selection.sourceCommit,phase:selection.phase,candidateDigest:config.candidateDigest,status:'PASS',startedAt:result.rawReceipt.startedAt,completedAt:result.rawReceipt.completedAt,vectorIds:[...LC20_VECTORS],assertions:{allFourVectorsExecuted:true,subordinateFormalCredit:0},rawReceipt:result.receipt}]:[];
   const report={schema:'runtime-correction-acceptance-report/v1',scenario:'LC',sourceCommit:selection.sourceCommit,phase:selection.phase,candidateDigest:config.candidateDigest,qualification:selection.qualification,...correctionCounts(catalog,selection.caseIds,results),controller:result,productAcceptance:'NOT_EVALUATED',releaseAuthorized:false,results},bytes=JSON.stringify(report,null,2)+'\n',original=path.join(selection.outputRoot,'REPORT-'+sha(bytes)+'.json');if(!fs.existsSync(original))fs.writeFileSync(original,bytes,{mode:0o600,flag:'wx'});fs.writeFileSync(path.join(selection.outputRoot,'REPORT.json'),bytes,{mode:0o600});return selection.outputRoot;

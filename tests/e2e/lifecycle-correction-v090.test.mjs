@@ -155,3 +155,41 @@ for(const native of [{statuses:['FAIL'],missing:'extension-native-action'},{stat
   const read=await f.request('lifecycle.correction.inspect',{stageRequestId:'failed-request'});assert.equal(read.status,200,JSON.stringify(read));assert.equal(read.result.nativeEvidence.status,'UNAVAILABLE');assert.equal(read.result.nativeEvidence.repairProof,false);assert.match(read.result.nativeEvidence.reason,/^(CORRUPT_EXTENSION|CORRECTION_NATIVE_EVIDENCE_MISMATCH)$/);assert.equal(read.result.executionAuthorized,false);assert.equal((await f.request('runtime.status')).result.revision,1);
  }finally{await f.close();}
 });
+
+// Source regressions only: injected observations and callback results below are
+// explicitly synthetic and cannot earn LC01 formal acceptance credit.
+test('LC01 fixed seven EXPECTED faults retain observations and reject before callback',async()=>{
+ const {runLc01Vectors,LC01_VECTORS}=await import('../acceptance/v090/correction.test.mjs');
+ const {preflightCorrection}=await import('../../dist/lifecycle/correction-planner.js');
+ const expected=Object.fromEntries(LC01_VECTORS.map((key,i)=>[key,'sha256:'+String(i+1).repeat(64)]));let reads=0,observations=0;
+ const result=await runLc01Vectors(preflightCorrection,expected,async()=>{observations++;return{bindings:structuredClone(expected),synthetic:true};},async()=>{reads++;return{synthetic:true};});
+ assert.equal(result.status,'PASS');assert.equal(reads,1);assert.equal(observations,8);assert.equal(result.fullCatalogCallable,'NOT_READY');
+ assert.deepEqual(result.vectors.map(row=>row.vectorId),LC01_VECTORS);
+ for(const row of result.vectors){assert.equal(row.callbackCount,0);assert.equal(row.status,'PASS');assert.deepEqual(row.input.observed,expected);assert.deepEqual(row.raw.issues,[{code:'BINDING_MISMATCH',id:row.vectorId}]);assert.deepEqual(Object.keys(expected).filter(key=>row.input.expected[key]!==expected[key]),[row.vectorId]);assert.equal(row.fault.kind,'EXPECTED_BINDING_ONLY');}
+ assert.equal(result.positive.callbackCount,1);assert.deepEqual(result.positive.input.expected,expected);
+});
+test('LC01 cannot pass when planner incorrectly admits faults or actual observations drift',async()=>{
+ const {runLc01Vectors,LC01_VECTORS}=await import('../acceptance/v090/correction.test.mjs');
+ const {preflightCorrection}=await import('../../dist/lifecycle/correction-planner.js');
+ const expected=Object.fromEntries(LC01_VECTORS.map(key=>[key,'sha256:'+'a'.repeat(64)]));
+ let calls=0;
+ const admitted=await runLc01Vectors(()=>({ready:true,issues:[],dispatchAuthorized:false}),expected,async()=>({bindings:structuredClone(expected)}),async()=>{calls++;return{};});
+ assert.equal(admitted.status,'FAILED');assert.equal(calls,8);assert(admitted.vectors.every(row=>row.status==='FAILED'&&row.callbackCount===1));
+ const drift=await runLc01Vectors(preflightCorrection,expected,async()=>({bindings:{...expected,source:'sha256:'+'b'.repeat(64)}}),async()=>{throw Error('Drift must never dispatch');});
+ assert.equal(drift.status,'FAILED');assert.equal(drift.positive.callbackCount,0);
+});
+test('LC01 rejects unverified manifests and wrong installed planner bytes before import',async()=>{
+ const {verifyLc01InstalledBytes}=await import('../acceptance/v090/correction.test.mjs');
+ const {writeFileSync,mkdirSync}=await import('node:fs');const {createHash}=await import('node:crypto');const sha=b=>createHash('sha256').update(b).digest('hex');
+ const root=mkdtempSync(join(realpathSync(tmpdir()),'lc01-unverified-source-fixture-'));
+ try{
+  const files={};for(const name of ['dist/lifecycle/correction-planner.js','dist/host/client.js','dist/server/security.js','dist/installation/service-control.js']){const ref=join(root,'package',name);mkdirSync(join(ref,'..'),{recursive:true});writeFileSync(ref,'SYNTHETIC NEVER IMPORTED');files[name]={type:'file',bytes:24,sha256:sha('SYNTHETIC NEVER IMPORTED')};}
+  const bytes=JSON.stringify({schema:'runtime-standalone-distribution/v1',files});writeFileSync(join(root,'distribution-manifest.json'),bytes);
+  assert.throws(()=>verifyLc01InstalledBytes(root,'0'.repeat(64)),/unverified installed manifest/);
+  // Wrong selected bytes and incomplete public closure are both fail-closed.
+  writeFileSync(join(root,'package/dist/lifecycle/correction-planner.js'),'WRONG INSTALLED BYTES');
+  assert.throws(()=>verifyLc01InstalledBytes(root,sha(bytes)));
+  delete files['dist/host/client.js'];const missing=JSON.stringify({schema:'runtime-standalone-distribution/v1',files});writeFileSync(join(root,'distribution-manifest.json'),missing);
+  assert.throws(()=>verifyLc01InstalledBytes(root,sha(missing)),/missing installed public module/);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});

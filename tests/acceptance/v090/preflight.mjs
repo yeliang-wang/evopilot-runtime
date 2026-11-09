@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { preflightCorrection } from '../../../dist/lifecycle/correction-planner.js';
 
 const categories = ['source', 'candidate', 'toolchain', 'fixture', 'collector', 'permission'];
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -61,7 +60,10 @@ export function observeAcceptanceBindings(profile) {
  * JSON. Existing scenario collectors need explicit registration refactoring;
  * this module does not claim that their inline branches are already registered.
  * Every callback retains its own existing service/authority guards. */
-export function createAcceptanceCollectorPreflight({ cases, entries, expectedByPhase, observationsByPhase }) {
+export function createAcceptanceCollectorPreflight({ cases, entries, expectedByPhase, observationsByPhase, preflightCorrection }) {
+  // The trusted caller selects and verifies its installed implementation. File
+  // observers must never load an unchecked source-tree dist as a side effect.
+  assert.equal(typeof preflightCorrection, 'function', 'An explicitly verified preflight implementation is required');
   assert(Array.isArray(cases) && cases.length > 0 && cases.length <= 1024);
   assert(entries instanceof Map, 'An explicit in-process callable registry is required');
   const catalog = structuredClone(cases), registry = new Map(entries);

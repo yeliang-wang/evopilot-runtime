@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 import {collectCaseCampaign,caseCampaignTestOptions,openScenario} from './support.mjs';
-import {collectInstalledBaseUpgrade} from './maintenance.mjs';
+import {collectInstalledBaseUpgrade,collectInitializationEntries,collectLegacyMigrationJourney} from './maintenance.mjs';
 import {openBrowser} from './browser.mjs';
 
 test('E17 native installed Base upgrade and retained rollback evidence',caseCampaignTestOptions('E17'),async()=>{
@@ -12,8 +12,8 @@ test('E17 native installed Base upgrade and retained rollback evidence',caseCamp
   if(run.selection.caseCampaign){await collectCaseCampaign(run,'E17');return;}
   for(const c of run.cases)await run.collect(c,async()=>{
    if(c.caseInstanceId==='E17.EX10')return collectInstalledBaseUpgrade(run,c,{chromium,expect,openBrowser});
-   if(c.caseInstanceId==='E17.journey')assert.fail('UNIMPLEMENTED_FIXED_CASE: E17.journey additionally requires its selected historical-format migration, unknown-schema/incompatibility/failure injections and preservation of private owner assets/decisions; EX10 alone is insufficient.');
-   if(c.caseInstanceId==='E17.CV01')assert.fail('UNIMPLEMENTED_FIXED_CASE: E17.CV01 needs every declared initialization entry through controlled activation and exactly pinned new instances, including all missing/invalid input refusals.');
+   if(c.caseInstanceId==='E17.journey')return collectLegacyMigrationJourney(run,c);
+   if(c.caseInstanceId==='E17.CV01')return collectInitializationEntries(run,c,{chromium,expect,openBrowser});
    assert.fail('Unknown frozen E17 case '+c.caseInstanceId);
   });
  }finally{run.finish();}

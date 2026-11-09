@@ -127,9 +127,24 @@ function collectorFixture() {
   const observed = observeAcceptanceBindings(profile), calls = [];
   const cases = [{ id: 'fixed-pre', entry: 'pre', phase: 'PRE_RELEASE', dependsOn: [] }, { id: 'fixed-post', entry: 'post', phase: 'POST_RELEASE', dependsOn: ['fixed-pre'] }];
   const entries = new Map([['pre', () => { calls.push('pre'); return { actualLocalCallback: true }; }], ['post', () => { calls.push('post'); return { actualLocalCallback: true }; }]]);
-  const options = { cases, entries, expectedByPhase: { PRE_RELEASE: observed }, observationsByPhase: { PRE_RELEASE: profile } };
+  const options = { cases, entries, expectedByPhase: { PRE_RELEASE: observed }, observationsByPhase: { PRE_RELEASE: profile }, preflightCorrection };
   return { root, profile, observed, calls, options, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
+test('binding observers load without a source dist or implicit preflight implementation', async () => {
+  const f = collectorFixture();
+  try {
+    const { pathToFileURL } = await import('node:url');
+    const copied = path.join(f.root, 'standalone-observer.mjs');
+    fs.copyFileSync(new URL('../acceptance/v090/preflight.mjs', import.meta.url), copied);
+    // Relative product imports cannot resolve here: only this single module and
+    // six observed files exist in the private temporary directory.
+    const isolated = await import(pathToFileURL(copied).href);
+    assert.deepEqual(isolated.observeAcceptanceBindings(f.profile), f.observed);
+    const { preflightCorrection: omitted, ...missing } = f.options;
+    assert.throws(() => isolated.createAcceptanceCollectorPreflight(missing), /explicitly verified/);
+    assert.deepEqual(f.calls, []);
+  } finally { f.cleanup(); }
+});
 test('registered collector preflight invokes real PRE callback without observing POST artifacts', async () => {
   const f = collectorFixture();
   try {
@@ -558,4 +573,40 @@ test('LC20 child history drift truncation and unknown originals never trigger re
    if(start>0){if(fault==='watermark')result.historyWatermark='sha256:'+'b'.repeat(64);if(fault==='total')result.totalAttempts=52;if(fault==='cycle')result.nextRequestId='original-49';if(fault==='duplicate')result.attempts[0].requestId='original-0';if(fault==='unknown')result.attempts[0].original=null;}return result;};
   await assert.rejects(find(read,'binding:child',fault==='missing'?'absent':'original-50'));assert(calls<=2);
  }
+});
+
+// E17 synthetic boundary inputs are not native migration or six-entry evidence.
+function e17GuardFixture(){
+ const selection={expectedManifestDigest:'a'.repeat(64),workspaceId:'workspace',projectId:'project'},entries=['http-api','http-mcp','cli','expert','dashboard-yaml','dashboard-graph'].map((entry,i)=>({entry,instanceId:'initial-'+i,authorityRef:'authority-'+i})),value={schema:'runtime-v090-initialization-migration/v1',candidateDigest:'sha256:'+selection.expectedManifestDigest,workspaceId:selection.workspaceId,projectId:selection.projectId,casePlans:{'E17.CV01':{yaml:{ref:'/synthetic-only/yaml',sha256:'b'.repeat(64)},graphField:'implementation-binding',entries}}};return{selection,value};
+}
+test('E17 CV01 keeps all six entry producers with distinct exact native authority bindings',async()=>{
+ const{validateE17Fixture:check}=await import('../acceptance/v090/maintenance.mjs'),{selection,value}=e17GuardFixture();assert.equal(check(value,selection,'E17.CV01').entries.length,6);
+ for(const change of [v=>v.candidateDigest='sha256:'+'c'.repeat(64),v=>v.workspaceId='other',v=>v.projectId='other',v=>v.casePlans['E17.CV01'].entries.pop(),v=>v.casePlans['E17.CV01'].entries.reverse(),v=>v.casePlans['E17.CV01'].entries[1].entry='http-api',v=>v.casePlans['E17.CV01'].entries[1].instanceId='initial-0',v=>v.casePlans['E17.CV01'].entries[0].authorityRef='',v=>v.casePlans['E17.CV01'].status='PASS',v=>v.casePlans['E17.EX10']={}]){const invalid=structuredClone(value);change(invalid);assert.throws(()=>check(invalid,selection,'E17.CV01'));}assert.throws(()=>check(value,selection,'E17.journey'),/NOT_READY/);
+});
+test('E17 field vectors preserve exact canonical graph input and actual required binding semantics',async()=>{
+ const{e17InputVectors:check}=await import('../acceptance/v090/maintenance.mjs'),{parse}=await import('yaml'),field={path:'config.plan.bindingRef',required:true,type:'bindingRef',policy:'CONFIGURABLE'},yaml='config:\n  plan:\n    bindingRef: binding:plan\n',vectors=check(yaml,field);assert.deepEqual(vectors.map(v=>v.name),['valid','missing-required','invalid-type']);assert.equal(vectors[0].yaml,yaml);assert.equal(parse(vectors[1].yaml).config.plan.bindingRef,'');assert.equal(parse(vectors[2].yaml).config.plan.bindingRef,'not-a-binding-reference');assert.throws(()=>check(yaml,{...field,required:false}));assert.throws(()=>check(yaml,{...field,policy:'LOCKED'}));assert.throws(()=>check(yaml,{...field,type:'integer'}));assert.throws(()=>check('config: {plan: {bindingRef: binding:plan}}\n',field),/canonical/);
+});
+test('E17 new-instance guard binds original revision effective graph Base and untouched PENDING history',async()=>{
+ const{assertE17NewInstance:check}=await import('../acceptance/v090/maintenance.mjs'),effective={semanticDigest:'sha256:'+'a'.repeat(64),base:{id:'base',digest:'sha256:'+'b'.repeat(64)},nodes:[{id:'scope'}]},definition={id:'sha256:'+'c'.repeat(64),compilation:{effective}},plan={instanceId:'actual-new'},instance={id:plan.instanceId,pins:{projectId:'project',definitionRevisionId:definition.id,semanticDigest:effective.semanticDigest,base:effective.base},definition:effective,requestIds:[],stages:Object.fromEntries(['scope','plan','implementation','candidate','verification','release-decision','publication','closure'].map(id=>[id,{status:'PENDING',attempts:0,requestId:null}])),pinsDigest:'synthetic-guard-only'};assert.equal(check(instance,definition,plan,'project'),instance.pinsDigest);
+ for(const change of [v=>v.id='other',v=>v.pins.projectId='other',v=>v.pins.definitionRevisionId='other',v=>v.pins.semanticDigest='other',v=>v.pins.base.digest='other',v=>v.definition.nodes=[],v=>v.requestIds=['old-request'],v=>v.stages.scope.status='PASSED',v=>v.stages.scope.attempts=1,v=>v.stages.scope.requestId='old-request',v=>delete v.stages.closure]){const invalid=structuredClone(instance);change(invalid);assert.throws(()=>check(invalid,definition,plan,'project'));}
+});
+test('E17 protected fixture is checked again after original bytes change',async()=>{
+ const{e17Plan}=await import('../acceptance/v090/maintenance.mjs'),{sha}=await import('../acceptance/v090/support.mjs'),f=collectorFixture(),{selection,value}=e17GuardFixture();try{const ref=path.join(f.root,'fixture.json');fs.writeFileSync(ref,JSON.stringify(value),{mode:0o600});const run={selection:{...selection,initializationMigration:{ref,sha256:sha(fs.readFileSync(ref))}}},prepared=e17Plan(run,{caseInstanceId:'E17.CV01'});prepared.recheck();fs.appendFileSync(ref,' ');assert.throws(()=>prepared.recheck());}finally{f.cleanup();}
+});
+test('both E17 selectors refuse absent actual migration/initialization bindings before installed access',async()=>{
+ const{openScenario}=await import('../acceptance/v090/support.mjs'),f=collectorFixture(),prior=process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;try{for(const id of ['E17.journey','E17.CV01']){const ref=path.join(f.root,'selection.json'),selection={schema:'runtime-v090-acceptance-selection/v1',installedRoot:path.join(f.root,'absent'),connectionRef:path.join(f.root,'absent-connection'),expectedManifestDigest:'a'.repeat(64),workspaceId:'workspace',projectId:'project',runId:'e17-source-only',outputRoot:path.join(f.root,'never-created'),qualification:'DEVELOPMENT',caseIds:[id]};fs.writeFileSync(ref,JSON.stringify(selection),{mode:0o600});process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION=ref;await assert.rejects(openScenario('E17'),/NOT_READY|initializationMigration/);assert.equal(fs.existsSync(selection.outputRoot),false);}}finally{if(prior===undefined)delete process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;else process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION=prior;f.cleanup();}
+});
+
+// Synthetic E17 journey parser material; no original native records are made.
+function e17JourneyGuardPlan(){const hash='a'.repeat(64),pin={ref:'/fixture/original.json',sha256:hash};return{sourceRoot:'/fixture/source',sourceSnapshotDigest:hash,originalRoot:'/fixture/original',originalSnapshotDigest:hash,backupRoot:'/fixture/backup',preservationRoot:'/fixture/preservation',installPlan:pin,projectRoot:'/fixture/project',referenceFiles:[],oldPackage:{root:'/fixture/package',archiveRef:'/fixture/official.tgz',archiveSha256:'4eef2130c2854fe1ecd56ca664882c4aa3026145388cad88d258de3bba3fd42d'},reads:[{family:'planning',operation:'planning.read',input:{id:'original'},original:pin,statusPointers:[{pointer:'/readable/snapshot/stages/0/status',value:'PENDING'}],pinPointers:['/revision/draft']},{family:'reconstruction',operation:'reconstruction.attempt',input:{id:'retained'},original:pin,statusPointers:[{pointer:'/receipt/stages/build',value:'NOT_RUN'}],pinPointers:['/claim']}],preservedFiles:['ontology','harness','decision'].map(role=>({role,ref:'/fixture/project/'+role+'.json',sha256:hash})),unknownSchema:{root:'/fixture/unknown',databaseSha256:hash},newGoal:{id:'new-evidence',description:'Explicit case evidence without decision or dispatch'},additiveEvidence:pin};}
+test('E17 complete journey fixture requires official baseline isolated roots literal histories and all preservation bindings',async()=>{
+ const{validateE17JourneyPlan:check}=await import('../acceptance/v090/maintenance.mjs'),p=e17JourneyGuardPlan();assert.deepEqual(check(p),p);
+ for(const change of [v=>delete v.preservationRoot,v=>v.originalRoot=v.sourceRoot,v=>v.backupRoot=v.sourceRoot+'/backup',v=>v.oldPackage.archiveSha256='0'.repeat(64),v=>v.reads=[],v=>v.reads[0].statusPointers[0].value='PREPARED',v=>v.reads[1].statusPointers[0].value='APPROVED',v=>v.reads[0].operation='planning.decide',v=>v.reads.forEach(r=>r.pinPointers=[]),v=>v.preservedFiles.pop(),v=>v.unknownSchema.root=v.sourceRoot,v=>v.nativePASS=true]){const invalid=structuredClone(p);change(invalid);assert.throws(()=>check(invalid));}
+});
+test('E17 original public history requires unchanged values exact literal status paths and nonempty pins',async()=>{
+ const{assertE17HistoricalValue:check}=await import('../acceptance/v090/maintenance.mjs'),value={state:{pending:'PENDING',stages:{build:'NOT_RUN'}},pins:{source:'retained-original'},decision:{id:'original-decision'}},read={statusPointers:[{pointer:'/state/pending',value:'PENDING'},{pointer:'/state/stages/build',value:'NOT_RUN'}],pinPointers:['/pins']};assert.deepEqual(check(value,structuredClone(value),read),value);
+ for(const change of [v=>v.state.pending='PREPARED',v=>v.state.stages.build='SUCCEEDED',v=>v.pins.source='new',v=>v.decision.id='replacement']){const invalid=structuredClone(value);change(invalid);assert.throws(()=>check(invalid,value,read));}assert.throws(()=>check(value,value,{...read,pinPointers:['/absent']}));assert.throws(()=>check(value,value,{...read,statusPointers:[{pointer:'/state/absent',value:'PENDING'}]}));assert.throws(()=>check({...value,pins:{}},{...value,pins:{}},read));
+});
+test('E17 old published package verifier refuses caller-selected archives before any package import',async()=>{
+ const{verifyE17PublishedArchive:check}=await import('../acceptance/v090/maintenance.mjs');assert.throws(()=>check('/absent-never-imported',Buffer.from('synthetic not official archive')));
 });

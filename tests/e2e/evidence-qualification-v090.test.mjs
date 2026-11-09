@@ -370,3 +370,25 @@ test('only the five fixed protected observation nodes admit null contract digest
  const f=completeLc20Fixture();const entry=f.snapshot.inputs.find(n=>n.id==='runtime:environment'),changed=JSON.stringify({actualEnvironment:'changed'});entry.file=f.rawPin(entry.file.path,changed);f.rawPin(LC20_INPUT_PATH,f.snapshot);assert.throws(()=>readLc20InputSnapshot(f.files,f.pin,{...f.expected,producerJobId:'71'},f.source,f.candidateFiles),{code:'LC20_INPUT_UNAVAILABLE'});
  const before=completeLc20Fixture(),after=completeLc20Fixture(),node=after.pin.protocolObservation.inputs.find(n=>n.id==='runtime:environment');node.raw=changed;node.digest=byteDigest(changed);const actual=after.snapshot.inputs.find(n=>n.id===node.id);actual.file=after.rawPin(actual.file.path,changed);after.rawPin(LC20_INPUT_PATH,after.snapshot);const a=readLc20InputSnapshot(before.files,before.pin,{...before.expected,producerJobId:'71'},before.source,before.candidateFiles),b=readLc20InputSnapshot(after.files,after.pin,{...after.expected,producerJobId:'71'},after.source,after.candidateFiles);assert.notEqual(a.nodes.find(n=>n.id===node.id).digest,b.nodes.find(n=>n.id===node.id).digest);
 });
+
+// Collector fixture guards are source evidence only; no provider is invoked.
+import {ADMISSION_STAGES,validateStageAdmissionFixture,assertStageAdmissionPair,collectStageAdmission} from '../acceptance/v090/execution.mjs';
+function admissionFixture(provider='github'){
+ const context={caseInstanceId:provider==='github'?'E01.variant.04':'E02.variant.03',candidateDigest:hash('installed'),workspaceId:'workspace',projectId:'project',provider};
+ return{context,value:{schema:'runtime-v090-stage-admission/v1',...context,sourceCommit:'a'.repeat(40),positive:{instanceId:'complete',codingSourceSelection:{kind:'ORIGINAL_RECORD'}},journeyReport:{ref:'/synthetic/REPORT.json',sha256:'a'.repeat(64)},blocked:ADMISSION_STAGES.map(stageId=>({stageId,instanceId:stageId==='scope'?'complete':'pending',creationRequestId:'native-create'}))}};
+}
+test('stage admission missing fixture fails before all installed/network/mutation access',async()=>{
+ let touched=0;await assert.rejects(()=>collectStageAdmission({selection:{},read:()=>{touched++;},request:()=>{touched++;}}, {caseInstanceId:'E01.variant.04'},'github'),/STAGE_ADMISSION_FIXTURE_REQUIRED/);assert.equal(touched,0);
+});
+for(const provider of ['github','gitlab'])test('stage admission '+provider+' fixed matrix rejects missing, repeated, reordered, cross-provider and fabricated outcomes',()=>{
+ const {value,context}=admissionFixture(provider);assert.equal(validateStageAdmissionFixture(value,context),value);
+ const faults=[v=>v.blocked.pop(),v=>v.blocked[1]=copy(v.blocked[0]),v=>v.blocked.reverse(),v=>v.provider=provider==='github'?'gitlab':'github',v=>v.caseInstanceId='E01.journey',v=>v.candidateDigest=hash('other'),v=>v.positive.codingSourceSelection.kind='CURRENT_JOURNEY',v=>v.blocked[1].instanceId='complete',v=>v.blocked[0].instanceId='pending',v=>v.blocked[2].status='PASS',v=>v.sourceCommit='latest'];
+ for(const mutate of faults){const f=copy(value);mutate(f);assert.throws(()=>validateStageAdmissionFixture(f,context));}
+});
+test('stage admission positive raw wire binds allow, input, identity, principal and retained original request',()=>{
+ const original={id:'original-request',instanceId:'complete',projectId:'project',stageId:'scope',inputDigest:hash('input'),initiatedBy:{id:'executor'}};
+ const input={instanceId:'complete',stageId:'scope'},envelope={projectId:'project',input};
+ const pair={admission:{request:{envelope:{...envelope,operation:'lifecycle.stage.admission'}},response:{status:200,body:{result:{allowed:true,reasons:[],executionDispatched:false,inputDigest:original.inputDigest}}}},request:{request:{envelope:{...envelope,operation:'lifecycle.stage.request',requestId:'wire-request'}},response:{status:200,body:{result:{projectId:'project',requestId:'wire-request',principalId:'executor',operation:'lifecycle.stage.request',result:{stageRequestId:original.id,instanceId:'complete',stageId:'scope',inputDigest:original.inputDigest,status:'REQUEST_RETAINED',automaticRedispatch:false}}}}}};
+ assert.equal(assertStageAdmissionPair('scope',original,pair).stageRequestId,original.id);
+ for(const mutate of [p=>p.admission.response.body.result.allowed=false,p=>p.admission.response.body.result.inputDigest=hash('other'),p=>p.request.response.body.result.result.stageRequestId='other',p=>p.request.response.body.result.principalId='fabricated',p=>p.request.request.envelope.input={...input,outcome:'PASS'},p=>p.request.response.status=409,p=>p.request.response.body.result.result.automaticRedispatch=true]){const p=copy(pair);mutate(p);assert.throws(()=>assertStageAdmissionPair('scope',original,p));}
+});
