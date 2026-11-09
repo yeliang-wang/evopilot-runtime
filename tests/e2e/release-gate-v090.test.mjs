@@ -10,6 +10,7 @@ import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {crc32} from 'node:zlib';
 import {RUNTIME_RELEASE_ASSETS,inspectRuntimeReleaseCandidate,prepareRuntimeRelease,verifyRuntimeReleaseDecision,verifyRuntimeReleaseGovernanceCurrent} from '../../dist/release/gate.js';
+import {inspectQualifiedAcceptanceEvidence,closeQualifiedAcceptanceObservation} from '../../dist/release/evidence.js';
 
 const repository=fileURLToPath(new URL('../../',import.meta.url)),sha=value=>createHash('sha256').update(value).digest('hex');
 const signal=()=>AbortSignal.timeout(30000);
@@ -59,7 +60,7 @@ function fixture(t,changeGovernance){
  for(let i=1;i<=20;i++){const scenario='E'+String(i).padStart(2,'0');reports.push({scenario,report:report(scenario,matrix.caseInstances.filter(c=>c.scenario===scenario).map(c=>c.caseInstanceId))});}
  const usageReport=report('UT',Array.from({length:23},(_,i)=>'UT'+String(i+1).padStart(2,'0')),true);
  const correctionCases=JSON.parse(fs.readFileSync(join(source,'governance/lifecycle-correction-v090.json'))).acceptance.cases.filter(c=>c.phase==='PRE_RELEASE'),correctionDir=join(evidence,'LC');
- const correctionSelection={scenario:'LC',sourceCommit,phase:'PRE_RELEASE',addendumDigest:sha(fs.readFileSync(join(source,'governance/lifecycle-correction-v090.json'))),qualification:'FINAL_CANDIDATE',candidate,candidateDigest,collectorPins:{'correction.test.mjs':sha(fs.readFileSync(join(source,'tests/acceptance/v090/correction.test.mjs')))},selectedCaseIds:correctionCases.map(c=>c.id)};
+ const correctionSelection={scenario:'LC',sourceCommit,phase:'PRE_RELEASE',addendumDigest:sha(fs.readFileSync(join(source,'governance/lifecycle-correction-v090.json'))),qualification:'FINAL_CANDIDATE',candidate,candidateDigest,collectorPins:Object.fromEntries(['correction.test.mjs','execution.mjs','browser.mjs','support.mjs','preflight.mjs'].map(name=>[name,sha(fs.readFileSync(join(source,'tests/acceptance/v090',name)))])),selectedCaseIds:correctionCases.map(c=>c.id)};
  const correctionSelectionRef=put(join(correctionDir,'selection.json'),correctionSelection);
  const correctionRecord=(caseInstanceId,vectorId)=>{const artifact=(caseInstanceId??'setup')+'-'+(vectorId??'setup')+'.raw.json',ref=put(join(correctionDir,artifact),{synthetic:true,message:'Raw integrity test fixture; not actual execution or acceptance',caseInstanceId,vectorId});return{caseInstanceId,vectorId,artifact,fileDigest:ref.sha256};};
  const observed={phase:'PRE_RELEASE',status:'PASS',qualification:'FINAL_CANDIDATE',candidateDigest,assertions:{synthetic:'Integrity fixture only'}};
@@ -179,6 +180,7 @@ test('LC source, candidate, obligations, phase and committed collector pins rema
  for(const change of [
   r=>r.sourceCommit='0'.repeat(40),r=>r.candidateDigest='sha256:'+'0'.repeat(64),r=>r.candidate.manifestDigest='0'.repeat(64),r=>r.results[0].candidateDigest='sha256:'+'0'.repeat(64),r=>r.results[0].vectors[0].candidateDigest='sha256:'+'0'.repeat(64),
   (_r,s)=>s.addendumDigest='0'.repeat(64),(_r,s)=>s.sourceCommit='0'.repeat(40),(_r,s)=>s.phase='POST_RELEASE',(_r,s)=>s.selectedCaseIds[0]='LC12',(_r,s)=>s.collectorPins['correction.test.mjs']='0'.repeat(64),
+  ...['execution.mjs','browser.mjs','support.mjs','preflight.mjs'].map(name=>(_r,s)=>{s.collectorPins[name]='0'.repeat(64);}),
  ]){
   f.rewriteCorrection(change);await assert.rejects(f.prepare,/Correction|correction|Selected LC/);f.put(selectionRef,baselineSelection);f.input.correctionReport=f.put(f.input.correctionReport.ref,baseline);
  }
@@ -364,4 +366,55 @@ test('publication stop and original journal survive a separately reported termin
  const transport=fakePublication(f,{unknownAt:'/assets?name=',onCall(method,endpoint){if(method==='POST'&&endpoint.includes('/assets?name='))failedEffect=true;}});
  await assert.rejects(()=>publishV2Fixture(f,transport),error=>{assert(error instanceof AggregateError);assert.match(error.message,/PUBLICATION_STOPPED_INSPECT_ORIGINAL_EVIDENCE/);assert.equal(error.errors.length,2);assert.match(error.errors[0].message,/PUBLICATION_STOPPED_INSPECT_ORIGINAL_EVIDENCE/);assert.match(error.errors[1].message,/Synthetic descriptor cleanup failure/);return true;});
  assert.equal(transport.calls.filter(c=>c.method==='POST'&&c.endpoint.includes('/assets?name=')).length,1);assert.equal(transport.calls.some(c=>c.method==='PATCH'||c.method==='DELETE'),false);assert.equal(scopes.active.size,0);assert.equal(scopes.opened,scopes.closed);const failure=JSON.parse(fs.readFileSync(join(f.root,'publication/failure.json')));assert.equal(failure.automaticRetry,false);assert.equal(failure.evidenceRetained,true);
+});
+
+// Synthetic report provenance only; no installed execution or release credit.
+test('LC full release reader rejects missing helper pins and changed helper bytes',async t=>{
+ const f=fixture(t),baseline=JSON.parse(fs.readFileSync(f.input.correctionReport.ref)),selectionRef=join(f.evidence,'LC','selection.json'),originalSelection=JSON.parse(fs.readFileSync(selectionRef));
+ for(const name of ['execution.mjs','browser.mjs','support.mjs','preflight.mjs']){
+  f.rewriteCorrection((_r,s)=>{delete s.collectorPins[name];});
+  await assert.rejects(f.prepare,/RELEASE_EVIDENCE: Unexpected input fields/);
+  f.put(selectionRef,originalSelection);f.input.correctionReport=f.put(f.input.correctionReport.ref,baseline);
+  const file=join(f.source,'tests/acceptance/v090',name),before=fs.readFileSync(file);
+  fs.appendFileSync(file,'// changed executable helper\n');
+  await assert.rejects(f.prepare,/Release requires exact clean committed source/);
+  fs.writeFileSync(file,before);
+ }
+ assert.equal((await f.prepare()).acceptance.correction.passed,20);
+});
+
+test('LC mixed release reader binds the full helper closure without crediting source fixtures',async t=>{
+ const f=fixture(t),files=f.input.candidate.files,service=createNativeQualificationService({},{}),actor={id:'synthetic',projects:['synthetic'],permissions:['read']};
+ const buildInput=()=>({schema:'runtime-qualified-release-evidence-input/v2',sourceCommit:f.input.candidate.sourceCommit,manifest:files['distribution-manifest.json'],archive:files['evopilot-runtime-0.9.0-darwin-arm64.tar.gz'],sourceRevision:files['source-revision.txt'],scope:f.input.scope,qualifications:[],executions:[],originalExecutions:[...f.input.reports.map(r=>r.report),f.input.usageReport,f.input.correctionReport].flatMap(report=>JSON.parse(fs.readFileSync(report.ref)).results.map(r=>({caseId:r.caseInstanceId,report})))});
+ const audit=async()=>{const result=await inspectQualifiedAcceptanceEvidence(f.source,buildInput(),service,actor,signal());closeQualifiedAcceptanceObservation(result);return result;};
+ const result=await audit();assert.equal(result.covered,698);assert.equal(result.reviewRequiredExecuted,698);assert.equal(result.typedExecuted,0);assert.equal(result.reused,0);assert.equal(result.executionAuthenticity,'ACTUAL_ORIGINAL_SOURCE_REVIEW_REQUIRED');assert.equal(result.productAcceptance,'NOT_EVALUATED');assert.equal(result.releaseAuthorized,false);
+ const baseline=JSON.parse(fs.readFileSync(f.input.correctionReport.ref)),selectionRef=join(f.evidence,'LC','selection.json'),originalSelection=JSON.parse(fs.readFileSync(selectionRef));
+ for(const name of ['execution.mjs','browser.mjs','support.mjs','preflight.mjs']){
+  f.rewriteCorrection((_r,s)=>{delete s.collectorPins[name];});
+  await assert.rejects(audit,/Unexpected input fields/);
+  f.put(selectionRef,originalSelection);f.input.correctionReport=f.put(f.input.correctionReport.ref,baseline);
+  f.rewriteCorrection((_r,s)=>{s.collectorPins[name]='0'.repeat(64);});
+  await assert.rejects(audit,/Original collector is not the exact committed current source/);
+  f.put(selectionRef,originalSelection);f.input.correctionReport=f.put(f.input.correctionReport.ref,baseline);
+ }
+ assert.equal((await audit()).covered,698);
+});
+
+test('LC06 and LC07 actual report assembler reaches the public mixed reader with honest partial reports',async t=>{
+ const {lcProviderSelectionRecord,assembleLcProviderReport}=await import('../acceptance/v090/correction.test.mjs'),f=mixedFixture(t),original=JSON.parse(fs.readFileSync(f.input.correctionReport.ref)),selection=JSON.parse(fs.readFileSync(join(f.evidence,'LC','selection.json'))),lanes=[];
+ for(const caseId of ['LC06','LC07']){
+  const dir=join(f.evidence,caseId),row=original.results.find(r=>r.caseInstanceId===caseId),selected=lcProviderSelectionRecord({sourceCommit:selection.sourceCommit,phase:'PRE_RELEASE',qualification:'FINAL_CANDIDATE',caseIds:[caseId]},selection.candidate,selection.addendumDigest,selection.collectorPins),selectedRef=f.put(join(dir,'selection.json'),selected);
+  for(const e of [...original.setupEvidence,...row.vectors.flatMap(v=>v.evidence)])f.put(join(dir,e.artifact),fs.readFileSync(join(f.evidence,'LC',e.artifact)));
+  const {result,report}=assembleLcProviderReport({selected,selectionDigest:selectedRef.sha256,catalog:f.correctionCases,setupEvidence:original.setupEvidence,vectors:row.vectors,status:'PASS',assertions:{synthetic:'Actual assembler compatibility; observations are synthetic, formal credit zero'}});
+  assert.equal(report.scenarioStatus,'INCOMPLETE');assert.equal(report.selected,1);assert.equal(report.scenarioDenominator,20);assert.equal(report.fullDenominator,709);assert.equal(report.unexecutedCaseIds.length,19);
+  f.put(join(dir,caseId+'.json'),result);const ref=f.put(join(dir,'REPORT.json'),report),entry=f.inputV2.originalExecutions.find(e=>e.caseId===caseId);entry.report=ref;lanes.push({caseId,dir,report,result,entry});
+ }
+ const review=await f.prepareV2();assert.equal(review.acceptance.covered,698);assert.equal(review.acceptance.reviewRequiredExecuted,698);assert.equal(review.acceptance.executionAuthenticity,'ACTUAL_ORIGINAL_SOURCE_REVIEW_REQUIRED');assert.equal(review.releaseAuthorized,false);closeQualifiedAcceptanceObservation(review.acceptance);
+ for(const lane of lanes){
+  const changed=structuredClone(lane.report);delete changed.results[0].vectors[0].phase;
+  f.put(join(lane.dir,lane.caseId+'.json'),changed.results[0]);lane.entry.report=f.put(join(lane.dir,'REPORT.json'),changed);
+  await assert.rejects(f.prepareV2,/Nonpassing original correction vector/);
+  f.put(join(lane.dir,lane.caseId+'.json'),lane.result);lane.entry.report=f.put(join(lane.dir,'REPORT.json'),lane.report);
+ }
+ const restored=await f.prepareV2();assert.equal(restored.acceptance.covered,698);closeQualifiedAcceptanceObservation(restored.acceptance);
 });

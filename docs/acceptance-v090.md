@@ -663,3 +663,18 @@ LC16 通过受保护的 `lc16` 选择真实原始记录及独立的当前执行�
 698 项发布前义务的执行、复用、待执行分区。过期与配置漂移分别识别，未知结果只观察
 原请求，不重新派发。十一组向量必须全部实证通过；缺少真实前提保留 NOT_READY，
 失败报告完整落盘且命令失败退出。源码回归不等于正式安装验收。
+
+Every canonical LC report pins the complete fixed local collector closure:
+`correction.test.mjs`, `execution.mjs`, `browser.mjs`, `support.mjs` and
+`preflight.mjs`. Both the full correction reader and the mixed evidence reader
+verify these committed bytes. A singleton report retains the full denominator
+and stays INCOMPLETE; only its observed case can enter the mixed audit.
+Shared native/provider transcripts belong once to setup evidence. Each vector
+has its own phase, assertions and distinct observation artifact; one raw leaf
+cannot stand in for multiple observations. Raw-report integrity still requires
+independent actual-source review and does not become a native CI execution
+receipt, an owner reuse decision or release authority.
+
+LC 报告统一绑定上述五个执行文件的提交摘要。单例报告保留完整分母与 INCOMPLETE，
+共享原始记录只归属一次，每个向量保留独立观察。发布读取器验证报告结构和原始字节，
+实际执行真实性仍须独立审阅，不能把报告改名为原生 CI 回执或发布批准。
