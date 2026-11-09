@@ -87,6 +87,13 @@ action or bypass missing repair evidence. Legacy and injected authorities do
 not acquire invented historical accounting. This linkage is separate from the
 immutable original instance and its recorded outcomes.
 
+A separately reviewed successor that actually reruns a completed stage uses
+its own bounded request window inside the unchanged original root window.
+The prior successful request's one-shot cutoff does not expire this new
+execution. Failed, unresolved and same-instance request cutoffs remain binding;
+all cumulative attempts still count. This does not reuse the old PASS, renew an
+expired root or alter any historical request or observation.
+
 ## Independent checks and evidence
 
 The deterministic branch planner preserves actual FAIL results, blocks their

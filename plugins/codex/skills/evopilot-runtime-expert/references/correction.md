@@ -49,6 +49,12 @@ approved a different instance. A link preserves the original remaining bounds
 and does not supply missing repair proof. If no historical native root exists,
 do not invent or backfill one. Expired roots allow historical reads only.
 
+When that reviewed successor actually reruns a completed stage, it receives a
+new bounded request window within the original root. The completed request in
+the other instance keeps its original cutoff and result. Failed, unresolved or
+same-instance cutoffs still apply, and cumulative attempts are never reset.
+This is a new execution, not reused evidence or renewal of an expired root.
+
 A captured CI report is an original observation, not a reuse decision. Missing
 collector review, complete history, input closure or a published Harness
 assessment must remain unavailable; do not turn captured PASS text into a
