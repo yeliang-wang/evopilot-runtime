@@ -99,6 +99,16 @@ export async function openScenario(scenario,callableRegistration){
  assert(Array.isArray(selectedIds)&&selectedIds.length&&new Set(selectedIds).size===selectedIds.length);
  assert(selectedIds.every(id=>all.some(c=>c.caseInstanceId===id)),'The selection may not create or replace a frozen case');
  const cases=all.filter(c=>selectedIds.includes(c.caseInstanceId));
+ if(scenario==='E04'&&selectedIds.includes('E04.EX11')){
+  assert(selection.extensionExecution,'E04.EX11 requires protected actual owner obligations fixture');keys(selection.extensionExecution,['ref','sha256']);assert(/^[a-f0-9]{64}$/.test(selection.extensionExecution.sha256));
+  const bytes=readRegular(selection.extensionExecution.ref,1048576,true);assert.equal(sha(bytes),selection.extensionExecution.sha256);const fixture=JSON.parse(bytes);
+  keys(fixture,['schema','candidateDigest','workspaceId','projectId','syntheticAssets','syntheticDecisions','exchangeRoot','casePlans']);assert.equal(fixture.schema,'runtime-v090-extension-execution-fixture/v1');assert.equal(fixture.candidateDigest,'sha256:'+selection.expectedManifestDigest);assert.equal(fixture.workspaceId,selection.workspaceId);assert.equal(fixture.projectId,selection.projectId);
+  const plan=fixture.casePlans['E04.EX11'];assert(plan,'E04.EX11 requires exact prepared case inputs');keys(plan,['baseline','extended','ownerConnection','passed','failed','stageId','successorId']);
+  for(const name of ['baseline','extended','ownerConnection']){keys(plan[name],['ref','sha256']);assert(/^[a-f0-9]{64}$/.test(plan[name].sha256));assert.equal(sha(readRegular(plan[name].ref,1048576,true)),plan[name].sha256);}
+  for(const name of ['passed','failed']){keys(plan[name],['instanceId','targetRef','definitionRevisionId']);for(const value of Object.values(plan[name]))assert(typeof value==='string'&&value.length>0&&value.length<=512);}
+  assert.notEqual(plan.passed.instanceId,plan.failed.instanceId);for(const name of ['stageId','successorId'])assert(typeof plan[name]==='string'&&plan[name].length>0&&plan[name].length<=128);
+ }
+
  // EX01 reuses the existing named connection contract, but only for its exact
  // second project. It never creates a project, principal, grant or instance.
  if(scenario==='E03'&&(selectedIds.includes('E03.EX01')||Object.hasOwn(selection,'principals'))){

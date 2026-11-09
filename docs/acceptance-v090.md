@@ -406,9 +406,26 @@ E04 registers its implemented case callbacks before reading the installation or
 starting a browser. Selecting a missing callback fails with
 `COLLECTOR_MAPPING_INCOMPLETE` at that preflight; it does not run a placeholder
 and does not skip the requirement. The retained callable report covers the full
-fixed E04 catalog even when a subset is selected. It proves callable coverage
-only, not environment readiness or acceptance. E04.EX11 remains unimplemented
-until its actual pinned owner report and current Target controls are collected.
+fixed E04 catalog even when a subset is selected. All 15 E04 callbacks are
+implemented; this proves callable coverage only, not environment readiness or
+acceptance.
+
+E04.EX11 requires a protected `extensionExecution` fixture with an exact
+`casePlans["E04.EX11"]` entry before installation or browser access. Its
+`baseline` and `extended` YAML pins must differ only by the appended Harness
+extension. `ownerConnection` pins the actual published owner connection, while
+`passed` and `failed` each bind an original instance, Target and definition
+revision that actually executed that same extended definition. The collector
+checks the original native reports against the declared criteria and variants;
+an unrelated failure cannot stand in for the added requirement. `stageId` and
+`successorId` identify the exact frozen dependency.
+
+The case then appends and activates the extension through the browser, rejects
+`latest` and forged PASS inputs through real service requests, removes the check
+from the draft, and verifies that the original failed Target still cannot enter
+its dependent stage. It preserves the failed request and owner assets. Preparing
+these fixtures or passing source regressions does not establish that the installed
+case has passed; a final-candidate run must collect its actual evidence.
 
 The paired E03.EX12 and E04.EX12 cases use the same exact legal YAML and a single
 extension-scope change as the illegal input. E03 exercises HTTP, MCP, CLI and a
