@@ -782,3 +782,19 @@ Missing current prerequisites remain NOT_READY, not a source-test PASS.
 
 LC18 核验当前执行工作区的准备状态和完整外层执行历史。复用 PASS 不会准备环境，
 也不能覆盖先前失败；四个向量仍须用真实安装和原件完成正式验收。
+
+LC13 retains ten branch and invalidation vectors through a protected `lc13`
+selection. Its fixed graph places A/B/D at candidate checks and serial C1/C2
+in preparation, using native source/preparation lineage. A failed prerequisite
+blocks its dependants while an independently authorized branch can continue.
+The next-RC vector uses actual v2 verification failures, a reviewed successor
+candidate with complete repair coverage, and its own verification result.
+
+Candidate-input invalidation is checked by the existing read-only correction
+admission path, which reaches native preparation; a stage-admission presence
+check alone is insufficient. Original authority and budget cutoffs remain in
+force. The collector reads complete existing histories and does not create
+branches, approvals or successor executions to manufacture its prerequisites.
+
+LC13 的十个向量绑定真实分支、准备源链和后继候选。独立分支可继续不代表失败
+前置被豁免；候选、环境、权限和预算失效仍阻止受影响执行。

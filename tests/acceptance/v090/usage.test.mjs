@@ -16,6 +16,28 @@ const metrics=(input,output,cachedInput=0,reasoningOutput=0)=>({input,output,tot
 const external=m=>Object.fromEntries(Object.entries({input_tokens:m.input,output_tokens:m.output,total_tokens:m.total,cached_input_tokens:m.cachedInput,cache_write_input_tokens:m.cacheWriteInput,reasoning_output_tokens:m.reasoningOutput}).filter(([,v])=>v!==null));
 const exact=(value,keys)=>assert.deepEqual(Object.keys(value).sort(),keys.sort());
 
+// Verify protected selection bytes before importing any installed helper.
+function usageRegular(ref,max=16777216){
+ assert(path.isAbsolute(ref)&&fs.realpathSync(ref)===ref);const before=fs.lstatSync(ref);assert(before.isFile()&&!before.isSymbolicLink()&&before.nlink===1&&before.size<=max);
+ const unchanged=stat=>{for(const key of ['dev','ino','uid','gid','mode','nlink','size','mtimeMs','ctimeMs'])assert.equal(stat[key],before[key],'Installed bytes changed during inspection');};
+ const fd=fs.openSync(ref,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);
+ try{unchanged(fs.fstatSync(fd));const bytes=Buffer.alloc(before.size+1);let length=0;while(length<bytes.length){const n=fs.readSync(fd,bytes,length,bytes.length-length,null);if(!n)break;length+=n;}assert.equal(length,before.size);unchanged(fs.fstatSync(fd));unchanged(fs.lstatSync(ref));return bytes.subarray(0,length);}finally{fs.closeSync(fd);}
+}
+export function verifyUsageInstalledBytes(root,expected){
+ assert(path.isAbsolute(root)&&fs.realpathSync(root)===root);assert(/^[a-f0-9]{64}$/.test(expected));
+ const bytes=usageRegular(path.join(root,'distribution-manifest.json')),manifest=JSON.parse(bytes);
+ assert.equal(sha(bytes),expected,'Usage candidate manifest differs from selection');exact(manifest,['schema','version','archiveDigest','files']);assert.equal(manifest.schema,'runtime-standalone-distribution/v1');assert.equal(manifest.version,'0.9.0');
+ assert(manifest.files&&typeof manifest.files==='object'&&!Array.isArray(manifest.files));const files=Object.entries(manifest.files);assert(files.length>0&&files.length<=10000);
+ for(const name of ['dist/compat/project/files.js','dist/server/security.js','dist/installation/service-control.js'])assert.equal(manifest.files[name]?.type,'file','Required installed helper is not pinned');
+ const packageRoot=path.join(root,'package');let size=0;
+ for(const [name,pin] of files){
+  assert(!path.isAbsolute(name)&&!name.split('/').some(part=>!part||part==='.'||part==='..'));const file=path.join(packageRoot,name);
+  if(pin.type==='symlink'){assert(fs.lstatSync(file).isSymbolicLink());assert.equal(fs.readlinkSync(file),pin.target);const target=path.resolve(path.dirname(file),pin.target);assert(target.startsWith(packageRoot+path.sep));assert.equal(manifest.files[path.relative(packageRoot,target)]?.type,'file');assert.equal(fs.realpathSync(file),target);continue;}
+  assert.equal(pin.type,'file');const content=usageRegular(file);size+=content.length;assert(size<=268435456,'Installed usage inspection exceeds distribution size bound');assert.equal(content.length,pin.bytes);assert.equal(sha(content),pin.sha256,'Unverified installed usage helper: '+name);
+ }
+ return{bytes,manifest};
+}
+
 export async function collectUsageReplay({report,source,bind,append,waitFor}){
  const before=await report(),s=await source('replay');await bind(s);
  const at=Date.now(),events=[
@@ -49,6 +71,8 @@ export async function executeUsageAcceptance(selectedRef=process.env.EVOPILOT_V0
  assert(/^[a-z][a-z0-9-]{0,19}$/.test(selection.runId));
  assert(/^[a-f0-9]{64}$/.test(selection.expectedManifestDigest));
  assert(Number.isSafeInteger(selection.principalRevision)&&selection.principalRevision>0);
+ assert(!process.execArgv.some(a=>/loader|--import|--require|^-r$/.test(a))&&!process.env.NODE_OPTIONS,'Usage installed execution forbids module substitution');
+ const verifiedDistribution=verifyUsageInstalledBytes(selection.installedRoot,selection.expectedManifestDigest);
  const installedModule=name=>import(pathToFileURL(path.join(selection.installedRoot,'package/dist',name+'.js')).href);
  const {readRegular,canonicalPath}=await installedModule('compat/project/files');
  const {readHostConnection,hostHeaders}=await installedModule('server/security');
@@ -56,7 +80,7 @@ export async function executeUsageAcceptance(selectedRef=process.env.EVOPILOT_V0
  const addendumBytes=fs.readFileSync(path.join(repository,'governance/token-usage-v090.json')),addendum=JSON.parse(addendumBytes),all=addendum.acceptance.cases.filter(c=>c.phase==='PRE_RELEASE');
  assert.equal(addendum.acceptance.originalRequiredInstances,664);assert.equal(all.length,23);assert.equal(addendum.acceptance.combinedRequiredInstances,688);
  const ids=selection.caseIds;assert(Array.isArray(ids)&&ids.length&&new Set(ids).size===ids.length&&ids.every(id=>all.some(c=>c.id===id)));
- const manifestBytes=fs.readFileSync(path.join(selection.installedRoot,'distribution-manifest.json')),manifest=JSON.parse(manifestBytes);
+ const {bytes:manifestBytes,manifest}=verifiedDistribution;
  const plan=JSON.parse(fs.readFileSync(path.join(selection.installedRoot,'installation-plan.json'))),installed=inspectInstalledServiceSelection(selection.installedRoot),connection=readHostConnection(selection.connectionRef);
  assert.equal(sha(manifestBytes),selection.expectedManifestDigest);assert.equal(plan.distribution.manifestDigest,selection.expectedManifestDigest);
  assert.equal(manifest.version,'0.9.0');assert.equal(connection.serviceId,installed.serviceId);assert.equal(connection.workspaceId,selection.workspaceId);assert.equal(connection.projectId,selection.projectId);

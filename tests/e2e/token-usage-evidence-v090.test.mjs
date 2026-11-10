@@ -155,3 +155,22 @@ test('UT03 installed driver assertions exercise native cumulative ledger semanti
  assert(Date.parse(records[3].observedAt)<Date.parse(records[2].observedAt),'The delayed event actually predates its predecessor');
  assert.equal(report().counts.total.recorded,227);assert.equal(report().counts.total.unknownRecords,3);
 });
+
+test('usage installed closure accepts pinned bytes and rejects tampering before code import',async()=>{
+ const {verifyUsageInstalledBytes,executeUsageAcceptance}=await import('../acceptance/v090/usage.test.mjs');
+ const root=fs.mkdtempSync(join(fs.realpathSync(tmpdir()),'usage-installed-import-'));
+ try{
+  const files={},names=['dist/compat/project/files.js','dist/server/security.js','dist/installation/service-control.js'];
+  for(const name of names){const ref=join(root,'package',name),bytes=Buffer.from('// original published helper fixture\n');fs.mkdirSync(dirname(ref),{recursive:true});fs.writeFileSync(ref,bytes);files[name]={type:'file',bytes:bytes.length,sha256:sha(bytes)};}
+  const manifest={schema:'runtime-standalone-distribution/v1',version:'0.9.0',archiveDigest:'a'.repeat(64),files},manifestBytes=Buffer.from(JSON.stringify(manifest));fs.writeFileSync(join(root,'distribution-manifest.json'),manifestBytes);
+  const expected=sha(manifestBytes);assert.deepEqual(verifyUsageInstalledBytes(root,expected).manifest,manifest);
+  const marker=join(root,'MUST-NOT-EXECUTE'),injected='import {writeFileSync} from "node:fs"; writeFileSync('+JSON.stringify(marker)+',"executed");\n';
+  fs.writeFileSync(join(root,'package',names[0]),injected);
+  const selection={schema:'runtime-v090-usage-selection/v1',installedRoot:root,expectedManifestDigest:expected,sourceRevision:{ref:join(root,'source.txt'),sha256:'b'.repeat(64)},connectionRef:join(root,'connection.json'),workspaceId:'synthetic',projectId:'alpha',runId:'import-guard',outputRoot:join(root,'output'),qualification:'DEVELOPMENT',caseIds:['UT03'],instanceId:'original',targetVersion:'0.9.0',principalRevision:1};
+  const ref=join(root,'selection.json');fs.writeFileSync(ref,JSON.stringify(selection),{mode:0o600});
+  await assert.rejects(executeUsageAcceptance(ref),{code:'ERR_ASSERTION'});
+  assert(!fs.existsSync(marker));assert(!fs.existsSync(selection.outputRoot));
+  fs.rmSync(join(root,'package',names[0]));fs.symlinkSync(join(root,'package',names[1]),join(root,'package',names[0]));
+  assert.throws(()=>verifyUsageInstalledBytes(root,expected),{code:'ERR_ASSERTION'});
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
