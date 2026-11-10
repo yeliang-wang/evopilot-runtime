@@ -1,3 +1,5 @@
+import {pathToFileURL as collectorPathToFileURL} from 'node:url';
+import {resolve as collectorResolve} from 'node:path';
 // Installed revision/candidate evidence only. An unimplemented fixed contract
 // fails explicitly; compiler fixtures and synthetic stage outcomes earn no credit.
 import test from 'node:test';
@@ -14,7 +16,7 @@ import {ownerObligations,collectE05Journey,collectE05MissingCandidate} from './e
 import {ownerFeedbackCase} from './e16.test.mjs';
 
 
-test('E05 installed revision isolation and actual candidate evidence',caseCampaignTestOptions('E05'),async()=>{
+export async function executeE05() {
  const run=await openScenario('E05');let serial=0,browser;
  try{
   if(run.selection.caseCampaign){await collectCaseCampaign(run,'E05');return;}
@@ -153,4 +155,5 @@ test('E05 installed revision isolation and actual candidate evidence',caseCampai
    assert.fail('Unknown frozen E05 case '+c.caseInstanceId);
   });
  }finally{await browser?.close();run.finish();}
-});
+}
+if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E05 installed revision isolation and actual candidate evidence',caseCampaignTestOptions('E05'),executeE05);

@@ -1,3 +1,5 @@
+import {pathToFileURL as collectorPathToFileURL} from 'node:url';
+import {resolve as collectorResolve} from 'node:path';
 // Real installed-service/browser qualification on explicitly marked synthetic
 // inventory. This collector never seeds SQLite, invents instance authority,
 // fulfills fake API responses, changes clocks or relaxes the fixed thresholds.
@@ -155,7 +157,7 @@ async function interactionStates(run,browser,original){
  }finally{await ui.close();}
 }
 
-test('E19 installed browser performance and usability with native synthetic inventory',{timeout:1800000},async t=>{
+export async function executeE19(t) {
  const run=await openScenario('E19');let browser,writer;
  try{
   for(const c of run.cases)await run.collect(c,async()=>{
@@ -207,4 +209,5 @@ test('E19 installed browser performance and usability with native synthetic inve
    assert(result.summaryP95Ms<=fixed.summaryP95Ms,'First summary p95 exceeded the fixed 2 second threshold');assert(result.eventP95Ms<=fixed.eventP95Ms,'Committed event to page p95 exceeded the fixed 5 second threshold');assert(disconnect.durationMs<=fixed.disconnectMs);return result;
   });
  }finally{writer?.flush();await browser?.close();run.finish();}
-});
+}
+if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E19 installed browser performance and usability with native synthetic inventory',{timeout:1800000},executeE19);

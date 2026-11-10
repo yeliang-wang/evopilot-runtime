@@ -1,3 +1,5 @@
+import {pathToFileURL as collectorPathToFileURL} from 'node:url';
+import {resolve as collectorResolve} from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,7 +8,7 @@ import {chromium,expect} from '@playwright/test';
 import {openScenario,sha} from './support.mjs';
 
 const stages=['scope','plan','implementation','candidate','verification','release-decision','publication','closure'];
-test('E10 actual installed Expert configuration and same-service readback',async()=>{
+export async function executeE10() {
  const run=await openScenario('E10');let expert,browser,context,completed=null;
  try{
   const input=run.selection.expertConfiguration;assert.deepEqual(Object.keys(input).sort(),['ref','sha256']);
@@ -58,4 +60,5 @@ test('E10 actual installed Expert configuration and same-service readback',async
    return{...completed,sameDefinitionAcrossExpertCliBrowser:true,serviceSurvivesHostExit:true,refreshedHostReadsCurrentState:true,noSeparateSkillInstallation:true,noRuntimeLlmAccount:true,noBusinessRunOrRelease:true};
   });
  }finally{await context?.close();await browser?.close();await expert?.close();run.finish();}
-});
+}
+if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E10 actual installed Expert configuration and same-service readback',executeE10);

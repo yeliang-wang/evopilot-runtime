@@ -1,3 +1,5 @@
+import {pathToFileURL as collectorPathToFileURL} from 'node:url';
+import {resolve as collectorResolve} from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -429,7 +431,7 @@ async function extensionExecution(run,c,browser,openBrowser){
 }
 
 
-test('E04 exact installed Base inheritance and constrained extension cases',async()=>{
+export async function executeE04() {
  let run,browser,base,initial,activeSource,activeData,positiveSource;
  // Register only implemented callbacks before installation reads or browser
  // startup. Prepared native evidence remains mandatory for owner obligations.
@@ -460,4 +462,5 @@ test('E04 exact installed Base inheritance and constrained extension cases',asyn
   if(run.cases.some(c=>['E04.variant.01','E04.variant.02','E04.EX01','E04.EX11','E04.EX12','E04.EX04','E04.EX07'].includes(c.caseInstanceId)))browser=await chromium.launch({headless:true});
   for(const c of run.cases)await run.collectRegistered(c);
  }finally{await browser?.close();run.finish();}
-});
+}
+if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E04 exact installed Base inheritance and constrained extension cases',executeE04);

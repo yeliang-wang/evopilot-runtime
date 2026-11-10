@@ -1,3 +1,5 @@
+import {pathToFileURL as collectorPathToFileURL} from 'node:url';
+import {resolve as collectorResolve} from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -111,7 +113,7 @@ async function proveCodingHost(run,selected,handoff,reported,claim,nodeExecutabl
   }};
  }finally{fs.closeSync(fd);}
 }
-test('E02 actual installed GitLab lifecycle with external Codex and native owners',caseCampaignTestOptions('E02'),async()=>{
+export async function executeE02() {
  const run=await openScenario('E02');let expert,browser,ui,primaryFailure;
  try{
   if(run.selection.caseCampaign){await collectCaseCampaign(run,'E02');return;}
@@ -353,4 +355,5 @@ test('E02 actual installed GitLab lifecycle with external Codex and native owner
   for(const cleanup of [()=>ui?.close(),()=>browser?.close(),()=>expert?.close()])try{await cleanup();}catch(error){failures.push(error);}
   try{run.finish();}catch(error){failures.push(error);}if(failures.length)throw new AggregateError([...(primaryFailure?[primaryFailure]:[]),...failures],'E02 cleanup/evidence was incomplete');
  }
-});
+}
+if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E02 actual installed GitLab lifecycle with external Codex and native owners',caseCampaignTestOptions('E02'),executeE02);

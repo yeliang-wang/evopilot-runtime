@@ -1,3 +1,5 @@
+import {pathToFileURL as collectorPathToFileURL} from 'node:url';
+import {resolve as collectorResolve} from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -253,7 +255,7 @@ async function fieldClassification(run,c,fields,base,initial,activeSource){
  return{entries:['http-api','http-mcp','cli'],providers:['github','gitlab'],policies,reports,otherProviderFieldsNotRequired:true,invalidActivationBlocked:true,originalBaseAndActiveUnchanged:true,actualCurrentBindingValidation:true,externalExecutionRequested:false};
 }
 
-test('E03 fixed candidate service admission cases',async()=>{
+export async function executeE03() {
  let run,browser,expert,fields,base,initial,activeSource,eventCursor;const variants=new Map();
  async function collectCase(c){
    if(c.caseInstanceId==='E03.EX01'){
@@ -315,4 +317,5 @@ test('E03 fixed candidate service admission cases',async()=>{
   if(run.cases.some(c=>c.parameters.entry==='expert'||c.caseInstanceId==='E03.EX12'))expert=await run.openExpert();
   for(const c of run.cases)await run.collectRegistered(c);
  }finally{await browser?.close();await expert?.close();run.finish();}
-});
+}
+if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E03 fixed candidate service admission cases',executeE03);

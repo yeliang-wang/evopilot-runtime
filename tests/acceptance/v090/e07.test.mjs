@@ -1,3 +1,5 @@
+import {pathToFileURL as collectorPathToFileURL} from 'node:url';
+import {resolve as collectorResolve} from 'node:path';
 // Installed monitor qualification. Original UNKNOWN, revocation and cursor gaps
 // need actual retained evidence; no direct store seeding or synthetic outcomes.
 import test from 'node:test';
@@ -37,7 +39,7 @@ async function readonly(run,ui,c){
  return{actualInstalledBrowser:true,actualReadOnlyPrincipal:true,httpAndBrowserExecutionDenied:true,monitorPayloadContainsNoEditorConfiguration:true,unchangedRevisionAndInstances:true,originalSseFrames:true,postIndependentRemaining:['E22','P04']};
 }
 
-test('E07 installed monitor state, read-only identity and original event stream',async()=>{
+export async function executeE07() {
  const run=await openScenario('E07');let browser;
  try{
   assert(run.selection.principals?.monitor,'Select an actual protected monitor-only connection');browser=await chromium.launch({headless:true});
@@ -74,4 +76,5 @@ test('E07 installed monitor state, read-only identity and original event stream'
    }finally{await ui.close();}
   });
  }finally{await browser?.close();run.finish();}
-});
+}
+if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E07 installed monitor state, read-only identity and original event stream',executeE07);

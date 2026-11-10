@@ -1,3 +1,5 @@
+import {pathToFileURL as collectorPathToFileURL} from 'node:url';
+import {resolve as collectorResolve} from 'node:path';
 // Final-candidate qualification only. All positive inputs are original actual
 // campaigns; corrupted private copies are used only for explicit negative probes.
 // No business execution, synthetic positive report, release or source build.
@@ -152,7 +154,7 @@ function negativeInventory(run,f,audit,caseInstanceId){
  const after=audit(repository,original);assert.equal(after.passed,652);run.artifact('native-negative-inventory-results.json',{outcomes,originalReportsUnchanged:true,originalPositiveAudit:after});return outcomes;
 }
 
-test('E20 exact source, original CI assets and frozen prerequisite qualification',{timeout:900000},async t=>{
+export async function executeE20(t) {
  const run=await openScenario('E20');let f;
  try{
   assert.equal(run.all.length,3);f=fixture(run);
@@ -186,4 +188,5 @@ test('E20 exact source, original CI assets and frozen prerequisite qualification
   });
   if(shared){native.inspectE20PrerequisiteEvidence(repository,evidenceInput(f));await candidateApi.inspectRuntimeReleaseCandidate(repository,f.candidateInput,t.signal);for(const pin of [f.documentationReview,f.extensionEvidence,f.releaseNotes])pinned(pin,1048576);}
  }finally{run.finish();}
-});
+}
+if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E20 exact source, original CI assets and frozen prerequisite qualification',{timeout:900000},executeE20);

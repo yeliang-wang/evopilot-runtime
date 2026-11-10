@@ -1,3 +1,5 @@
+import {pathToFileURL as collectorPathToFileURL} from 'node:url';
+import {resolve as collectorResolve} from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -98,7 +100,7 @@ async function refresh(f,run,c){
  return{actualOldConnectionFailedAndClosed:true,installerNeverInferredHostSuccess:true,explicitFreshHostConnection:true,newEphemeralThread:true,actualSkillAndHttpReadback:true,receiptPreserved:true,actualModelTurn:false};
 }
 
-test('E14 five fixed installed service and actual Codex maintenance cases',async()=>{
+export async function executeE14() {
  const run=await openScenario('E14');let maintenance;
  try{
   assert.equal(process.platform,'darwin','These fixed installed user-service cases require the actual macOS launchd Host');assert(run.cases.every(c=>cases.includes(c.caseInstanceId)));maintenance=openMaintenance(run);
@@ -109,4 +111,5 @@ test('E14 five fixed installed service and actual Codex maintenance cases',async
    return{...result,actualInstalledCandidate:true,sourceTestsCounted:false,uninstallRetainsDataCredentialsAndAudit:true,ownedServiceStopped:true,actualPluginUnregistered:true,dailyInstallationChanged:false,expertDialogueClaimed:false};
   });
  }finally{run.finish();}
-});
+}
+if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E14 five fixed installed service and actual Codex maintenance cases',executeE14);

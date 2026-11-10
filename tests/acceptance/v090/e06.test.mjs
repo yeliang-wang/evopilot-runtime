@@ -1,3 +1,5 @@
+import {pathToFileURL as collectorPathToFileURL} from 'node:url';
+import {resolve as collectorResolve} from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {parse,parseDocument,stringify} from 'yaml';
@@ -104,7 +106,7 @@ async function conflicts(run,browser,ui,initial){
  }finally{await loss.close();}
 }
 
-test('E06 exact installed graph and YAML lifecycle browser cases',async()=>{
+export async function executeE06() {
  const run=await openScenario('E06');let browser;
  try{
   browser=await chromium.launch({headless:true});
@@ -127,4 +129,5 @@ test('E06 exact installed graph and YAML lifecycle browser cases',async()=>{
    }finally{await ui.close();}
   });
  }finally{await browser?.close();run.finish();}
-});
+}
+if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E06 exact installed graph and YAML lifecycle browser cases',executeE06);

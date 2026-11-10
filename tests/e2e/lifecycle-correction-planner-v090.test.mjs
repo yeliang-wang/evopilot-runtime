@@ -1395,3 +1395,14 @@ test('LC18 repaired inventory rejects authenticated run observation and CI ident
  ];
  for(const [label,mutate]of mutations){const f=await lc18SourceScenario('no-business-redispatch'),snapshot=f.snapshots[0];mutate(snapshot);for(const key of ['run','observation','ci']){const retained=snapshot[key],event=f.events.find(e=>e.seq===retained.sequence);event.data.digest=lc16Digest(retained.value);}f.pins.set('history',Buffer.from(JSON.stringify(f.snapshots)));await assert.rejects(f.run(),{code:'ERR_ASSERTION'},label);}
 });
+
+test('fixed campaign imports expose original callbacks without starting selected acceptance',async()=>{
+ const {spawnSync}=await import('node:child_process'),{fileURLToPath}=await import('node:url');
+ const root=fileURLToPath(new URL('../../',import.meta.url));
+ const code=`import path from 'node:path';import {pathToFileURL} from 'node:url';for(const n of [1,2,3,4,5,6,7,8,9,10,12,14,15,17,19,20]){const id='E'+String(n).padStart(2,'0');const m=await import(pathToFileURL(path.resolve('tests/acceptance/v090/'+id.toLowerCase()+'.test.mjs')));if(typeof m['execute'+id]!=='function')throw Error(id+' callable missing');}process.stdout.write('IMPORT_ONLY');`;
+ const env=Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('EVOPILOT_V090_')&&!key.startsWith('NODE_TEST')));
+ const result=spawnSync(process.execPath,['--input-type=module','-e',code],{cwd:root,env,encoding:'utf8',timeout:10000,maxBuffer:262144});
+ assert.equal(result.status,0,result.stderr);assert.equal(result.signal,null);assert.equal(result.stdout,'IMPORT_ONLY');
+ const direct=spawnSync(process.execPath,['--test','tests/acceptance/v090/e09.test.mjs'],{cwd:root,env,encoding:'utf8',timeout:10000,maxBuffer:262144});
+ assert.equal(direct.status,1,'Direct entry must still register its acceptance test and require a protected selection');assert.equal(direct.signal,null);assert.match(direct.stdout,/E09 installed candidate Streamable HTTP contract/);assert.match(direct.stdout,/EVOPILOT_V090_ACCEPTANCE_SELECTION/);
+});

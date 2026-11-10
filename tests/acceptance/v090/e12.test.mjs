@@ -1,3 +1,5 @@
+import {pathToFileURL as collectorPathToFileURL} from 'node:url';
+import {resolve as collectorResolve} from 'node:path';
 // Real installed HTTP/browser boundary observations. Synthetic negative input is
 // labeled; unavailable revocation timing is never inferred from a different test.
 import test from 'node:test';
@@ -237,7 +239,7 @@ async function permissionJourney(run,browser,c){
 }
 
 
-test('E12 exact installed browser and HTTP permission/security boundaries',{timeout:240000},async()=>{
+export async function executeE12() {
  const run=await openScenario('E12');let browser;
  try{
   browser=await chromium.launch({headless:true});
@@ -250,4 +252,5 @@ test('E12 exact installed browser and HTTP permission/security boundaries',{time
    assert.fail('Unknown fixed E12 case '+c.caseInstanceId);
   });
  }finally{await browser?.close();run.finish();}
-});
+}
+if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E12 exact installed browser and HTTP permission/security boundaries',{timeout:240000},executeE12);

@@ -1,3 +1,5 @@
+import {pathToFileURL as collectorPathToFileURL} from 'node:url';
+import {resolve as collectorResolve} from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -26,7 +28,7 @@ function toolResult(raw){
  const value=raw.structuredContent??JSON.parse(raw.content.find(part=>part.type==='text').text);assert(!value.error,JSON.stringify(value.error));return value;
 }
 
-test('E15 actual installed legacy Host delegates to one HTTP Runtime and exact published owners',async()=>{
+export async function executeE15() {
  const run=await openScenario('E15');let host;
  try{
   for(const c of run.cases)await run.collect(c,async()=>{
@@ -147,4 +149,5 @@ test('E15 actual installed legacy Host delegates to one HTTP Runtime and exact p
    return{actualCodexHost:true,actualModelTurn:false,expertDialogueCompleted:false,samePluginHttpAndLegacy:true,modernToolsNotDuplicated:true,sameProjectGoalAndReceipt:true,legacyWrites:1,ownerNativeValidations:ownerResults,actualHistoricalOwnerCombination:true,versionMatrix,legacyNoticeObserved:true,noSecondRuntimeWriter:true,ownerPackageBytesUnchanged:true,ownerSemanticOrPublicationDecisions:0,businessRunsDispatched:0,projectLifecycleActivationChanged:false,parentCodeOrReleaseChanged:false,historicalDevelopmentReportsReused:false};
   });
  }finally{try{await host?.close();}finally{run.finish();}}
-});
+}
+if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E15 actual installed legacy Host delegates to one HTTP Runtime and exact published owners',executeE15);

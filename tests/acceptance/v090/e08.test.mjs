@@ -1,3 +1,5 @@
+import {pathToFileURL as collectorPathToFileURL} from 'node:url';
+import {resolve as collectorResolve} from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -18,7 +20,7 @@ function privatePinned(value){
 }
 const execute=(executable,args,cwd,timeout=60000)=>new Promise(resolve=>execFile(executable,args,{cwd,timeout,maxBuffer:8388608,encoding:'utf8',env:{PATH:'/usr/local/bin:/usr/bin:/bin',HOME:process.env.HOME,LC_ALL:'C',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_OPTIONAL_LOCKS:'0'}},(error,stdout,stderr)=>resolve({executable,args,exitCode:error?error.code:0,signal:error?.signal??null,stdout,stderr})));
 
-test('E08 independent installed Runtime and published owner compatibility',async()=>{
+export async function executeE08() {
  const run=await openScenario('E08'),root=path.join(run.selection.installedRoot,'package');
  const configuration=run.selection.packageCompatibility;
  assert(configuration,'Select explicit private fixture and static source/navigation inputs for E08');
@@ -111,4 +113,5 @@ test('E08 independent installed Runtime and published owner compatibility',async
   run.artifact('package-compatibility-selection.json',{fixtureReference:configuration.fixture,fixture,versionMatrix,scope:'Actual installed Runtime plus published 0.8.3 owners; isolated synthetic assets, no real project/domain claim'});
   for(const c of run.cases)await run.collect(c,()=>c.caseInstanceId==='E08.journey'?independent():c.caseInstanceId==='E08.variant.01'?compatible():c.caseInstanceId==='E08.variant.02'?incompatible():Promise.reject(Error('Unimplemented E08 case '+c.caseInstanceId)));
  }finally{for(const adapter of adapters.reverse())adapter.close();run.finish();}
-});
+}
+if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E08 independent installed Runtime and published owner compatibility',executeE08);

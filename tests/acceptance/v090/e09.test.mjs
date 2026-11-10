@@ -1,3 +1,5 @@
+import {pathToFileURL as collectorPathToFileURL} from 'node:url';
+import {resolve as collectorResolve} from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -10,7 +12,7 @@ const versions=['2025-06-18','2025-11-25'];
 const rpc=(id,method,params)=>JSON.stringify({jsonrpc:'2.0',...(id===null?{}:{id}),method,...(params===undefined?{}:{params})});
 const refs=versions.map(version=>({version,transport:`https://modelcontextprotocol.io/specification/${version}/basic/transports`,lifecycle:`https://modelcontextprotocol.io/specification/${version}/basic/lifecycle`,cancellation:`https://modelcontextprotocol.io/specification/${version}/basic/utilities/cancellation`}));
 
-test('E09 installed candidate Streamable HTTP contract',async()=>{
+export async function executeE09() {
  const run=await openScenario('E09');let seq=0;
  const call=(version,method,params,options={})=>run.protocol(rpc(++seq,method,params),{headers:{'mcp-protocol-version':version,...options.headers}});
  const identity=result=>{
@@ -96,6 +98,7 @@ test('E09 installed candidate Streamable HTTP contract',async()=>{
    return{frozenInstances:run.all.map(c=>c.caseInstanceId),independentProtocolResults:versions.map(v=>({version:v,...completed.get('E09.http.'+v)})),fullDenominator:664,crossScenarioCoverage:'Requires separate E01/E02/E03/E18/E20 reports'};
   });
  }finally{run.finish();}
-});
+}
+if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E09 installed candidate Streamable HTTP contract',executeE09);
 
 async function PromiseSequential(items,fn){const out=[];for(const item of items)out.push(await fn(item));return out;}
