@@ -1399,7 +1399,7 @@ test('LC18 repaired inventory rejects authenticated run observation and CI ident
 test('fixed campaign imports expose original callbacks without starting selected acceptance',async()=>{
  const {spawnSync}=await import('node:child_process'),{fileURLToPath}=await import('node:url');
  const root=fileURLToPath(new URL('../../',import.meta.url));
- const code=`import path from 'node:path';import {pathToFileURL} from 'node:url';for(const n of [1,2,3,4,5,6,7,8,9,10,12,14,15,17,19,20]){const id='E'+String(n).padStart(2,'0');const m=await import(pathToFileURL(path.resolve('tests/acceptance/v090/'+id.toLowerCase()+'.test.mjs')));if(typeof m['execute'+id]!=='function')throw Error(id+' callable missing');}process.stdout.write('IMPORT_ONLY');`;
+ const code=`import path from 'node:path';import {pathToFileURL} from 'node:url';for(const n of Array.from({length:21},(_,i)=>i+1)){const id='E'+String(n).padStart(2,'0');const m=await import(pathToFileURL(path.resolve('tests/acceptance/v090/'+id.toLowerCase()+'.test.mjs')));if(typeof m['execute'+id]!=='function')throw Error(id+' callable missing');}process.stdout.write('IMPORT_ONLY');`;
  const env=Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('EVOPILOT_V090_')&&!key.startsWith('NODE_TEST')));
  const result=spawnSync(process.execPath,['--input-type=module','-e',code],{cwd:root,env,encoding:'utf8',timeout:10000,maxBuffer:262144});
  assert.equal(result.status,0,result.stderr);assert.equal(result.signal,null);assert.equal(result.stdout,'IMPORT_ONLY');

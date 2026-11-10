@@ -371,9 +371,10 @@ export async function activeCiExitReentry(run,c){
 }
 
 
-if(process.argv[1] && import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)test('E11 actual two-client two-project Runtime isolation',async()=>{
+export async function executeE11() {
  const run=await openScenario('E11');try{assert.equal(run.all.length,2);for(const c of run.cases)await run.collect(c,async()=>{
   if(c.caseInstanceId==='E11.journey')return journey(run,c);
   assert.equal(c.caseInstanceId,'E11.CV05');return activeCiExitReentry(run,c);
  });}finally{run.finish();}
-});
+}
+if(process.argv[1] && import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)test('E11 actual two-client two-project Runtime isolation',executeE11);

@@ -125,3 +125,5 @@ async function main(t){
 // Importing pure guards for bounded synthetic checks never registers or executes
 // the POST_RELEASE scenario. The actual node --test entry always registers it.
 if(process.argv[1]&&pathToFileURL(path.resolve(process.argv[1])).href===import.meta.url)test('E21 actual independent public Runtime release readback',{timeout:900000},main);
+
+export {main as executeE21};

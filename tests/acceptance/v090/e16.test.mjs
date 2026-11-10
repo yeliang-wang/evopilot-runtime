@@ -475,7 +475,7 @@ async function permissionTiming(run,browser,c){
  return{actualInstalledCandidate:true,actualThreeRoles:true,monitor:roleMonitor,timings,postActivation:post,oldInstanceAndPinsUnchanged:true,authFaultInjection:true,productMembershipManagement:false,newInstanceOrStageDispatches:0,newModelCalls:0,newCiRuns:0,originalOwnerReferences:initial.original.definition.semantic.assets,originalRevisionId:initial.original.pins.definitionRevisionId,ownerFeedbackBranchesNotCredited:true,l3SoftwareAcceptanceClaimed:false};
 }
 
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))test('E16 installed owner boundaries and original feedback replay',caseCampaignTestOptions('E16',{timeout:240000}),async()=>{
+export async function executeE16() {
  const run=await openScenario('E16');
  try{
   if(run.selection.caseCampaign){await collectCaseCampaign(run,'E16');return;}
@@ -489,7 +489,8 @@ if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.ur
    assert.fail('Unknown fixed E16 case '+c.caseInstanceId);
   });
  }finally{run.finish();}
-});
+}
+if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))test('E16 installed owner boundaries and original feedback replay',caseCampaignTestOptions('E16',{timeout:240000}),executeE16);
 
 const ownerCaseIds=['E16.journey','E16.variant.01','E16.CV06'];
 function ownerExact(v,fields){assert(v&&typeof v==='object'&&!Array.isArray(v));assert.deepEqual(Object.keys(v).sort(),[...fields].sort());}

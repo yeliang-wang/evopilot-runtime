@@ -99,7 +99,7 @@ export function assertForkGitLabArtifact(metadata){
  const file=metadata.artifacts_file;assert(file,'NOT_READY: original probe artifact metadata required');assert.equal(file.filename,'artifacts.zip');assert(Number.isSafeInteger(file.size)&&file.size>0&&file.size<=1048576,'NOT_READY: bounded dedicated probe archive required');return metadata;
 }
 
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))test('E18 installed CI evidence and exact release-authority mismatch',async()=>{
+export async function executeE18() {
  const run=await openScenario('E18');
  try{
   if(run.cases.every(c=>c.caseInstanceId==='E18.CV03')){for(const c of run.cases)await run.collect(c,()=>collectManagedBudget(run,c));return;}
@@ -443,4 +443,5 @@ if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.ur
    assert.fail('Unimplemented fixed E18 case '+c.caseInstanceId);
   });
  }finally{run.finish();}
-});
+}
+if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))test('E18 installed CI evidence and exact release-authority mismatch',executeE18);

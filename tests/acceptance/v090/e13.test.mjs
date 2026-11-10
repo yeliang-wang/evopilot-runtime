@@ -646,7 +646,7 @@ async function originalProviderLoss(run,driver,c,plan,continuous=null){
  run.artifact('real-provider-loss-recovery.json',{parentRequest:original.request,derivation:retained.derivation,ci,advance,actualPause:received,remote,finalRemote,beforeInventory,afterInventory,nativeReadback:observed,addedEvents:added,providerRedispatches:0,remoteRunCount:afterInventory.matchingRuns.length,transportCancellationImpliesRollback:false,formalCaseCredit:0});assert.deepEqual(lossPinned(plan.faultPlan),f);for(const pin of [f.producer.entry,...f.producer.helpers])assert.equal(faultSha(faultPrivate(pin.ref)),pin.sha256);if(continuous)return continuous.complete({original,handoff,retained,advance,ci,remote,finalRemote,beforeInventory,afterInventory,observed,independentProviderReadCalls});return{sameBusinessInstance:instance.id,originalCodingClaimPreserved:true,actualGitHubResponseBodyLost:true,independentOriginalRunId:String(remote.id),runAttempt:1,oneOriginalProviderRun:true,nativeOriginalReadbackRecovered:true,newProviderDispatchAfterFault:false,newHostTurn:false,fullJourneyNotCredited:true};
 }
 
-if(process.argv[1]&&pathToFileURL(path.resolve(process.argv[1])).href===import.meta.url)test('E13 installed interruption and truthful unavailable measurement branches',{timeout:900000},async t=>{
+export async function executeE13(t) {
  const captured=await openScenario('E13'),run={...captured};
  // A bounded request already in flight retains its original response through
  // support. If the test was aborted meanwhile, stop before issuing any next
@@ -670,7 +670,8 @@ if(process.argv[1]&&pathToFileURL(path.resolve(process.argv[1])).href===import.m
    throw Error('UNIMPLEMENTED_ORIGINAL_CASE: '+c.caseInstanceId);
   });
  }finally{run.finish();}
-});
+}
+if(process.argv[1]&&pathToFileURL(path.resolve(process.argv[1])).href===import.meta.url)test('E13 installed interruption and truthful unavailable measurement branches',{timeout:900000},executeE13);
 
 function e13CodeBytes(ref){assert.equal(fs.realpathSync(ref),ref);const s=fs.lstatSync(ref);assert(s.isFile()&&!s.isSymbolicLink()&&s.nlink===1&&s.uid===process.getuid()&&(s.mode&0o022)===0&&s.size<=262144);return fs.readFileSync(ref);}
 export function validateE13JourneyPlan(plan){
