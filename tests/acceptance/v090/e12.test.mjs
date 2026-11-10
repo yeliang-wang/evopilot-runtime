@@ -77,7 +77,7 @@ async function invalidDraft(ui,run,c,name,source,expected){
  await ui.login('/lifecycle');await expect(ui.source).toHaveValue(source);
  return{name,issues:found,invalidDraftRetained:true,oldActiveUnchanged:true,nativeActivationBlocked:true};
 }
-async function samePageRepairs(run,browser,c){
+export async function samePageRepairs(run,browser,c){
  identity(run,'activator');identity(run,'editor');const initial=await selectedActive(run),preview=await run.principalRequest('activator','lifecycle.definition.validate',{yaml:initial.source});assert.equal(preview.status,200);assert.equal(preview.body.result.ready,true);
  const ui=await openBrowser(run,browser,{principalAlias:'activator',route:'/lifecycle',monitorEvidence:true});
  try{
@@ -165,7 +165,7 @@ async function phaseMapping(run,browser,c){
  run.artifact('phase-traceability.json',mapping);return{phase:'PRE_RELEASE',actualCandidateMonitorAndPermissionEvidence:monitor,...mapping};
 }
 
-async function permissionFixture(run,c){
+export async function permissionFixture(run,c){
  const f=run.permissionFixture;assert(f&&f.caseIds.includes(c.caseInstanceId));for(const role of ['monitor','editor','activator'])identity(run,role);
  const original=(await run.read('lifecycle.instance.inspect',{instanceId:f.instanceId})).instance;assert.equal(original.id,f.instanceId);assert.equal(original.pins.projectId,run.selection.projectId);assert(Object.values(original.stages).every(s=>s.status==='PENDING'&&s.attempts===0&&s.requestId===null));
  const originalSource=await run.source(original.pins.definitionRevisionId);return{fixture:f,original,originalSource};
@@ -205,7 +205,7 @@ async function restorePreview(run,ui,c,initial,source,preview,restoreId,pendingR
  // this same Dashboard page before obtaining and consuming a genuinely new preview.
  await ui.login('/lifecycle');const fresh=await previewPermissionSource(ui,source);assert.notEqual(fresh.digest,preview.digest);const activated=await activateCurrent(ui,run,source);await intactPermissionHistory(run,initial);return{oldSessionRejected:true,originalRequestRecovery,oldPreviewRequestId:requestId,oldPreviewBlocked:true,freshPreview:fresh,activated};
 }
-async function afterActivationRevocation(run,browser,c,initial,ids){
+export async function afterActivationRevocation(run,browser,c,initial,ids){
  const ui=await openBrowser(run,browser,{principalAlias:'activator',route:'/lifecycle',monitorEvidence:true});
  try{
   const selected=await selectedActive(run),source=selected.source+'\n# exact post-active revocation '+run.selection.runId+'\n',preview=await previewPermissionSource(ui,source),activation=await activateCurrent(ui,run,source),before=await run.read('lifecycle.definition.inspect');
@@ -218,7 +218,7 @@ async function afterActivationRevocation(run,browser,c,initial,ids){
   const recovery=await restorePreview(run,ui,c,initial,source,preview,ids.restore);await noCredentialExposure(run,ui,[{name:'revoked stream',text:JSON.stringify(stream)}]);await ui.flush();return{activation,fault,nativeRevoked:native.body.error.code,browserRevoked:session.body.error.code,originalSseError:frame,newSseRejected:true,recovery};
  }finally{run.restorePermissionFault();await ui.close();}
 }
-async function permissionTiming(run,browser,c){
+export async function permissionTiming(run,browser,c){
  const initial=await permissionFixture(run,c),events=await permissionEvents(run),roleMonitor=await monitorCase(run,browser,c);let editor;
  try{editor=await openBrowser(run,browser,{principalAlias:'editor',route:'/lifecycle'});const old=await selectedActive(run),source=old.source+'\n# editor retained draft\n';await editor.source.fill(source);await editor.save();await editor.preview();await expect(editor.page.getByRole('button',{name:'保存并启用',exact:true})).toBeDisabled();const preview=actualPreview(editor,source),view=await run.read('lifecycle.definition.inspect'),denial=await editor.sessionRequest('lifecycle.definition.save-and-activate',{yaml:source,validationDigest:preview.digest},{requestId:run.requestId(c.caseInstanceId,'editor-denied'),expectedRevision:view.revision});assert.equal(denial.status,403);denied(denial,['FORBIDDEN']);await noChanges(run,view);}finally{await editor?.close();}
  const timings=[];

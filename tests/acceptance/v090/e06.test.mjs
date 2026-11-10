@@ -2,10 +2,18 @@ import {pathToFileURL as collectorPathToFileURL} from 'node:url';
 import {resolve as collectorResolve} from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {parse,parseDocument,stringify} from 'yaml';
 import {chromium,expect} from '@playwright/test';
-import {openScenario} from './support.mjs';
+import {openScenario,sha} from './support.mjs';
 import {openBrowser} from './browser.mjs';
+
+import * as permissionCollectors from './e12.test.mjs';
+import {extensionExecution} from './e04.test.mjs';
+import {activationAtomicity} from './e13.test.mjs';
+import {interruptionFixture,openExecution} from './execution.mjs';
 
 const changed=(source,path,value)=>{const doc=parseDocument(source);doc.setIn(path,value);return doc.toString({lineWidth:0});};
 const semantic=source=>{const v=parse(source);delete v.presentation;return v;};
@@ -106,15 +114,56 @@ async function conflicts(run,browser,ui,initial){
  }finally{await loss.close();}
 }
 
+// Configuration evolution uses an existing native instance and only explicitly
+// selected synthetic test decisions; it never manufactures an execution result.
+export function assertDashboardInFlight(instance,projectId){
+ assert.equal(instance.pins.projectId,projectId);assert.notEqual(instance.stages.closure.status,'PASSED');
+ assert(Object.values(instance.stages).some(s=>s.status==='PASSED'));
+ assert(Object.values(instance.stages).every(s=>!['RUNNING','UNKNOWN'].includes(s.status)));
+}
+async function revisionBrowser(run,browser,ui,initial,c,editChecks){
+ const cfg=run.selection.revisionEvolution;assert(cfg?.allowSyntheticDecisions===true);
+ const old=(await run.read('lifecycle.instance.inspect',{instanceId:cfg.instanceId})).instance;assertDashboardInFlight(old,run.selection.projectId);
+ const unchanged=async()=>assert.deepEqual((await run.read('lifecycle.instance.inspect',{instanceId:cfg.instanceId})).instance,old);
+ const driver=await openExecution(run),before=await driver.events();let source=initial.source;
+ if(editChecks){
+  const keys=['config','verification','requiredChecks'],checks=parse(source).config.verification.requiredChecks,extra='binding:synthetic/e06-'+sha(run.selection.runId+'|'+c.caseInstanceId).slice(0,20);
+  assert(!checks.includes(extra));const added=changed(source,keys,[...checks,extra]);await ui.source.fill(added);await ui.save();await ui.preview();
+  const a=await run.read('lifecycle.definition.validate',{yaml:added});assert.equal(a.compilation.valid,true);assert(a.compilation.effective.nodes.find(n=>n.id==='verification').checks.includes(extra));const addedId=(await run.read('lifecycle.definition.inspect')).draft.id;await unchanged();
+  await ui.source.fill(source);await ui.save();await ui.preview();const removed=await run.read('lifecycle.definition.validate',{yaml:source});assert.notEqual(a.compilation.effective.semanticDigest,removed.compilation.effective.semanticDigest);
+  source=changed(source,['presentation','layout','scope'],{x:35,y:65})+'\n# retained E06 EX09 comment\n';await ui.source.fill(source);await ui.preview();const presentation=await run.read('lifecycle.definition.validate',{yaml:source});assert.equal(presentation.compilation.effective.semanticDigest,removed.compilation.effective.semanticDigest);
+  await unchanged();assert.equal(await run.source(addedId),added);await conflicts(run,browser,ui,{...initial,source});await unchanged();
+ }else{
+  const keys=['config','plan','budget','timeoutSeconds'],rule=initial.base.fields.find(f=>f.path===keys.join('.'));assert(rule);const oldValue=parse(source).config.plan.budget.timeoutSeconds;
+  source=changed(source,keys,oldValue>rule.rules.minimum?oldValue-1:oldValue+1)+'\n# exact E06 new definition\n';
+  await ui.source.fill(source);await ui.preview();await ui.activate();await unchanged();
+ }
+ const events=await driver.events(),addedEvents=events.slice(before.length);assert.deepEqual(events.slice(0,before.length),before);assert(!addedEvents.some(e=>e.type.startsWith('stage-')||e.type==='lifecycle-instance-created'||e.data?.kind==='release'));
+ if(editChecks)return{actualBrowserCheckAddRemove:true,semanticPresentationSeparation:true,concurrentConflictAndOriginalReceiptRecovery:true,oldInstanceUnchanged:true,newExecutionDispatched:false};
+ const active=await run.read('lifecycle.definition.inspect'),preview=await run.read('lifecycle.definition.validate',{yaml:source});assert.notEqual(active.active.id,initial.view.active.id);assert.notEqual(active.active.semanticDigest,initial.view.active.semanticDigest);assert.equal(await run.source(active.active.id),source);
+ const id='e06-'+sha(run.selection.runId+'|'+c.caseInstanceId).slice(0,32),subject={instanceId:id,definitionRevisionId:active.active.id,goalRef:'synthetic:e06/'+run.selection.runId+'/goal',targetRef:'synthetic:e06/'+run.selection.runId+'/target',loopRef:'synthetic:e06/'+run.selection.runId+'/loop',budget:preview.compilation.effective.semantic.config.plan.budget,expiresAt:new Date(Date.now()+300000).toISOString()},review=await run.read('lifecycle.authority.preview',{kind:'execution',subject});
+ const decisionSubject={owner:'runtime',operation:'lifecycle.authority.execution',workspaceId:run.selection.workspaceId,scope:{visibility:'private',projectId:run.selection.projectId},reviewDigest:review.reviewDigest,decision:'APPROVE'},sourceBytes=JSON.stringify({synthetic:true,description:'Explicit isolated E06 technical test attestation; never human business authority',subject:decisionSubject})+'\n',sourceRef=path.join(run.selection.outputRoot,id+'-source.json');fs.writeFileSync(sourceRef,sourceBytes,{mode:0o600,flag:'wx'});
+ const evidence={schema:'evopilot-decision-evidence/v1',subject:decisionSubject,source:{reference:pathToFileURL(sourceRef).href+'#sha256='+sha(sourceBytes),description:'Synthetic isolated revision acceptance only'}},bytes=JSON.stringify(evidence)+'\n',ref=path.join(run.selection.outputRoot,id+'-decision.json');fs.writeFileSync(ref,bytes,{mode:0o600,flag:'wx'});
+ const write=async(operation,input,suffix)=>{const result=await run.request(operation,input,{requestId:run.requestId(c.caseInstanceId,suffix),expectedRevision:(await run.read('runtime.status')).revision});assert.equal(result.status,200);return result.body.result;};
+ const grant=await write('lifecycle.authority.record',{kind:'execution',subject,reviewDigest:review.reviewDigest,decision:'APPROVE',evidenceRef:pathToFileURL(ref).href+'#sha256='+sha(bytes)},'test-authority'),created=await write('lifecycle.instance.create',{instanceId:id,definitionRevisionId:active.active.id,authorityRef:grant.result.authorityRef},'create-pending');assert.equal(created.result.executionDispatched,false);assert.equal(created.result.releaseAuthorized,false);
+ const current=(await run.read('lifecycle.instance.inspect',{instanceId:id})).instance;assert.equal(current.pins.definitionRevisionId,active.active.id);assert.equal(current.pins.semanticDigest,active.active.semanticDigest);assert.deepEqual(current.requestIds,[]);assert.equal(current.candidate,null);assert(Object.values(current.stages).every(s=>s.status==='PENDING'&&s.attempts===0&&s.requestId===null));await unchanged();
+ const finalEvents=(await driver.events()).slice(before.length);assert.equal(finalEvents.filter(e=>e.type==='lifecycle-instance-created').length,1);assert(!finalEvents.some(e=>e.type.startsWith('stage-')||e.data?.kind==='release'));
+ run.artifact('browser-revision-native-pins.json',{old,current,events:finalEvents,syntheticDecision:true,businessApproval:false});return{oldInstanceUnchanged:true,newInstance:id,newRevision:active.active.id,explicitNativeTestAuthority:true,activationCreatedNoRun:true,newInstancePendingOnly:true,releaseAuthorized:false};
+}
+
 export async function executeE06() {
  const run=await openScenario('E06');let browser;
  try{
   browser=await chromium.launch({headless:true});
   for(const c of run.cases)await run.collect(c,async()=>{
-   const id=variant(c),supported=['E06.journey','E06.variant.01','E06.variant.02','E06.variant.03','E06.variant.04','E06.variant.05','E06.variant.06','E06.variant.08','MC02','MC04','EX05','EX08'];
-   assert(supported.includes(id),'This exact case still requires scoped real authority/instance/extension execution or service-fault evidence; cannot credit it from another UI journey: '+c.caseInstanceId);
+   const id=variant(c);
+   if(['E06.variant.07','MC03'].includes(id))return permissionCollectors.samePageRepairs(run,browser,c);
+   if(id==='CV02')return permissionCollectors.permissionTiming(run,browser,c);
+   if(id==='EX04')return extensionExecution(run,c,browser,openBrowser);
+   if(id==='CV04'){const fixture=interruptionFixture(run);return activationAtomicity(run,await openExecution(run),c,fixture.casePlans[c.caseInstanceId]);}
    const initial=await setup(run,c),ui=await openBrowser(run,browser);
    try{
+    if(['E06.variant.09','MC05','EX09'].includes(id))return await revisionBrowser(run,browser,ui,initial,c,id==='EX09');
     if(['E06.journey','E06.variant.06','MC02'].includes(id))return await roundtrip(run,ui,initial,c);
     if(id==='E06.variant.01')return await locked(run,ui,initial);
     if(id==='E06.variant.04')return await injections(run,ui,initial);
@@ -124,6 +173,7 @@ export async function executeE06() {
     const one=extension(initial.base,run.selection.projectId,'one'),two=extension(initial.base,run.selection.projectId,'two'),input=(entries)=>changed(initial.source,['extensions'],entries);
     if(id==='E06.variant.02')return await negative(run,ui,initial,[['cycle',input([{...one,dependsOn:[two.id]},{...two,dependsOn:[one.id]}])],['duplicate-ID',input([one,{...two,id:one.id}])]]);
     if(id==='E06.variant.03')return await negative(run,ui,initial,[['unknown-root-field',changed(initial.source,['unrecognized'],true)],['unknown-extension-field',input([{...one,unrecognized:true}])],['unknown-action',input([{...one,actionRef:'runtime:unpublished-action'}])]]);
+    assert.equal(id,'EX05','Unknown frozen E06 case');
     const alternate=Object.keys(initial.base.slots).find(s=>s!==one.slot&&initial.base.slots[s].types.includes('check'));assert(alternate);
     return await negative(run,ui,initial,[['remove-base-stage',changed(initial.source,['stages'],initial.base.stages.filter(s=>s.id!=='verification'))],['cross-slot',input([one,{...extension(initial.base,run.selection.projectId,'two',alternate),dependsOn:[one.id]}])],['skip-to-publication',input([{...one,dependsOn:['publication']}])],['cycle',input([{...one,dependsOn:[two.id]},{...two,dependsOn:[one.id]}])],['isolated-dependency',input([{...one,dependsOn:['project.missing']}])],['duplicate-base-ID',input([{...one,id:'verification'}])],['OR-join',input([{...one,join:'OR'}])],['not-required',input([{...one,required:false}])],['continue-on-error',input([{...one,continueOnError:true}])]]);
    }finally{await ui.close();}

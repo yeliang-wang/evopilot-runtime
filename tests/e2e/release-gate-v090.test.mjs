@@ -49,7 +49,7 @@ function fixture(t,changeGovernance){
  const candidate={manifestDigest:sha(manifest),archiveDigest:sha(archive),version:'0.9.0',serviceId:'synthetic',workspaceId:'synthetic',projectId:'synthetic'},candidateDigest='sha256:'+sha(manifest),matrixBytes=fs.readFileSync(join(source,'governance/parameter-matrix-v090.json')),matrix=JSON.parse(matrixBytes);
  const reports=[];
  function report(scenario,ids,usage=false){
-  const dir=join(evidence,scenario),collectorNames=usage?['usage.test.mjs']:['support.mjs','preflight.mjs',scenario.toLowerCase()+'.test.mjs',...(['E01','E02','E04','E05','E06','E07','E12','E13','E16','E17','E18','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(['E01','E02','E04','E05','E13','E16','E18'].includes(scenario)?['execution.mjs']:[]),...(scenario==='E13'?['e11.test.mjs']:[]),...(scenario==='E05'?['e16.test.mjs']:[])];
+  const dir=join(evidence,scenario),collectorNames=usage?['usage.test.mjs']:['support.mjs','preflight.mjs',scenario.toLowerCase()+'.test.mjs',...(['E01','E02','E04','E05','E06','E07','E12','E13','E16','E17','E18','E19'].includes(scenario)?['browser.mjs']:[]),...(['E05','E14','E15','E17'].includes(scenario)?['maintenance.mjs']:[]),...(['E01','E02','E04','E05','E13','E16','E18'].includes(scenario)?['execution.mjs']:[]),...(scenario==='E13'?['e11.test.mjs']:[]),...(scenario==='E05'?['e16.test.mjs']:[]),...(scenario==='E03'?['browser.mjs','maintenance.mjs','execution.mjs','e11.test.mjs','e12.test.mjs']:[]),...(scenario==='E06'?['execution.mjs','e11.test.mjs','e12.test.mjs','e04.test.mjs','e13.test.mjs']:[]),...(scenario==='E07'?['e12.test.mjs']:[])];
   const selection={scenario,qualification:'FINAL_CANDIDATE',candidate,candidateDigest,collectorPins:Object.fromEntries(collectorNames.map(n=>[n,sha(fs.readFileSync(join(source,'tests/acceptance/v090',n)))])),selectedCaseIds:ids,...(usage?{sourceCommit,addendumDigest:sha(fs.readFileSync(join(source,'governance/token-usage-v090.json')))}:{matrixDigest:sha(matrixBytes)})};
   const selectionRef=put(join(dir,'selection.json'),selection);
   const records=id=>{const n=id??'setup',request=put(join(dir,n+'-request.json'),{caseInstanceId:id,synthetic:true,request:'Integrity fixture'}),response=put(join(dir,n+'-response.json'),{caseInstanceId:id,synthetic:true,response:'Not actual acceptance'});return{caseInstanceId:id,request:n+'-request.json',requestDigest:request.sha256,response:n+'-response.json',fileDigest:response.sha256};};
@@ -60,7 +60,7 @@ function fixture(t,changeGovernance){
  for(let i=1;i<=20;i++){const scenario='E'+String(i).padStart(2,'0');reports.push({scenario,report:report(scenario,matrix.caseInstances.filter(c=>c.scenario===scenario).map(c=>c.caseInstanceId))});}
  const usageReport=report('UT',Array.from({length:23},(_,i)=>'UT'+String(i+1).padStart(2,'0')),true);
  const correctionCases=JSON.parse(fs.readFileSync(join(source,'governance/lifecycle-correction-v090.json'))).acceptance.cases.filter(c=>c.phase==='PRE_RELEASE'),correctionDir=join(evidence,'LC');
- const correctionSelection={scenario:'LC',sourceCommit,phase:'PRE_RELEASE',addendumDigest:sha(fs.readFileSync(join(source,'governance/lifecycle-correction-v090.json'))),qualification:'FINAL_CANDIDATE',candidate,candidateDigest,collectorPins:Object.fromEntries(['correction.test.mjs','execution.mjs','browser.mjs','support.mjs','preflight.mjs'].map(name=>[name,sha(fs.readFileSync(join(source,'tests/acceptance/v090',name)))])),selectedCaseIds:correctionCases.map(c=>c.id)};
+ const correctionSelection={scenario:'LC',sourceCommit,phase:'PRE_RELEASE',addendumDigest:sha(fs.readFileSync(join(source,'governance/lifecycle-correction-v090.json'))),qualification:'FINAL_CANDIDATE',candidate,candidateDigest,collectorPins:Object.fromEntries(['correction.test.mjs','execution.mjs','browser.mjs','support.mjs','preflight.mjs','e22.test.mjs'].map(name=>[name,sha(fs.readFileSync(join(source,'tests/acceptance/v090',name)))])),selectedCaseIds:correctionCases.map(c=>c.id)};
  const correctionSelectionRef=put(join(correctionDir,'selection.json'),correctionSelection);
  const correctionRecord=(caseInstanceId,vectorId)=>{const artifact=(caseInstanceId??'setup')+'-'+(vectorId??'setup')+'.raw.json',ref=put(join(correctionDir,artifact),{synthetic:true,message:'Raw integrity test fixture; not actual execution or acceptance',caseInstanceId,vectorId});return{caseInstanceId,vectorId,artifact,fileDigest:ref.sha256};};
  const observed={phase:'PRE_RELEASE',status:'PASS',qualification:'FINAL_CANDIDATE',candidateDigest,assertions:{synthetic:'Integrity fixture only'}};
@@ -180,7 +180,7 @@ test('LC source, candidate, obligations, phase and committed collector pins rema
  for(const change of [
   r=>r.sourceCommit='0'.repeat(40),r=>r.candidateDigest='sha256:'+'0'.repeat(64),r=>r.candidate.manifestDigest='0'.repeat(64),r=>r.results[0].candidateDigest='sha256:'+'0'.repeat(64),r=>r.results[0].vectors[0].candidateDigest='sha256:'+'0'.repeat(64),
   (_r,s)=>s.addendumDigest='0'.repeat(64),(_r,s)=>s.sourceCommit='0'.repeat(40),(_r,s)=>s.phase='POST_RELEASE',(_r,s)=>s.selectedCaseIds[0]='LC12',(_r,s)=>s.collectorPins['correction.test.mjs']='0'.repeat(64),
-  ...['execution.mjs','browser.mjs','support.mjs','preflight.mjs'].map(name=>(_r,s)=>{s.collectorPins[name]='0'.repeat(64);}),
+  ...['execution.mjs','browser.mjs','support.mjs','preflight.mjs','e22.test.mjs'].map(name=>(_r,s)=>{s.collectorPins[name]='0'.repeat(64);}),
  ]){
   f.rewriteCorrection(change);await assert.rejects(f.prepare,/Correction|correction|Selected LC/);f.put(selectionRef,baselineSelection);f.input.correctionReport=f.put(f.input.correctionReport.ref,baseline);
  }
@@ -371,7 +371,7 @@ test('publication stop and original journal survive a separately reported termin
 // Synthetic report provenance only; no installed execution or release credit.
 test('LC full release reader rejects missing helper pins and changed helper bytes',async t=>{
  const f=fixture(t),baseline=JSON.parse(fs.readFileSync(f.input.correctionReport.ref)),selectionRef=join(f.evidence,'LC','selection.json'),originalSelection=JSON.parse(fs.readFileSync(selectionRef));
- for(const name of ['execution.mjs','browser.mjs','support.mjs','preflight.mjs']){
+ for(const name of ['execution.mjs','browser.mjs','support.mjs','preflight.mjs','e22.test.mjs']){
   f.rewriteCorrection((_r,s)=>{delete s.collectorPins[name];});
   await assert.rejects(f.prepare,/RELEASE_EVIDENCE: Unexpected input fields/);
   f.put(selectionRef,originalSelection);f.input.correctionReport=f.put(f.input.correctionReport.ref,baseline);
@@ -389,7 +389,7 @@ test('LC mixed release reader binds the full helper closure without crediting so
  const audit=async()=>{const result=await inspectQualifiedAcceptanceEvidence(f.source,buildInput(),service,actor,signal());closeQualifiedAcceptanceObservation(result);return result;};
  const result=await audit();assert.equal(result.covered,698);assert.equal(result.reviewRequiredExecuted,698);assert.equal(result.typedExecuted,0);assert.equal(result.reused,0);assert.equal(result.executionAuthenticity,'ACTUAL_ORIGINAL_SOURCE_REVIEW_REQUIRED');assert.equal(result.productAcceptance,'NOT_EVALUATED');assert.equal(result.releaseAuthorized,false);
  const baseline=JSON.parse(fs.readFileSync(f.input.correctionReport.ref)),selectionRef=join(f.evidence,'LC','selection.json'),originalSelection=JSON.parse(fs.readFileSync(selectionRef));
- for(const name of ['execution.mjs','browser.mjs','support.mjs','preflight.mjs']){
+ for(const name of ['execution.mjs','browser.mjs','support.mjs','preflight.mjs','e22.test.mjs']){
   f.rewriteCorrection((_r,s)=>{delete s.collectorPins[name];});
   await assert.rejects(audit,/Unexpected input fields/);
   f.put(selectionRef,originalSelection);f.input.correctionReport=f.put(f.input.correctionReport.ref,baseline);
@@ -403,7 +403,7 @@ test('LC mixed release reader binds the full helper closure without crediting so
 test('LC06 and LC07 actual report assembler reaches the public mixed reader with honest partial reports',async t=>{
  const {lcProviderSelectionRecord,assembleLcProviderReport}=await import('../acceptance/v090/correction.test.mjs'),f=mixedFixture(t),original=JSON.parse(fs.readFileSync(f.input.correctionReport.ref)),selection=JSON.parse(fs.readFileSync(join(f.evidence,'LC','selection.json'))),lanes=[];
  for(const caseId of ['LC06','LC07']){
-  const dir=join(f.evidence,caseId),row=original.results.find(r=>r.caseInstanceId===caseId),selected=lcProviderSelectionRecord({sourceCommit:selection.sourceCommit,phase:'PRE_RELEASE',qualification:'FINAL_CANDIDATE',caseIds:[caseId]},selection.candidate,selection.addendumDigest,selection.collectorPins),selectedRef=f.put(join(dir,'selection.json'),selected);
+  const dir=join(f.evidence,caseId),row=original.results.find(r=>r.caseInstanceId===caseId),selected=lcProviderSelectionRecord({sourceCommit:selection.sourceCommit,phase:'PRE_RELEASE',qualification:'FINAL_CANDIDATE',caseIds:[caseId]},selection.candidate,selection.addendumDigest,Object.fromEntries(Object.entries(selection.collectorPins).filter(([name])=>name!=='e22.test.mjs'))),selectedRef=f.put(join(dir,'selection.json'),selected);
   for(const e of [...original.setupEvidence,...row.vectors.flatMap(v=>v.evidence)])f.put(join(dir,e.artifact),fs.readFileSync(join(f.evidence,'LC',e.artifact)));
   const {result,report}=assembleLcProviderReport({selected,selectionDigest:selectedRef.sha256,catalog:f.correctionCases,setupEvidence:original.setupEvidence,vectors:row.vectors,status:'PASS',assertions:{synthetic:'Actual assembler compatibility; observations are synthetic, formal credit zero'}});
   assert.equal(report.scenarioStatus,'INCOMPLETE');assert.equal(report.selected,1);assert.equal(report.scenarioDenominator,20);assert.equal(report.fullDenominator,709);assert.equal(report.unexecutedCaseIds.length,19);

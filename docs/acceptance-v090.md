@@ -334,8 +334,10 @@ HTTP MCP 保存／校验，再独立读回原请求和草稿。输入明确保�
 测试权限，不修改日常 Codex 配置、不生成领域或发布批准。固定 Host 版本和可执行文件
 摘要必须匹配；异常、超时及未知写入均不能算通过。
 
-其余 E03 完整流程仍必须实现。未实现用例会失败；选择部分用例
-只生成明确的部分报告，保留完整分母及未执行 ID。开发版本不能声明最终候选验收通过。
+E03 完整流程入口覆盖两个平台初始化、八阶段向导、缺失资产／凭据／认证拒绝，
+以及权限、预算、会话恢复和输入入口检查。每项使用自己的固定 ID、精确隔离配置与
+原始执行证据；缺少前置条件会失败。选择部分用例只生成部分报告，保留完整分母及
+未执行 ID。入口实现及开发版本均不能声明最终候选验收通过。
 结果不替代完整源代码 CI、真实 Host／浏览器／平台流程、发行及当前 Codex 安装终验。
 
 E09 对两个已声明协议版本执行独立 HTTP 交互，并使用锁定的官方 SDK 连接同一安装包。
@@ -539,7 +541,9 @@ installation and use its native current-selection service-control API. They do
 not replay a historical installer plan or require a Codex conversation.
 
 E04, E05 and E06 pin `browser.mjs` in addition to their own collector and
-`support.mjs`; E04 and E05 also pin the shared `execution.mjs` helper. The release
+`support.mjs`; E04 and E05 also pin the shared `execution.mjs` helper. E06
+additionally pins `execution.mjs`, `e04.test.mjs`, `e11.test.mjs`, `e12.test.mjs`
+and `e13.test.mjs` for its native execution, permission and interruption paths. The release
 evidence audit rejects missing or changed helper pins. The browser helper
 omits authentication headers, cookies, CSRF values, session responses and one-use
 connection codes. Exact variants requiring live extension execution, current
@@ -548,8 +552,8 @@ explicitly until their own conditions and evidence are supplied.
 
 E04／E05／E06 的采集器分别验证 Base 约束、版本与实例隔离、真实浏览器编辑。定义
 校验、真实启用、阶段执行分别记录，不能互相替代。浏览器重启仅操作明确选择的隔离
-安装，保留当前安装标识与原回执；涉及真实运行、权限撤销和事务故障的未实现变体
-继续列为未完成，不用已通过的页面或字段测试替代。
+安装，保留当前安装标识与原回执。真实运行、权限撤销、版本实例隔离和事务故障
+分支必须各自执行；缺少原始环境或回执仍列为未完成，页面或字段测试不能替代。
 
 ## Monitor identities and original event evidence
 
@@ -583,9 +587,11 @@ draft, then reconnects with the original cursor and checks the server's actual
 reset and current snapshot. It neither edits the database nor synthesizes an
 SSE response. This branch needs the candidate's 1000-event replay profile.
 
-The complete E07 journey and CV02 still require their original multi-project,
-interruption/revocation/recovery conditions and are not credited from read-only
-checks. MC06/CV08 candidate checks leave E22/P04 post-release obligations separate.
+The complete E07 journey executes original UNKNOWN inspection, replay-window
+recovery, actual browser project switching and permission expiry/restoration.
+CV02 independently executes the six native permission fault steps. Both require
+their own exact fixtures and original evidence, not another read-only check
+result. Their shared permission collector `e12.test.mjs` is also hash-pinned. MC06/CV08 candidate checks leave E22/P04 post-release obligations separate.
 E07/E12 also pin `browser.mjs`; credential exposure checks compare selected
 secrets internally against provided DOM/URL/traffic surfaces and the two exact
 installed ordinary logs, returning only surface sizes and digests.
@@ -798,3 +804,40 @@ branches, approvals or successor executions to manufacture its prerequisites.
 
 LC13 的十个向量绑定真实分支、准备源链和后继候选。独立分支可继续不代表失败
 前置被豁免；候选、环境、权限和预算失效仍阻止受影响执行。
+
+LC11 uses a singleton PRE selection for one actual installed Expert correction
+journey over HTTP MCP. The selected original failure, independent minimal
+verification and governed retry all retain their native requests and receipts;
+a proposal alone cannot complete the case. The supported non-source repair
+route retains an original declared-tool ENOENT and verifies restored tooling
+through the native repair contract, within the original authority and deadline.
+
+The no-Runtime-model assertion binds the standard installed service composition
+and actual native validation route. Published owner distributions and native
+tools must pass their complete fixed distribution/official-lock inspectors;
+self-declared executable hashes are insufficient. Actual external Codex model
+usage is retained separately. This does not claim all-host syscall tracing.
+
+PRE reports containing LC11 and the full PRE report pin `e22.test.mjs` in
+addition to the five existing correction helper files. PRE subsets without
+LC11 retain five pins; POST LC12 retains six. Missing prerequisites produce
+three nonpassing vector rows, never a borrowed POST success.
+
+LC11 必须完成同一次真实 Expert 纠错。固定服务组成、原生回执和官方工具链
+共同支撑 Runtime 不调用模型的判断；源码守卫不能替代这次实际验收。
+
+
+LC14 and LC15 collect the four static-input and fourteen invalidation vectors
+from protected, read-only original evidence. Refusal attribution follows the
+actual canonical assertion order and native child/attempt order; a later failure
+cannot stand in for the first failure. Missing authenticated prefix bytes or
+receipts remain NOT_READY. These collectors do not create authority or reset
+execution budgets.
+
+UT08 and UT13–UT15 read original native stage events, usage source bindings,
+immutable completion snapshots and publication/closure receipts. Completion
+instances may differ from the active implementation instance. Snapshots cover
+the project and target version through their original cutoff, including other
+instances; later work in another version must leave the closure snapshot
+unchanged. The driver executes these read-only checks before controlled replay
+mutations. Source regression fixtures earn no installed or Host acceptance.

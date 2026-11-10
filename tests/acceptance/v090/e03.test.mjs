@@ -6,7 +6,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {stringify,parse,parseDocument} from 'yaml';
 import {chromium,expect} from '@playwright/test';
-import {openScenario,repository,sha} from './support.mjs';
+import {openScenario,repository,sha,collectCaseCampaign,caseCampaignTestOptions} from './support.mjs';
+import {openBrowser} from './browser.mjs';
+import {collectManagedBudget,collectCoverageInventory} from './execution.mjs';
+import {collectInitializationEntries,assertE17NewInstance} from './maintenance.mjs';
+import {activeCiExitReentry} from './e11.test.mjs';
+import {samePageRepairs,permissionTiming} from './e12.test.mjs';
 
 function extensionInputs(run){
  const selected=run.selection.extensionConfiguration;assert(selected,'EX12 needs one protected registered extension YAML shared with E04');
@@ -255,9 +260,87 @@ async function fieldClassification(run,c,fields,base,initial,activeSource){
  return{entries:['http-api','http-mcp','cli'],providers:['github','gitlab'],policies,reports,otherProviderFieldsNotRequired:true,invalidActivationBlocked:true,originalBaseAndActiveUnchanged:true,actualCurrentBindingValidation:true,externalExecutionRequested:false};
 }
 
+
+// Each route receives its own frozen E03 ID and emits its own original calls.
+// Shared collectors consume native records, never another scenario's PASS.
+export const E03_COMPLETION_ROUTES=Object.freeze({
+ 'E03.journey':'primary','E03.variant.01':'github','E03.variant.02':'gitlab',
+ 'E03.variant.03':'ontology','E03.variant.04':'harness','E03.variant.05':'credential',
+ 'E03.variant.06':'no-llm','E03.variant.07':'authentication',
+ 'E03.variant.08':'wizard','E03.variant.09':'repairs','E03.MC01':'wizard','E03.MC03':'repairs',
+ 'E03.CV01':'entries','E03.CV02':'permissions','E03.CV03':'budget','E03.CV05':'reentry','E03.CV07':'coverage',
+});
+const e03Stages=['scope','plan','implementation','candidate','verification','release-decision','publication','closure'];
+const e03Positive=['primary','github','gitlab','no-llm','wizard'];
+export function validateE03Initialization(value,run,c){
+ const route=E03_COMPLETION_ROUTES[c.caseInstanceId];assert(route&&![ 'entries','permissions','budget','reentry','coverage','repairs'].includes(route));
+ const required=['schema','caseInstanceId','candidateDigest','workspaceId','projectId','yaml',...(e03Positive.includes(route)?['instanceId','authorityRef']:[]),...(route==='credential'?['credentialRefs']:[])];
+ assert.deepEqual(Object.keys(value).sort(),required.sort());assert.equal(value.schema,'runtime-e03-initialization/v1');assert.equal(value.caseInstanceId,c.caseInstanceId);assert.equal(value.candidateDigest,run.candidateDigest);for(const k of ['workspaceId','projectId'])assert.equal(value[k],run.selection[k]);
+ assert.deepEqual(Object.keys(value.yaml).sort(),['ref','sha256']);assert(path.isAbsolute(value.yaml.ref));assert(/^[a-f0-9]{64}$/.test(value.yaml.sha256));
+ if(e03Positive.includes(route)){assert(/^[a-z0-9][a-z0-9-]{0,63}$/.test(value.instanceId));assert(typeof value.authorityRef==='string'&&value.authorityRef.length>0&&value.authorityRef.length<=512);}
+ if(route==='credential'){assert.deepEqual(Object.keys(value.credentialRefs).sort(),['expired','foreign']);for(const ref of Object.values(value.credentialRefs))assert(/^credential:[a-z0-9][a-z0-9._/-]{0,127}$/.test(ref));assert.notEqual(value.credentialRefs.expired,value.credentialRefs.foreign);}
+ return value;
+}
+function e03Pinned(pin,max=1048576){assert.deepEqual(Object.keys(pin).sort(),['ref','sha256']);assert.equal(fs.realpathSync(pin.ref),pin.ref);const stat=fs.lstatSync(pin.ref);assert(stat.isFile()&&!stat.isSymbolicLink()&&stat.nlink===1&&stat.uid===process.getuid()&&(stat.mode&0o077)===0&&stat.size<=max);const bytes=fs.readFileSync(pin.ref);assert.equal(sha(bytes),pin.sha256);return bytes;}
+export function e03MissingInputs(yaml,fields,provider){
+ const data=parse(yaml);return e03Stages.map(stage=>{const field=fields.find(f=>f.stage===stage&&f.providers.includes(provider)&&f.required&&f.policy!=='LOCKED');assert(field,'Every base stage needs its actual required field');const changed=structuredClone(data);set(changed,field.path,undefined);return{stage,path:field.path,yaml:stringify(changed,{lineWidth:0})};});
+}
+async function e03Events(run){const events=[];let cursor;for(let i=0;i<100;i++){const page=await run.read('runtime.events.read',cursor?{cursor}:{});if(!page.events.length)return events;events.push(...page.events);assert.notEqual(page.cursor,cursor);cursor=page.cursor;}throw Error('E03 event inventory exceeds original read bound');}
+async function e03Blocked(run,c,yaml,field,structural,label){
+ const before=await run.read('lifecycle.definition.inspect'),events=await e03Events(run),old=before.active?await run.source(before.active.id):null;
+ const draft=await run.configurationEntry('http-api','lifecycle.draft.save',{yaml},{requestId:run.requestId(c.caseInstanceId,label+'-draft'),expectedRevision:before.revision});assert.equal(draft.result.result.status,'DRAFT');
+ const preview=(await run.configurationEntry('http-api','lifecycle.definition.validate',{yaml})).result;assert.equal(preview.ready,false);assert.equal(preview.compilation.valid,structural);assert(preview.issues.some(i=>(i.path===field||i.path.startsWith(field+'.'))&&i.rule&&i.remedy),'Specific original field refusal required');
+ const current=await run.read('lifecycle.definition.inspect'),activation=await run.configurationEntry('http-api','lifecycle.definition.save-and-activate',{yaml,validationDigest:preview.validationDigest},{requestId:run.requestId(c.caseInstanceId,label+'-activate'),expectedRevision:current.revision});assert.equal(activation.result.result.status,'BLOCKED');assert.equal(activation.result.result.executionAuthorized,false);assert.equal(activation.result.result.releaseAuthorized,false);
+ const after=await run.read('lifecycle.definition.inspect');assert.deepEqual(after.active,before.active);assert.equal(await run.source(after.draft.id),yaml);if(before.active)assert.equal(await run.source(before.active.id),old);const final=await e03Events(run);assert.deepEqual(final.slice(0,events.length),events);assert.deepEqual(final.slice(events.length).map(e=>e.type),['definition-draft-saved','definition-activation-blocked']);
+ return{label,path:field,draftRequestId:draft.result.requestId,activationRequestId:activation.result.requestId,issues:preview.issues,activeUnchanged:true,newStageClaims:0};
+}
+async function e03NativeInitialization(run,c,base){
+ const route=E03_COMPLETION_ROUTES[c.caseInstanceId],pin=run.selection.e03Initialization;assert(pin,'E03 requires its own protected original YAML and exact native instance authority selector');const bytes=e03Pinned(pin),plan=validateE03Initialization(JSON.parse(bytes),run,c),input=e03Pinned(plan.yaml,262144),yaml=input.toString(),data=parse(yaml),provider=data.config.implementation.provider;
+ assert.equal(data.projectId,run.selection.projectId);assert(['github','gitlab'].includes(provider));if(['github','gitlab'].includes(route))assert.equal(provider,route);
+ const recheck=()=>{assert.deepEqual(e03Pinned(pin),bytes);assert.deepEqual(e03Pinned(plan.yaml,262144),input);};
+ const control=await run.read('lifecycle.definition.validate',{yaml});assert.equal(control.ready,true,'Select actual current owner/provider bindings');assert.equal(control.bindings.ready,true);assert(control.bindings.checks.every(v=>v.status==='VALID'));assert.deepEqual(control.compilation.effective.nodes.filter(n=>n.source==='base').map(n=>n.id),e03Stages);assert.equal((await run.read('runtime.status')).independentLlm,false);
+ run.artifact('e03-exact-input.json',{caseInstanceId:c.caseInstanceId,plan,yaml,provider,validation:control});
+ let expert;const negatives=[];try{
+ if(route==='primary')for(const v of e03MissingInputs(yaml,base.fields,provider))negatives.push(await e03Blocked(run,c,v.yaml,v.path,false,v.stage));
+ if(['ontology','harness'].includes(route)){const bad=structuredClone(data);delete bad.assets[route];negatives.push(await e03Blocked(run,c,stringify(bad,{lineWidth:0}),'assets.'+route,false,'missing-'+route));}
+ if(route==='credential'){
+  const spec=JSON.parse(fs.readFileSync(path.join(run.selection.installedRoot,'service-specification.json'))),api=await import(collectorPathToFileURL(path.join(run.selection.installedRoot,'package/dist/adapters/config.js')).href),configuration=api.readIntegrationConfiguration(spec.integrationsRef,run.selection.workspaceId);
+  const expired=configuration.credentials.find(v=>v.ref===plan.credentialRefs.expired&&v.projectId===run.selection.projectId),foreign=configuration.credentials.find(v=>v.ref===plan.credentialRefs.foreign&&v.projectId!==run.selection.projectId);assert(expired&&Date.parse(expired.expiresAt)<=Date.now());assert(foreign&&Date.parse(foreign.expiresAt)>Date.now());
+  for(const [label,value,structural]of [['placeholder','TODO',false],['expired',expired.ref,true],['foreign',foreign.ref,true]]){const bad=structuredClone(data);bad.config.implementation.credentialRef=value;negatives.push(await e03Blocked(run,c,stringify(bad,{lineWidth:0}),'config.implementation.credentialRef',structural,label));}
+  run.artifact('e03-original-credential-metadata.json',{expired:{ref:expired.ref,projectId:expired.projectId,expiresAt:expired.expiresAt,revision:expired.revision},foreign:{ref:foreign.ref,projectId:foreign.projectId,expiresAt:foreign.expiresAt,revision:foreign.revision}});
+ }
+ if(route==='authentication'){
+  for(const field of ['config.implementation.credentialRef','config.publication.credentialRef']){const bad=structuredClone(data);set(bad,field,undefined);negatives.push(await e03Blocked(run,c,stringify(bad,{lineWidth:0}),field,false,'missing-'+field));}
+  const before=await run.read('lifecycle.definition.inspect'),request={operation:'lifecycle.definition.inspect',projectId:run.selection.projectId,input:{}},response=await fetch(run.serviceOrigin+'/api/v1/request',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(request),signal:AbortSignal.timeout(15000),redirect:'error'});assert.equal(response.status,401);const raw=await response.text();assert(Buffer.byteLength(raw)<=65536);const body=JSON.parse(raw);assert.equal(body.error.code,'UNAUTHENTICATED');run.artifact('e03-missing-service-authentication.json',{request,status:response.status,rawBody:raw});assert.deepEqual(await run.read('lifecycle.definition.inspect'),before);
+ }
+ let initialized=null;
+ if(e03Positive.includes(route)){
+  const before=await run.read('lifecycle.definition.inspect');let activation;
+  if(['primary','wizard'].includes(route)){
+   expert=await run.openExpert();if(route==='primary'){const untouched=await run.read('lifecycle.definition.inspect'),chat=await expert.configurationTurn('This is ordinary conversation. In one sentence, explain why rainbows have colors. Do not select Runtime, configure a project, use any tools, or request lifecycle inputs.',null,{ordinary:true});assert.equal(chat.calls.length,0);assert.deepEqual(await run.read('lifecycle.definition.inspect'),untouched);run.artifact('e03-ordinary-chat.json',chat);}
+   const wizard=await expert.configurationTurn('Configure this selected project. Read lifecycle.base.inspect and lifecycle.definition.inspect, then guide all eight base stages using exact stage IDs and required field paths. Ask for missing inputs; do not write, activate or send me to Dashboard.');for(const stage of e03Stages)assert(wizard.messages.join('\n').includes(stage));for(const op of ['lifecycle.base.inspect','lifecycle.definition.inspect'])assert(wizard.calls.some(v=>v.arguments.operation===op));assert.deepEqual(await run.read('lifecycle.definition.inspect'),before);
+   const fresh=await run.read('lifecycle.definition.validate',{yaml});assert.equal(fresh.ready,true);const write={operation:'lifecycle.definition.save-and-activate',projectId:run.selection.projectId,input:{yaml,validationDigest:fresh.validationDigest},requestId:run.requestId(c.caseInstanceId,'expert-activate'),expectedRevision:before.revision};const turn=await expert.configurationTurn('These exact complete answers and this definition activation are already approved. Validate the YAML and apply exactly the supplied write once if ready; read back the active definition. Do not ask for the same approval again, open Dashboard, dispatch stages or alter YAML.\n'+JSON.stringify(write),write);assert(turn.calls.some(v=>v.arguments.operation==='lifecycle.definition.validate'&&v.arguments.input.yaml===yaml));assert(turn.calls.some(v=>v.arguments.operation==='lifecycle.definition.inspect'));activation=await run.read('runtime.receipt.read',{requestId:write.requestId});
+  }else{const saved=await run.configurationEntry('http-api','lifecycle.draft.save',{yaml},{requestId:run.requestId(c.caseInstanceId,'valid-draft'),expectedRevision:before.revision});assert.equal(saved.result.result.status,'DRAFT');const draft=await run.read('lifecycle.definition.inspect'),fresh=await run.read('lifecycle.definition.validate',{yaml});assert.equal(fresh.ready,true);activation=(await run.configurationEntry('http-api','lifecycle.definition.save-and-activate',{yaml,validationDigest:fresh.validationDigest},{requestId:run.requestId(c.caseInstanceId,'valid-activate'),expectedRevision:draft.revision})).result;}
+  assert.equal(activation.result.status,'ACTIVE');assert.equal(activation.result.executionAuthorized,false);const active=await run.read('lifecycle.definition.inspect');assert.equal(active.active.id,activation.result.revisionId);assert.equal(await run.source(active.active.id),yaml);const definition=await run.read('lifecycle.definition.read',{revisionId:active.active.id});assert.deepEqual(definition.compilation.effective,control.compilation.effective);
+  const authority=await run.read('lifecycle.authority.inspect',{authorityRef:plan.authorityRef});assert.equal(authority.decision.subject.instanceId,plan.instanceId);assert.equal(authority.decision.subject.definitionRevisionId,active.active.id);assert.equal(authority.usable,true);const status=await run.read('runtime.status'),created=await run.request('lifecycle.instance.create',{instanceId:plan.instanceId,definitionRevisionId:active.active.id,authorityRef:plan.authorityRef},{requestId:run.requestId(c.caseInstanceId,'new-instance'),expectedRevision:status.revision});assert.equal(created.status,200);assert.equal(created.body.result.result.executionDispatched,false);const instance=(await run.read('lifecycle.instance.inspect',{instanceId:plan.instanceId})).instance;assertE17NewInstance(instance,{...definition,id:active.active.id},plan,run.selection.projectId);initialized={definitionRevisionId:active.active.id,activationRequestId:activation.requestId,instance,pinsDigest:instance.pinsDigest};
+ }
+ recheck();return{caseInstanceId:c.caseInstanceId,provider,negatives,initialized,independentLlm:false,actualOwnNativeActions:true,stageDispatches:0,releaseAuthorized:false};
+ }finally{await expert?.close();recheck();}
+}
+export async function collectE03Completion(run,c,base,{initialization=e03NativeInitialization,entries=collectInitializationEntries,permissions=permissionTiming,repairs=samePageRepairs,budget=collectManagedBudget,reentry=activeCiExitReentry,coverage=collectCoverageInventory,browserFactory=()=>chromium.launch({headless:true})}={}){
+ const route=E03_COMPLETION_ROUTES[c.caseInstanceId];assert(route,'Unknown fixed E03 completion case');
+ if(route==='entries')return entries(run,c,{chromium,expect,openBrowser});
+ if(route==='budget')return budget(run,c);
+ if(route==='reentry')return reentry(run,c);
+ if(route==='coverage')return coverage(run,c);
+ if(['permissions','repairs'].includes(route)){const browser=await browserFactory();try{return await (route==='permissions'?permissions:repairs)(run,browser,c);}finally{await browser.close();}}
+ return initialization(run,c,base);
+}
+
 export async function executeE03() {
  let run,browser,expert,fields,base,initial,activeSource,eventCursor;const variants=new Map();
  async function collectCase(c){
+   if(E03_COMPLETION_ROUTES[c.caseInstanceId]){const result=await collectE03Completion(run,c,base);initial=await run.read('lifecycle.definition.inspect');activeSource=initial.active?await run.source(initial.active.id):null;for(;;){const page=await run.read('runtime.events.read',eventCursor?{cursor:eventCursor}:{});eventCursor=page.cursor;if(!page.events.length)break;}return result;}
    if(c.caseInstanceId==='E03.EX01'){
     const result=await exactSingleBaseProjects(run,c,base);
     // Later cases use the actual independently activated current baseline;
@@ -300,14 +383,15 @@ export async function executeE03() {
    if(before.draft)assert.equal(await run.source(before.draft.revisionId??before.draft.id),oldDraft);
    return{entry,field:spec.path,fault,specificFieldRuleAndRemedy:true,invalidDraftRetained:true,activationBlocked:true,existingActiveAndHistoryUnchanged:true,externalExecutionRequested:false,inputKind:'SYNTHETIC_NEGATIVE_CONFIGURATION',service:'ACTUAL_INSTALLED_HTTP'};
  }
- run=await openScenario('E03',{phase:'PRE_RELEASE',register:catalog=>new Map(catalog.filter(c=>['E03.EX01','E03.EX02','E03.EX12'].includes(c.caseInstanceId)||['REAL_SERVICE_PARAMETER','ENTRY_ADMISSION'].includes(c.kind)).map(c=>[c.caseInstanceId,()=>collectCase(c)]))});
+ run=await openScenario('E03',{phase:'PRE_RELEASE',register:catalog=>new Map(catalog.filter(c=>E03_COMPLETION_ROUTES[c.caseInstanceId]||['E03.EX01','E03.EX02','E03.EX12'].includes(c.caseInstanceId)||['REAL_SERVICE_PARAMETER','ENTRY_ADMISSION'].includes(c.kind)).map(c=>[c.caseInstanceId,()=>collectCase(c)]))});
  run.artifact('collector-callable-preflight.json',run.callablePreflight);
 
  try{
+  if(run.selection.caseCampaign){await collectCaseCampaign(run,'E03');return;}
   fields=JSON.parse(fs.readFileSync(path.join(repository,'governance/lifecycle-contract-v090.json'))).fields;
   base=await run.read('lifecycle.base.inspect');assert.deepEqual(base.fields,fields);
-  initial=await run.read('lifecycle.definition.inspect');assert(initial.active,'Use a real previously activated isolated baseline; do not seed its database');
-  activeSource=await run.source(initial.active.revisionId??initial.active.id);
+  initial=await run.read('lifecycle.definition.inspect');if(run.cases.some(c=>!E03_COMPLETION_ROUTES[c.caseInstanceId]))assert(initial.active,'Use a real previously activated isolated baseline; do not seed its database');
+  activeSource=initial.active?await run.source(initial.active.revisionId??initial.active.id):null;
   for(;;){const page=await run.read('runtime.events.read',eventCursor?{cursor:eventCursor}:{});eventCursor=page.cursor;if(page.events.length<50)break;}
   for(const provider of new Set(run.cases.filter(c=>['REAL_SERVICE_PARAMETER','ENTRY_ADMISSION'].includes(c.kind)).map(c=>c.parameters.provider))){
    const data=structuralInput(base,provider,run.selection.projectId),control=await run.read('lifecycle.definition.validate',{yaml:stringify(data,{lineWidth:0})});
@@ -318,4 +402,4 @@ export async function executeE03() {
   for(const c of run.cases)await run.collectRegistered(c);
  }finally{await browser?.close();await expert?.close();run.finish();}
 }
-if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E03 fixed candidate service admission cases',executeE03);
+if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E03 fixed candidate service admission cases',caseCampaignTestOptions('E03'),executeE03);

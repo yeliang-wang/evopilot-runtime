@@ -583,7 +583,7 @@ export async function collectE05MissingCandidate(run,c){
 // Only the existing support.mjs original-execution emit format is accepted.
 // Original sibling executions remain inputs; this callback executes its own
 // inventory guards and independently rereads real Host/provider/owner records.
-const COVERAGE_SCENARIOS=Object.freeze({E01:['github'],E02:['gitlab'],E18:['github','gitlab']});
+const COVERAGE_SCENARIOS=Object.freeze({E01:['github'],E02:['gitlab'],E03:['github','gitlab'],E18:['github','gitlab']});
 const ORIGINAL_REPORT_KEYS=['scenario','candidate','candidateDigest','selectionDigest','qualification','scenarioDenominator','fullDenominator','selected','executed','passed','failed','unexecutedCaseIds','scenarioStatus','productAcceptance','releaseAuthorized','dailyInstallationChanged','setupEvidence','results'];
 const ORIGINAL_RESULT_KEYS=['caseInstanceId','status','candidateDigest','qualification','assertions','evidence'];
 export function validateCoverageInventoryRecords(records,context){
@@ -688,7 +688,7 @@ export function validateStageAdmissionFixture(f,context){
  exactKeys(f,['schema','caseInstanceId','candidateDigest','workspaceId','projectId','provider','sourceCommit','positive','journeyReport','blocked']);
  assert.equal(f.schema,'runtime-v090-stage-admission/v1');
  for(const key of ['caseInstanceId','candidateDigest','workspaceId','projectId','provider'])assert.equal(f[key],context[key]);
- assert(['github','gitlab'].includes(f.provider));assert([f.provider==='github'?'E01.variant.04':'E02.variant.03',...(f.provider==='github'?['E01.CV03']:['E02.CV03']),'E13.CV03','E18.CV03'].includes(f.caseInstanceId));assert(/^[a-f0-9]{40}$/.test(f.sourceCommit));
+ assert(['github','gitlab'].includes(f.provider));assert([f.provider==='github'?'E01.variant.04':'E02.variant.03',...(f.provider==='github'?['E01.CV03']:['E02.CV03']),'E03.CV03','E13.CV03','E18.CV03'].includes(f.caseInstanceId));assert(/^[a-f0-9]{40}$/.test(f.sourceCommit));
  assert.equal(f.positive.codingSourceSelection.kind,'ORIGINAL_RECORD');
  assert(Array.isArray(f.blocked));assert.deepEqual(f.blocked.map(v=>v.stageId),ADMISSION_STAGES);
  for(const row of f.blocked){exactKeys(row,['stageId','instanceId','creationRequestId']);assert(/^[a-z0-9][a-z0-9._-]{0,127}$/.test(row.instanceId));assert(typeof row.creationRequestId==='string'&&row.creationRequestId.length>0&&row.creationRequestId.length<=128);}
@@ -762,7 +762,7 @@ export async function collectStageAdmission(run,c,provider,outerDeadline=Infinit
 // CV03 is a separate actual collection, never an alias for a journey result.
 // The fixture selects existing native originals only; there is no preparation,
 // decision creation, database seed, timer reset, or new provider dispatch here.
-export const MANAGED_BUDGET_CASES=Object.freeze(['E01.CV03','E02.CV03','E13.CV03','E18.CV03']);
+export const MANAGED_BUDGET_CASES=Object.freeze(['E01.CV03','E02.CV03','E03.CV03','E13.CV03','E18.CV03']);
 export function validateManagedBudgetFixture(f,context){
  exactKeys(f,['schema','caseInstanceId','candidateDigest','workspaceId','projectId','provider','sourceCommit','stageAdmission','time','attempts','concurrency','loops','unknownUsage']);
  assert.equal(f.schema,'runtime-v090-managed-budget/v1');assert(MANAGED_BUDGET_CASES.includes(f.caseInstanceId));

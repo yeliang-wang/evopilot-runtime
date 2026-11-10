@@ -331,3 +331,116 @@ export async function lc12OwnedExpert(run,connection,client,envelopes,deadline){
   lc12ProofRemaining(deadline);return {...turn,observations:turn.calls.map(c=>({envelope:c.arguments,body:exactResult(c)}))};
  }finally{await host.close();}
 }
+
+
+// PRE LC11 shares the reviewed process protocol, not LC12 POST evidence.
+export function assertLc11HostEnvelope(e){
+ const writes=['lifecycle.correction.propose','lifecycle.stage.request'];
+ const reads=['runtime.status','lifecycle.correction.inspect','lifecycle.correction.admission','lifecycle.stage.request.inspect','runtime.receipt.read','lifecycle.instance.inspect'];
+ keys(e,e.requestId?['operation','projectId','input','requestId','expectedRevision']:['operation','projectId','input']);
+ assert((e.requestId?writes:reads).includes(e.operation));assert(typeof e.projectId==='string'&&e.projectId.length>0);
+ if(e.requestId){assert(typeof e.requestId==='string'&&e.requestId.length>0);assert(Number.isSafeInteger(e.expectedRevision)&&e.expectedRevision>=0);}
+ if(e.operation==='lifecycle.correction.propose'){keys(e.input,['stageRequestId','hypothesis','minimalVerification','proposedChanges','verification']);assert.deepEqual(e.input.proposedChanges,[]);}
+ if(e.operation==='lifecycle.stage.request'){keys(e.input,['instanceId','stageId',...(e.input.correctionRef===undefined?[]:['correctionRef'])]);if(e.input.correctionRef!==undefined)assert(/^correction:sha256:[a-f0-9]{64}$/.test(e.input.correctionRef));}
+ return e;
+}
+export async function lc11OwnedExpert(run,connection,client,deadline){
+ ({readRegular,canonicalPath}=await import(pathToFileURL(path.join(run.selection.installedRoot,'package/dist/compat/project/files.js')).href));
+ assert.equal(client.pluginRoot,path.join(run.selection.installedRoot,'plugin'));
+ assert.equal(client.marketplacePath,path.join(run.selection.installedRoot,'.agents/plugins/marketplace.json'));
+ ownDirectory(client.hostWorkingDirectory);assert.equal(fs.readdirSync(client.hostWorkingDirectory).length,0);
+ return openLc11Client(run,connection.projectId,client,{default:connection},deadline);
+}
+
+async function openLc11Client(run,project,client,connections,deadline){
+ const bounded=true,suffix='lc11-pre-correction';
+ assert(Date.now()<deadline,'Original LC11 deadline exhausted');
+ const host=run.selection.codexHost;keys(host,['executable','executableSha256','timeoutSeconds']);canonicalPath(host.executable);assert.equal(sha(fs.readFileSync(host.executable)),host.executableSha256);assert(Number.isInteger(host.timeoutSeconds)&&host.timeoutSeconds>=60&&host.timeoutSeconds<=600);
+ const version=await new Promise((resolve,reject)=>execFile(host.executable,['--version'],{timeout:bounded?lc12ProofRemaining(deadline,10000):Math.max(1,Math.min(10000,deadline-Date.now())),maxBuffer:16384,encoding:'utf8'},(e,out)=>e?reject(e):resolve(out.trim())));
+ if(bounded)lc12ProofRemaining(deadline);assert.equal(version,'codex-cli '+JSON.parse(fs.readFileSync(path.join(repository,'governance/environment-contract-v090.json'))).hostVersion);
+ const globalConfig=path.join(process.env.HOME,'.codex/config.toml'),configBytes=fs.readFileSync(globalConfig),disabled=[];
+ for(const line of configBytes.toString().split('\n')){const m=line.match(/^\[(plugins|mcp_servers)\.("(?:[^"\\]|\\.)*"|[^.\]]+)/);if(!m)continue;const name=m[2].startsWith('"')?JSON.parse(m[2]):m[2];assert(/^[a-zA-Z0-9_@-]+$/.test(name));const key=m[1]+'.'+name+'.enabled=false';if(!disabled.includes(key))disabled.push(key);}
+ const directory=client.hostWorkingDirectory,marketplace=json(client.marketplacePath),pluginId='evopilot-runtime@'+marketplace.name;
+ const configurationRef=path.join(client.pluginRoot,'skills/evopilot-runtime-expert/references/configuration.md'),configuration=fs.readFileSync(configurationRef,'utf8');
+ const tokens=Object.values(connections).map(c=>JSON.parse(readRegular(c.tokenRef,16384,true)).token),redact=value=>tokens.reduce((text,token)=>text.replaceAll(token,'[REDACTED]'),value);
+ assert(Date.now()<deadline,'Do not spawn an actual Host after the selected execution budget');
+ const child=spawn(host.executable,['app-server','-c','features.apps=false','-c','features.multi_agent=false',...disabled.flatMap(x=>['-c',x])],{cwd:directory,detached:!!bounded,stdio:['pipe','pipe','pipe']});
+ let threadId,thread,skill,serial=0,fatal=null,current=null,closing=false,closePromise=null,stderr='',frames=[],frameBytes=0,usage=null,exitOutcome=null;
+ // A failed spawn emits close but not exit. Retain that terminal observation
+ // instead of waiting forever for an exit from a process which never existed.
+ const stopOwned=signal=>{try{if(bounded&&child.pid)process.kill(-child.pid,signal);else child.kill(signal);}catch(e){if(e.code!=='ESRCH')throw e;}};
+ const pending=new Map(),exited=new Promise(resolve=>{child.once('exit',(code,signal)=>{exitOutcome={code,signal,spawned:!!child.pid};resolve(exitOutcome);});child.once('close',(code,signal)=>{if(!exitOutcome){exitOutcome={code,signal,spawned:!!child.pid};resolve(exitOutcome);}});});
+ const record=value=>{const raw=redact(JSON.stringify(value));assert(Buffer.byteLength(raw)<=1048576&&frameBytes+Buffer.byteLength(raw)<=16777216,'Actual Host evidence exceeded its bounded transcript');frames.push(JSON.parse(raw));frameBytes+=Buffer.byteLength(raw);};
+ const abort=error=>{fatal??=error;for(const p of pending.values()){clearTimeout(p.timer);p.reject(error);}pending.clear();current?.resolve({driverError:error.message});};
+ const remaining=()=>{const ms=deadline-Date.now();assert(ms>0,'LC11 original 600-second budget exhausted; do not redispatch');return ms;};
+ const call=(method,params)=>new Promise((resolve,reject)=>{if(fatal&&method!=='turn/interrupt'){reject(fatal);return;}let time;try{time=method==='turn/interrupt'?3000:Math.min(45000,remaining());}catch(e){reject(e);return;}const id=++serial,timer=setTimeout(()=>{pending.delete(id);reject(Error('Actual Host request timeout: '+method));},time);pending.set(id,{resolve,reject,timer});try{record({direction:'request',id,method,params});if(bounded&&!closing)remaining();child.stdin.write(JSON.stringify({id,method,params})+'\n');}catch(e){clearTimeout(timer);pending.delete(id);reject(e);}});
+ child.on('error',abort);child.stdin.on('error',e=>{if(!closing)abort(e);});child.once('exit',(code,signal)=>{if(!closing)abort(Error('Actual Host exited: '+code+'/'+signal));});child.stderr.on('data',b=>{stderr=(stderr+b).slice(-262144);});
+ createInterface({input:child.stdout}).on('line',line=>{try{
+  const m=JSON.parse(line);
+  if(m.id!==undefined&&pending.has(m.id)){const p=pending.get(m.id);pending.delete(m.id);clearTimeout(p.timer);try{record({direction:'response',...m});if(bounded&&!closing)remaining();m.error?p.reject(Error(JSON.stringify(m.error))):p.resolve(m.result);}catch(e){p.reject(e);throw e;}}
+  else if(m.id!==undefined&&typeof m.method!=='string')record({direction:'late-response-no-retry',...m});
+  else if(m.id!==undefined){
+   record({direction:'host-request',...m});const allowed=!fatal&&!closing&&Date.now()<deadline&&!current?.completed&&current?.write&&m.method==='mcpServer/elicitation/request'&&m.params.threadId===threadId&&m.params.serverName==='evopilot_runtime'&&m.params.mode==='form'&&m.params._meta?.codex_approval_kind==='mcp_tool_call'&&m.params.message.includes('"runtime_write"')&&current.approvals===0&&isDeepStrictEqual(m.params._meta.tool_params,current.write);
+   const response=allowed?{id:m.id,result:{action:'accept',content:{}}}:{id:m.id,error:{code:-32601,message:'Outside this exact PRE correction request'}};
+   if(allowed)current.approvals++;record({direction:'exact-test-tool-approval',basis:'Existing bounded implementation authority; not a business/domain/release decision',...response});child.stdin.write(JSON.stringify(response)+'\n');
+  }else if(['item/started','item/completed','turn/completed','thread/tokenUsage/updated','error'].includes(m.method)){
+   if(m.params?.item?.type==='reasoning')return;record({direction:'notification',...m});
+   if(bounded&&m.params?.item)assert(['userMessage','agentMessage','reasoning','plan','mcpToolCall'].includes(m.params.item.type),'Outside LC11 Host item whitelist');
+   if(m.params?.item?.type==='mcpToolCall'){const c=m.params.item;assert.equal(c.server,'evopilot_runtime');assert.equal(c.tool,current?.envelope?.requestId?'runtime_write':'runtime_read');assert.deepEqual(c.arguments,current?.envelope,'Outside exact LC11 envelope');}
+   if(['commandExecution','fileChange','webSearch','collabAgentToolCall'].includes(m.params?.item?.type))throw Error('Actual chat attempted an out-of-scope execution capability');
+   if(m.method==='thread/tokenUsage/updated'&&m.params.threadId===threadId)usage=m.params.tokenUsage;
+   if(m.method==='item/completed'&&current)current.items.push(m.params.item);
+   if(m.method==='turn/completed'&&m.params.threadId===threadId&&current){current.completed=true;current.resolve(m.params);}
+  }
+ }catch(e){abort(e);}});
+ const close=()=>closePromise??=(async()=>{
+  let failure=null,interruptionError=null;closing=true;
+  try{
+   if(current&&!current.completed&&current.turnId&&!exitOutcome)try{await call('turn/interrupt',{threadId,turnId:current.turnId});}catch(e){interruptionError=e.message;}
+   for(const p of pending.values()){clearTimeout(p.timer);p.reject(Error('Owned Host is closing'));}pending.clear();
+   if(!exitOutcome){let limit;const term=setTimeout(()=>stopOwned('SIGTERM'),3000),kill=setTimeout(()=>stopOwned('SIGKILL'),8000);try{child.stdin.end();await Promise.race([exited,new Promise((_,reject)=>{limit=setTimeout(()=>reject(Error('Owned Host exit not confirmed')),12000);})]);}finally{clearTimeout(term);clearTimeout(kill);clearTimeout(limit);}}
+   assert(exitOutcome);if(bounded&&child.pid){stopOwned('SIGKILL');const until=Date.now()+3000;for(;;){try{process.kill(-child.pid,0);}catch(error){if(error.code==='ESRCH')break;throw error;}assert(Date.now()<until,'Owned Host process group exit not confirmed');await pause(25);}}
+  }catch(e){failure=e;}
+  let globalConfigurationUnchanged=false,configurationReadError=null;try{globalConfigurationUnchanged=sha(fs.readFileSync(globalConfig))===sha(configBytes);}catch(e){configurationReadError=e.message;}
+  run.artifact('lc11-pre-client-host-close.json',{project,connection:suffix,threadId:threadId??null,exitOutcome,hostStopped:!!exitOutcome,latestObservedThreadUsage:usage,usageIsCumulative:true,stderr:redact(stderr),fatal:fatal?.message??null,interruptionError,cleanupError:failure?.message??null,cleanupBoundMs:bounded?18000:15000,ownedProcessGroupStopped:bounded?!failure:null,globalConfigurationUnchanged,configurationReadError,runtimeLlmProfile:null});
+  if(failure)throw failure;assert(globalConfigurationUnchanged,'This test must not edit global Codex settings');return exitOutcome;
+ })();
+ try{
+  const identity=await call('initialize',{clientInfo:{name:'runtime-lc11-pre-acceptance',version:'1'},capabilities:{experimentalApi:true}});child.stdin.write(JSON.stringify({method:'initialized',params:{}})+'\n');
+  const detail=await call('plugin/read',{marketplacePath:client.marketplacePath,pluginName:'evopilot-runtime'});assert.equal(detail.plugin.summary.id,pluginId);assert.equal(detail.plugin.summary.source.path,client.pluginRoot);skill=detail.plugin.skills.find(s=>s.path===path.join(client.pluginRoot,'skills/evopilot-runtime-expert/SKILL.md'));assert(skill?.enabled);
+  // plugin/read is metadata discovery, not proof that this isolated process's
+  // skill catalog can resolve the selected package. Register only its existing
+  // skill directory through the official process-local API; do not copy skills
+  // or modify the user's installation/configuration to repair a test process.
+  const skillRoot=path.join(client.pluginRoot,'skills');
+  await call('skills/extraRoots/set',{extraRoots:[skillRoot]});
+  const catalog=await call('skills/list',{cwds:[directory],forceReload:true});
+  const matches=catalog.data.filter(row=>row.cwd===directory).flatMap(row=>row.skills).filter(value=>value.path===skill.path);
+  assert.equal(matches.length,1);assert.equal(matches[0].name,skill.name);assert.equal(matches[0].enabled,true);
+  run.artifact('lc11-pre-client-process-skill-discovery.json',{project,connection:suffix,skillRoot,exactSkill:matches[0],processOnly:true,pluginBytesUnmodified:true,globalConfigurationUnchanged:sha(fs.readFileSync(globalConfig))===sha(configBytes)});
+  thread=await call('thread/start',{cwd:directory,ephemeral:true,approvalPolicy:'on-request',sandbox:'read-only',selectedCapabilityRoots:[{id:pluginId,location:{type:'environment',environmentId:'local',path:client.pluginRoot}}],developerInstructions:'LC11 PRE_RELEASE actual correction. Use the installed Expert and only the exact supplied HTTP MCP envelope per turn. No shell, web, file edits, delegation, decisions, grants, release, retries or new requests. Stop on unknown or error. Existing scoped correction authorization is not a semantic approval.'});threadId=thread.thread.id;
+  const readyUntil=Math.min(deadline,Date.now()+30000);let active=[];
+  do{const d=await call('mcpServerStatus/list',{threadId,detail:'full'});active=d.data.filter(s=>Object.keys(s.tools??{}).length);assert(active.every(s=>s.name==='evopilot_runtime'),'Unexpected active Host capability');if(active.length===1&&active[0].runtimeStatus==='connected')break;assert(Date.now()<readyUntil,'Selected actual MCP did not become ready');await pause(250);}while(true);
+  assert.equal(active.length,1);assert.equal(active[0].name,'evopilot_runtime');assert.deepEqual(Object.keys(active[0].tools).sort(),['runtime_read','runtime_write']);
+  assert.equal(typeof thread.model,'string');assert.equal(typeof thread.modelProvider,'string');
+  run.artifact('lc11-pre-client-host-setup.json',{project,connection:suffix,host:{...host,version},threadId,model:thread.model,provider:thread.modelProvider,pluginId,skill,skillDigest:sha(fs.readFileSync(skill.path)),configurationDigest:sha(configuration),identity,frames,actualModelTurn:false,hostWorkingDirectory:directory,codexHomeOverridden:false,runtimeLlmProfile:null});frames=[];frameBytes=0;
+ }catch(e){try{run.artifact('lc11-pre-client-host-setup-failure.json',{project,connection:suffix,error:e.message,frames});}finally{try{await close();}catch(cleanupError){throw new AggregateError([e,cleanupError],'Actual Host setup and cleanup both failed');}}throw e;}
+ return{threadId,close,async turn(label,prompt,{write}={}){
+  assertLc11HostEnvelope(write);const envelope=write;write=envelope.requestId?envelope:null;
+  assert(!fatal);assert(!current||current.completed);frames=[];frameBytes=0;let resolve,timer;const done=new Promise(r=>resolve=r),startedAt=Date.now();current={write,envelope,resolve,items:[],approvals:0,completed:false,turnId:null};
+  try{
+   const started=await call('turn/start',{threadId,additionalContext:{installedRuntimeConfiguration:{kind:'application',value:configuration}},input:[{type:'skill',name:skill.name,path:skill.path},{type:'text',text:'Use $'+skill.name+' for the selected project '+project+'. '+prompt}]});current.turnId=started.turn.id;
+   timer=setTimeout(()=>abort(Error('Actual model turn exceeded the original bounded LC11 budget; inspect original requests')),Math.min(host.timeoutSeconds*1000,remaining()));
+   const result=await done;if(bounded)remaining();if(result.driverError)throw Error(result.driverError);assert.equal(result.turn.status,'completed',JSON.stringify(result.turn.error));
+   const all=current.items.filter(x=>x.type==='mcpToolCall'),discovery=all.filter(x=>x.server==='codex'&&['list_mcp_resources','list_mcp_resource_templates'].includes(x.tool));
+   for(const d of discovery){assert.equal(d.status,'completed');assert(!d.arguments.server||d.arguments.server==='evopilot_runtime');assert(Object.keys(d.arguments).every(k=>k==='server'));}
+   const calls=all.filter(x=>!discovery.includes(x));assert.equal(calls.length,1,'LC11 requires one original MCP call; no retry');
+   for(const c of calls){assert.equal(c.server,'evopilot_runtime');assert(['runtime_read','runtime_write'].includes(c.tool));assert.deepEqual(c.arguments,envelope);assert.equal(c.arguments.projectId,project);}
+   const writes=calls.filter(x=>x.tool==='runtime_write');assert.equal(writes.length,write?1:0);if(write)assert.deepEqual(writes[0].arguments,write);
+   const messages=current.items.filter(x=>x.type==='agentMessage').map(x=>x.text);assert(messages.length);assert(usage?.total&&Number.isSafeInteger(usage.total.totalTokens),'Retain actual model usage, not estimated or zero-filled totals');
+   return{calls,messages,threadId,turnId:current.turnId,model:thread.model,provider:thread.modelProvider,usage,startedAt,completedAt:Date.now(),approvalResponses:current.approvals};
+  }finally{clearTimeout(timer);run.artifact('lc11-pre-client-actual-turn.json',{project,connection:suffix,label,threadId,turnId:current.turnId,model:thread.model,provider:thread.modelProvider,actualModelTurn:true,exactWrite:write,startedAt,endedAt:Date.now(),latestObservedThreadUsage:usage,usageIsCumulative:true,frames});}
+ }};
+}
+
+export {executeE22};

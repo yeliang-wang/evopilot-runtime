@@ -174,3 +174,125 @@ test('usage installed closure accepts pinned bytes and rejects tampering before 
   assert.throws(()=>verifyUsageInstalledBytes(root,expected),{code:'ERR_ASSERTION'});
  }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
+
+// SOURCE regression only: synthetic business originals, actual native Codex
+// parser and usage report engine. This fixture never earns installed/Host credit.
+async function nativeUsageFixture(t,{missingCacheWrite=false,foreignWork={}}={}){
+ const {collectUsageNative}=await import('../acceptance/v090/usage.test.mjs');
+ const {inspectCodexSource,collectCodexUsage}=await import('../../dist/usage/codex.js');
+ const {createUsageReport}=await import('../../dist/usage/reports.js');
+ const {digest}=await import('../../dist/server/errors.js'),hash=v=>'sha256:'+digest(v);
+ const root=fs.mkdtempSync(join(fs.realpathSync(tmpdir()),'runtime-usage-native-source-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const base=['scope','plan','implementation','candidate','verification','release-decision','publication','closure'],at=n=>new Date(Date.parse('2026-01-01T00:00:00Z')+n*1000).toISOString(),count=n=>({input:n,output:1,total:n+1,cachedInput:0,cacheWriteInput:missingCacheWrite?null:0,reasoningOutput:0}),zero=Object.fromEntries(Object.keys(count(1)).map(k=>[k,0]));
+ const selection={workspaceId:'workspace',projectId:'project',targetVersion:'0.9.0',instanceId:'main',expectedManifestDigest:'a'.repeat(64)},proof={schema:'runtime-usage-native-originals/v1',candidateDigest:'sha256:'+selection.expectedManifestDigest,workspaceId:selection.workspaceId,projectId:selection.projectId,targetVersion:selection.targetVersion,completionInstanceId:'main',deadlineAt:new Date(Date.now()+60000).toISOString(),maxRequests:600,stages:[],sources:[]};
+ const instances=new Map(),objects=new Map(),registered=[],bindingRows=[],captures=new Map(),events=[],stageViews=new Map(),receipts=new Map(),snapshots=[];
+ function instance(id){if(!instances.has(id))instances.set(id,{instance:{id,pins:{projectId:'project',targetRef:'target:'+id,budget:{maxAttempts:4,timeoutSeconds:180}},pinsDigest:hash(id),requestIds:[],stages:{}},loopBudget:{maxLoops:4,consumed:1,remaining:3,deadlineAt:at(180)}});return instances.get(id).instance;}
+ const plans=[{stage:'implementation',instanceId:'main',phase:'FAILED',second:2},...base.map((stage,i)=>({stage,instanceId:'main',phase:'COMPLETE',second:i+3})),{stage:'implementation',instanceId:'second',phase:'COMPLETE',second:4},{stage:'implementation',instanceId:'later',phase:'COMPLETE',second:12,version:'0.10.0',...foreignWork}];
+ for(const [index,p]of plans.entries()){
+  const inst=instance(p.instanceId),id='original-'+index,plan={adapterId:'synthetic-native-shape',adapterDigest:hash('adapter'),action:'base.'+p.stage,bindingDigest:hash({}),parameters:{}};
+  const body={schema:'runtime-stage-request/v1',id,workspaceId:'workspace',projectId:'project',instanceId:inst.id,stageId:p.stage,pinsDigest:inst.pinsDigest,inputDigest:hash(id),bindingStamp:hash('bindings'),authorityRef:'authority:original',releaseAuthorityRef:p.stage==='publication'?'release:original':null,initiatedBy:{id:'actor',revision:1},plan,planDigest:hash(plan),requestedAt:at(p.requestedSecond??p.second-1),deadlineAt:at(180),...(p.stage==='implementation'&&p.instanceId==='main'&&p.phase==='COMPLETE'?{correctionRef:'correction:original'}:{})},request={...body,digest:hash(body)};
+  inst.requestIds.push(id);inst.stages[p.stage]={status:p.phase==='COMPLETE'?'PASSED':'FAILED',requestId:id,attempts:p.stage==='implementation'&&inst.id==='main'&&p.phase==='COMPLETE'?2:1};
+  const observation={requestId:id,inputDigest:request.inputDigest,adapterDigest:plan.adapterDigest,phase:p.phase,handle:null,outcome:{requestId:id,inputDigest:request.inputDigest,receiptRef:'native:'+id,status:p.phase,expiresAt:at(180),checks:[]}},evidence={schema:'runtime-stage-observation/v1',requestId:id,observation,reason:'native-observation',observedAt:at(p.second)},observed={observationRef:hash(evidence),evidence,historical:true};
+  const event={seq:index+1,revision:index+1,type:'stage-observed',at:at(p.second),data:{instanceId:inst.id,stageId:p.stage,stageRequestId:id,phase:p.phase,observationRef:observed.observationRef}},admission={requestId:'admit-'+id,operation:'lifecycle.stage.request',principalId:'actor',result:{stageRequestId:id}};
+  const original={request,observation:observed,event,admission};if(['publication','closure'].includes(p.stage)){const evidence={schema:'runtime-'+p.stage+'-evidence/v1',requestDigest:request.digest,planDigest:request.planDigest};original.nativeEvidence={evidence,evidenceRef:hash(evidence),automaticRedispatch:false,historical:true};}
+  proof.stages.push(original);events.push(event);receipts.set(admission.requestId,admission);stageViews.set(id,{request,progress:{requestId:id,phase:p.phase,terminal:true,observation,observationRef:observed.observationRef},automaticRedispatch:false});
+  const sourceId='source-'+index,file=join(root,sourceId+'.jsonl'),counts=count(index+1),observedAt=at(p.usageSecond??p.second-0.1),external={input_tokens:counts.input,output_tokens:counts.output,total_tokens:counts.total,cached_input_tokens:0,...(missingCacheWrite?{}:{cache_write_input_tokens:0}),reasoning_output_tokens:0};
+  fs.writeFileSync(file,JSON.stringify({type:'session_meta',payload:{id:'thread-'+index,cli_version:'synthetic-format',model_provider:'test'}})+'\n'+JSON.stringify({type:'event_msg',timestamp:observedAt,payload:{type:'token_count',info:{total_token_usage:external,last_token_usage:external}}})+'\n',{mode:0o600});
+  const grant={schema:'runtime-codex-usage-grant/v1',id:sourceId,workspaceId:'workspace',projectId:'project',principalId:'actor',principalRevision:1,path:file,identity:inspectCodexSource(file),epoch:'one',agentRole:'main',parentThreadId:null,baseline:zero,baselineEvidence:'controlled:zero',expiresAt:new Date(Date.now()+60000).toISOString()},captured=collectCodexUsage(file,grant.identity,null),source={schema:'runtime-usage-source/v1',id:sourceId,projectId:'project',threadId:grant.identity.threadId,epoch:grant.epoch,agentRole:grant.agentRole,parentThreadId:null,baseline:zero,baselineEvidence:grant.baselineEvidence,principalId:'actor',principalRevision:1,grantDigest:digest(grant),registeredAt:at(0),revoked:false};
+  const binding={schema:'runtime-usage-attribution/v1',id:'binding-'+index,sourceId,afterSequence:0,throughSequence:null,projectId:'project',targetVersion:p.version??'0.9.0',targetRef:inst.pins.targetRef,instanceId:inst.id,instancePinsDigest:inst.pinsDigest,stageId:p.stage,baseStage:p.stage,taskId:'task-'+index,attemptId:id,workType:'testing',recordedRevision:30+index},entry={binding,closure:null};
+  const originalSource={sourceId,grant:{ref:join(root,sourceId+'-grant.json'),sha256:'a'.repeat(64)},observations:captured.observations,bindings:[entry],expectedDeltas:captured.observations.map(o=>({sequence:o.sequence,counts})),sourceKind:'CONTROLLED'};proof.sources.push(originalSource);captures.set(sourceId,{grant,...captured});registered.push({...source,cursor:{offset:captured.cursor.offset,latestSequence:captured.cursor.latestSequence},health:{sourceId,status:'CAUGHT_UP',code:null}});bindingRows.push(entry);
+  for(const [kind,id,value]of [['usage-source',sourceId,source],['usage-attribution',binding.id,binding],...captured.observations.map(o=>['usage-observation',sourceId+'-'+o.sequence,{...o,schema:'runtime-usage-observation/v1',sourceId,epoch:'one',recordedRevision:50+index}])]){const list=objects.get(kind)??[];list.push({id,value});objects.set(kind,list);}
+ }
+ const store={revision:()=>500,objectsPage:(project,kind,after='')=>(objects.get(kind)??[]).filter(o=>o.id>after).sort((a,b)=>a.id.localeCompare(b.id)).slice(0,100)},report=query=>createUsageReport(store,'project',query);
+ for(const stage of proof.stages.filter(s=>s.request.instanceId==='main'&&s.observation.evidence.observation.phase==='COMPLETE')){const r=stage.request,e=stage.event,trigger={instanceId:r.instanceId,stageId:r.stageId,stageRequestId:r.id,eventRevision:e.revision,completedAt:e.at};snapshots.push({schema:'runtime-usage-snapshot/v1',id:digest(trigger),kind:r.stageId==='publication'?'publication':r.stageId==='closure'?'closure':'stage',trigger,report:report({targetVersion:'0.9.0',throughTime:e.at})});}
+ const operations=[],artifacts=[],read=async(op,input)=>{operations.push(op);switch(op){
+  case'runtime.events.read':return{events:input.cursor?[]:events,cursor:'end'};
+  case'lifecycle.stage.request.inspect':return structuredClone(stageViews.get(input.stageRequestId));
+  case'lifecycle.stage.observation.read':return structuredClone(proof.stages.find(s=>s.request.id===input.stageRequestId).observation);
+  case'runtime.receipt.read':return structuredClone(receipts.get(input.requestId));
+  case'lifecycle.instance.inspect':return structuredClone(instances.get(input.instanceId));
+  case'usage.sources.list':return{sources:structuredClone(registered),nextAfter:null};
+  case'usage.attributions.list':return{bindings:structuredClone(bindingRows),nextAfter:null};
+  case'usage.report.read':return report(input);
+  case'usage.snapshots.list':return{snapshots:snapshots.map(s=>({id:s.id,kind:s.kind,trigger:s.trigger,reportDigest:s.report.digest,targetVersion:s.report.targetVersion,cutoffRevision:s.report.cutoffRevision})),nextAfter:null};
+  case'usage.snapshot.read':return structuredClone(snapshots.find(s=>s.id===input.id));
+  case'lifecycle.publication.evidence.read':case'lifecycle.closure.evidence.read':return structuredClone(proof.stages.find(s=>s.request.id===input.stageRequestId).nativeEvidence);
+  default:assert.fail('Unexpected write or unsupported read '+op);
+ }};
+ const run=(caseId,override={})=>collectUsageNative({caseId,selection,proof,read,collectSource:async original=>{const c=captures.get(original.sourceId);return{grant:c.grant,...collectCodexUsage(c.grant.path,c.grant.identity,null)};},artifact:(name,value)=>artifacts.push({name,value}),pause:async()=>{},...override});
+ return{run,proof,selection,read,operations,snapshots,registered,bindingRows,captures,events,instances,stageViews,artifacts};
+}
+
+test('UT08/13/14/15 native collectors accept reachable original API shapes and project-version snapshots',async t=>{
+ const f=await nativeUsageFixture(t);for(const id of ['UT08','UT13','UT14','UT15']){const result=await f.run(id);assert.equal(result.installedNativeReadback,true);assert.equal(result.formalCaseCredit,0);assert.equal(result.newBusinessDispatches,0);assert.deepEqual(result.sourceKinds,['CONTROLLED']);}
+ assert.equal((await f.run('UT13',{selection:{...f.selection,instanceId:'active-other-instance'}})).observedSnapshots,8,'Historical completions need not be the active UT12 instance');
+ assert(f.snapshots.find(s=>s.kind==='closure').report.views.instance.some(r=>r.key==='second'),'Same-version other-instance usage is included');
+ assert(!f.operations.some(op=>/request$|advance|reconcile|snapshot.create|attribution.bind/.test(op)));
+});
+
+test('native completion readback preserves missing native metric subsets as unknown',async t=>{
+ const f=await nativeUsageFixture(t,{missingCacheWrite:true});assert.equal((await f.run('UT15')).formalCaseCredit,0);const closure=f.snapshots.find(s=>s.kind==='closure');assert.equal(closure.report.counts.cacheWriteInput.recorded,null);assert.equal(closure.report.counts.cacheWriteInput.unknownRecords,closure.report.records);
+});
+
+test('UT15 rejects foreign work or original usage that does not follow the actual closure cutoff',async t=>{
+ for(const foreignWork of [
+  {requestedSecond:7,second:8.5,usageSecond:8}, // exact independent-review counterexample
+  {requestedSecond:7,second:12,usageSecond:8}, // later completion cannot move original usage forward
+  {requestedSecond:7,second:8.5,usageSecond:12}, // later Host counter alone cannot prove later business work
+  {requestedSecond:7,second:12,usageSecond:10}, // equal to closure is not subsequent
+  {requestedSecond:7,second:10,usageSecond:12}, // work at the cutoff is not subsequent
+ ]){
+  const f=await nativeUsageFixture(t,{foreignWork}),closure=f.snapshots.find(s=>s.kind==='closure'),before=structuredClone(closure);
+  assert.equal(closure.trigger.completedAt,'2026-01-01T00:00:10.000Z');
+  await assert.rejects(f.run('UT15'),/original other-version work and usage must be observed after closure/);
+  assert.deepEqual(closure,before);
+ }
+ const same=await nativeUsageFixture(t,{foreignWork:{version:'0.9.0'}});await assert.rejects(same.run('UT15'),/separately bound other-version consumption required/);
+});
+
+test('UT15 accepts genuine later work including spanning requests, delayed Host counters and older or non-semver Targets',async t=>{
+ for(const foreignWork of [
+  {version:'0.10.0'},
+  {version:'0.8.3',requestedSecond:7,second:12,usageSecond:11},
+  {version:'maintenance-branch',requestedSecond:7,second:12,usageSecond:13},
+ ]){
+  const f=await nativeUsageFixture(t,{foreignWork}),closure=f.snapshots.find(s=>s.kind==='closure'),before=structuredClone(closure),result=await f.run('UT15');
+  assert.equal(result.formalCaseCredit,0);assert.deepEqual(closure,before);
+  const capture=f.artifacts.find(a=>a.name==='post-closure-other-version-usage').value;
+  assert.equal(capture.closureCutoff,closure.trigger.completedAt);assert.equal(capture.observations.length,1);
+  const row=capture.observations[0],original=f.proof.stages.find(s=>s.request.id===row.stageRequestId);assert.equal(row.targetVersion,foreignWork.version);assert.equal(row.requestedAt,original.request.requestedAt);assert.equal(row.workObservedAt,original.event.at);
+  const source=f.proof.sources.find(s=>s.sourceId===row.sourceId);assert.equal(row.usageObservedAt,source.observations.find(o=>o.sequence===row.sequence).observedAt);assert(row.recordedTotal>0);assert(Date.parse(row.usageObservedAt)>Date.parse(capture.closureCutoff));assert(Date.parse(row.workObservedAt)>Date.parse(capture.closureCutoff));
+  assert(!closure.report.views.instance.some(r=>r.key==='later'));
+ }
+});
+
+test('native usage collectors reject missing/stale original events, receipts, scopes and source deltas',async t=>{
+ const f=await nativeUsageFixture(t),original=structuredClone(f.proof);
+ for(const mutate of [p=>p.stages[0].event.revision++,p=>p.stages[0].admission.principalId='other',p=>p.sources[0].expectedDeltas[0].counts.total++,p=>p.sources[0].observations[0].provenanceDigest='b'.repeat(64),p=>p.sources[0].bindings[0].binding.instanceId='other',p=>p.candidateDigest='sha256:'+'b'.repeat(64),p=>p.deadlineAt='2020-01-01T00:00:00Z',p=>p.maxRequests=2]){const p=structuredClone(original);mutate(p);await assert.rejects(f.run('UT08',{proof:p}));}
+ assert.equal((await f.run('UT08')).formalCaseCredit,0);
+ let clock=Date.now();const proof={...original,deadlineAt:new Date(clock+1000).toISOString()};await assert.rejects(f.run('UT08',{proof,now:()=>clock,read:async(op,input)=>{clock+=1001;return f.read(op,input);}}),/deadline exhausted/);
+});
+
+test('native completion collectors require every Base completion and publication/closure native evidence',async t=>{
+ const f=await nativeUsageFixture(t);
+ for(const stage of ['scope','publication','closure']){const p=structuredClone(f.proof);p.stages=p.stages.filter(s=>s.request.stageId!==stage);await assert.rejects(f.run('UT13',{proof:p}));}
+ const p=structuredClone(f.proof);delete p.stages.find(s=>s.request.stageId==='publication').nativeEvidence;await assert.rejects(f.run('UT14',{proof:p}),/native publication evidence original/);
+ const snapshot=f.snapshots.find(s=>s.kind==='publication'),before=structuredClone(snapshot);snapshot.report.counts.total.recorded++;await assert.rejects(f.run('UT14'));Object.assign(snapshot,before);
+ const read=async(op,input)=>{const value=await f.read(op,input);if(op==='usage.snapshot.read')value.kind='on-demand';return value;};await assert.rejects(f.run('UT14',{read}));
+});
+
+test('native retry and closure collectors cannot credit absent repair, later version or post-publication work',async t=>{
+ const f=await nativeUsageFixture(t),original=structuredClone(f.proof);
+ // Removing the original failure/repair from proof cannot preserve the claimed
+ // attribution inventory, even when an aggregate total looks unchanged.
+ for(const [id,keep]of [['UT08',s=>s.observation.evidence.observation.phase!=='FAILED'],['UT08',s=>!s.request.correctionRef],['UT15',s=>s.request.instanceId!=='later']]){const p=structuredClone(original);p.stages=p.stages.filter(keep);await assert.rejects(f.run(id,{proof:p}));}
+ const closure=f.snapshots.find(s=>s.kind==='closure'),publication=f.snapshots.find(s=>s.kind==='publication'),saved=structuredClone(closure);closure.report=structuredClone(publication.report);await assert.rejects(f.run('UT15'));Object.assign(closure,saved);
+});
+
+test('native usage collectors preserve original snapshots and detect new dispatch or budget changes',async t=>{
+ const f=await nativeUsageFixture(t);
+ await assert.rejects(f.run('UT13',{pause:async()=>{f.snapshots[0].report.records++;}}));f.snapshots[0].report.records--;
+ const before=structuredClone(f.instances.get('main'));await assert.rejects(f.run('UT14',{pause:async()=>{f.instances.get('main').loopBudget.consumed++;}}),/budget/);f.instances.set('main',before);
+ await assert.rejects(f.run('UT14',{pause:async()=>{f.events.push({seq:100,revision:100,type:'stage-requested',at:new Date().toISOString(),data:{}});}}),/business events/);
+
+});

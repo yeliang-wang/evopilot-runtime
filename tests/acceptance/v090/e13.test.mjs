@@ -167,7 +167,7 @@ function faultPrivate(ref,limit=1048576){
 async function faultWait(promise,milliseconds,label){let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(label)),milliseconds);})]);}finally{clearTimeout(timer);}}
 const faultSleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
-async function activationAtomicity(run,driver,c,plan){
+export async function activationAtomicity(run,driver,c,plan){
  exactKeys(plan,['instanceId','allowServiceRestart','transactionFault']);slug(plan.instanceId);assert.equal(plan.allowServiceRestart,true);
  const cfg=plan.transactionFault;exactKeys(cfg,['debuggerExecutable','debuggerSha256','timeoutMs','points','serviceSelection','syntheticTechnicalFaultOnly']);
  assert.equal(cfg.debuggerExecutable,'/usr/bin/lldb');assert.equal(cfg.timeoutMs,45000);assert.deepEqual(cfg.points,cv04Points);assert.equal(cfg.syntheticTechnicalFaultOnly,true);

@@ -326,7 +326,7 @@ function readPinned(pin){
  const bytes=fs.readFileSync(pin.ref);assert.equal(sha(bytes),pin.sha256);return JSON.parse(bytes);
 }
 
-async function extensionExecution(run,c,browser,openBrowser){
+export async function extensionExecution(run,c,browser,openBrowser){
  const pin=run.selection.extensionExecution;assert(pin,'Select exact native extension fixture; absent evidence is never a PASS');const fixture=readPinned(pin);
  exact(fixture,['schema','candidateDigest','workspaceId','projectId','syntheticAssets','syntheticDecisions','exchangeRoot','casePlans']);assert.equal(fixture.schema,'runtime-v090-extension-execution-fixture/v1');assert.equal(fixture.candidateDigest,run.candidateDigest);assert.equal(fixture.workspaceId,run.selection.workspaceId);assert.equal(fixture.projectId,run.selection.projectId);assert.equal(fixture.syntheticAssets,true);assert.equal(fixture.syntheticDecisions,true);
  assert.equal(fs.realpathSync(fixture.exchangeRoot),fixture.exchangeRoot);const ds=fs.lstatSync(fixture.exchangeRoot);assert(ds.isDirectory()&&ds.uid===process.getuid()&&(ds.mode&0o077)===0);
@@ -378,7 +378,7 @@ async function extensionExecution(run,c,browser,openBrowser){
  const monitor=async(id,label)=>{if(!ui)ui=await openBrowser(run,browser,{route:'/monitor',monitorEvidence:true});await ui.page.getByLabel('生命周期实例',{exact:true}).selectOption(id);const current=(await inspect(id)).instance,expected=current.definition.nodes.filter(n=>n.source==='project').map(n=>({id:n.id,status:current.stages[n.id].status,requestId:current.stages[n.id].requestId}));await ui.page.waitForFunction(({id,projectId,expected})=>document.querySelector('#instance')?.value===id&&document.querySelector('.monitor-strip')?.getAttribute('data-project-id')===projectId&&expected.every(e=>{const row=[...document.querySelectorAll('tbody tr')].find(r=>r.querySelector('button')?.textContent===e.id);return row?.querySelector('.status')?.classList.contains(e.status)&&row.querySelector('code')?.textContent===(e.requestId??'尚无请求');}),{id,projectId:run.selection.projectId,expected});await ui.screenshot();await ui.flush();const trace=await ui.close();ui=null;run.artifact('extension-browser-checkpoint.json',{label,instanceId:id,monitorOnly:true,originalRequestIds:current.requestIds,renderedExtensions:expected,trace});};
  const pair=async(id,slot)=>{const i=await graph(id);return i.definition.nodes.filter(n=>n.source==='project'&&n.stage===slot).sort((a,b)=>b.action.actionRef.localeCompare(a.action.actionRef));};
  try{
-  if(c.caseInstanceId==='E04.EX04'){
+  if(['E04.EX04','E06.EX04'].includes(c.caseInstanceId)){
    exact(plan,['failed','unknown','passing']);for(const p of [plan.failed,plan.passing])exact(p,['instanceId']);exact(plan.unknown,['instanceId','faultPlan']);assert.equal(new Set(Object.values(plan).map(p=>p.instanceId)).size,3);
    // Negative instances retain their original failed/unknown actions forever.
    for(const [mode,p]of [['FAILED',plan.failed],['UNKNOWN',plan.unknown]]){
