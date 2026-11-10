@@ -1225,7 +1225,7 @@ test('LC12 compares immutable originals while permitting current observation met
 test('LC12 helper import is inert and E22 retains a guarded direct-entry dependency loader',async()=>{
  const fs=await import('node:fs'),{spawnSync}=await import('node:child_process');const entry=new URL('../acceptance/v090/e22.test.mjs',import.meta.url),source=fs.readFileSync(entry,'utf8');
  const result=spawnSync(process.execPath,['--input-type=module','-e',`const m=await import(${JSON.stringify(entry.href)}); if(typeof m.lc12InstalledProof!=='function'||typeof m.lc12OwnedExpert!=='function')throw Error('missing helper'); process.stdout.write('IMPORT_ONLY');`],{encoding:'utf8',timeout:10000,env:{PATH:process.env.PATH,NODE_OPTIONS:''}});assert.equal(result.status,0,result.stderr);assert.equal(result.stdout,'IMPORT_ONLY');assert.equal(result.stderr,'');
- const staticImports=source.split('\n').filter(line=>line.startsWith('import '));assert(staticImports.every(line=>/from 'node:/.test(line)));assert.match(source,/async function executeE22\(\)\{\s*await loadE22Dependencies\(\);const run=await openScenario\('E22'\)/);assert.match(source,/if\(process.argv\[1\].*import.meta.url===pathToFileURL.*test\('E22 actual published/);assert.match(source,/const allCases=\['E22.journey','E22.variant.01','E22.variant.02','E22.variant.03','E22.MC01','E22.MC02','E22.MC06','E22.CV08'\]/);assert.match(source,/LC12 owns exactly one model turn/);assert.match(source,/process.kill\(-child.pid,signal\)/);
+ const staticImports=source.split('\n').filter(line=>line.startsWith('import '));assert(staticImports.every(line=>/from 'node:/.test(line)||line==="import {registerFixedScenario} from './preflight.mjs';"));assert.match(source,/async function executeE22\(callableContext\)\{\s*await loadE22Dependencies\(\);const run=await openScenario\('E22',undefined,callableContext\)/);assert.match(source,/if\(process.argv\[1\].*import.meta.url===pathToFileURL.*test\('E22 actual published/);assert.match(source,/const allCases=\['E22.journey','E22.variant.01','E22.variant.02','E22.variant.03','E22.MC01','E22.MC02','E22.MC06','E22.CV08'\]/);assert.match(source,/LC12 owns exactly one model turn/);assert.match(source,/process.kill\(-child.pid,signal\)/);
 });
 test('LC12 live installed witness rejects changed PID configuration identity and origin',async()=>{
  const {assertLc12LiveService:check}=await import('../acceptance/v090/correction.test.mjs');
@@ -1563,4 +1563,90 @@ test('E03 shared dashboard exports and exact E06 selector mappings preserve clos
   for(const [caseId,field,value]of [['E06.MC05','revisionEvolution',{instanceId:'original',allowSyntheticDecisions:true}],['E06.variant.09','revisionEvolution',{instanceId:'original',allowSyntheticDecisions:true}],['E06.EX09','revisionEvolution',{instanceId:'original',allowSyntheticDecisions:true}],['E06.CV04','interruptionFixture',pin]]){fs.writeFileSync(selectionRef,JSON.stringify({...base,caseIds:[caseId],[field]:value}),{mode:0o600});await assert.rejects(openScenario('E06'),e=>e.code==='ENOENT','Allowed exact mapping reaches installed identity read');fs.writeFileSync(selectionRef,JSON.stringify({...base,caseIds:['E06.EX01'],[field]:value}));await assert.rejects(openScenario('E06'),e=>e.code==='ERR_ASSERTION','Foreign case must fail before installed read');}assert.equal(fs.existsSync(base.outputRoot),false);
  }finally{if(prior===undefined)delete process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;else process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION=prior;f.cleanup();}
 
+});
+
+
+// Source controls below invoke the production collector body with explicitly
+// controlled I/O. They produce no installed Host/browser acceptance evidence.
+test('E10 fixed routes preserve each original case and route CV05 before dialogue prerequisites',async()=>{
+ const {collectE10Case,E10_DIALOGUE_CASES}=await import('../acceptance/v090/e10.test.mjs'),run={selection:{}},seen=[];
+ const deps={dialogue:async(r,c)=>{assert.equal(r,run);seen.push(['dialogue',c]);return c;},reentry:async(r,c)=>{assert.equal(r,run);seen.push(['reentry',c]);return c;}};
+ for(const id of [...E10_DIALOGUE_CASES,'E10.CV05']){const c={caseInstanceId:id};assert.equal(await collectE10Case(run,c,deps),c);assert.equal(seen.at(-1)[1],c);assert.equal(seen.at(-1)[0],id==='E10.CV05'?'reentry':'dialogue');}
+ await assert.rejects(collectE10Case(run,{caseInstanceId:'E10.unknown'},deps));const stop=Error('native continuation refusal');await assert.rejects(collectE10Case(run,{caseInstanceId:'E10.CV05'},{...deps,reentry:async()=>{throw stop;}}),e=>e===stop);
+});
+async function e10DialogueSourceControl(caseInstanceId,{omitStage=false,alreadyActive=false}={}){
+ const {collectE10Dialogue}=await import('../acceptance/v090/e10.test.mjs'),{sha}=await import('../acceptance/v090/support.mjs'),{compileLifecycle}=await import('../../dist/lifecycle/compiler.js'),{lifecycle,yaml:render}=await import('../fixtures/lifecycle-v090.mjs'),f=collectorFixture();
+ try{const source=render(lifecycle()),compilation=compileLifecycle(source,'alpha');assert.equal(compilation.valid,true);const ref=path.join(f.root,'exact.yaml');fs.writeFileSync(ref,source,{mode:0o600});const c={caseInstanceId},selection={expertConfiguration:{ref,sha256:sha(source)},projectId:'alpha',workspaceId:'workspace',outputRoot:path.join(f.root,'no-prior-reports')},artifacts=[],turns=[],writes=[],closed=[];let opened=0,view={revision:0,active:alreadyActive?{id:'old'}:null};
+ const node={fill:async()=>{},click:async()=>{}},page={on(){},off(){},goto:async()=>{},getByLabel:()=>node,getByRole:()=>node,getByText:()=>node,screenshot:async()=>Buffer.from('source-control')},context={newPage:async()=>page,request:{get:async()=>({status:()=>200,json:async()=>({result:{serviceId:'service',workspaceId:'workspace',projectId:'alpha'}})})},close:async()=>closed.push('context')},browser={newContext:async()=>context,version:()=> 'SOURCE_CONTROL',close:async()=>closed.push('browser')};
+ const call=(operation,input={})=>({tool:'runtime_read',arguments:{operation,input}}),run={selection,candidate:{serviceId:'service'},serviceOrigin:'http://127.0.0.1:1',artifact:(name,value)=>artifacts.push({name,value}),imageArtifact(){},browserCode:async()=> 'SOURCE_CONTROL',requestId:(id,label)=>{assert.equal(id,c.caseInstanceId);return id+'-'+label;},source:async()=>source,configurationEntry:async(entry,operation)=>{assert.equal(entry,'cli');assert.equal(operation,'lifecycle.definition.inspect');return{result:structuredClone(view)};},read:async operation=>{if(operation==='lifecycle.definition.inspect')return structuredClone(view);if(operation==='runtime.status')return{independentLlm:false,serviceId:'service'};if(operation==='lifecycle.definition.validate')return{ready:true,compilation,validationDigest:'sha256:'+'c'.repeat(64)};throw Error('Unexpected read '+operation);},openExpert:async()=>{const n=++opened;return{close:async()=>closed.push('expert-'+n),configurationTurn:async(prompt,write)=>{turns.push({host:n,write:write??null});let calls,messages;if(write){writes.push(write);view={revision:1,active:{id:'sha256:'+'d'.repeat(64)}};calls=[call('lifecycle.definition.validate',{yaml:source}),call('lifecycle.definition.inspect')];messages=[];}else if(n===1){calls=[call('lifecycle.base.inspect'),call('lifecycle.definition.inspect')];messages=[compilation.effective.nodes.filter(x=>x.source==='base'&&(!omitStage||x.id!=='closure')).map(x=>x.id).join(' ')];}else{calls=[call('runtime.status'),call('lifecycle.definition.inspect')];messages=[view.active.id];}return{threadId:caseInstanceId+'-thread-'+n,turnId:caseInstanceId+'-turn-'+turns.length,model:'CONTROL',provider:'CONTROL',calls,messages,approvalResponses:[]};}};}};
+ let result,error;try{result=await collectE10Dialogue(run,c,{launchBrowser:async()=>browser,assertUi:()=>({toBeVisible:async()=>{},toHaveValue:async value=>assert.equal(value,source)})});}catch(e){error=e;}
+ assert.equal(fs.existsSync(selection.outputRoot),false,'No earlier journey report exists or can be consumed');return{result,error,opened,turns,writes,closed,artifacts};
+ }finally{f.cleanup();}
+}
+test('E10 each dialogue case performs its own original wizard activation and reconnect through the collector body',async()=>{
+ for(const id of ['E10.journey','E10.variant.01','E10.MC01']){const observed=await e10DialogueSourceControl(id);assert.equal(observed.error,undefined);assert.equal(observed.result.caseInstanceId,id);assert.equal(observed.opened,2);assert.equal(observed.turns.length,3);assert.equal(observed.writes.length,1);assert.equal(observed.writes[0].requestId,id+'-activate');assert(observed.result.turns.every(t=>t.threadId.startsWith(id+'-')));assert.deepEqual(observed.closed,['context','browser','expert-1','expert-2']);assert.equal(observed.artifacts.find(a=>a.name==='expert-journey-summary.json').value.caseInstanceId,id);assert(!observed.artifacts.some(a=>a.name==='mc01-dialogue-binding.json'));}
+});
+test('E10 missing wizard stages and already active projects cannot be replaced by prior PASS labels',async()=>{
+ const missing=await e10DialogueSourceControl('E10.MC01',{omitStage:true});assert.match(missing.error.message,/Wizard omitted stage closure/);assert.equal(missing.writes.length,0);assert.deepEqual(missing.closed,['expert-1']);const active=await e10DialogueSourceControl('E10.variant.01',{alreadyActive:true});assert.match(active.error.message,/fresh isolated project/);assert.equal(active.opened,0);assert.equal(active.writes.length,0);
+});
+
+test('LC02 fixed source registry identifies real native campaign dependencies and preserves missing implementations',async()=>{
+ const {loadFixedAcceptanceRegistry}=await import('../acceptance/v090/preflight.mjs'),{fileURLToPath}=await import('node:url');
+ const registry=await loadFixedAcceptanceRegistry(fileURLToPath(new URL('../../',import.meta.url)));
+ assert.equal(registry.cases.length,709);assert.equal(registry.cases.filter(c=>c.phase==='PRE_RELEASE').length,698);assert.equal(registry.cases.filter(c=>c.phase==='POST_RELEASE').length,11);assert.equal(registry.fullCatalogCallable,true);assert.equal(registry.registrations.size,709);assert.deepEqual(registry.gaps,[]);assert.deepEqual(registry.missingExports,[]);
+ // Missing exports/branches are reported, never filled with a throwing callback.
+ assert(registry.gaps.every(c=>!registry.registrations.has(c.caseInstanceId)));
+ for(const [id,count]of [['E09.CV07',6],['E22.CV08',8]]){const r=registry.registrations.get(id);assert.equal(r.executionCaseIds.length,count);assert.deepEqual(r.dependsOn,r.executionCaseIds.filter(c=>c!==id));}
+ assert.equal(registry.registrations.get('E20.journey').evidenceDependsOn.length,675);assert.deepEqual(registry.registrations.get('E22.journey').evidenceDependsOn,['E21.journey']);
+ // Every real registered callback must reject opposite-phase execution before
+ // it can read a selected installation, fixture or authorization file.
+ for(const r of registry.registrations.values())await assert.rejects(r.call({selectionRef:'/must-not-open/selection.json',phase:r.phase==='PRE_RELEASE'?'POST_RELEASE':'PRE_RELEASE',signal:new AbortController().signal}),/POST callbacks cannot run/);
+});
+test('LC02 callable admission binds exact case closure before reading live selected materials',async()=>{
+ const {assertCallableSelection,registerFixedScenario}=await import('../acceptance/v090/preflight.mjs');
+ const catalog=[{scenario:'E09',caseInstanceId:'E09.journey',phase:'PRE_RELEASE'},{scenario:'E09',caseInstanceId:'E09.CV07',phase:'PRE_RELEASE'}];let calls=0;
+ const r=registerFixedScenario({scenario:'E09',phase:'PRE_RELEASE',catalog,routes:{'E09.journey':{handler:'journey'},'E09.CV07':{handler:'inventory',executionCaseIds:['E09.journey','E09.CV07'],dependsOn:['E09.journey']}},execute:async context=>{calls++;assertCallableSelection(context,{caseIds:['E09.journey','E09.CV07']},catalog);return context;}}),context={selectionRef:'/private/selection.json',phase:'PRE_RELEASE',signal:new AbortController().signal};
+ const admitted=await r.get('E09.CV07').call(context);assert.equal(calls,1);assert.equal(admitted.caseInstanceId,'E09.CV07');
+ for(const selection of [{caseIds:['E09.CV07']},{caseIds:['E09.CV07','E09.journey']},{caseIds:['E09.journey','E09.CV07'],caseCampaign:{}},{caseIds:['E09.journey','E09.CV07'],phase:'POST_RELEASE'}])assert.throws(()=>assertCallableSelection(admitted,selection,catalog));
+ const abort=new AbortController();abort.abort();await assert.rejects(r.get('E09.CV07').call({...context,signal:abort.signal}));assert.equal(calls,1);
+ const {mkdtempSync,writeFileSync,rmSync,realpathSync}=await import('node:fs'),{tmpdir}=await import('node:os'),{join}=await import('node:path'),folder=realpathSync(mkdtempSync(join(tmpdir(),'lc02-singleton-')));
+ try{const ref=join(folder,'selection.json');writeFileSync(ref,JSON.stringify({caseIds:['E01.variant.01'],installedRoot:'/must-not-read'}),{mode:0o600});const {registerE01CallableCases}=await import('../acceptance/v090/e01.test.mjs');const fixed=JSON.parse((await import('node:fs')).readFileSync(new URL('../../governance/parameter-matrix-v090.json',import.meta.url))).caseInstances;await assert.rejects(registerE01CallableCases(fixed).get('E01.journey').call({...context,selectionRef:ref}),/Actual execution selection differs/);}finally{rmSync(folder,{recursive:true,force:true});}
+});
+
+test('LC02 four-vector preflight uses exact mapping faults without dispatching callbacks or reading POST profiles',async()=>{
+ const api=await import('../acceptance/v090/preflight.mjs'),{preflightCorrection}=await import('../../dist/lifecycle/correction-planner.js'),fs=await import('node:fs'),os=await import('node:os'),path=await import('node:path');
+ const folder=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'lc02-preflight-')));let invoked=0;
+ try{
+  const ref=path.join(folder,'pre.json');fs.writeFileSync(ref,'synthetic source-only preflight bindings\n',{mode:0o600});const profile=Object.fromEntries(['source','candidate','toolchain','fixture','collector','permission'].map(k=>[k,[ref]])),expected=api.observeAcceptanceBindings(profile);
+  const cases=Array.from({length:709},(_,i)=>({id:'synthetic-source-only-'+i,phase:i<698?'PRE_RELEASE':'POST_RELEASE',entry:'synthetic/'+i,dependsOn:[]})),registrations=new Map(cases.map(c=>[c.id,{caseInstanceId:c.id,entry:c.entry,call:()=>{invoked++;throw Error('Never execute synthetic guard callback');}}])),entries=new Map([...registrations.values()].map(r=>[r.entry,r.call]));
+  const registry={catalog:cases,cases,registrations,entries,gaps:[],missingExports:[],fullCatalogCallable:true},result=api.exerciseLc02Preflight({registry,expected,observations:profile,preflightCorrection});
+  assert.deepEqual(result.vectors.map(v=>v.vector),['missing-entry','uncallable-entry','pre-post-cycle','valid-mapping']);assert.deepEqual(result.vectors.slice(0,3).map(v=>v.code),['MISSING_ENTRY','UNCALLABLE_ENTRY','CORRECTION_PHASE_DEPENDENCY']);assert.equal(result.preOnlyCycleControl.code,'CORRECTION_CYCLE');assert.equal(invoked,0);assert.equal(result.callablePreCases,698);assert.equal(result.registeredPostCases,11);assert.equal(result.postProfilesObserved,false);
+  assert.throws(()=>api.exerciseLc02Preflight({registry:{...registry,gaps:[{caseInstanceId:'missing-real-implementation'}]},expected,observations:profile,preflightCorrection}),{code:'NOT_READY'});assert.equal(invoked,0);
+ }finally{fs.rmSync(folder,{recursive:true,force:true});}
+});
+
+test('LC08 and LC19 own continuity selectors pass exact schema without an unrelated input lane',async()=>{
+ const {collectCorrection}=await import('../acceptance/v090/correction.test.mjs'),{sha}=await import('../acceptance/v090/support.mjs'),f=collectorFixture();
+ try{const commit='a'.repeat(40),revision=path.join(f.root,'revision.txt');fs.writeFileSync(revision,commit+'\n',{mode:0o600});
+ for(const id of ['LC08','LC19']){const selection={schema:'runtime-correction-acceptance-selection/v1',sourceRoot:path.join(f.root,'missing-source'),sourceCommit:commit,sourceRevision:{ref:revision,sha256:sha(commit+'\n')},phase:'PRE_RELEASE',caseIds:[id],installedRoot:path.join(f.root,'missing-installed'),expectedManifestDigest:'b'.repeat(64),qualification:'DEVELOPMENT',outputRoot:path.join(f.root,'output'),lcContinuity:{ref:path.join(f.root,'unused-fixture'),sha256:'c'.repeat(64)}},ref=path.join(f.root,id+'.json');fs.writeFileSync(ref,JSON.stringify(selection),{mode:0o600});await assert.rejects(collectCorrection(ref),e=>e.code==='ENOENT'&&e.path===selection.sourceRoot);assert(!fs.existsSync(selection.outputRoot));}
+ }finally{f.cleanup();}
+});
+
+// Add to the existing source-only planner suite; never formal LC02 evidence.
+test('LC02 four-vector preflight preserves real E21 PRE evidence edges',async()=>{
+ const api=await import('../acceptance/v090/preflight.mjs'),{preflightCorrection}=await import('../../dist/lifecycle/correction-planner.js'),{fileURLToPath}=await import('node:url'),os=await import('node:os');
+ const registry=await api.loadFixedAcceptanceRegistry(fileURLToPath(new URL('../../',import.meta.url))),original=structuredClone(registry.cases);
+ const target=registry.cases.find(c=>c.phase==='PRE_RELEASE'),later=registry.cases.find(c=>c.phase==='POST_RELEASE');
+ assert.equal(target.id,'E01.journey');assert.equal(later.id,'E21.journey');assert.equal(later.dependsOn.filter(id=>id===target.id).length,1);
+ const folder=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'lc02-real-registry-source-')));
+ try{
+  const ref=path.join(folder,'synthetic-source-only.txt');fs.writeFileSync(ref,'Synthetic file binding for source guard; no acceptance credit.\n',{mode:0o600});
+  const observations=Object.fromEntries(['source','candidate','toolchain','fixture','collector','permission'].map(k=>[k,[ref]])),expected=api.observeAcceptanceBindings(observations);
+  const result=api.exerciseLc02Preflight({registry,expected,observations,preflightCorrection});
+  assert.deepEqual(result.vectors.map(v=>v.vector),['missing-entry','uncallable-entry','pre-post-cycle','valid-mapping']);
+  assert.deepEqual(result.vectors.slice(0,3).map(v=>v.code),['MISSING_ENTRY','UNCALLABLE_ENTRY','CORRECTION_PHASE_DEPENDENCY']);
+  assert.equal(result.vectors[3].ready,true);assert.equal(result.preOnlyCycleControl.code,'CORRECTION_CYCLE');
+  assert.equal(result.businessCallbacksInvoked,0);assert.equal(result.postProfilesObserved,false);assert.equal(result.callablePreCases,698);assert.equal(result.registeredPostCases,11);
+  assert.deepEqual(registry.cases,original,'Private fault copies must preserve the original real dependency graph');
+ }finally{fs.rmSync(folder,{recursive:true,force:true});}
 });

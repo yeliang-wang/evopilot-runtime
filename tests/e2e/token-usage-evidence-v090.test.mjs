@@ -19,6 +19,7 @@ function fixture(t){
   const put=(file,value)=>{fs.mkdirSync(dirname(file),{recursive:true});const bytes=Buffer.isBuffer(value)?value:Buffer.from(typeof value==='string'?value:JSON.stringify(value,null,2)+'\n');fs.writeFileSync(file,bytes,{mode:0o600});return{ref:file,sha256:sha(bytes)};};
   for(const file of ['package.json','package-lock.json',...fs.readdirSync(join(repository,'governance')).filter(n=>n.endsWith('.json')).map(n=>'governance/'+n)])put(join(source,file),fs.readFileSync(join(repository,file)));
   const collector='tests/acceptance/v090/usage.test.mjs';put(join(source,collector),'// SYNTHETIC identity fixture; never actual acceptance.\n');
+  put(join(source,'tests/acceptance/v090/preflight.mjs'),'// SYNTHETIC preflight identity only.\n');
   const git=args=>execFileSync('/usr/bin/git',['-c','core.fsmonitor=false','-C',source,...args],{env:{...process.env,GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1'},stdio:['ignore','pipe','pipe']}).toString();
   const commit=()=>{git(['add','.']);git(['-c','user.name=Synthetic evidence test','-c','user.email=synthetic@example.invalid','-c','commit.gpgsign=false','commit','--quiet','-m','Synthetic fixture only']);return git(['rev-parse','HEAD']).trim();};
   git(['init','--quiet']);const sourceCommit=commit();
@@ -26,7 +27,7 @@ function fixture(t){
   const manifest=put(join(evidenceRoot,'manifest.json'),{schema:'runtime-standalone-distribution/v1',version:'0.9.0',archiveDigest:archive.sha256,files:{'package.json':{type:'file',sha256:sha(Buffer.from('{}')),bytes:2,mode:0o644}}});
   const sourceRevision=put(join(evidenceRoot,'source.txt'),sourceCommit+'\n');
   const candidate={manifestDigest:manifest.sha256,archiveDigest:archive.sha256,version:'0.9.0',serviceId:'synthetic',workspaceId:'synthetic',projectId:'synthetic'},candidateDigest='sha256:'+manifest.sha256;
-  const selection={scenario:'UT',sourceCommit,qualification:'FINAL_CANDIDATE',candidate,candidateDigest,addendumDigest:sha(fs.readFileSync(join(source,'governance/token-usage-v090.json'))),collectorPins:{'usage.test.mjs':sha(fs.readFileSync(join(source,collector)))},selectedCaseIds:ids};
+  const selection={scenario:'UT',sourceCommit,qualification:'FINAL_CANDIDATE',candidate,candidateDigest,addendumDigest:sha(fs.readFileSync(join(source,'governance/token-usage-v090.json'))),collectorPins:{'usage.test.mjs':sha(fs.readFileSync(join(source,collector))),'preflight.mjs':sha(fs.readFileSync(join(source,'tests/acceptance/v090/preflight.mjs')))},selectedCaseIds:ids};
   const selectionPin=put(join(evidenceRoot,'selection.json'),selection);
   const record=id=>{const prefix=id??'setup',request=put(join(evidenceRoot,prefix+'-request.json'),{caseInstanceId:id,synthetic:true,request:'read-only fixture'}),response=put(join(evidenceRoot,prefix+'-response.json'),{caseInstanceId:id,synthetic:true,response:'fixture observation'});return{caseInstanceId:id,request:prefix+'-request.json',requestDigest:request.sha256,response:prefix+'-response.json',fileDigest:response.sha256};};
   const results=ids.map(caseInstanceId=>({caseInstanceId,status:'PASS',qualification:'FINAL_CANDIDATE',candidateDigest,assertions:{synthetic:'Integrity fixture only; not a real assertion about product behavior'},evidence:[record(caseInstanceId)]}));
@@ -59,7 +60,7 @@ test('report and selection must bind exact source, addendum, collector and candi
     const r=structuredClone(original);mutate(r);f.saveReport(r);assert.throws(f.audit);
   }
   f.saveReport(original);
-  for(const mutate of [s=>s.sourceCommit='a'.repeat(40),s=>s.addendumDigest='a'.repeat(64),s=>s.collectorPins['usage.test.mjs']='a'.repeat(64),s=>s.collectorPins['support.mjs']='b'.repeat(64),s=>s.selectedCaseIds.pop(),s=>s.selectedCaseIds[0]='UT24',s=>s.selectedCaseIds[0]='UT02',s=>s.candidate.serviceId='different']){
+  for(const mutate of [s=>s.sourceCommit='a'.repeat(40),s=>s.addendumDigest='a'.repeat(64),s=>s.collectorPins['usage.test.mjs']='a'.repeat(64),s=>delete s.collectorPins['preflight.mjs'],s=>s.collectorPins['preflight.mjs']='b'.repeat(64),s=>s.phase='POST_RELEASE',s=>s.collectorPins['support.mjs']='b'.repeat(64),s=>s.selectedCaseIds.pop(),s=>s.selectedCaseIds[0]='UT24',s=>s.selectedCaseIds[0]='UT02',s=>s.candidate.serviceId='different']){
     const s=structuredClone(selection);mutate(s);f.saveSelection(s);assert.throws(f.audit);
   }
   f.saveSelection(selection);assert.equal(f.audit().passed,23);
@@ -295,4 +296,57 @@ test('native usage collectors preserve original snapshots and detect new dispatc
  const before=structuredClone(f.instances.get('main'));await assert.rejects(f.run('UT14',{pause:async()=>{f.instances.get('main').loopBudget.consumed++;}}),/budget/);f.instances.set('main',before);
  await assert.rejects(f.run('UT14',{pause:async()=>{f.events.push({seq:100,revision:100,type:'stage-requested',at:new Date().toISOString(),data:{}});}}),/business events/);
 
+});
+
+// Focused usage continuity semantic guards. All records below are synthetic;
+// these tests intentionally cannot enter the installed-only execution path.
+import {usageContinuityCases,usageContinuityBudget,assertUsageContinuityPhase,usageReportContent,assertUsageContinuityPreserved,assertUsageInspectionPreserved,assertUsageTokenNotification,assertActualUsageObservations} from '../acceptance/v090/usage.test.mjs';
+import {inspectCodexSource,collectCodexUsage} from '../../dist/usage/codex.js';
+import {createUsageReport,usageMarkdown} from '../../dist/usage/reports.js';
+
+function continuityOriginals(t){
+ const root=fs.mkdtempSync(join(fs.realpathSync(tmpdir()),'runtime-usage-continuity-source-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const source=join(root,'original.jsonl'),hostCounts=(input,output)=>({inputTokens:input,outputTokens:output,totalTokens:input+output,cachedInputTokens:10,reasoningOutputTokens:2}),rawCounts=(input,output)=>({input_tokens:input,output_tokens:output,total_tokens:input+output,cached_input_tokens:10,reasoning_output_tokens:2});
+ const rows=[{type:'session_meta',payload:{id:'synthetic-host-thread',cli_version:'synthetic-not-an-installed-host',model_provider:'synthetic-provider'}}];const turns=[];
+ for(const [index,input,output]of [[1,100,20],[2,160,30]]){const last=index===1?[100,20]:[60,10],turnId='synthetic-turn-'+index;rows.push({type:'turn_context',payload:{turn_id:turnId,model:'synthetic-model',model_provider:'synthetic-provider'}},{type:'event_msg',timestamp:'2026-11-10T00:00:0'+index+'.000Z',payload:{type:'token_count',info:{total_token_usage:rawCounts(input,output),last_token_usage:rawCounts(...last)}}});turns.push({threadId:'synthetic-host-thread',turnId,usageTurnId:turnId,status:'completed',actualModelTurn:true,model:'synthetic-model',provider:'synthetic-provider',usage:{total:hostCounts(input,output),last:hostCounts(...last)}});}
+ fs.writeFileSync(source,rows.map(v=>JSON.stringify(v)+'\n').join(''),{mode:0o600});const identity=inspectCodexSource(source),captured=collectCodexUsage(source,identity,null);assert.equal(captured.caughtUp,true);return{root,source,identity,...captured,turns};
+}
+function continuityLedger(t){
+ const raw=continuityOriginals(t),source={schema:'runtime-usage-source/v1',id:'synthetic-source',projectId:'synthetic-project',threadId:raw.identity.threadId,epoch:'original',agentRole:'main',parentThreadId:null,baseline:{input:0,output:0,total:0,cachedInput:0,cacheWriteInput:0,reasoningOutput:0},baselineEvidence:'synthetic-source-only',principalId:'synthetic-principal',principalRevision:1,grantDigest:'a'.repeat(64),registeredAt:'2026-11-10T00:00:00.000Z',revoked:false},binding={id:'synthetic-binding',sourceId:source.id,afterSequence:0,throughSequence:null,targetVersion:'synthetic-version',targetRef:'synthetic-target',instanceId:'synthetic-instance',stageId:'verification',baseStage:'verification',taskId:'synthetic-task',attemptId:'synthetic-attempt',workType:'testing',recordedRevision:1},records=raw.observations.map(o=>({...o,sourceId:source.id,epoch:source.epoch,recordedRevision:2})),values={'usage-source':[source],'usage-attribution':[binding],'usage-attribution-close':[],'usage-observation':records};
+ const store={revision:()=>2,objectsPage(_project,kind,after){assert.equal(after,'');return(values[kind]??[]).map((value,index)=>({id:String(index),value}));}};
+ const report=createUsageReport(store,'synthetic-project',{targetVersion:'synthetic-version'}),snapshot={id:'synthetic-snapshot',report},inventory={sources:[{...source,cursor:{offset:raw.cursor.offset,latestSequence:raw.cursor.latestSequence},health:{status:'CAUGHT_UP'}}],bindings:[{binding,closure:null}],snapshots:[snapshot],business:[{instanceId:'synthetic-instance',view:{projectRevision:2,instance:{requestIds:['original'],stages:{verification:{status:'PASSED',attempts:1}}},loopBudget:{consumed:1,remaining:0,deadlineAt:'2026-11-10T01:00:00Z'}},requests:[{projectRevision:2,request:{id:'original',inputDigest:'synthetic',deadlineAt:'2026-11-10T01:00:00Z'},automaticRedispatch:false,progress:{phase:'COMPLETE'}}]}],events:[{seq:1,type:'stage-observed',data:{stageRequestId:'original',phase:'COMPLETE'}}],report};return{...raw,report,inventory};
+}
+test('usage continuity fixed six IDs retain UT24 POST-only phase',()=>{
+ const catalog=JSON.parse(fs.readFileSync(join(repository,'governance/token-usage-v090.json'))).acceptance.cases;assert.deepEqual(usageContinuityCases,['UT07','UT16','UT19','UT22','UT23','UT24']);for(const id of usageContinuityCases){const row=catalog.find(c=>c.id===id);assert(row);assertUsageContinuityPhase(id,row.phase);assert.throws(()=>assertUsageContinuityPhase(id,row.phase==='POST_RELEASE'?'PRE_RELEASE':'POST_RELEASE'));}assert.throws(()=>assertUsageContinuityPhase('UT25','PRE_RELEASE'));
+});
+test('usage continuity absolute deadline and aggregate requests do not reset across phases',()=>{
+ let now=1000;const budget=usageContinuityBudget({deadlineAt:new Date(3000).toISOString(),maxRequests:2},()=>now);assert.equal(budget.remaining(5000),2000);budget.take();now=2500;assert.equal(budget.remaining(5000),500);budget.take();assert.throws(()=>budget.take(),/request budget/);now=3000;assert.throws(()=>budget.remaining(),/deadline/);const capped=usageContinuityBudget({deadlineAt:new Date(9999999).toISOString(),maxRequests:1},()=>1000);assert.equal(capped.deadline,541000);
+});
+test('usage continuity real native adapter shape distinguishes two cumulative and last-turn counters',t=>{
+ const f=continuityLedger(t),expected=assertActualUsageObservations(f.identity,f.turns,f.observations);assert.equal(expected.records,2);assert.equal(expected.counts.total.recorded,190);assert.equal(expected.counts.cacheWriteInput.recorded,null);assert.equal(expected.counts.cacheWriteInput.unknownRecords,2);assert.deepEqual(expected.counts,f.report.counts);assert.notEqual(expected.counts.total.recorded,f.turns.reduce((n,t)=>n+t.usage.total.totalTokens,0));assert.equal(expected.capabilities.completeVersionTotal,false);
+ const replay=collectCodexUsage(f.source,f.identity,f.cursor);assert.deepEqual(replay.observations,[]);assert.deepEqual(replay.cursor,f.cursor);
+});
+test('usage continuity actual-counter guard rejects unrelated thread turn model provider and cumulative substitution',t=>{
+ const f=continuityOriginals(t);for(const change of [x=>x[0].threadId='other-thread',x=>x[1].turnId='other-turn',x=>x[1].model='other-model',x=>x[1].provider='other-provider',x=>x[1].usage.total.totalTokens+=120,x=>x[1].usage.last.totalTokens=x[1].usage.total.totalTokens]){const changed=structuredClone(f.turns);change(changed);assert.throws(()=>assertActualUsageObservations(f.identity,changed,f.observations));}assert.throws(()=>assertActualUsageObservations(f.identity,f.turns.slice(0,1),f.observations));const wrong=structuredClone(f.observations);wrong[1].sequence=wrong[0].sequence;assert.throws(()=>assertActualUsageObservations(f.identity,f.turns,wrong));
+});
+test('usage continuity native JSON and Markdown keep unknown coverage and validate original report digest',t=>{
+ const f=continuityLedger(t),content=usageReportContent(f.report);assert.equal(content.completeVersionTotal,false);assert.equal(content.counts.total.recorded,190);assert.match(usageMarkdown(f.report),/不代表整个版本/);const changed=structuredClone(f.report);changed.counts.total.recorded=310;assert.throws(()=>usageReportContent(changed));const later={...f.report,createdAt:'2026-11-10T01:00:00.000Z',cutoffRevision:3};delete later.digest;const canonical=v=>v&&typeof v==='object'?Array.isArray(v)?v.map(canonical):Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v;later.digest=sha(JSON.stringify(canonical(later)));assert.deepEqual(usageReportContent(later),content);
+});
+test('usage continuity recovery rejects cursor reset duplication binding loss old-report replacement budget reset or redispatch',t=>{
+ const f=continuityLedger(t);assert.equal(assertUsageContinuityPreserved(f.inventory,structuredClone(f.inventory)),true);const mutations=[v=>v.sources[0].cursor.offset--,v=>v.sources.push(v.sources[0]),v=>v.bindings=[],v=>v.snapshots[0].report={...v.report,records:99},v=>v.business[0].view.loopBudget.remaining=1,v=>v.business[0].requests[0].request.deadlineAt='2026-11-11T01:00:00Z',v=>v.business[0].requests[0].automaticRedispatch=true,v=>v.events.push({seq:2,type:'stage-requested',data:{stageRequestId:'replacement'}})];for(const mutate of mutations){const changed=structuredClone(f.inventory);mutate(changed);assert.throws(()=>assertUsageContinuityPreserved(f.inventory,changed));}
+});
+test('usage continuity permits native inspect project revisions from its own usage writes without dropping business budget fields',t=>{
+ const f=continuityLedger(t),after=structuredClone(f.inventory);after.business[0].view.projectRevision=8;after.business[0].requests[0].projectRevision=9;assert.equal(assertUsageContinuityPreserved(f.inventory,after),true);
+ const original=f.inventory.business[0].view;assert.equal(assertUsageInspectionPreserved(original,{...original,projectRevision:3}),true);for(const changed of [{...original,projectRevision:1},{...original,projectRevision:3,loopBudget:{...original.loopBudget,remaining:1}},{...original,projectRevision:3,instance:{...original.instance,requestIds:['replacement']}}])assert.throws(()=>assertUsageInspectionPreserved(original,changed));
+});
+test('usage continuity binds native token notification turnId before and after turn-start response',()=>{
+ const params={threadId:'thread',turnId:'turn-2',tokenUsage:{total:{totalTokens:20},last:{totalTokens:10}}};assert.equal(assertUsageTokenNotification({threadId:'thread',turnId:null,usageTurnId:null},params),'turn-2');assert.equal(assertUsageTokenNotification({threadId:'thread',turnId:'turn-2',usageTurnId:'turn-2'},params),'turn-2');
+ for(const current of [{threadId:'other',turnId:null,usageTurnId:null},{threadId:'thread',turnId:'turn-1',usageTurnId:null},{threadId:'thread',turnId:null,usageTurnId:'turn-1'}])assert.throws(()=>assertUsageTokenNotification(current,params));assert.throws(()=>assertUsageTokenNotification({threadId:'thread',turnId:null,usageTurnId:null},{...params,turnId:undefined}));
+});
+
+test('usage entry enforces continuity isolation and POST before touching an installation',async()=>{
+ const {executeUsageAcceptance}=await import('../acceptance/v090/usage.test.mjs');const root=fs.mkdtempSync(join(fs.realpathSync(tmpdir()),'usage-phase-entry-'));
+ try{const base={schema:'runtime-v090-usage-selection/v1',installedRoot:join(root,'missing-installation'),expectedManifestDigest:'a'.repeat(64),sourceRevision:{ref:join(root,'unused-source'),sha256:'b'.repeat(64)},connectionRef:join(root,'missing-connection'),workspaceId:'scope',projectId:'alpha',runId:'phase-entry',outputRoot:join(root,'must-not-exist'),qualification:'DEVELOPMENT',caseIds:['UT24'],targetVersion:'0.9.0'},ref=join(root,'selection.json');
+ for(const change of [{},{phase:'PRE_RELEASE'},{phase:'POST_RELEASE',caseIds:['UT19']},{caseIds:['UT07','UT01'],instanceId:'original',principalRevision:1}]){fs.writeFileSync(ref,JSON.stringify({...base,...change}),{mode:0o600});await assert.rejects(executeUsageAcceptance(ref),e=>e.code==='ERR_ASSERTION'&&!String(e).includes('ENOENT'));}
+ for(const id of ['UT07','UT16','UT19','UT22','UT23','UT24']){fs.writeFileSync(ref,JSON.stringify({...base,caseIds:[id],...(id==='UT24'?{phase:'POST_RELEASE'}:{})}),{mode:0o600});await assert.rejects(executeUsageAcceptance(ref),e=>e.code==='ENOENT'&&e.path.startsWith(base.installedRoot));}assert(!fs.existsSync(base.outputRoot));
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
 });

@@ -1,3 +1,4 @@
+import {registerFixedScenario} from './preflight.mjs';
 import {pathToFileURL as collectorPathToFileURL} from 'node:url';
 import {resolve as collectorResolve} from 'node:path';
 import test from 'node:test';
@@ -28,8 +29,8 @@ function toolResult(raw){
  const value=raw.structuredContent??JSON.parse(raw.content.find(part=>part.type==='text').text);assert(!value.error,JSON.stringify(value.error));return value;
 }
 
-export async function executeE15() {
- const run=await openScenario('E15');let host;
+export async function executeE15(callableContext) {
+ const run=await openScenario('E15',undefined,callableContext);let host;
  try{
   for(const c of run.cases)await run.collect(c,async()=>{
    assert.equal(c.caseInstanceId,'E15.journey');assert(run.selection.legacyCompatibility,'Select a current exact isolated legacy compatibility plan');
@@ -151,3 +152,10 @@ export async function executeE15() {
  }finally{try{await host?.close();}finally{run.finish();}}
 }
 if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E15 actual installed legacy Host delegates to one HTTP Runtime and exact published owners',executeE15);
+
+// Fixed source-audited branches; no fixture or provider action runs at registration.
+const E15_CALLABLE_ROUTES=Object.freeze({"E15.journey":{"handler":"executeE15/journey"}});
+export function registerE15CallableCases(catalog){
+ const routes=E15_CALLABLE_ROUTES;
+ return registerFixedScenario({scenario:'E15',phase:'PRE_RELEASE',catalog,routes,execute:executeE15});
+}

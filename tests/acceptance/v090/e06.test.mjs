@@ -1,3 +1,4 @@
+import {registerFixedScenario} from './preflight.mjs';
 import {pathToFileURL as collectorPathToFileURL} from 'node:url';
 import {resolve as collectorResolve} from 'node:path';
 import test from 'node:test';
@@ -151,8 +152,8 @@ async function revisionBrowser(run,browser,ui,initial,c,editChecks){
  run.artifact('browser-revision-native-pins.json',{old,current,events:finalEvents,syntheticDecision:true,businessApproval:false});return{oldInstanceUnchanged:true,newInstance:id,newRevision:active.active.id,explicitNativeTestAuthority:true,activationCreatedNoRun:true,newInstancePendingOnly:true,releaseAuthorized:false};
 }
 
-export async function executeE06() {
- const run=await openScenario('E06');let browser;
+export async function executeE06(callableContext) {
+ const run=await openScenario('E06',undefined,callableContext);let browser;
  try{
   browser=await chromium.launch({headless:true});
   for(const c of run.cases)await run.collect(c,async()=>{
@@ -181,3 +182,10 @@ export async function executeE06() {
  }finally{await browser?.close();run.finish();}
 }
 if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E06 exact installed graph and YAML lifecycle browser cases',executeE06);
+
+// Fixed source-audited branches; no fixture or provider action runs at registration.
+const E06_CALLABLE_ROUTES=Object.freeze({"E06.journey":{"handler":"roundtrip"},"E06.variant.01":{"handler":"locked"},"E06.variant.02":{"handler":"negative/cycle-duplicate"},"E06.variant.03":{"handler":"negative/unknown"},"E06.variant.04":{"handler":"injections"},"E06.variant.05":{"handler":"keyboard"},"E06.variant.06":{"handler":"roundtrip"},"E06.variant.07":{"handler":"samePageRepairs"},"E06.variant.08":{"handler":"conflicts"},"E06.variant.09":{"handler":"revisionBrowser"},"E06.EX04":{"handler":"extensionExecution"},"E06.EX05":{"handler":"negative/graph-attacks"},"E06.EX08":{"handler":"extensionsRoundtrip"},"E06.EX09":{"handler":"revisionBrowser"},"E06.MC02":{"handler":"roundtrip"},"E06.MC03":{"handler":"samePageRepairs"},"E06.MC04":{"handler":"conflicts"},"E06.MC05":{"handler":"revisionBrowser"},"E06.CV02":{"handler":"permissionTiming"},"E06.CV04":{"handler":"activationAtomicity"}});
+export function registerE06CallableCases(catalog){
+ const routes=E06_CALLABLE_ROUTES;
+ return registerFixedScenario({scenario:'E06',phase:'PRE_RELEASE',catalog,routes,execute:executeE06});
+}

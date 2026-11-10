@@ -1,3 +1,4 @@
+import {registerFixedScenario} from './preflight.mjs';
 import {pathToFileURL as collectorPathToFileURL} from 'node:url';
 import {resolve as collectorResolve} from 'node:path';
 // Installed monitor qualification. Original UNKNOWN, revocation and cursor gaps
@@ -87,8 +88,8 @@ async function monitorJourney(run,browser,c){
  return{...observations,revocation,originalUnknownPreserved:true,actualInstalledBrowser:true,postReleaseAcceptance:false};
 }
 
-export async function executeE07() {
- const run=await openScenario('E07');let browser;
+export async function executeE07(callableContext) {
+ const run=await openScenario('E07',undefined,callableContext);let browser;
  try{
   assert(run.selection.principals?.monitor,'Select an actual protected monitor-only connection');browser=await chromium.launch({headless:true});
   for(const c of run.cases)await run.collect(c,async()=>{
@@ -112,3 +113,10 @@ export async function executeE07() {
  }finally{await browser?.close();run.finish();}
 }
 if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E07 installed monitor state, read-only identity and original event stream',executeE07);
+
+// Fixed source-audited branches; no fixture or provider action runs at registration.
+const E07_CALLABLE_ROUTES=Object.freeze({"E07.journey":{"handler":"monitorJourney"},"E07.variant.01":{"handler":"empty-native-monitor"},"E07.variant.02":{"handler":"unknownMonitor"},"E07.variant.03":{"handler":"replayMonitor"},"E07.variant.04":{"handler":"readonly"},"E07.MC06":{"handler":"readonly"},"E07.CV02":{"handler":"permissionTiming"},"E07.CV08":{"handler":"readonly/phase-mapping"}});
+export function registerE07CallableCases(catalog){
+ const routes=E07_CALLABLE_ROUTES;
+ return registerFixedScenario({scenario:'E07',phase:'PRE_RELEASE',catalog,routes,execute:executeE07});
+}

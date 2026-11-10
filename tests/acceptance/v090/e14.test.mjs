@@ -1,3 +1,4 @@
+import {registerFixedScenario} from './preflight.mjs';
 import {pathToFileURL as collectorPathToFileURL} from 'node:url';
 import {resolve as collectorResolve} from 'node:path';
 import test from 'node:test';
@@ -100,8 +101,8 @@ async function refresh(f,run,c){
  return{actualOldConnectionFailedAndClosed:true,installerNeverInferredHostSuccess:true,explicitFreshHostConnection:true,newEphemeralThread:true,actualSkillAndHttpReadback:true,receiptPreserved:true,actualModelTurn:false};
 }
 
-export async function executeE14() {
- const run=await openScenario('E14');let maintenance;
+export async function executeE14(callableContext) {
+ const run=await openScenario('E14',undefined,callableContext);let maintenance;
  try{
   assert.equal(process.platform,'darwin','These fixed installed user-service cases require the actual macOS launchd Host');assert(run.cases.every(c=>cases.includes(c.caseInstanceId)));maintenance=openMaintenance(run);
   for(const c of run.cases)await run.collect(c,async()=>{
@@ -113,3 +114,10 @@ export async function executeE14() {
  }finally{run.finish();}
 }
 if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E14 five fixed installed service and actual Codex maintenance cases',executeE14);
+
+// Fixed source-audited branches; no fixture or provider action runs at registration.
+const E14_CALLABLE_ROUTES=Object.freeze({"E14.journey":{"handler":"executeE14/journey"},"E14.variant.01":{"handler":"executeE14/variant.01"},"E14.variant.02":{"handler":"executeE14/variant.02"},"E14.variant.03":{"handler":"executeE14/variant.03"},"E14.variant.04":{"handler":"executeE14/variant.04"}});
+export function registerE14CallableCases(catalog){
+ const routes=E14_CALLABLE_ROUTES;
+ return registerFixedScenario({scenario:'E14',phase:'PRE_RELEASE',catalog,routes,execute:executeE14});
+}

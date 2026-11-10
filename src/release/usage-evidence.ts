@@ -83,9 +83,9 @@ export function inspectUsageAcceptanceEvidence(repositoryRoot:string,input:Usage
   const selection=parse(selectionBytes);
   requireValue(selection.scenario==='UT'&&selection.sourceCommit===input.sourceCommit&&selection.addendumDigest===addendumDigest&&selection.qualification==='FINAL_CANDIDATE'&&selection.candidateDigest===candidateDigest&&isDeepStrictEqual(selection.candidate,candidate),'Selection differs from the source, report or fixed obligations');
   requireValue(isDeepStrictEqual(array(selection.selectedCaseIds).map(string).sort(),requiredIds),'Selected UT list is incomplete, duplicated or foreign');
-  const pins=object(selection.collectorPins);exact(pins,['usage.test.mjs']);
-  const collector='tests/acceptance/v090/usage.test.mjs',committed=git(['show',input.sourceCommit+':'+collector]);
-  requireValue(sha(committed)===digest(pins['usage.test.mjs'])&&sha(read(join(repositoryRoot,collector),4194304,false))===sha(committed),'Collector differs from the qualified source');
+  const pins=object(selection.collectorPins);exact(pins,['usage.test.mjs','preflight.mjs']);
+  requireValue((selection.phase===undefined||selection.phase==='PRE_RELEASE')&&(report.phase===undefined||report.phase==='PRE_RELEASE'),'POST usage cannot qualify PRE');
+  for(const name of ['usage.test.mjs','preflight.mjs']){const collector='tests/acceptance/v090/'+name,committed=git(['show',input.sourceCommit+':'+collector]);requireValue(sha(committed)===digest(pins[name])&&sha(read(join(repositoryRoot,collector),4194304,false))===sha(committed),'Collector differs from the qualified source');}
 
   let evidenceFiles=0,evidenceBytes=0;
   const ownedLeaves=new Set<string>();

@@ -1,3 +1,4 @@
+import {registerFixedScenario} from './preflight.mjs';
 import {pathToFileURL as collectorPathToFileURL} from 'node:url';
 import {resolve as collectorResolve} from 'node:path';
 // Real installed-service/browser qualification on explicitly marked synthetic
@@ -158,7 +159,7 @@ async function interactionStates(run,browser,original){
 }
 
 export async function executeE19(t) {
- const run=await openScenario('E19');let browser,writer;
+ const run=await openScenario('E19',undefined,t);let browser,writer;
  try{
   for(const c of run.cases)await run.collect(c,async()=>{
    assert.equal(c.caseInstanceId,'E19.journey');const cfg=run.selection.performanceConfiguration;assert.equal(cfg?.allowSyntheticInventory,true);assert.equal(cfg.permissionLossTimeoutMs,60000);assert(run.selection.principals?.empty&&run.selection.principals?.['permission-loss'],'Select real empty-project and initially valid permission-loss identities; absent fixtures cannot pass E19');
@@ -211,3 +212,10 @@ export async function executeE19(t) {
  }finally{writer?.flush();await browser?.close();run.finish();}
 }
 if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E19 installed browser performance and usability with native synthetic inventory',{timeout:1800000},executeE19);
+
+// Fixed source-audited branches; no fixture or provider action runs at registration.
+const E19_CALLABLE_ROUTES=Object.freeze({"E19.journey":{"handler":"executeE19/journey"}});
+export function registerE19CallableCases(catalog){
+ const routes=E19_CALLABLE_ROUTES;
+ return registerFixedScenario({scenario:'E19',phase:'PRE_RELEASE',catalog,routes,execute:executeE19});
+}

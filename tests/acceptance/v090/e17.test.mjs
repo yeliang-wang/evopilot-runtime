@@ -1,3 +1,4 @@
+import {registerFixedScenario} from './preflight.mjs';
 import {pathToFileURL as collectorPathToFileURL} from 'node:url';
 import {resolve as collectorResolve} from 'node:path';
 // Candidate-bound native maintenance qualification. Each fixed case keeps its
@@ -9,8 +10,8 @@ import {collectCaseCampaign,caseCampaignTestOptions,openScenario} from './suppor
 import {collectInstalledBaseUpgrade,collectInitializationEntries,collectLegacyMigrationJourney} from './maintenance.mjs';
 import {openBrowser} from './browser.mjs';
 
-export async function executeE17() {
- const run=await openScenario('E17');try{
+export async function executeE17(callableContext) {
+ const run=await openScenario('E17',undefined,callableContext);try{
   if(run.selection.caseCampaign){await collectCaseCampaign(run,'E17');return;}
   for(const c of run.cases)await run.collect(c,async()=>{
    if(c.caseInstanceId==='E17.EX10')return collectInstalledBaseUpgrade(run,c,{chromium,expect,openBrowser});
@@ -21,3 +22,10 @@ export async function executeE17() {
  }finally{run.finish();}
 }
 if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E17 native installed Base upgrade and retained rollback evidence',caseCampaignTestOptions('E17'),executeE17);
+
+// Fixed source-audited branches; no fixture or provider action runs at registration.
+const E17_CALLABLE_ROUTES=Object.freeze({"E17.journey":{"handler":"collectLegacyMigrationJourney"},"E17.EX10":{"handler":"collectInstalledBaseUpgrade"},"E17.CV01":{"handler":"collectInitializationEntries"}});
+export function registerE17CallableCases(catalog){
+ const routes=E17_CALLABLE_ROUTES;
+ return registerFixedScenario({scenario:'E17',phase:'PRE_RELEASE',catalog,routes,execute:executeE17});
+}

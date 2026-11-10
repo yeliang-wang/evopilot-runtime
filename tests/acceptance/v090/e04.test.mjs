@@ -1,3 +1,4 @@
+import {registerFixedScenario} from './preflight.mjs';
 import {pathToFileURL as collectorPathToFileURL} from 'node:url';
 import {resolve as collectorResolve} from 'node:path';
 import test from 'node:test';
@@ -431,7 +432,7 @@ export async function extensionExecution(run,c,browser,openBrowser){
 }
 
 
-export async function executeE04() {
+export async function executeE04(callableContext) {
  let run,browser,base,initial,activeSource,activeData,positiveSource;
  // Register only implemented callbacks before installation reads or browser
  // startup. Prepared native evidence remains mandatory for owner obligations.
@@ -452,7 +453,7 @@ export async function executeE04() {
   'E04.EX11':c=>ownerObligations(run,c,browser),
   'E04.EX12':c=>extensionBrowserEntries(run,c,browser)
  };
- run=await openScenario('E04',{phase:'PRE_RELEASE',register:catalog=>new Map(catalog.filter(c=>Object.hasOwn(collectors,c.caseInstanceId)).map(c=>[c.caseInstanceId,()=>collectors[c.caseInstanceId](c)]))});
+ run=await openScenario('E04',{phase:'PRE_RELEASE',register:catalog=>new Map(catalog.filter(c=>Object.hasOwn(collectors,c.caseInstanceId)).map(c=>[c.caseInstanceId,()=>collectors[c.caseInstanceId](c)]))},callableContext);
  run.artifact('collector-callable-preflight.json',run.callablePreflight);
  try{
   base=await run.read('lifecycle.base.inspect');assert.equal(base.projectMutationAllowed,false);
@@ -464,3 +465,10 @@ export async function executeE04() {
  }finally{await browser?.close();run.finish();}
 }
 if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E04 exact installed Base inheritance and constrained extension cases',executeE04);
+
+// Fixed source-audited branches; no fixture or provider action runs at registration.
+const E04_CALLABLE_ROUTES=Object.freeze({"E04.journey":{"handler":"collectors[E04.journey]"},"E04.variant.01":{"handler":"collectors[E04.variant.01]"},"E04.variant.02":{"handler":"collectors[E04.variant.02]"},"E04.variant.03":{"handler":"collectors[E04.variant.03]"},"E04.variant.04":{"handler":"collectors[E04.variant.04]"},"E04.variant.05":{"handler":"collectors[E04.variant.05]"},"E04.EX01":{"handler":"collectors[E04.EX01]"},"E04.EX02":{"handler":"collectors[E04.EX02]"},"E04.EX03":{"handler":"collectors[E04.EX03]"},"E04.EX04":{"handler":"collectors[E04.EX04]"},"E04.EX05":{"handler":"collectors[E04.EX05]"},"E04.EX06":{"handler":"collectors[E04.EX06]"},"E04.EX07":{"handler":"collectors[E04.EX07]"},"E04.EX11":{"handler":"collectors[E04.EX11]"},"E04.EX12":{"handler":"collectors[E04.EX12]"}});
+export function registerE04CallableCases(catalog){
+ const routes=E04_CALLABLE_ROUTES;
+ return registerFixedScenario({scenario:'E04',phase:'PRE_RELEASE',catalog,routes,execute:executeE04});
+}

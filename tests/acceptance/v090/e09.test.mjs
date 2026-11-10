@@ -1,3 +1,4 @@
+import {registerFixedScenario} from './preflight.mjs';
 import {pathToFileURL as collectorPathToFileURL} from 'node:url';
 import {resolve as collectorResolve} from 'node:path';
 import test from 'node:test';
@@ -12,8 +13,8 @@ const versions=['2025-06-18','2025-11-25'];
 const rpc=(id,method,params)=>JSON.stringify({jsonrpc:'2.0',...(id===null?{}:{id}),method,...(params===undefined?{}:{params})});
 const refs=versions.map(version=>({version,transport:`https://modelcontextprotocol.io/specification/${version}/basic/transports`,lifecycle:`https://modelcontextprotocol.io/specification/${version}/basic/lifecycle`,cancellation:`https://modelcontextprotocol.io/specification/${version}/basic/utilities/cancellation`}));
 
-export async function executeE09() {
- const run=await openScenario('E09');let seq=0;
+export async function executeE09(callableContext) {
+ const run=await openScenario('E09',undefined,callableContext);let seq=0;
  const call=(version,method,params,options={})=>run.protocol(rpc(++seq,method,params),{headers:{'mcp-protocol-version':version,...options.headers}});
  const identity=result=>{
   assert.equal(result.serviceId,run.candidate.serviceId);assert.equal(result.version,run.candidate.version);
@@ -102,3 +103,10 @@ export async function executeE09() {
 if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E09 installed candidate Streamable HTTP contract',executeE09);
 
 async function PromiseSequential(items,fn){const out=[];for(const item of items)out.push(await fn(item));return out;}
+
+// Fixed source-audited branches; no fixture or provider action runs at registration.
+const E09_CALLABLE_ROUTES=Object.freeze({"E09.journey":{"handler":"officialClient/errors"},"E09.variant.01":{"handler":"wire/all-versions"},"E09.variant.02":{"handler":"wire/compatible"},"E09.CV07":{"handler":"completed-campaign-inventory","executionCaseIds":["E09.journey","E09.variant.01","E09.variant.02","E09.http.2025-06-18","E09.http.2025-11-25","E09.CV07"],"dependsOn":["E09.journey","E09.variant.01","E09.variant.02","E09.http.2025-06-18","E09.http.2025-11-25"]},"E09.http.2025-06-18":{"handler":"wire/2025-06-18"},"E09.http.2025-11-25":{"handler":"wire/2025-11-25"}});
+export function registerE09CallableCases(catalog){
+ const routes=E09_CALLABLE_ROUTES;
+ return registerFixedScenario({scenario:'E09',phase:'PRE_RELEASE',catalog,routes,execute:executeE09});
+}

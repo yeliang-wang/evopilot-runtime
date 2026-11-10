@@ -1,3 +1,4 @@
+import {registerFixedScenario} from './preflight.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -328,7 +329,7 @@ function inspectHostSource(receipt,cutoffBytes,contextPin,invocation){
   const meta=JSON.parse(metaRaw);requireThat(meta.type==='session_meta','MEASUREMENT_SOURCE_PROFILE_CHANGED');
   const identity={sessionId:meta.payload.id,hostVersion:meta.payload.cli_version,provider:meta.payload.model_provider??null};
   requireThat(identity.sessionId===receipt.metadata.sessionId&&identity.hostVersion===receipt.metadata.hostVersion&&identity.provider===receipt.metadata.provider,'MEASUREMENT_SOURCE_IDENTITY');
-  requireThat(identity.hostVersion==='0.166.0-alpha.5.1'&&safeName(identity.provider),'MEASUREMENT_SOURCE_PROFILE_CHANGED');
+  requireThat(identity.hostVersion===E13_APP_SERVER_PROTOCOL_VERSION&&safeName(identity.provider),'MEASUREMENT_SOURCE_PROFILE_CHANGED');
   let end=cutoffBytes;
   if(end===undefined){if(take(opened.size-1,1)[0]===10)end=opened.size;else{const tailStart=Math.max(receipt.startOffset,opened.size-65536),tail=take(tailStart,opened.size-tailStart),newline=tail.lastIndexOf(10);requireThat(newline>=0,'MEASUREMENT_SOURCE_NO_COMPLETE_CUTOFF');end=tailStart+newline+1;}}
   exact(contextPin,['offset','bytes','sha256'],'MEASUREMENT_CONTEXT_PIN');
@@ -647,7 +648,7 @@ async function originalProviderLoss(run,driver,c,plan,continuous=null){
 }
 
 export async function executeE13(t) {
- const captured=await openScenario('E13'),run={...captured};
+ const captured=await openScenario('E13',undefined,t),run={...captured};
  // A bounded request already in flight retains its original response through
  // support. If the test was aborted meanwhile, stop before issuing any next
  // read/write; never interpret cancellation as permission to replay.
@@ -740,4 +741,11 @@ async function continuousInterruptionJourney(run,driver,c,rawPlan){
    time();await e13Drain(run,observationEnd,'final-original-drain');const final=await driver.original(originalId);assert.deepEqual(final.request,originalRequest);assert.deepEqual(await run.read('runtime.receipt.read',{requestId:envelope.requestId}),receipt);assert.deepEqual(await run.read('lifecycle.agent.handoff.read',{stageRequestId:originalId}),submitted);assert.equal(final.instance.stages.implementation.attempts,1);assert.deepEqual(final.instance.requestIds,[...saved.requestIds,originalId]);assert.deepEqual((await driver.instance(extra.instance.id)).instance,extra.instance);for(const stage of ['scope','plan'])assert.deepEqual(await run.read('lifecycle.'+stage+'.evidence.read',{stageRequestId:saved.stages[stage].requestId}),preparations[stage]);assert.deepEqual((await run.read('lifecycle.definition.inspect')).active,view.active);const jobs=await pages('/actions/runs/'+remoteId+'/jobs?filter=all','jobs');assert.deepEqual(jobs.map(j=>({id:String(j.id),attempt:j.run_attempt})).sort((a,b)=>a.id.localeCompare(b.id)),finalJobs);assert.deepEqual(await inventory(),[...beforeProvider,{id:remoteId,attempt:1}].sort((a,b)=>a.id.localeCompare(b.id)));const all=await driver.events();assert.deepEqual(all.slice(0,baselineEvents.length),baselineEvents);const added=all.slice(baselineEvents.length);for(const type of ['stage-requested','agent-handoff-retained','agent-claimed','stage-advance-requested']){const found=added.filter(e=>e.type===type);assert.equal(found.length,1);assert.equal(found[0].data.stageRequestId,originalId);}const reports=added.filter(e=>e.type==='agent-reported');assert.equal(reports.filter(e=>e.data.state==='SUBMITTED').length,1);assert(reports.every(e=>e.data.stageRequestId===originalId));assert(!added.some(e=>['lifecycle-instance-created','authority-recorded','definition-activated','release-decision-recorded'].includes(e.type)));recheck();assert(Date.now()>=executionEnd);const summary={caseInstanceId:c.caseInstanceId,continuousOriginalRequest:originalId,originalReceipt:envelope.requestId,precommit,postcommit,coding,sourceReviewRef:sourceReview.ref,hostAExit,hostBExit,derivation:ctx.retained.derivation.digest,actualOriginalRunId:remoteId,actualRunCount:1,runAttempt:1,denials,finalNativePhase:final.progress.phase,finalProviderStatus:ctx.finalRemote.status,originalUnknownRetained:true,reconciliationAfterDeadline:true,elapsedMonotonicMs:performance.now()-startMono,providerInventoryGetCalls:providerGetCalls,providerLossIndependentGetCalls:ctx.independentProviderReadCalls,totalCollectorProviderGetCalls:providerGetCalls+ctx.independentProviderReadCalls,internalAdapterHttpCalls:null,helperNativeCalls:null,nativeInterruptedHttpCalls:2,collectorNativeCalls:nativeCalls,prerequisiteScopePlanRequests:saved.requestIds.length,admittedImplementationRequests:1,submittedAgentReports:reports.filter(e=>e.data.state==='SUBMITTED').length,actualOwnedHostProcesses:2,actualHostTurns:turns.length+1,runtimeStartsAgent:false,taskCost:null,sharedThreadUsage:turns.map(t=>({turnId:t.turnId,usage:t.usage})),usageUnknownNotZero:true,newAuthority:false,newSemanticDecision:false,priorCasePassImported:false};run.artifact('e13-continuous-original-journey.json',{summary,originalRequest,receipt,sourceReview,final,addedEvents:added});return summary;
   }});
  }finally{const cleanup=[];for(const host of [a,b])if(host)cleanup.push(host.close());const results=await Promise.allSettled(cleanup);for(const r of results)if(r.status==='rejected')throw r.reason;recheck();}
+}
+
+// Fixed source-audited branches; no fixture or provider action runs at registration.
+const E13_CALLABLE_ROUTES=Object.freeze({"E13.journey":{"handler":"continuousInterruptionJourney"},"E13.variant.01":{"handler":"interruption"},"E13.variant.02":{"handler":"interruption"},"E13.variant.03":{"handler":"originalOwnerLoss"},"E13.variant.04":{"handler":"originalProviderLoss"},"E13.variant.05":{"handler":"unavailableTaskMeasurement"},"E13.variant.06":{"handler":"unsupportedLimit"},"E13.variant.07":{"handler":"definitionConflict"},"E13.MC04":{"handler":"definitionConflict"},"E13.CV03":{"handler":"collectManagedBudget"},"E13.CV04":{"handler":"activationAtomicity"},"E13.CV05":{"handler":"activeCiExitReentry"}});
+export function registerE13CallableCases(catalog){
+ const routes=E13_CALLABLE_ROUTES;
+ return registerFixedScenario({scenario:'E13',phase:'PRE_RELEASE',catalog,routes,execute:executeE13});
 }

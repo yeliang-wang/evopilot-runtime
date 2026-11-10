@@ -1,28 +1,22 @@
+import {registerFixedScenario} from './preflight.mjs';
 import {pathToFileURL as collectorPathToFileURL} from 'node:url';
 import {resolve as collectorResolve} from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import path from 'node:path';
 import {chromium,expect} from '@playwright/test';
-import {openScenario,sha} from './support.mjs';
+import {openScenario,sha,collectCaseCampaign,caseCampaignTestOptions} from './support.mjs';
+import {activeCiExitReentry} from './e11.test.mjs';
 
 const stages=['scope','plan','implementation','candidate','verification','release-decision','publication','closure'];
-export async function executeE10() {
- const run=await openScenario('E10');let expert,browser,context,completed=null;
+export const E10_DIALOGUE_CASES=Object.freeze(['E10.journey','E10.variant.01','E10.MC01']);
+export async function collectE10Dialogue(run,c,{launchBrowser=()=>chromium.launch(),assertUi=expect}={}) {
+ assert(E10_DIALOGUE_CASES.includes(c.caseInstanceId));let expert,browser,context;
  try{
   const input=run.selection.expertConfiguration;assert.deepEqual(Object.keys(input).sort(),['ref','sha256']);
   assert.equal(fs.realpathSync(input.ref),input.ref);const st=fs.lstatSync(input.ref);assert(st.isFile()&&!st.isSymbolicLink()&&st.nlink===1&&st.size<=262144&&(st.mode&0o077)===0&&st.uid===process.getuid());
   const bytes=fs.readFileSync(input.ref);assert.equal(sha(bytes),input.sha256);const yaml=bytes.toString();assert(yaml.endsWith('\n')&&!yaml.endsWith('\n\n'));
   run.artifact('expert-input.json',{input,syntheticConfiguration:true,yaml,scope:'Definition configuration only; no execution, semantic asset decision or publication'});
-  for(const c of run.cases)await run.collect(c,async()=>{
-   if(['E10.variant.01','E10.MC01'].includes(c.caseInstanceId)){
-    assert(completed,'MC01 aliases require the actual full same-campaign dialogue, never a label or a prior candidate');
-    const ref=path.join(run.selection.outputRoot,'E10.journey.json'),original=fs.readFileSync(ref);assert.equal(JSON.parse(original).status,'PASS');
-    run.artifact('mc01-dialogue-binding.json',{primaryCase:'E10.journey',primaryCaseDigest:sha(original),actualConversation:completed.turns,stages:completed.stages,interpretation:'The frozen matrix includes both the named MC01 variant and its expanded alias; both bind the exact same actual eight-stage dialogue, not independent extra runs'});
-    return{actualEightStageConversation:true,sameEntryActivation:true,stageIds:stages,sourceCase:'E10.journey',sourceCaseDigest:sha(original),noDashboardRequiredForExpert:true};
-   }
-   assert.equal(c.caseInstanceId,'E10.journey','CV05 requires a separate actual active-CI/authority-drift journey; it cannot be credited by configuration reconnection');
    const before=await run.read('lifecycle.definition.inspect');assert.equal(before.active,null,'Use a fresh isolated project; never reset historical state to prepare a run');
    const statusBefore=await run.read('runtime.status');assert.equal(statusBefore.independentLlm,false);
    const preview=await run.read('lifecycle.definition.validate',{yaml});assert.equal(preview.ready,true,JSON.stringify(preview.issues));
@@ -38,13 +32,13 @@ export async function executeE10() {
    assert(configured.calls.some(c=>c.tool==='runtime_read'&&c.arguments.operation==='lifecycle.definition.inspect'));
    const after=await run.read('lifecycle.definition.inspect');assert(after.active);assert.equal(after.revision,before.revision+1);assert.equal(await run.source(after.active.id),yaml);
    const cli=(await run.configurationEntry('cli','lifecycle.definition.inspect')).result;assert.deepEqual(cli,after);
-   browser=await chromium.launch();context=await browser.newContext({viewport:{width:1440,height:1000},reducedMotion:'reduce'});const page=await context.newPage(),network=[],pending=new Set(),errors=[];
+   browser=await launchBrowser();context=await browser.newContext({viewport:{width:1440,height:1000},reducedMotion:'reduce'});const page=await context.newPage(),network=[],pending=new Set(),errors=[];
    const listener=response=>{const u=new URL(response.url());if(u.origin!==run.serviceOrigin||u.pathname!=='/api/v1/dashboard/request')return;const task=(async()=>{const body=await response.text();assert(Buffer.byteLength(body)<=262144);network.push({path:u.pathname,status:response.status(),request:response.request().postDataJSON(),rawBody:body});})();pending.add(task);task.then(()=>pending.delete(task),e=>{errors.push(e.message);pending.delete(task);});};
    page.on('response',listener);page.on('pageerror',e=>errors.push(e.message));
    try{
-    await page.goto(run.serviceOrigin+'/lifecycle');await page.getByLabel('一次性连接码').fill(await run.browserCode());await page.getByRole('button',{name:'连接项目',exact:true}).click();await expect(page.getByRole('heading',{name:'生命周期定义',exact:true})).toBeVisible();
-    await expect(page.getByLabel('Project Lifecycle YAML')).toHaveValue(yaml);
-    await expect(page.getByText('图形已与当前源码结构核对',{exact:false})).toBeVisible();
+    await page.goto(run.serviceOrigin+'/lifecycle');await page.getByLabel('一次性连接码').fill(await run.browserCode());await page.getByRole('button',{name:'连接项目',exact:true}).click();await assertUi(page.getByRole('heading',{name:'生命周期定义',exact:true})).toBeVisible();
+    await assertUi(page.getByLabel('Project Lifecycle YAML')).toHaveValue(yaml);
+    await assertUi(page.getByText('图形已与当前源码结构核对',{exact:false})).toBeVisible();
     const session=await context.request.get(run.serviceOrigin+'/api/v1/dashboard/session');assert.equal(session.status(),200);const identity=(await session.json()).result;assert.equal(identity.serviceId,run.candidate.serviceId);assert.equal(identity.workspaceId,run.selection.workspaceId);assert.equal(identity.projectId,run.selection.projectId);
     await Promise.all([...pending]);assert.deepEqual(errors,[]);assert(!network.some(n=>n.request.requestId),'Readback must not submit another definition or execution');
     run.imageArtifact(await page.screenshot({fullPage:true}));
@@ -55,10 +49,25 @@ export async function executeE10() {
    assert(refreshed.calls.some(c=>c.arguments.operation==='runtime.status'));assert(refreshed.calls.some(c=>c.arguments.operation==='lifecycle.definition.inspect'));assert(refreshed.messages.join('\n').includes(after.active.id));
    const statusAfter=await run.read('runtime.status');assert.equal(statusAfter.serviceId,statusBefore.serviceId);assert.deepEqual(await run.read('lifecycle.definition.inspect'),after);
    await expert.close();expert=null;
-   completed={stages,turns:[wizard,configured,refreshed].map(t=>({threadId:t.threadId,turnId:t.turnId,model:t.model,provider:t.provider,productCalls:t.calls.length,approvalResponses:t.approvalResponses})),active:after.active,projectRevision:after.revision};
+   const completed={caseInstanceId:c.caseInstanceId,stages,turns:[wizard,configured,refreshed].map(t=>({threadId:t.threadId,turnId:t.turnId,model:t.model,provider:t.provider,productCalls:t.calls.length,approvalResponses:t.approvalResponses})),active:after.active,projectRevision:after.revision};
    run.artifact('expert-journey-summary.json',{...completed,serviceId:run.candidate.serviceId,independentLlm:false,actualInstalledHttpMcp:true,actualCli:true,actualBrowser:true,refreshedHost:true,activeCiExitRecovery:'Separate CV05 obligation remains unexecuted',executionRequested:false});
    return{...completed,sameDefinitionAcrossExpertCliBrowser:true,serviceSurvivesHostExit:true,refreshedHostReadsCurrentState:true,noSeparateSkillInstallation:true,noRuntimeLlmAccount:true,noBusinessRunOrRelease:true};
-  });
- }finally{await context?.close();await browser?.close();await expert?.close();run.finish();}
+ }finally{await context?.close();await browser?.close();await expert?.close();}
 }
-if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E10 actual installed Expert configuration and same-service readback',executeE10);
+
+export async function collectE10Case(run,c,{dialogue=collectE10Dialogue,reentry=activeCiExitReentry}={}){
+ if(c.caseInstanceId==='E10.CV05')return reentry(run,c);
+ assert(E10_DIALOGUE_CASES.includes(c.caseInstanceId),'Unknown fixed E10 case');return dialogue(run,c);
+}
+export async function executeE10(callableContext) {
+ const run=await openScenario('E10',undefined,callableContext);try{
+  if(run.selection.caseCampaign){await collectCaseCampaign(run,'E10');return;}
+  assert.equal(run.cases.length,1,'E10 requires one independently owned case; select caseCampaign for the complete fixed scenario');
+  for(const c of run.cases)await run.collect(c,()=>collectE10Case(run,c));
+ }finally{run.finish();}
+}
+if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E10 actual installed Expert configuration and same-service readback',caseCampaignTestOptions('E10'),executeE10);
+
+// Fixed source-audited branches; each case performs its own original actions.
+const E10_CALLABLE_ROUTES=Object.freeze({"E10.journey":{"handler":"collectE10Case/collectE10Dialogue"},"E10.variant.01":{"handler":"collectE10Case/collectE10Dialogue"},"E10.MC01":{"handler":"collectE10Case/collectE10Dialogue"},"E10.CV05":{"handler":"collectE10Case/activeCiExitReentry"}});
+export function registerE10CallableCases(catalog){return registerFixedScenario({scenario:"E10",phase:"PRE_RELEASE",catalog,routes:E10_CALLABLE_ROUTES,execute:executeE10});}

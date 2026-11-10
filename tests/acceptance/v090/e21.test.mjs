@@ -1,3 +1,4 @@
+import {registerFixedScenario} from './preflight.mjs';
 // POST_RELEASE only. Actual read-only GitHub observations and anonymous public
 // downloads. No release/install command, authenticator, mock transport or retry.
 import test from 'node:test';
@@ -92,7 +93,7 @@ async function anonymousDownload(run,name,expected,signal){
  }throw Error('PUBLIC_DOWNLOAD_REDIRECT_LIMIT');
 }
 async function main(t){
- const {openScenario,repository}=await import('./support.mjs');const run=await openScenario('E21');
+ const {openScenario,repository}=await import('./support.mjs');const run=await openScenario('E21',undefined,t);
  try{assert.equal(run.selection.qualification,'FINAL_CANDIDATE');assert.equal(run.all.length,1);assert.equal(run.all[0].phase,'POST_RELEASE');assert.equal(run.all[0].caseInstanceId,'E21.journey');assert(run.selection.publicReleaseReadback,'E21 cannot execute before real publication and original release records exist');
   const fixtureBytes=pinned(run.selection.publicReleaseReadback,1048576),f=JSON.parse(fixtureBytes);exact(f,['schema','preflight','review','authorization','authentication','decisionEvidence','publication','beforePublication','githubCli']);assert.equal(f.schema,'runtime-v090-public-release-readback/v1');checkGh(f.githubCli);
   const native=await import(pathToFileURL(path.join(run.selection.installedRoot,'package/dist/release/gate.js')).href),helper=await import('../../../scripts/release-gate.mjs');const adapter=read(path.join(repository,'scripts/release-gate.mjs'),1048576,false);f.preflightInput=parsed(f.preflight,2097152);const source=f.preflightInput.candidate.sourceCommit;
@@ -127,3 +128,11 @@ async function main(t){
 if(process.argv[1]&&pathToFileURL(path.resolve(process.argv[1])).href===import.meta.url)test('E21 actual independent public Runtime release readback',{timeout:900000},main);
 
 export {main as executeE21};
+
+// Fixed source-audited branches; no fixture or provider action runs at registration.
+const E21_CALLABLE_ROUTES=Object.freeze({"E21.journey":{"handler":"executeE21 exact authorized public release"}});
+export function registerE21CallableCases(catalog){
+ const prerequisites=catalog.filter(c=>c.phase==='PRE_RELEASE').map(c=>c.caseInstanceId??c.id);assert.equal(prerequisites.length,698);
+ const routes=Object.fromEntries(Object.entries(E21_CALLABLE_ROUTES).map(([id,row])=>[id,{...row,evidenceDependsOn:prerequisites}]));
+ return registerFixedScenario({scenario:'E21',phase:'POST_RELEASE',catalog,routes,execute:main});
+}

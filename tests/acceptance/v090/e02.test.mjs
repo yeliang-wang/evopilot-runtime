@@ -1,3 +1,4 @@
+import {registerFixedScenario} from './preflight.mjs';
 import {pathToFileURL as collectorPathToFileURL} from 'node:url';
 import {resolve as collectorResolve} from 'node:path';
 import test from 'node:test';
@@ -113,8 +114,8 @@ async function proveCodingHost(run,selected,handoff,reported,claim,nodeExecutabl
   }};
  }finally{fs.closeSync(fd);}
 }
-export async function executeE02() {
- const run=await openScenario('E02');let expert,browser,ui,primaryFailure;
+export async function executeE02(callableContext) {
+ const run=await openScenario('E02',undefined,callableContext);let expert,browser,ui,primaryFailure;
  try{
   if(run.selection.caseCampaign){await collectCaseCampaign(run,'E02');return;}
  if(!run.cases.some(c=>c.caseInstanceId==='E02.journey')){for(const c of run.cases)await run.collect(c,async()=>{if(c.caseInstanceId==='E02.CV03')return collectManagedBudget(run,c,'gitlab');if(c.caseInstanceId==='E02.variant.03')return collectStageAdmission(run,c,'gitlab');if(c.caseInstanceId==='E02.CV07')return collectCoverageInventory(run,c);if(Object.hasOwn(LIFECYCLE_READBACK_CASES,c.caseInstanceId))return collectLifecycleReadback(run,c,'gitlab',proveCodingHost);throw Error('UNIMPLEMENTED_ORIGINAL_CASE: '+unsupported[c.caseInstanceId]);});return;}
@@ -357,3 +358,10 @@ export async function executeE02() {
  }
 }
 if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E02 actual installed GitLab lifecycle with external Codex and native owners',caseCampaignTestOptions('E02'),executeE02);
+
+// Fixed source-audited branches; no fixture or provider action runs at registration.
+const E02_CALLABLE_ROUTES=Object.freeze({"E02.journey":{"handler":"executeE02 original GitLab lifecycle"},"E02.variant.01":{"handler":"collectLifecycleReadback/non-rc"},"E02.variant.02":{"handler":"collectLifecycleReadback/candidate-drift"},"E02.variant.03":{"handler":"collectStageAdmission"},"E02.variant.04":{"handler":"collectLifecycleReadback/feedback-publication"},"E02.CV03":{"handler":"collectManagedBudget"},"E02.CV07":{"handler":"collectCoverageInventory"}});
+export function registerE02CallableCases(catalog){
+ const routes=E02_CALLABLE_ROUTES;
+ return registerFixedScenario({scenario:'E02',phase:'PRE_RELEASE',catalog,routes,execute:executeE02});
+}

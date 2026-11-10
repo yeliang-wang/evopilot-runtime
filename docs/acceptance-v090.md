@@ -371,11 +371,12 @@ protected exact synthetic configuration, and only its single matching activation
 request can receive the test's scoped tool permission. Runtime still performs
 live validation and activation. CLI and browser read back the same definition;
 a new Host connection must read current server state without another write.
-The `E10.variant.01` and `E10.MC01` aliases bind that original dialogue's case and
-transcript hashes. They are not additional independent runs. CV05's active-CI,
-changed-scope/permission and authority-reuse requirements remain separate and
-cannot pass merely because a configuration-only Host reconnects. Preparatory
-selections must leave CV05 explicitly unexecuted until that collector exists.
+Each of `E10.journey`, `E10.variant.01` and `E10.MC01` executes its own
+actual dialogue, activation and reconnect in an independently selected fresh
+project. CV05 separately executes the original active-CI, scope/permission drift
+and authority-reuse journey. A bounded parent campaign may select their distinct
+child configurations; no case borrows another dialogue's PASS. The shared
+`e11.test.mjs` dependency is pinned with the E10 collector.
 
 E08 separately collects installed package behavior and static prerequisites.
 Its protected `packageCompatibility` selection binds a published-owner synthetic
@@ -841,3 +842,23 @@ the project and target version through their original cutoff, including other
 instances; later work in another version must leave the closure snapshot
 unchanged. The driver executes these read-only checks before controlled replay
 mutations. Source regression fixtures earn no installed or Host acceptance.
+
+
+The fixed callable registry covers 709 explicit source routes (698 PRE and
+11 POST). Every callable binds the actual selection's case IDs and phase before
+reading installation, fixture or permission files. E09.CV07 and E22.CV08 retain
+their original six/eight-case execution groups. Evidence dependencies remain
+distinct from executing another case. LC02 registers POST source functions
+without reading POST materials or invoking any business callback. Its four
+mapping vectors use the verified installed planner and exact reviewed binding
+observations; they do not certify domain fixture readiness or grant execution.
+
+UT07/16/19/22/23/24 require independent singleton continuity selections. Their
+protected fixtures bind original ledger/cursor history, actual Host identity and
+usage when required, or the selected owned maintenance roots. UT22 preserves the
+original stopped installation before native backup restoration; it cannot treat
+an unchanged original directory as a restore. UT24 requires explicit POST, actual
+public download/current installation evidence and actual Host usage. It remains
+independent of E21, E22 and LC12. The existing usage report's additive denominator
+remains 688; the overall Runtime denominator remains 709. PRE readers reject
+POST usage, and the usage collector now pins its preflight helper.

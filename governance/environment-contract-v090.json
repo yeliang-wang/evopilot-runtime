@@ -2,7 +2,7 @@
   "schema": "runtime-v090-environment-contract/v1",
   "platform": "darwin-arm64",
   "node": "24.14.0",
-  "hostVersion": "0.166.0-alpha.5.1",
+  "hostVersion": "0.167.0-alpha.3.2",
   "actualHostHttpProtocol": "2025-06-18",
   "httpProtocolCases": [
     "2025-06-18",

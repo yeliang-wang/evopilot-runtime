@@ -1,3 +1,4 @@
+import {registerFixedScenario} from './preflight.mjs';
 // Exact installed scope refusals, original feedback continuation, and asset
 // version evolution. Only variant.04 creates one explicit synthetic execution
 // decision and runs scope/plan for its new binding. No branch publishes assets,
@@ -475,8 +476,8 @@ async function permissionTiming(run,browser,c){
  return{actualInstalledCandidate:true,actualThreeRoles:true,monitor:roleMonitor,timings,postActivation:post,oldInstanceAndPinsUnchanged:true,authFaultInjection:true,productMembershipManagement:false,newInstanceOrStageDispatches:0,newModelCalls:0,newCiRuns:0,originalOwnerReferences:initial.original.definition.semantic.assets,originalRevisionId:initial.original.pins.definitionRevisionId,ownerFeedbackBranchesNotCredited:true,l3SoftwareAcceptanceClaimed:false};
 }
 
-export async function executeE16() {
- const run=await openScenario('E16');
+export async function executeE16(callableContext) {
+ const run=await openScenario('E16',undefined,callableContext);
  try{
   if(run.selection.caseCampaign){await collectCaseCampaign(run,'E16');return;}
   assert.equal(run.all.length,7,'The frozen E16 denominator must remain unchanged');
@@ -616,4 +617,11 @@ export function deriveLaterOwnerFailure(good,failed,observed,knownScope,vd){
  // whole managed-history object. This derived row is only a negative adapter
  // probe, never claimed to be an imported/protected CI archive history record.
  const probe=structuredClone(input);probe.history=[...probe.history,entry].sort((a,b)=>Date.parse(a.executedAt)-Date.parse(b.executedAt));return probe;
+}
+
+// Fixed source-audited branches; no fixture or provider action runs at registration.
+const E16_CALLABLE_ROUTES=Object.freeze({"E16.journey":{"handler":"ownerFeedbackCase"},"E16.variant.01":{"handler":"ownerFeedbackCase"},"E16.variant.02":{"handler":"duplicateFeedback"},"E16.variant.03":{"handler":"scopeMismatch"},"E16.variant.04":{"handler":"assetVersionEvolution"},"E16.CV02":{"handler":"permissionTiming"},"E16.CV06":{"handler":"ownerFeedbackCase"}});
+export function registerE16CallableCases(catalog){
+ const routes=E16_CALLABLE_ROUTES;
+ return registerFixedScenario({scenario:'E16',phase:'PRE_RELEASE',catalog,routes,execute:executeE16});
 }

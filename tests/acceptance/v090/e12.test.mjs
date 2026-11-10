@@ -1,3 +1,4 @@
+import {registerFixedScenario} from './preflight.mjs';
 import {pathToFileURL as collectorPathToFileURL} from 'node:url';
 import {resolve as collectorResolve} from 'node:path';
 // Real installed HTTP/browser boundary observations. Synthetic negative input is
@@ -239,8 +240,8 @@ async function permissionJourney(run,browser,c){
 }
 
 
-export async function executeE12() {
- const run=await openScenario('E12');let browser;
+export async function executeE12(callableContext) {
+ const run=await openScenario('E12',undefined,callableContext);let browser;
  try{
   browser=await chromium.launch({headless:true});
   for(const c of run.cases)await run.collect(c,async()=>{
@@ -254,3 +255,10 @@ export async function executeE12() {
  }finally{await browser?.close();run.finish();}
 }
 if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E12 exact installed browser and HTTP permission/security boundaries',{timeout:240000},executeE12);
+
+// Fixed source-audited branches; no fixture or provider action runs at registration.
+const E12_CALLABLE_ROUTES=Object.freeze({"E12.journey":{"handler":"permissionJourney"},"E12.variant.01":{"handler":"samePageRepairs"},"E12.variant.02":{"handler":"monitorCase"},"E12.MC03":{"handler":"samePageRepairs"},"E12.MC06":{"handler":"monitorCase"},"E12.CV02":{"handler":"permissionTiming"},"E12.CV08":{"handler":"phaseMapping"}});
+export function registerE12CallableCases(catalog){
+ const routes=E12_CALLABLE_ROUTES;
+ return registerFixedScenario({scenario:'E12',phase:'PRE_RELEASE',catalog,routes,execute:executeE12});
+}

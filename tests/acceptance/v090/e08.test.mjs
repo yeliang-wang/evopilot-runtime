@@ -1,3 +1,4 @@
+import {registerFixedScenario} from './preflight.mjs';
 import {pathToFileURL as collectorPathToFileURL} from 'node:url';
 import {resolve as collectorResolve} from 'node:path';
 import test from 'node:test';
@@ -20,8 +21,8 @@ function privatePinned(value){
 }
 const execute=(executable,args,cwd,timeout=60000)=>new Promise(resolve=>execFile(executable,args,{cwd,timeout,maxBuffer:8388608,encoding:'utf8',env:{PATH:'/usr/local/bin:/usr/bin:/bin',HOME:process.env.HOME,LC_ALL:'C',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_OPTIONAL_LOCKS:'0'}},(error,stdout,stderr)=>resolve({executable,args,exitCode:error?error.code:0,signal:error?.signal??null,stdout,stderr})));
 
-export async function executeE08() {
- const run=await openScenario('E08'),root=path.join(run.selection.installedRoot,'package');
+export async function executeE08(callableContext) {
+ const run=await openScenario('E08',undefined,callableContext),root=path.join(run.selection.installedRoot,'package');
  const configuration=run.selection.packageCompatibility;
  assert(configuration,'Select explicit private fixture and static source/navigation inputs for E08');
  assert.deepEqual(Object.keys(configuration).sort(),['fixture','parentNavigationRoot','sourceRevision']);
@@ -115,3 +116,10 @@ export async function executeE08() {
  }finally{for(const adapter of adapters.reverse())adapter.close();run.finish();}
 }
 if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E08 independent installed Runtime and published owner compatibility',executeE08);
+
+// Fixed source-audited branches; no fixture or provider action runs at registration.
+const E08_CALLABLE_ROUTES=Object.freeze({"E08.journey":{"handler":"independent"},"E08.variant.01":{"handler":"compatible"},"E08.variant.02":{"handler":"incompatible"}});
+export function registerE08CallableCases(catalog){
+ const routes=E08_CALLABLE_ROUTES;
+ return registerFixedScenario({scenario:'E08',phase:'PRE_RELEASE',catalog,routes,execute:executeE08});
+}

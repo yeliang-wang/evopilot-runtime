@@ -1,3 +1,4 @@
+import {registerFixedScenario} from './preflight.mjs';
 import {pathToFileURL as collectorPathToFileURL} from 'node:url';
 import {resolve as collectorResolve} from 'node:path';
 // Installed revision/candidate evidence only. An unimplemented fixed contract
@@ -16,8 +17,8 @@ import {ownerObligations,collectE05Journey,collectE05MissingCandidate} from './e
 import {ownerFeedbackCase} from './e16.test.mjs';
 
 
-export async function executeE05() {
- const run=await openScenario('E05');let serial=0,browser;
+export async function executeE05(callableContext) {
+ const run=await openScenario('E05',undefined,callableContext);let serial=0,browser;
  try{
   if(run.selection.caseCampaign){await collectCaseCampaign(run,'E05');return;}
   const cfg=run.selection.revisionEvolution;let baseline;
@@ -157,3 +158,10 @@ export async function executeE05() {
  }finally{await browser?.close();run.finish();}
 }
 if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E05 installed revision isolation and actual candidate evidence',caseCampaignTestOptions('E05'),executeE05);
+
+// Fixed source-audited branches; no fixture or provider action runs at registration.
+const E05_CALLABLE_ROUTES=Object.freeze({"E05.journey":{"handler":"collectE05Journey"},"E05.variant.01":{"handler":"nonRc"},"E05.variant.02":{"handler":"collectE05MissingCandidate"},"E05.variant.03":{"handler":"latest"},"E05.variant.04":{"handler":"reviseAndPin"},"E05.EX09":{"handler":"edits"},"E05.EX10":{"handler":"collectInstalledBaseUpgrade"},"E05.EX11":{"handler":"ownerObligations"},"E05.MC05":{"handler":"reviseAndPin"},"E05.CV06":{"handler":"ownerFeedbackCase"}});
+export function registerE05CallableCases(catalog){
+ const routes=E05_CALLABLE_ROUTES;
+ return registerFixedScenario({scenario:'E05',phase:'PRE_RELEASE',catalog,routes,execute:executeE05});
+}

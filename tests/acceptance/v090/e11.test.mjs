@@ -1,3 +1,4 @@
+import {registerFixedScenario} from './preflight.mjs';
 // Two actual ephemeral Codex chats, one installed service, two native project
 // scopes. Synthetic fixture decisions are never human or production authority.
 import test from 'node:test';
@@ -371,10 +372,17 @@ export async function activeCiExitReentry(run,c){
 }
 
 
-export async function executeE11() {
- const run=await openScenario('E11');try{assert.equal(run.all.length,2);for(const c of run.cases)await run.collect(c,async()=>{
+export async function executeE11(callableContext) {
+ const run=await openScenario('E11',undefined,callableContext);try{assert.equal(run.all.length,2);for(const c of run.cases)await run.collect(c,async()=>{
   if(c.caseInstanceId==='E11.journey')return journey(run,c);
   assert.equal(c.caseInstanceId,'E11.CV05');return activeCiExitReentry(run,c);
  });}finally{run.finish();}
 }
 if(process.argv[1] && import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)test('E11 actual two-client two-project Runtime isolation',executeE11);
+
+// Fixed source-audited branches; no fixture or provider action runs at registration.
+const E11_CALLABLE_ROUTES=Object.freeze({"E11.journey":{"handler":"journey"},"E11.CV05":{"handler":"activeCiExitReentry"}});
+export function registerE11CallableCases(catalog){
+ const routes=E11_CALLABLE_ROUTES;
+ return registerFixedScenario({scenario:'E11',phase:'PRE_RELEASE',catalog,routes,execute:executeE11});
+}

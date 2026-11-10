@@ -1,3 +1,4 @@
+import {registerFixedScenario} from './preflight.mjs';
 import {pathToFileURL as collectorPathToFileURL} from 'node:url';
 import {resolve as collectorResolve} from 'node:path';
 // Final-candidate qualification only. All positive inputs are original actual
@@ -155,7 +156,7 @@ function negativeInventory(run,f,audit,caseInstanceId){
 }
 
 export async function executeE20(t) {
- const run=await openScenario('E20');let f;
+ const run=await openScenario('E20',undefined,t);let f;
  try{
   assert.equal(run.all.length,3);f=fixture(run);
   const load=file=>import(pathToFileURL(path.join(run.selection.installedRoot,'package/dist/release',file)).href),native=await load('evidence.js'),candidateApi=await load('gate.js'),usageApi=await load('usage-evidence.js'),ciApi=await load('source-ci.js');
@@ -190,3 +191,11 @@ export async function executeE20(t) {
  }finally{run.finish();}
 }
 if(process.argv[1]&&collectorPathToFileURL(collectorResolve(process.argv[1])).href===import.meta.url)test('E20 exact source, original CI assets and frozen prerequisite qualification',{timeout:900000},executeE20);
+
+// Fixed source-audited branches; no fixture or provider action runs at registration.
+const E20_CALLABLE_ROUTES=Object.freeze({"E20.journey":{"handler":"prerequisites/checkDocuments/checkExtensions/negativeInventory"},"E20.EX12":{"handler":"prerequisites/checkExtensions"},"E20.CV07":{"handler":"prerequisites/negativeInventory/fixed-inventory"}});
+export function registerE20CallableCases(catalog){
+ const prerequisites=catalog.filter(c=>c.phase==='PRE_RELEASE'&&(c.scenario!=='E20'&&/^E\d\d$/.test(c.scenario??'')||c.scenario==='UT')).map(c=>c.caseInstanceId??c.id);assert.equal(prerequisites.length,675);
+ const routes=Object.fromEntries(Object.entries(E20_CALLABLE_ROUTES).map(([id,row])=>[id,{...row,evidenceDependsOn:prerequisites}]));
+ return registerFixedScenario({scenario:'E20',phase:'PRE_RELEASE',catalog,routes,execute:executeE20});
+}

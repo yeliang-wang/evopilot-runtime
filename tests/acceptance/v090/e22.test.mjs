@@ -1,3 +1,4 @@
+import {registerFixedScenario} from './preflight.mjs';
 // POST_RELEASE only. Reads the actual public delivery and current installation;
 // configuration writes are confined to explicit fresh synthetic project scopes.
 // This collector never installs/registers, records decisions, creates instances,
@@ -276,8 +277,8 @@ async function preservedProjects(run,f){
  };const baseline=await capture();return async()=>assert.deepEqual(await capture(),baseline,'An original native project changed during isolated POST_RELEASE qualification');
 }
 
-async function executeE22(){
- await loadE22Dependencies();const run=await openScenario('E22');let browser;const rechecks=[];
+async function executeE22(callableContext){
+ await loadE22Dependencies();const run=await openScenario('E22',undefined,callableContext);let browser;const rechecks=[];
  try{
   assert(run.selection.currentInstallation,'E22 requires a protected actual published/current installation fixture');const f=parsed(run.selection.currentInstallation);keys(f,['schema','candidateDigest','serviceId','workspaceId','installedRoot','e21','publicDownloads','installation','currentChat','cases','preservation','preservedProjects','ownerEntries','allowServiceRestart']);assert.equal(f.schema,'runtime-e22-current-installation/v1');assert.equal(f.candidateDigest,run.candidateDigest);assert.equal(f.serviceId,run.candidate.serviceId);assert.equal(f.workspaceId,run.selection.workspaceId);assert.equal(f.installedRoot,run.selection.installedRoot);assert.equal(f.allowServiceRestart,true);keys(f.e21,['report','selection']);keys(f.installation,['request','result']);keys(f.ownerEntries,['ontology','harness']);checkCaseSelection(f,run.cases.map(c=>c.caseInstanceId));
   const release=e21Evidence(run,f),installedAfter=await installationProof(run,f);assert.equal(fs.readFileSync(f.publicDownloads['source-revision.txt'].ref,'utf8').trim(),release.sourceCommit);rechecks.push(originalData(run,f));const nativePreservation=await preservedProjects(run,f);const ownerBaseline=await ownerEntries(run,f);browser=await chromium.launch({headless:true});
@@ -444,3 +445,10 @@ async function openLc11Client(run,project,client,connections,deadline){
 }
 
 export {executeE22};
+
+// Fixed source-audited branches; no fixture or provider action runs at registration.
+const E22_CALLABLE_ROUTES=Object.freeze({"E22.journey":{"handler":"executeE22 current installation journey","evidenceDependsOn":["E21.journey"]},"E22.variant.01":{"handler":"monitorClosure","evidenceDependsOn":["E21.journey"]},"E22.variant.02":{"handler":"expertClosure","evidenceDependsOn":["E21.journey"]},"E22.variant.03":{"handler":"browserClosure","evidenceDependsOn":["E21.journey"]},"E22.MC01":{"handler":"expertClosure","evidenceDependsOn":["E21.journey"]},"E22.MC02":{"handler":"browserClosure","evidenceDependsOn":["E21.journey"]},"E22.MC06":{"handler":"monitorClosure","evidenceDependsOn":["E21.journey"]},"E22.CV08":{"handler":"expertClosure/browserClosure/monitorClosure/closureMatrix","executionCaseIds":["E22.journey","E22.variant.01","E22.variant.02","E22.variant.03","E22.MC01","E22.MC02","E22.MC06","E22.CV08"],"dependsOn":["E22.journey","E22.variant.01","E22.variant.02","E22.variant.03","E22.MC01","E22.MC02","E22.MC06"],"evidenceDependsOn":["E21.journey"]}});
+export function registerE22CallableCases(catalog){
+ const routes=E22_CALLABLE_ROUTES;
+ return registerFixedScenario({scenario:'E22',phase:'POST_RELEASE',catalog,routes,execute:executeE22});
+}
