@@ -621,14 +621,21 @@ export function validateCoverageProviderBindings(providers,scenario,records){
 }
 // HTTP, JSON-only MCP and CLI retain different original wire shapes. The
 // existing CLI envelope lacks the wrapper's caseInstanceId; never invent it.
-export function coverageOriginalInstance(request,response,item,caseId,candidate){
+export function coverageOriginalInstance(request,response,item,caseId,candidate,selection){
  assert.equal(response.caseInstanceId,caseId);
  if(Object.hasOwn(request,'caseInstanceId'))assert.equal(request.caseInstanceId,caseId);
  if(Object.hasOwn(item,'responseDigest')){assert.equal(typeof response.rawBody,'string');assert.equal(sha(response.rawBody),item.responseDigest);}
  if(Object.hasOwn(response,'body'))assert.deepEqual(JSON.parse(response.rawBody),response.body);
  if(request.envelope?.operation!=='lifecycle.instance.inspect'||response.status!==200)return null;
- assert.equal(request.caseInstanceId,caseId);assert.equal(request.envelope.projectId,candidate.projectId);
- const instance=response.body.result.instance;assert.equal(instance.id,request.envelope.input.instanceId);assert.equal(instance.pins.projectId,candidate.projectId);return instance.id;
+ assert.equal(request.caseInstanceId,caseId);const projectId=request.envelope.projectId,instance=response.body.result.instance;assert.equal(instance.id,request.envelope.input.instanceId);assert.equal(instance.pins.projectId,projectId);
+ if(projectId!==candidate.projectId){
+  // EX01 keeps legitimate second-project originals in the same case. Their
+  // declared native read principal is checked, but they cannot supply the
+  // default candidate project's provider execution identity. All raw bytes
+  // remain retained by the caller before this classification.
+  assert.equal(caseId,'E03.EX01','CV07_FOREIGN_INSTANCE_CASE');assert.deepEqual(selection?.selectedCaseIds,[caseId]);assert.deepEqual(selection?.candidate,candidate);assert.deepEqual(Object.keys(selection?.principalConnections??{}),['beta'],'CV07_UNDECLARED_NAMED_PROJECT');const declared=selection.principalConnections.beta;assert.equal(declared.projectId,projectId,'CV07_UNDECLARED_NAMED_PROJECT');assert.equal(declared.principalId,request.principalId,'CV07_WRONG_NAMED_PRINCIPAL');for(const permission of ['read','draft.write','definition.activate'])assert(declared.expectedPermissions.includes(permission),'CV07_EX01_PRINCIPAL_PERMISSIONS');return null;
+ }
+ return instance.id;
 }
 async function coverageTarget(run,p,original,deadline,recheck){
  const {value:input}=readbackPrivate(p.selection);assert.equal(input.schema,'runtime-v090-acceptance-selection/v1');assert.equal(input.expectedManifestDigest,run.candidate.manifestDigest);assert.equal(input.qualification,run.selection.qualification);assert.deepEqual(input.caseIds,[p.reportCaseId]);assert(!input.caseCampaign);
@@ -668,7 +675,7 @@ export async function collectCoverageInventory(run,c){
   retain('original-singleton-report',entry.report.ref,report.bytes);retain('original-singleton-selection',selectionRef,selection.bytes);retain('original-singleton-case',caseRef,caseRecord.bytes);
   const seen=new Map(),instanceIds=new Set();let childBytes=0;
   const leaf=(name,digest)=>{assert(typeof name==='string'&&/^[A-Za-z0-9_.-]+$/.test(name)&&!['.','..','REPORT.json','selection.json',entry.caseInstanceId+'.json'].includes(name));assert(/^[a-f0-9]{64}$/.test(digest));if(seen.has(name)){assert.equal(seen.get(name).digest,digest);return seen.get(name).bytes;}const ref=path.join(root,name),st=fs.lstatSync(ref);assert.equal(fs.realpathSync(ref),ref);assert(st.isFile()&&!st.isSymbolicLink()&&st.nlink===1&&st.uid===process.getuid()&&(st.mode&0o077)===0&&st.size<=16777216);const bytes=fs.readFileSync(ref);assert.equal(sha(bytes),digest);childBytes+=bytes.length;assert(childBytes<=268435456&&++leaves<=30000,'CV07 original raw evidence exceeds fixed bounds');seen.set(name,{digest,bytes});retain('original-raw-evidence',ref,bytes);return bytes;};
-  const evidence=(item,id)=>{assert.equal(item.caseInstanceId,id);if(Object.hasOwn(item,'artifact')){assert(!Object.hasOwn(item,'request')&&!Object.hasOwn(item,'response'));leaf(item.artifact,item.fileDigest);}else{const request=JSON.parse(leaf(item.request,item.requestDigest)),response=JSON.parse(leaf(item.response,item.fileDigest));const instanceId=coverageOriginalInstance(request,response,item,id,report.value.candidate);if(instanceId)instanceIds.add(instanceId);}};
+  const evidence=(item,id)=>{assert.equal(item.caseInstanceId,id);if(Object.hasOwn(item,'artifact')){assert(!Object.hasOwn(item,'request')&&!Object.hasOwn(item,'response'));leaf(item.artifact,item.fileDigest);}else{const request=JSON.parse(leaf(item.request,item.requestDigest)),response=JSON.parse(leaf(item.response,item.fileDigest));const instanceId=coverageOriginalInstance(request,response,item,id,report.value.candidate,selection.value);if(instanceId)instanceIds.add(instanceId);}};
   assert(Array.isArray(report.value.setupEvidence)&&report.value.results.length===1);for(const item of report.value.setupEvidence)evidence(item,null);for(const item of caseRecord.value.evidence)evidence(item,entry.caseInstanceId);
   originals.set(entry.caseInstanceId,{...record,reportRef:entry.report.ref,instanceIds});
  }
