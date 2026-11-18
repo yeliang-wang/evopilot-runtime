@@ -548,7 +548,10 @@ test('the original stage deadline releases a reservation before a late binding r
   try{
     await activate(f);await create(f,await grant(f));const start=await execWrite(f,'lifecycle.stage.request',{instanceId:'one',stageId:'scope'}),id=start.result.result.stageRequestId;
     await until(()=>stageState(f,id),v=>v.result.progress.phase==='CI_RUNNING');await until(()=>request(f,'runtime.status'),v=>v.result.observationWorker.inFlight===0);const original=(await stageState(f,id)).result.request;
-    pause=true;const pending=execWrite(f,'lifecycle.stage.advance',{stageRequestId:id},'executor',{requestId:'deadline-reservation'});await inPermit;
+    pause=true;const pending=execWrite(f,'lifecycle.stage.advance',{stageRequestId:id},'executor',{requestId:'deadline-reservation'});let permitTimer;
+    // A delayed test runner can exhaust the original deadline before permit is
+    // entered. Surface that response and clean up instead of waiting forever.
+    try{await Promise.race([inPermit,pending.then(result=>assert.fail('Continuation completed before the permission barrier: '+JSON.stringify({status:result.status,code:result.error?.code}))),new Promise((_,fail)=>{permitTimer=setTimeout(()=>fail(Error('Original continuation permission barrier did not begin')),5000);})]);}finally{clearTimeout(permitTimer);}
     const result=await pending;assert.equal(result.status,409);assert.equal(result.error.code,'OBSERVATION_INTERRUPTED');assert(Date.now()>=Date.parse(original.deadlineAt));
     pause=false;release();await new Promise(resolve=>setTimeout(resolve,25));
     assert.equal((await request(f,'runtime.receipt.read',{requestId:'deadline-reservation'},'executor')).status,404);assert.deepEqual((await stageState(f,id)).result.request,original);assert.equal(advances,0);assert.equal(state.dispatches,1);
