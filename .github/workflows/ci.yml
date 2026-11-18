@@ -45,7 +45,7 @@ jobs:
   source:
     # The frozen v0.9 environment is darwin-arm64. Source regression includes
     # actual launchd, Seatbelt and HFS image recovery, not Linux substitutes.
-    if: ${{ inputs.runtime_request_id == '' || inputs.runtime_request_id == 'SOURCE_CHECKS' || github.repository == 'yeliang-wang/evopilot-runtime-v090-e2e' }}
+    if: ${{ inputs.runtime_request_id == '' || inputs.runtime_request_id == 'SOURCE_CHECKS' || github.repository == vars.RUNTIME_LC20_REPOSITORY }}
     runs-on: "${{ github.event_name == 'workflow_dispatch' && inputs.runtime_request_id != '' && inputs.runtime_request_id != 'SOURCE_CHECKS' && 'runtime-lc20-isolated' || 'macos-15' }}"
     env:
       RUNTIME_LC20_SELECTION_ROOT: ${{ vars.RUNTIME_LC20_SELECTION_ROOT }}
@@ -103,6 +103,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: '"$RUNTIME_LC20_NODE" tests/acceptance/v090/correction.test.mjs --lc20-ci-producer resolve'
+      - name: Check the original implementation source
+        if: ${{ steps.lc20.outputs.mode == 'IMPLEMENTATION' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: '"$RUNTIME_LC20_NODE" tests/acceptance/v090/correction.test.mjs --lc20-ci-producer IMPLEMENTATION'
       - name: Execute the original complete LC20 case
         if: ${{ steps.lc20.outputs.mode == 'EXECUTE' }}
         env:
