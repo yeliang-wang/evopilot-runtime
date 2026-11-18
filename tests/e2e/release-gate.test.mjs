@@ -77,13 +77,40 @@ test('CI archive download uses the GitHub API media type while verifying the ori
  const github=async(method,endpoint,options)=>{
   if(endpoint.endsWith('/zip')){
    downloads++;assert.equal(options.accept,'application/vnd.github+json');
-   assert.equal(options.maxBytes,128*1024*1024);
+   assert.equal(options.maxBytes,128*1024*1024);assert.equal(options.timeoutMs,1200000);
   }
   return f.github(method,endpoint,options);
  };
  const result=await prepareCiDistribution(f.input,{github});assert.equal(downloads,1);
  assert.equal(result.artifactDigest,f.input.artifactDigest);
  assert.equal(result.status,'PACKAGE_STAGED_ONLY');assert.equal(result.releaseAuthorized,false);
+});
+test('long transfer timeout is restricted to the owning read-only artifact ZIP endpoint',()=>{
+ for(const [method,endpoint,timeoutMs]of [
+  ['POST','repos/'+repository+'/releases',1200000],
+  ['PATCH','repos/'+repository+'/releases/1',1200000],
+  ['GET','repos/'+repository+'/actions/runs/12',1200000],
+  ['GET','repos/'+repository+'/actions/artifacts/23/zip',1200001],
+  ['GET','repos/'+repository+'/actions/artifacts/23/zip',0],
+  ['GET','repos/'+repository+'/actions/artifacts/23/zip',Infinity]
+ ])assert.throws(()=>gitHubRequest(method,endpoint,{timeoutMs}),/GITHUB_TIMEOUT_SCOPE/);
+});
+test('every preparation request inherits the same absolute remaining budget',async t=>{
+ const f=fixture(t),deadlineAt=Date.now()+10000,seen=[];
+ const github=async(method,endpoint,options)=>{seen.push(options.timeoutMs);assert(Number.isSafeInteger(options.timeoutMs)&&options.timeoutMs>0&&options.timeoutMs<=10000);return f.github(method,endpoint);};
+ const result=await prepareCiDistribution(f.input,{github,deadlineAt});assert.equal(result.status,'PACKAGE_STAGED_ONLY');assert.equal(seen.length,6);assert(seen.every((n,i)=>i===0||n<=seen[i-1]));
+});
+test('blocking transport cannot renew the preparation deadline or admit a later request',async t=>{
+ const f=fixture(t),deadlineAt=Date.now()+300;let calls=0;
+ const github=async(method,endpoint,options)=>{calls++;assert(options.timeoutMs<=300);const end=Date.now()+400;while(Date.now()<end){}return f.github(method,endpoint);};
+ await assert.rejects(()=>prepareCiDistribution(f.input,{github,deadlineAt}),/PREPARATION_TIMEOUT/);assert.equal(calls,1);
+ assert.equal(fs.existsSync(join(f.input.outputRoot,'candidate-input.json')),false);assert.equal(fs.existsSync(join(f.input.outputRoot,'preparation.json')),false);
+ assert.equal(JSON.parse(fs.readFileSync(join(f.input.outputRoot,'failure.json'))).automaticRetry,false);
+});
+test('expired or enlarged preparation bounds fail before invoking any transport',async t=>{
+ const f=fixture(t);let calls=0;const github=async()=>{calls++;throw Error('must not run');};
+ for(const deadlineAt of [Date.now()-1,Date.now()+1600000,Infinity])await assert.rejects(()=>prepareCiDistribution(f.input,{github,deadlineAt}),/PREPARATION_DEADLINE/);
+ assert.equal(calls,0);assert.equal(fs.existsSync(f.input.outputRoot),false);
 });
 test('foreign/failed CI and ambiguous or changed artifacts stop preparation and retain safe failure evidence',async t=>{
  for(const mutate of [f=>f.run.repository={id:1,full_name:'foreign/repo'},f=>f.run.conclusion='failure',f=>f.artifact.digest='sha256:'+'0'.repeat(64),f=>f.values.get('repos/'+repository+'/actions/runs/12/artifacts?per_page=100').total_count=2]){const f=fixture(t);mutate(f);await assert.rejects(f.prepare);const failure=JSON.parse(fs.readFileSync(join(f.input.outputRoot,'failure.json')));assert.equal(failure.automaticRetry,false);assert.equal(failure.evidenceRetained,true);assert(!fs.existsSync(join(f.input.outputRoot,'candidate-input.json')));}
