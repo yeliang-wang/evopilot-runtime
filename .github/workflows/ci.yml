@@ -1,51 +1,123 @@
 name: Source checks
+run-name: evopilot:${{ inputs.runtime_request_id }}:${{ inputs.runtime_input_digest }}
 on:
   workflow_dispatch:
+    inputs:
+      runtime_request_id:
+        type: string
+        required: true
+        default: SOURCE_CHECKS
+      runtime_input_digest:
+        type: string
+        required: true
+        default: none
+      runtime_source_commit:
+        type: string
+        required: true
+        default: none
+      runtime_stage:
+        type: string
+        required: true
+        default: none
+      runtime_candidate_digest:
+        type: string
+        required: true
+        default: none
+      runtime_workflow_digest:
+        type: string
+        required: true
+        default: none
+      runtime_binding_digest:
+        type: string
+        required: true
+        default: none
+      runtime_candidate_input:
+        type: string
+        required: true
+        default: none
   pull_request:
   push:
     branches: [main]
 permissions:
   contents: read
+  actions: read
 jobs:
   source:
     # The frozen v0.9 environment is darwin-arm64. Source regression includes
     # actual launchd, Seatbelt and HFS image recovery, not Linux substitutes.
-    runs-on: macos-15
+    if: ${{ inputs.runtime_request_id == '' || inputs.runtime_request_id == 'SOURCE_CHECKS' || github.repository == 'yeliang-wang/evopilot-runtime-v090-e2e' }}
+    runs-on: "${{ github.event_name == 'workflow_dispatch' && inputs.runtime_request_id != '' && inputs.runtime_request_id != 'SOURCE_CHECKS' && 'runtime-lc20-isolated' || 'macos-15' }}"
+    env:
+      RUNTIME_LC20_SELECTION_ROOT: ${{ vars.RUNTIME_LC20_SELECTION_ROOT }}
+      RUNTIME_LC20_NODE: ${{ vars.RUNTIME_LC20_NODE }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.runtime_request_id == '' || inputs.runtime_request_id == 'SOURCE_CHECKS' }}
         with:
           node-version: '24.14.0'
       - name: Verify the declared source-test platform
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.runtime_request_id == '' || inputs.runtime_request_id == 'SOURCE_CHECKS' }}
         run: node --input-type=module -e 'import assert from "node:assert/strict"; assert.equal(process.platform, "darwin"); assert.equal(process.arch, "arm64"); assert.equal(process.version, "v24.14.0");'
       - run: npm ci --ignore-scripts
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.runtime_request_id == '' || inputs.runtime_request_id == 'SOURCE_CHECKS' }}
       - id: build
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.runtime_request_id == '' || inputs.runtime_request_id == 'SOURCE_CHECKS' }}
         run: npm run build
       # A failed independent check remains a failed job, while other checks can
       # still report useful evidence. Candidate packaging requires overall success.
       - name: Check scoped correction code
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.runtime_request_id == '' || inputs.runtime_request_id == 'SOURCE_CHECKS') && !cancelled() && steps.build.outcome == 'success' }}
         run: npm run lint:correction
       - name: Validate workflows with pinned actionlint
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.runtime_request_id == '' || inputs.runtime_request_id == 'SOURCE_CHECKS') && !cancelled() && steps.build.outcome == 'success' }}
         run: npm run lint:workflows
       - name: Verify source contracts
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.runtime_request_id == '' || inputs.runtime_request_id == 'SOURCE_CHECKS') && !cancelled() && steps.build.outcome == 'success' }}
         run: npm run check
       - name: Run source regressions including generated properties
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.runtime_request_id == '' || inputs.runtime_request_id == 'SOURCE_CHECKS') && !cancelled() && steps.build.outcome == 'success' }}
         run: npm test
 
       - name: Pack exact candidate (not a Release)
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.runtime_request_id == '' || inputs.runtime_request_id == 'SOURCE_CHECKS' }}
         shell: bash
         run: |
           set -euo pipefail
           package_dir="$RUNNER_TEMP/evopilot-package"
           node scripts/package-distribution.mjs "$package_dir"
       - name: Retain independently built candidate package
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.runtime_request_id == '' || inputs.runtime_request_id == 'SOURCE_CHECKS' }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ github.event.repository.name }}-${{ github.sha }}-package
           path: ${{ runner.temp }}/evopilot-package/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Resolve the original protected LC20 producer
+        id: lc20
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.runtime_request_id != '' && inputs.runtime_request_id != 'SOURCE_CHECKS' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: '"$RUNTIME_LC20_NODE" tests/acceptance/v090/correction.test.mjs --lc20-ci-producer resolve'
+      - name: Execute the original complete LC20 case
+        if: ${{ steps.lc20.outputs.mode == 'EXECUTE' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: '"$RUNTIME_LC20_NODE" tests/acceptance/v090/correction.test.mjs --lc20-ci-producer EXECUTE'
+      - name: Observe the original LC20 input inventory
+        if: ${{ steps.lc20.outputs.mode == 'INVENTORY' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: '"$RUNTIME_LC20_NODE" tests/acceptance/v090/correction.test.mjs --lc20-ci-producer INVENTORY'
+      - name: Retain the exact original Runtime CI archive
+        if: ${{ success() && steps.lc20.outputs.mode != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-ci
+          path: ${{ steps.lc20.outputs.artifact_root }}/
           if-no-files-found: error
           retention-days: 14

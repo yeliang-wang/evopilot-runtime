@@ -68,7 +68,11 @@ export function githubClient(configuration:PlatformRegistration,credentials:Plat
       if(file.sha!==blob)reject('WORKFLOW_CONTENT_CHANGED','Workflow blob integrity check failed',409);
       const document=parseDocument(bytes.toString('utf8'),{uniqueKeys:true});if(document.errors.length)reject('WORKFLOW_NOT_READY','Workflow YAML could not be inspected',409);
       const jobs=record(record(document.toJS({maxAliasCount:32})).jobs);
-      const matches=Object.values(jobs).some(raw=>{const job=record(raw),labels=job['runs-on'];return labels===binding.runner||Array.isArray(labels)&&labels.includes(binding.runner);});
+      // Native dispatch always supplies a nonempty original runtime_request_id.
+      // Recognize this one committed producer branch; never evaluate workflow
+      // expressions or accept its inactive hosted runner as native readiness.
+      const lc20RunnerExpression="${{ github.event_name == 'workflow_dispatch' && inputs.runtime_request_id != '' && inputs.runtime_request_id != 'SOURCE_CHECKS' && 'runtime-lc20-isolated' || 'macos-15' }}";
+      const matches=Object.values(jobs).some(raw=>{const job=record(raw),labels=job['runs-on'];return labels===lc20RunnerExpression?binding.runner==='runtime-lc20-isolated':labels===binding.runner||Array.isArray(labels)&&labels.includes(binding.runner);});
       if(!matches)reject('RUNNER_NOT_READY','Registered runner label is not present in a concrete workflow job',409);
       // Hosted capacity is established by an actual job, not by configuration.
       return{observation:readinessResult(binding,commit,path,sha256(bytes),{id:'label:'+binding.runner,online:null}),branchHeadCommit};
