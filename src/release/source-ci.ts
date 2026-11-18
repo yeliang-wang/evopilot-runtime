@@ -3,6 +3,12 @@ import {isDeepStrictEqual} from 'node:util';
 import {readArtifactArchive} from '../adapters/artifacts.js';
 
 const repository='yeliang-wang/evopilot-runtime',repositoryId=1416265295;
+const sourceSteps=['Verify the declared source-test platform','Run npm ci --ignore-scripts','Run npm run build'];
+const packageSteps=['Pack exact candidate (not a Release)','Retain independently built candidate package'];
+const legacyChecks=['Run npm run check','Run npm test'];
+const currentChecks=['Check scoped correction code','Validate workflows with pinned actionlint','Verify source contracts','Run source regressions including generated properties'];
+// These are the only inapplicable steps in the current workflow's source mode.
+const lc20Steps=['Resolve the original protected LC20 producer','Check the original implementation source','Execute the original complete LC20 case','Observe the original LC20 input inventory','Retain the exact original Runtime CI archive'];
 const names=['SHA256SUMS','distribution-manifest.json','evopilot-next-runtime-0.9.0.tgz','evopilot-runtime-0.9.0-darwin-arm64.tar.gz','runtime-dependency-lock.json','source-revision.txt'].sort();
 const sha=(b:Buffer|string):string=>createHash('sha256').update(b).digest('hex');
 const requireValue=(v:unknown,message:string):void=>{if(!v)throw Error('SOURCE_CI_EVIDENCE: '+message);};
@@ -35,8 +41,15 @@ export async function inspectSourceCiRecords(input:SourceCiRecords,signal:AbortS
  const job=list[0];positive(job.id);
  requireValue(job.name==='source'&&job.run_id===run.id&&job.run_attempt===run.run_attempt&&job.head_sha===input.sourceCommit&&job.status==='completed'&&job.conclusion==='success','Job identity/attempt differs from source CI');
  requireValue(isDeepStrictEqual(job.labels,['macos-15']),'Source job did not use the frozen macOS runner');
- const steps=array(job.steps).map(object),required=['Verify the declared source-test platform','Run npm ci --ignore-scripts','Run npm run build','Run npm run check','Run npm test','Pack exact candidate (not a Release)','Retain independently built candidate package'];
- requireValue(steps.length>0&&steps.every(s=>s.status==='completed'&&s.conclusion==='success'),'Skipped, failed or incomplete CI step');
+ const steps=array(job.steps).map(object),current=String(run.display_title).startsWith('evopilot:')||steps.some(s=>[...currentChecks,...lc20Steps].includes(String(s.name)));
+ // Historical all-success records retain their original required names. Current
+ // dispatches identify source mode; push/PR have no dispatch inputs, so the
+ // unconditional native run-name resolves exactly to evopilot::.
+ if(current)
+  requireValue(typeof run.display_title==='string'&&(run.event==='workflow_dispatch'?/^evopilot:(?:SOURCE_CHECKS)?:[^\r\n]*$/.test(run.display_title):run.display_title==='evopilot::'),'Run is not in Source checks mode');
+ requireValue(!current||!steps.some(s=>legacyChecks.includes(String(s.name))),'Mixed historical and current CI checks');
+ const required=[...sourceSteps,...(current?currentChecks:legacyChecks),...packageSteps,...(current?lc20Steps:[])];
+ requireValue(steps.length>0&&steps.every(s=>s.status==='completed'&&s.conclusion===(current&&lc20Steps.includes(String(s.name))?'skipped':'success')),'Skipped, failed or incomplete CI step');
  const positions=required.map(name=>{const found=steps.filter(s=>s.name===name);requireValue(found.length===1,'Missing or duplicate required CI step');return steps.indexOf(found[0]);});
  requireValue(positions.every((n,i)=>i===0||n>positions[i-1]),'Required CI step order changed');
  const artifact=object(input.artifact),workflow=object(artifact.workflow_run);positive(artifact.id);
@@ -46,6 +59,12 @@ export async function inspectSourceCiRecords(input:SourceCiRecords,signal:AbortS
  requireValue(Buffer.isBuffer(input.artifactZip)&&artifact.size_in_bytes===input.artifactZip.length&&artifact.digest==='sha256:'+input.artifactDigest&&sha(input.artifactZip)===input.artifactDigest,'Downloaded CI archive differs from original metadata');
  requireValue(typeof input.jobLog==='string'&&Buffer.byteLength(input.jobLog)<=16777216,'Missing or excessive original job log');
  const log=input.jobLog.replace(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z /gm,'').replaceAll('\r\n','\n');
+ if(current){
+  // Provider step names are descriptive; the original log retains command names.
+  const commands=['npm ci --ignore-scripts','npm run build','npm run lint:correction','npm run lint:workflows','npm run check','npm test'];
+  const offsets=commands.map(command=>{const marker='##[group]Run '+command+'\n',at=log.indexOf(marker);requireValue(at>=0&&log.indexOf(marker,at+marker.length)===-1,'Missing or ambiguous source command log');return at;});
+  requireValue(offsets.every((n,i)=>i===0||n>offsets[i-1]),'Source command log order changed');
+ }
  const start='##[group]Run npm test\n',offset=log.indexOf(start);requireValue(offset>=0&&log.indexOf(start,offset+start.length)===-1,'Missing or ambiguous original npm test step');
  const next=log.indexOf('##[group]',offset+start.length);requireValue(next>offset,'Test step has no subsequent packaging step');
  const testLog=log.slice(offset,next),counts:Record<string,number>={};

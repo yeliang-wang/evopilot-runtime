@@ -19,6 +19,9 @@ import {collectCoverageInventory,collectManagedBudget} from './execution.mjs';
 // {schema,candidateDigest,workspaceId,projectId,syntheticAssets:true,
 //  syntheticDecisions:true,casePlans:{[fixedCaseId]:plan}}.
 // Stage plan: {instanceId,predecessorId}; predecessorId is null only for scope.
+// publication.failed selects {instanceId,predecessorId:'release-decision',
+// authorityRef,decisionRequestId}: exact current native REJECT; reports the true
+// RUNNING/UNKNOWN stage and denied admission, never claims terminal FAILED.
 // Scope negative plans preserve the fixed outcome IDs but inspect actual entry
 // prerequisites, as required by accepted CV03 (not a fictitious graph node):
 // not-run: {scopePrerequisite:'authority-not-recorded',subject,authorityRef};
@@ -100,6 +103,82 @@ export function assertForkGitLabArtifact(metadata){
  const file=metadata.artifacts_file;assert(file,'NOT_READY: original probe artifact metadata required');assert.equal(file.filename,'artifacts.zip');assert(Number.isSafeInteger(file.size)&&file.size>0&&file.size<=1048576,'NOT_READY: bounded dedicated probe archive required');return metadata;
 }
 
+// These readers classify exact original native facts. No input supplies an
+// outcome, missing flag or latest-decision assertion. Unit callers use synthetic
+// records; actual collection always obtains these values from the installed APIs.
+export async function readE18Events(read){
+ const events=[];let cursor;
+ for(let pages=0;pages<1024;pages++){
+  const page=await read('runtime.events.read',cursor===undefined?{}:{cursor});
+  assert(Array.isArray(page.events)&&typeof page.cursor==='string');
+  for(const e of page.events){assert(Number.isSafeInteger(e.seq)&&Number.isSafeInteger(e.revision));assert(!events.length||e.seq>events.at(-1).seq);events.push(e);assert(events.length<=32768,'NOT_READY: complete native event inventory exceeds bound');}
+  if(!page.events.length)return events;
+  assert.notEqual(page.cursor,cursor,'NOT_READY: native event pagination did not advance');cursor=page.cursor;
+ }
+ assert.fail('NOT_READY: complete native event inventory unavailable');
+}
+export function classifyE18MissingEvidence(retained,readback,history,digest,now=Date.now()){
+ const {request:r,progress,instance}=retained,p=r.plan.parameters,o=progress.observation,prior=instance.stages[r.stageId];
+ const {digest:rd,...rb}=r;assert.equal(rd,digest(rb));assert.equal(r.planDigest,digest(r.plan));assert.equal(r.plan.bindingDigest,digest(p));
+ assert.equal(r.instanceId,instance.id);assert.equal(r.pinsDigest,instance.pinsDigest);assert.equal(r.id,prior.requestId);assert.equal(r.inputDigest,prior.inputDigest);
+ assert(o);assert.equal(o.requestId,r.id);assert.equal(o.inputDigest,r.inputDigest);assert.equal(o.adapterDigest,r.plan.adapterDigest);assert.equal(prior.outcomeDigest,digest(o.outcome));
+ assert.equal(o.phase,progress.phase);assert.equal(o.outcome.status,prior.status);assert.equal(progress.terminal,false);assert(Date.parse(r.deadlineAt)>now,'NOT_READY: original request expired');
+ if(!['UNKNOWN','RUNNING'].includes(o.phase))return null;
+ const missingChecks=()=>{const required=instance.definition.nodes.find(n=>n.id===r.stageId).checks,found=new Set(o.outcome.checks.map(c=>c.id));assert(required.some(id=>!found.has(id)));assert(!o.outcome.checks.some(c=>c.status==='FAIL'||c.status==='UNKNOWN'));};
+ if(['implementation','candidate','verification'].includes(r.stageId)&&o.phase==='UNKNOWN'&&missingEvidenceReasons.includes(progress.reason)){missingChecks();return{kind:'ci-original-rejection',reason:progress.reason};}
+ if(r.stageId==='scope'&&o.phase==='UNKNOWN'&&progress.reason===null){
+  assert.equal(r.plan.adapterId,'runtime-scope-stage-v1');assert.equal(r.plan.action,'base.scope');assert.equal(o.handle?.preparationRef,p.preparationRef);
+  if(readback?.status===404&&readback.body?.error?.code==='NOT_FOUND'){missingChecks();return{kind:'scope-original-evidence-absent',reason:'NOT_FOUND',operation:'lifecycle.scope.evidence.read'};}
+  assert.equal(readback?.status,200,'NOT_READY: scope evidence read was uncertain');return null;
+ }
+ if(r.stageId==='plan'&&o.phase==='UNKNOWN'&&progress.reason===null){
+  assert.equal(r.plan.adapterId,'runtime-plan-stage-v1');assert.equal(r.plan.action,'base.plan');assert.equal(o.handle?.preparationRef,p.preparationRef);
+  if(readback?.status===404&&readback.body?.error?.code==='NOT_FOUND'){missingChecks();return{kind:'plan-original-input-absent',reason:'NOT_FOUND',operation:'lifecycle.plan.evidence.read'};}
+  assert.equal(readback?.status,200,'NOT_READY: plan evidence read was uncertain');const value=readback.body.result,e=value.evidence,{digest:ed,...eb}=e;
+  assert.equal(value.stageRequestId,r.id);assert.equal(value.historical,true);assert.equal(ed,digest(eb));assert.equal(e.requestDigest,r.digest);assert.equal(e.planDigest,r.planDigest);assert.equal(e.preparationDigest,p.preparationDigest);assert.equal(e.factsDigest,p.factsDigest);
+  const absent=[];for(const kind of ['ontology','harness']){const {action:a,receipt}=value.owners[kind];if(!a)continue;const {digest:ad,...ab}=a;assert.equal(ad,digest(ab));assert.equal(a.requestDigest,digest({owner:kind,request:a.request}));assert.equal(a.request.operation,'native.package.validate');assert.equal(a.request.requestId,'plan-native-'+digest({requestId:r.id,projectId:r.projectId,owner:kind}).slice(7,55));assert.deepEqual(a.request.scope,p.owners[kind].scope);assert.equal(a.request.input.id,p.owners[kind].reference.id);assert.equal(a.request.input.version,p.owners[kind].reference.version);assert.equal(a.context.claimId,digest({stageRequestDigest:r.digest}));assert.equal(a.context.inputDigest,r.inputDigest);assert.deepEqual(a.request.input.context,a.context);if(receipt===null)absent.push({owner:kind,requestId:a.request.requestId,actionDigest:a.digest});}
+  assert(absent.length<=1,'NOT_READY: multiple unretained owner receipts do not identify the native missing original');if(absent.length){missingChecks();return{kind:'plan-original-owner-receipt-absent',reason:'NOT_FOUND',absent};}return null;
+ }
+ if(r.stageId==='release-decision'){
+  assert.equal(r.plan.adapterId,'runtime-release-admission-v1');assert.equal(r.plan.action,'base.release-decision');
+  if(readback?.status===409&&readback.body?.error?.code==='RELEASE_MATERIAL_REQUIRED'){
+   const interrupted=history.filter(v=>{const e=v.evidence;assert.equal(v.observationRef,digest(e));assert.equal(e.requestId,r.id);assert.equal(e.observation.requestId,r.id);assert.equal(e.observation.inputDigest,r.inputDigest);assert.equal(e.observation.adapterDigest,r.plan.adapterDigest);return e.observation.phase==='UNKNOWN'&&e.observation.outcome.status==='UNKNOWN'&&typeof e.reason==='string'&&e.reason.length>0;});
+   assert(interrupted.length,'NOT_READY: retain original incomplete collection observation, not an unstarted or approval-waiting stage');missingChecks();return{kind:'release-original-material-absent',reason:'RELEASE_MATERIAL_REQUIRED',nativePhase:o.phase,interruptionRefs:interrupted.map(v=>v.observationRef)};
+  }
+  assert.equal(readback?.status,200,'NOT_READY: release material read was uncertain');return null;
+ }
+ if(r.stageId==='publication'&&o.phase==='UNKNOWN'){
+  assert.equal(r.plan.adapterId,'runtime-publication-stage-v2');assert.equal(r.plan.action,'base.publication');assert.equal(readback?.status,200,'NOT_READY: publication evidence read was uncertain');const v=readback.body.result,e=v.evidence;if(!e)return null;
+  assert.equal(v.evidenceRef,digest(e));assert.equal(e.requestDigest,r.digest);assert.equal(e.planDigest,r.planDigest);assert.equal(e.releaseAuthorityRef,r.releaseAuthorityRef);
+  if(!e.reasons.includes('CI_RESULT_MISSING'))return null;
+  assert.deepEqual(e.reasons,['CI_RESULT_MISSING'],'An unrelated publication failure cannot supply missing-evidence credit');assert(v.ciRequest&&v.run&&e.ci);assert.equal(e.schema,'runtime-publication-evidence/v1');assert.equal(e.ci.status,'PASSED');assert.equal(e.distribution?.status,'PASSED');assert.equal(e.artifact,null);assert.equal(e.harness,null);assert.equal(e.currentGrant,false);
+  assert.equal(v.ciRequest.requestId,e.ci.requestId);assert.equal(v.ciRequest.inputDigest,r.inputDigest);assert.equal(v.ciRequest.commit,p.commit);assert.equal(v.ciRequest.stageId,'publication');assert.equal(v.ciRequest.workflowDigest,p.workflowDigest);assert.equal(v.ciRequest.bindingDigest,digest(p.binding));assert.equal(v.run.runId,e.ci.runId);assert.equal(e.ci.commit,p.commit);assert.equal(e.ci.repositoryId,p.binding.repositoryId);assert.equal(e.ci.provider,p.binding.provider);missingChecks();
+  return{kind:'publication-original-result-absent',reason:'CI_RESULT_MISSING',evidenceRef:v.evidenceRef,runId:v.run.runId};
+ }
+ return null;
+}
+export function readE18DecisionOriginals(reference){
+ const bytesOf=ref=>{const url=new URL(ref);assert.equal(url.protocol,'file:');assert.equal(url.host,'');assert.equal(url.search,'');assert(/^#sha256=[a-f0-9]{64}$/.test(url.hash));const expected=url.hash.slice(8);url.hash='';const filename=fileURLToPath(url);assert.equal(fs.realpathSync(filename),filename);const fd=fs.openSync(filename,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);let bytes;try{const st=fs.fstatSync(fd);assert(st.isFile()&&st.size>0&&st.size<=1048576);bytes=Buffer.alloc(st.size+1);let size=0;while(size<bytes.length){const n=fs.readSync(fd,bytes,size,bytes.length-size,null);if(!n)break;size+=n;}assert.equal(size,st.size);bytes=bytes.subarray(0,size);}finally{fs.closeSync(fd);}assert.equal(sha(bytes),expected);return{reference:ref,sha256:expected,bytes:bytes.length,base64:bytes.toString('base64')};};
+ const decision=bytesOf(reference),value=JSON.parse(Buffer.from(decision.base64,'base64').toString('utf8'));assert.equal(value.schema,'evopilot-decision-evidence/v1');return{decision,source:bytesOf(value.source.reference)};
+}
+export function assertE18CurrentReleaseRejection(value,digest,now=Date.now()){
+ const {instance:i,retained,authority:a,preview:v,receipt,events,principal,executionAuthority}=value,d=a.decision,{ref,...db}=d,r=retained.request,stage=i.stages['release-decision'];
+ const {digest:requestDigest,...requestBody}=r;assert.equal(requestDigest,digest(requestBody));assert.equal(r.planDigest,digest(r.plan));assert.equal(r.plan.bindingDigest,digest(r.plan.parameters));
+ assert.equal(executionAuthority.usable,true);assert.equal(executionAuthority.reason,null);assert.equal(executionAuthority.decision.ref,r.authorityRef);assert.equal(executionAuthority.decision.kind,'execution');assert.equal(executionAuthority.decision.choice,'APPROVE');assert.equal(executionAuthority.decision.subject.instanceId,i.id);assert.equal(executionAuthority.decision.subject.definitionRevisionId,i.pins.definitionRevisionId);
+ assert.equal(ref,'authority:'+digest(db));assert.equal(d.schema,'runtime-authority-decision/v1');assert.equal(d.kind,'release');assert.equal(d.choice,'REJECT');assert.equal(a.revocation,null);assert.equal(a.usable,false);assert.equal(a.reason,'AUTHORITY_REVOKED');
+ assert.equal(d.workspaceId,r.workspaceId);assert.equal(d.projectId,i.pins.projectId);assert.equal(d.principalId,principal.id);assert.equal(d.principalRevision,principal.revision);assert(Date.parse(d.subject.expiresAt)>now);assert(Date.parse(r.deadlineAt)>now);assert(Date.parse(principal.expiresAt)>now);
+ assert.equal(r.stageId,'release-decision');assert.equal(r.plan.adapterId,'runtime-release-admission-v1');assert.equal(r.id,stage.requestId);assert.equal(r.instanceId,i.id);assert.equal(r.pinsDigest,i.pinsDigest);assert(['RUNNING','UNKNOWN'].includes(stage.status));assert.equal(retained.progress.terminal,false);assert.equal(retained.progress.phase,stage.status);assert.equal(retained.progress.observation.phase,stage.status);assert.equal(retained.progress.observation.requestId,r.id);assert.equal(retained.progress.observation.inputDigest,r.inputDigest);assert.equal(retained.progress.observation.adapterDigest,r.plan.adapterDigest);assert.equal(retained.progress.observation.outcome.requestId,r.id);assert.equal(retained.progress.observation.outcome.inputDigest,r.inputDigest);assert.equal(retained.progress.observation.outcome.status,stage.status);assert.equal(stage.outcomeDigest,digest(retained.progress.observation.outcome));
+ assert.equal(i.stages.publication.status,'PENDING');assert.equal(i.stages.publication.attempts,0);assert.equal(i.stages.publication.requestId,null);
+ assert.equal(v.authorityGranted,false);assert.equal(v.executionDispatched,false);const {reviewDigest,authorityGranted,executionDispatched,...review}=v;assert.equal(reviewDigest,digest(review));assert.equal(reviewDigest,d.reviewDigest);assert.equal(v.kind,'release');assert.equal(v.workspaceId,d.workspaceId);assert.equal(v.projectId,d.projectId);assert.equal(v.principalId,d.principalId);assert.equal(v.principalRevision,d.principalRevision);assert.equal(v.policyDigest,d.policyDigest);assert.equal(v.bindingContextDigest,d.bindingContextDigest);assert.deepEqual(v.subject,d.subject);
+ for(const [key,expected] of Object.entries({instanceId:i.id,pinsDigest:i.pinsDigest,definitionRevisionId:i.pins.definitionRevisionId,semanticDigest:i.pins.semanticDigest,requirementsDigest:i.pins.requirementsDigest,candidateDigest:i.candidateDigest,channel:i.definition.semantic.config.publication.channel}))assert.equal(d.subject[key],expected);
+ const m=v.releaseMaterial,{digest:md,...mb}=m;assert.equal(md,digest(mb));assert.equal(d.subject.releaseMaterialDigest,md);assert.equal(m.stageRequestId,r.id);assert.equal(m.requestDigest,r.digest);assert.equal(m.planDigest,r.planDigest);assert.equal(m.candidateDigest,i.candidateDigest);assert.equal(m.bindingContextDigest,d.bindingContextDigest);assert.equal(m.releaseAuthorized,false);
+ const subject={instanceId:i.id,candidateDigest:i.candidateDigest,expiresAt:d.subject.expiresAt},input={kind:'release',subject,reviewDigest:d.reviewDigest,decision:'REJECT',evidenceRef:d.evidenceRef};
+ assert.equal(receipt.operation,'lifecycle.authority.record');assert.equal(receipt.projectId,d.projectId);assert.equal(receipt.principalId,d.principalId);assert.equal(receipt.requestDigest,digest({operation:receipt.operation,projectId:d.projectId,input}));assert.equal(receipt.result.status,'REJECTED');assert.equal(receipt.result.authorityRef,ref);assert.equal(receipt.result.kind,'release');assert.equal(receipt.result.reviewDigest,d.reviewDigest);assert.equal(receipt.result.instanceId,i.id);assert.equal(receipt.result.executionDispatched,false);
+ const decisions=events.filter(e=>e.type==='authority-recorded'&&e.data.kind==='release'&&e.data.instanceId===i.id);assert(decisions.length);const last=decisions.at(-1);assert.equal(last.data.authorityRef,ref);assert.equal(last.data.choice,'REJECT');assert.equal(last.data.reviewDigest,d.reviewDigest);assert.equal(last.data.principalId,d.principalId);assert.equal(last.revision,receipt.revision);assert.equal(last.at,receipt.at);assert(Number.isFinite(Date.parse(d.at))&&Date.parse(d.at)<=Date.parse(receipt.at)&&Date.parse(receipt.at)<=now);
+ assert(!events.some(e=>e.type==='authority-revoked'&&(e.data.authorityRef===ref||e.data.kind==='release'&&e.data.instanceId===i.id)&&e.seq>=last.seq),'NOT_READY: release decision was revoked');
+ return{decisionRef:ref,decisionRequestId:receipt.requestId,reviewDigest:d.reviewDigest,nativeStageStatus:stage.status,decision:'REJECT',nativeStageFailureClaimed:false};
+}
+
 export async function executeE18(callableContext) {
  const run=await openScenario('E18',undefined,callableContext);
  try{
@@ -115,6 +194,7 @@ export async function executeE18(callableContext) {
   for(const id of Object.keys(fixture.casePlans))assert(run.all.some(c=>c.caseInstanceId===id),'Fixture cannot introduce a new acceptance case');
   const installed=path.join(run.selection.installedRoot,'package');
   const load=relative=>import(pathToFileURL(path.join(installed,'dist',relative)).href);
+  const {evidenceValueDigest:evidenceDigest}=await load('server/errors.js');
   const base=await load('lifecycle/base.js'),instanceApi=await load('lifecycle/instance.js'),platformApi=await load('adapters/platforms.js');
   const configApi=await load('adapters/config.js'),artifactApi=await load('adapters/artifacts.js'),security=await load('server/security.js');
   const spec=read(path.join(run.selection.installedRoot,'service-specification.json'));
@@ -225,8 +305,53 @@ export async function executeE18(callableContext) {
    assert.deepEqual((await run.read('lifecycle.preparation.read',{preparationRef:before.pins.targetRef})).packet,preparation.packet);
    return{provider,stage:'scope',predecessorOutcome,scopePrerequisite:plan.scopePrerequisite,boundary:'lifecycle.stage.admission',actualNativeRejection:missing?denied.body.error.code:denied.body.result.reasons[0],instancePinsUnchanged:true,originalPreparationUnchanged:true,executionDispatched:false};
   }
+  const evidenceOperation={scope:'lifecycle.scope.evidence.read',plan:'lifecycle.plan.evidence.read','release-decision':'lifecycle.release.evidence.read',publication:'lifecycle.publication.evidence.read'};
+  async function missingEvidence(retained){
+   const r=retained.request,operation=evidenceOperation[r.stageId];let readback=null,history=[];
+   if(operation){readback=await run.request(operation,{stageRequestId:r.id});
+    if(r.stageId==='release-decision'&&readback.status===409&&readback.body.error?.code==='RELEASE_MATERIAL_REQUIRED'){
+     const events=await readE18Events(run.read);for(const e of events.filter(e=>e.type==='stage-observed'&&e.data.stageRequestId===r.id&&e.data.phase==='UNKNOWN')){assert(hash.test(e.data.observationRef));const value=await run.read('lifecycle.stage.observation.read',{stageRequestId:r.id,observationRef:e.data.observationRef});assert.equal(value.evidence.reason,e.data.reason);history.push(value);}
+    }
+   }
+   const proof=classifyE18MissingEvidence(retained,readback,history,evidenceDigest);
+   return{proof,readback,history};
+  }
+  async function verifyPublicationMissingArchive(retained,selected){
+   const r=retained.request,p=r.plan.parameters,v=selected.readback.body.result,binding=configApi.configuredPlatform(configuration(),actor(),r.projectId,p.binding.ref);assert.deepEqual(binding,p.binding);
+   const client=(await load('adapters/'+binding.provider+'.js'))[binding.provider+'Client'](binding,async(b,a,signal)=>{signal.throwIfAborted();return configApi.readPlatformToken(spec.integrationsRef,b,a);});
+   const request=platformApi.validateRunRequest(v.ciRequest,binding),remaining=()=>{const ms=Date.parse(r.deadlineAt)-Date.now();assert(ms>0,'NOT_READY: original publication deadline expired');return AbortSignal.timeout(Math.min(60000,ms));};
+   const observed=await client.run(actor(),request,v.run.runId,remaining());assert.equal(observed.status,'PASSED');assert.equal(observed.runId,v.run.runId);assert.equal(observed.requestId,request.requestId);
+   const archive=await client.artifact(actor(),request,v.run.runId,remaining());assert.equal(archive.archiveDigest,'sha256:'+sha(archive.bytes));assert.equal(archive.archiveBytes,archive.bytes.length);
+   let error;try{await artifactApi.verifyCiArtifact(archive,request,p.expectedChecks,remaining());}catch(e){error=e.code;}assert.equal(error,'CI_RESULT_MISSING','Original actual publication archive must independently reproduce the native missing-result reason');remaining();
+   const filename='actual-missing-publication-'+(++archiveSequence)+'.zip';fs.writeFileSync(path.join(run.selection.outputRoot,filename),archive.bytes,{mode:0o600,flag:'wx'});const {bytes,...metadata}=archive;
+   run.artifact('publication-missing-original-archive.json',{filename,request,observed,metadata,reason:error,remoteWritesByCollector:0});
+  }
+  async function currentReleaseRejection(c,plan){
+   keys(plan,['instanceId','predecessorId','authorityRef','decisionRequestId']);assert.equal(plan.predecessorId,'release-decision');assert(/^authority:sha256:[a-f0-9]{64}$/.test(plan.authorityRef));assert(typeof plan.decisionRequestId==='string'&&plan.decisionRequestId);
+   const instance=await installedInstance(plan.instanceId);assert.equal(instance.definition.semantic.config.implementation.provider,c.parameters.provider);assert(instance.definition.nodes.find(n=>n.id==='publication').dependsOn.includes('release-decision'));
+   const retained=await original(instance.stages['release-decision'].requestId),authority=await run.read('lifecycle.authority.inspect',{authorityRef:plan.authorityRef}),d=authority.decision,subject={instanceId:instance.id,candidateDigest:instance.candidateDigest,expiresAt:d.subject.expiresAt};
+   const executionAuthority=await run.read('lifecycle.authority.inspect',{authorityRef:retained.request.authorityRef}),definitionSource=await run.source(instance.pins.definitionRevisionId);assert.equal((await run.read('lifecycle.definition.validate',{yaml:definitionSource})).ready,true,'NOT_READY: unrelated binding failure cannot replace exact release rejection');
+   const principal=actor();assert.equal(principal.id,d.principalId);assert.equal(principal.revision,d.principalRevision);assert.equal(d.subject.instanceId,instance.id);
+   const receipt=await run.read('runtime.receipt.read',{requestId:plan.decisionRequestId});assert.equal(receipt.requestId,plan.decisionRequestId);
+   const {verifyDecisionEvidence}=await import(pathToFileURL(path.join(installed,'vendor/compatibility/v1/decision-evidence.mjs')).href),expected={owner:'runtime',operation:'lifecycle.authority.release',workspaceId:run.selection.workspaceId,scope:{visibility:'private',projectId:run.selection.projectId},reviewDigest:d.reviewDigest,decision:'REJECT'};
+   verifyDecisionEvidence(d.evidenceRef,expected);const decisionOriginals=readE18DecisionOriginals(d.evidenceRef);
+   const material=await run.read('lifecycle.release.evidence.read',{stageRequestId:retained.request.id}),preview=await run.read('lifecycle.authority.preview',{kind:'release',subject});assert.deepEqual(material.material,preview.releaseMaterial);
+   const events=await readE18Events(run.read),input={instance,retained,authority,preview,receipt,events,principal,executionAuthority},proof=assertE18CurrentReleaseRejection(input,evidenceDigest);
+   const admission=await run.request('lifecycle.stage.admission',{instanceId:instance.id,stageId:'publication'});assert.equal(admission.status,403);assert.equal(admission.body.error?.code,'AUTHORITY_REVOKED');
+   const after=await installedInstance(instance.id);assert.deepEqual(after,instance);const finalRetained=await original(retained.request.id);assert.deepEqual(finalRetained.request,retained.request);assert.deepEqual(finalRetained.progress,retained.progress);
+   const finalAuthority=await run.read('lifecycle.authority.inspect',{authorityRef:plan.authorityRef});const {projectRevision:unusedRevision,...finalDecision}=finalAuthority,{projectRevision:unusedOriginal,...originalDecision}=authority;assert.deepEqual(finalDecision,originalDecision);
+   assert.deepEqual(await run.read('runtime.receipt.read',{requestId:plan.decisionRequestId}),receipt);assert.deepEqual(await run.read('lifecycle.release.evidence.read',{stageRequestId:retained.request.id}),material);verifyDecisionEvidence(d.evidenceRef,expected);assert.deepEqual(readE18DecisionOriginals(d.evidenceRef),decisionOriginals);
+   const finalExecutionAuthority=await run.read('lifecycle.authority.inspect',{authorityRef:retained.request.authorityRef});assert.equal(finalExecutionAuthority.usable,true);assert.deepEqual(finalExecutionAuthority.decision,executionAuthority.decision);assert.equal((await run.read('lifecycle.definition.validate',{yaml:definitionSource})).ready,true);
+   const finalPreview=await run.read('lifecycle.authority.preview',{kind:'release',subject});assert.deepEqual(finalPreview,preview);const finalEvents=await readE18Events(run.read);assert.deepEqual(finalEvents,events,'NOT_READY: native event inventory changed during rejection collection');assertE18CurrentReleaseRejection({...input,authority:finalAuthority,preview:finalPreview,events:finalEvents,principal:actor(),executionAuthority:finalExecutionAuthority},evidenceDigest);
+   // Final file verification follows every awaited read; no async gap remains before retention.
+   verifyDecisionEvidence(d.evidenceRef,expected);assert.deepEqual(readE18DecisionOriginals(d.evidenceRef),decisionOriginals);
+   run.artifact('current-release-rejection.json',{proof,instance,request:retained.request,progress:retained.progress,authority,executionAuthority,preview,receipt,events,admission,decisionOriginals,remoteWritesByCollector:0,decisionEvidenceVerified:true});
+   return{provider:c.parameters.provider,stage:'publication',predecessorOutcome:'failed',instanceId:instance.id,predecessorId:'release-decision',...proof,boundary:'lifecycle.stage.admission',actualNativeRejection:'AUTHORITY_REVOKED',executionDispatched:false};
+  }
   async function stageAdmission(c,plan){
+   if(c.parameters.stage==='publication'&&c.parameters.predecessorOutcome==='failed')return currentReleaseRejection(c,plan);
    keys(plan,['instanceId','predecessorId']);const {provider,stage,predecessorOutcome}=c.parameters;
+   let originalPredecessor,selectedMissing;
    assert(['github','gitlab'].includes(provider)&&stages.includes(stage)&&outcomes.includes(predecessorOutcome));
    const before=await installedInstance(plan.instanceId),node=before.definition.nodes.find(n=>n.id===stage);
    assert(node);assert.equal(before.definition.semantic.config.implementation.provider,provider);
@@ -250,17 +375,21 @@ export async function executeE18(callableContext) {
      assert(observation,'A state label alone is insufficient; retain the actual provider/adapter outcome');
      assert.equal(observation.outcome.requestId,prior.requestId);assert.equal(observation.outcome.inputDigest,prior.inputDigest);
      assert.equal(prior.outcomeDigest,base.valueDigest(observation.outcome));
-     const expected=before.definition.nodes.find(n=>n.id===plan.predecessorId).checks;
+     originalPredecessor=retained;const expected=before.definition.nodes.find(n=>n.id===plan.predecessorId).checks;
+     if(['unknown','missing-evidence'].includes(predecessorOutcome))selectedMissing=await missingEvidence(retained);
      if(predecessorOutcome==='failed'){
       assert.equal(prior.status,'FAILED');assert.equal(observation.outcome.status,'FAILED');
       assert.equal(observation.phase,'FAILED');assert.equal(retained.progress.terminal,true);
      }else if(predecessorOutcome==='unknown'){
       assert.equal(prior.status,'UNKNOWN');assert.equal(observation.outcome.status,'UNKNOWN');
+      assert.equal(selectedMissing.proof,null,'An authenticated missing original has its own fixed case');
       assert(!missingEvidenceReasons.includes(retained.progress.reason),'A specific missing-evidence rejection has its own fixed case');
       assert(retained.progress.reason||observation.handle||observation.outcome.checks.some(check=>check.status==='UNKNOWN'),'Retain an actual uncertain request/handle/check or native reason');
      }else if(predecessorOutcome==='missing-evidence'){
-      assert.equal(prior.status,'UNKNOWN');assert.equal(observation.outcome.status,'UNKNOWN');
-      assert(missingEvidenceReasons.includes(retained.progress.reason),'An empty observation alone does not prove missing evidence; retain the precise native missing-evidence rejection');
+      assert(selectedMissing.proof,'An empty observation alone does not prove missing evidence; retain the exact native missing original');
+      assert.equal(prior.status,selectedMissing.proof.kind==='release-original-material-absent'?selectedMissing.proof.nativePhase:'UNKNOWN');assert.equal(observation.outcome.status,prior.status);
+      if(selectedMissing.proof.kind==='publication-original-result-absent')await verifyPublicationMissingArchive(retained,selectedMissing);
+      run.artifact('native-missing-evidence.json',{request:retained.request,progress:retained.progress,...selectedMissing,executionDispatched:false});
       const found=new Set(observation.outcome.checks.map(check=>check.id));assert(expected.some(id=>!found.has(id)),'The original observation must actually omit a required evidence item');
       assert(!observation.outcome.checks.some(check=>check.status==='FAIL'||check.status==='UNKNOWN'),'Do not relabel an explicit failed/unknown check as missing evidence');
      }else{
@@ -278,7 +407,8 @@ export async function executeE18(callableContext) {
    if(predecessorOutcome==='passed')assert.deepEqual(admission.reasons,[]);
    else assert(admission.reasons.includes('PREDECESSOR_NOT_PASSED:'+plan.predecessorId));
    const after=await installedInstance(before.id);assert.deepEqual(after,before,'Read-only admission changed the original instance');
-   return{provider,stage,predecessorOutcome,instanceId:before.id,predecessorId:plan.predecessorId,admission,actualNativeObservation:true,executionDispatched:false};
+   if(selectedMissing){const finalOriginal=await original(originalPredecessor.request.id);assert.deepEqual(finalOriginal.request,originalPredecessor.request);assert.deepEqual(finalOriginal.progress,originalPredecessor.progress);const finalMissing=await missingEvidence(finalOriginal);assert.deepEqual(finalMissing,selectedMissing,'NOT_READY: original missing-evidence readback changed during admission');}
+   return{provider,stage,predecessorOutcome,instanceId:before.id,predecessorId:plan.predecessorId,admission,actualNativeObservation:true,...(selectedMissing?.proof?{missingEvidence:selectedMissing.proof,nativePredecessorStatus:before.stages[plan.predecessorId].status}:{}),executionDispatched:false};
   }
   function ciRequest(r){
    const p=r.plan.parameters;

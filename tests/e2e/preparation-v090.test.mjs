@@ -14,6 +14,7 @@ import {createNativeExtensionStageAdapter} from '../../dist/adapters/extension-s
 import {requiredChecksDigest} from '../../dist/lifecycle/instance.js';
 import {compileLifecycle} from '../../dist/lifecycle/compiler.js';
 import {registeredAuthorityPolicy} from '../../dist/adapters/authority.js';
+import {createRegisteredBindings} from '../../dist/adapters/bindings.js';
 import {registeredPreparation,createScopeStageAdapter,createPlanStageAdapter} from '../../dist/adapters/preparation-stages.js';
 import {lifecycleBindingExample} from '../fixtures/adapters-v090.mjs';
 import {syntheticBindings,yaml,extension,syntheticSourceTree} from '../fixtures/lifecycle-v090.mjs';
@@ -23,7 +24,7 @@ import {nativeSha256,NATIVE_CONTRACT_DIGEST} from '../../vendor/compatibility/v1
 
 // The actual HTTP/store/policy/scope adapters are exercised with explicit
 // synthetic asset admission and a read-only synthetic source platform.
-async function fixture({plan=false,extensions=[],extensionSlot='after-plan',missingCriterion=false,toolRecovery=false,repairConcurrency=1}={}){
+async function fixture({plan=false,extensions=[],extensionSlot='after-plan',missingCriterion=false,toolRecovery=false,repairConcurrency=1,registeredSource=false,legacyScope=false}={}){
   const dir=mkdtempSync(join(realpathSync(tmpdir()),'runtime-preparation-')),root=join(dir,'state'),workspaceId='synthetic',projectId='alpha',path=join(dir,'integrations.json'),expiry='2030-01-01T00:00:00Z';
   const pin=owner=>({product:owner,id:'synthetic-'+owner,version:'1.0.0',specVersion:'v1',visibility:'private',digest:valueDigest(owner),standardDigest:valueDigest(owner+'-standard'),standardLockDigest:valueDigest(owner+'-lock'),producer:{product:owner,version:'0.3.0'},contractDigest:NATIVE_CONTRACT_DIGEST});
   const platform={ref:'binding:alpha/platform',workspaceId,projectId,provider:'github',host:'https://github.com',repository:'synthetic/project',repositoryId:'42',defaultBranch:'main',credentialRef:'credential:alpha/platform',revision:1,expiresAt:expiry,workflowPath:'.github/workflows/build.yml',runner:'ubuntu-latest'};
@@ -37,7 +38,7 @@ async function fixture({plan=false,extensions=[],extensionSlot='after-plan',miss
       config.resources.find(r=>r.role==='config.verification.evidenceMappingRef').definition.rows.push(row);
     }
   }
-  if(plan)data.config.plan.budget.timeoutSeconds=60; // Explicit synthetic recovery budget; no production grant is changed.
+  if(plan||registeredSource)data.config.plan.budget.timeoutSeconds=60; // Explicit synthetic recovery budget; no production grant is changed.
   let recoveryTools=null;
   if(toolRecovery){
     // Isolated inert bytes; this fixture never executes a tool. Its owner below
@@ -53,7 +54,7 @@ async function fixture({plan=false,extensions=[],extensionSlot='after-plan',miss
   const all=['read','draft.write','definition.activate','decision.record','execution.request'];
   initializeCredentials(root,workspaceId,Object.entries(tokens).map(([id,token])=>({id,projects:[id==='foreign'?'beta':projectId],permissions:id==='reader'||id==='foreign'?['read']:all,revision:1,expiresAt:expiry,tokenDigest:tokenDigest(token)})));
   const state={commit:'a'.repeat(40),reads:0,pending:null,fail:null,missing:false,context:false,lost:null,beforeWrite:false,afterWrite:null,manifest:config.nativeToolchain?.digest??valueDigest('toolchain-manifest')},calls=[],receipts=new Map(),toolchainLockDigest=valueDigest('toolchain-lock'),effectiveConfigDigest=valueDigest('native-config'),bindings=syntheticBindings(),validator=registeredPreparation(path,workspaceId),policy=registeredAuthorityPolicy(path,workspaceId);
-  const client={sourceTree:async(_actor,{commit},signal)=>{await state.onTree?.(signal);return syntheticSourceTree(platform,commit);},readiness:async()=>{state.reads++;return{provider:platform.provider,projectId,repositoryId:platform.repositoryId,bindingDigest:valueDigest(platform),commit:state.commit,factsDigest:valueDigest({commit:state.commit}),expiresAt:new Date(Date.now()+60000).toISOString()};}};
+  const client={sourceTree:async(_actor,{commit},signal)=>{await state.onTree?.(signal);return syntheticSourceTree(platform,commit);},readiness:async(_actor,signal)=>{state.reads++;if(state.sourceWait)await new Promise((resolve,reject)=>{const abort=()=>{clearTimeout(timer);reject(new ServiceError('OBSERVATION_INTERRUPTED','Synthetic pending read interrupted',409));},timer=setTimeout(()=>{signal.removeEventListener('abort',abort);resolve();},5000);signal.addEventListener('abort',abort,{once:true});if(signal.aborted)abort();});state.afterRead?.();if(state.sourceError)throw new ServiceError(state.sourceError,'Synthetic observed provider uncertainty',503);return{provider:platform.provider,projectId,repositoryId:platform.repositoryId,bindingDigest:valueDigest(platform),commit:state.commit,factsDigest:valueDigest({commit:state.commit}),expiresAt:new Date(Date.now()+60000).toISOString(),...(state.sourceOverride??{})};}};
   const ownerAdapters=Object.fromEntries(['ontology','harness'].map(kind=>['binding:alpha/'+kind,{owner:kind,workspaceId,capabilities:()=>({registrationDigest:valueDigest(kind+'registration')}),
     readPackage:async()=>{const body={reference:pin('harness'),qualityStatus:'PASS',effectiveConfigDigest};return kind==='ontology'?{package:{manifest:{entrypoints:{cases:'cases.json'}},files:{'cases.json':JSON.stringify({cases:[{id:'positive',requirementIds:['scope']}]})}}}:{validation:{...body,reportDigest:nativeSha256(body)},package:{manifest:{entrypoints:{coverage:'coverage.json'}},files:{'coverage.json':JSON.stringify({requirements:[{id:'requirement-H001',ruleIds:['H001'],caseIds:['positive']}]})}}};},
     read:async(_a,_p,r)=>{if(r.operation==='workspace.inspect')return{revision:0};const receipt=receipts.get(r.input.requestId);if(!receipt)throw new ServiceError('NOT_FOUND','Synthetic missing native receipt',404);const stage=calls.find(c=>c.request.requestId===r.input.requestId)?.request.input.observation?.values.runtimeExtension?.stageId;return state.pending===kind||state.pendingStages?.has(stage)?{...structuredClone(receipt),status:'RUNNING',result:{status:'RUNNING'}}:structuredClone(receipt);},
@@ -70,8 +71,19 @@ async function fixture({plan=false,extensions=[],extensionSlot='after-plan',miss
     },
   }]));
   const reviewConnections=()=>({platform:()=>client,owner:ref=>ownerAdapters[ref],source:async()=>({commit:state.commit,evidenceRef:'synthetic:completed-source'})});
-  let server,sequence=0,activeStore,activeRequest;const start=async()=>server=await startRuntimeServer({stateRoot:root,workspaceId},bindings.provider,undefined,policy,(store,services)=>{
-    activeStore=store;const scope=createScopeStageAdapter(store,path,{platform:()=>client});if(!plan)return scope;
+  const registered=createRegisteredBindings(path,workspaceId,{platform:()=>client,owner:ref=>ownerAdapters[ref]});
+  // Only owner/material admission is synthetic. This option uses the actual
+  // registered connection/credential observations and hashes in HTTP admission,
+  // authority review, instance pinning and both execution permits.
+  const provider=registeredSource?async(...args)=>{
+    const [fallback,actual]=await Promise.all([bindings.provider(...args),registered(...args)]);
+    return fallback.map(row=>{if(row.path==='config.implementation.connection'||row.path.endsWith('.credentialRef')){const v=actual.find(v=>v.path===row.path);assert.equal(v.status,'VALID',JSON.stringify(v));state.registeredChecks=(state.registeredChecks??0)+1;return v;}return row;});
+  }:bindings.provider;
+  let server,sequence=0,activeStore,activeRequest;const start=async()=>server=await startRuntimeServer({stateRoot:root,workspaceId},provider,undefined,policy,(store,services)=>{
+    activeStore=store;const mutate=store.mutate.bind(store);store.mutate=(actor,mutation,...rest)=>{if(state.persistenceFault&&mutation.operation==='lifecycle.scope.evidence')throw new ServiceError('SYNTHETIC_PERSISTENCE_FAILURE','Source fixture rejects the local write before any effect',503);return mutate(actor,mutation,...rest);};
+    const scope=createScopeStageAdapter(store,path,{platform:()=>client});
+    if(legacyScope){const prepare=scope.prepare.bind(scope);scope.prepare=async(...args)=>({...await prepare(...args),adapterDigest:valueDigest({id:'runtime-scope-stage-v1',preparation:'runtime-preparation/v1',checks:['target-scope','requirements-mapping'],continuation:'explicit-local-commit'})});}
+    if(!plan)return scope;
     const connections={platform:()=>client,owner:ref=>ownerAdapters[ref],toolchainLockDigest,toolchainManifestDigest:state.manifest,source:async()=>({commit:state.commit,evidenceRef:'synthetic:completed-source'})},adapter=createPlanStageAdapter(store,path,connections),nativeExtension=createNativeExtensionStageAdapter(store,path,connections),scopeReview={...services.extensionReviews.adapter,async inspect(...args){const result=await services.extensionReviews.adapter.inspect(...args);await state.afterReviewOutcome?.(result);return result;}};
     // This source/candidate provider is deliberately synthetic. It exercises the
     // real execution core and slot joins, not external Agent/CI qualification.
@@ -158,15 +170,35 @@ test('scope completes from an exact preparation and actual adapter observations 
     assert.equal((await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:'plan'},true)).error.code,'STAGE_ADAPTER_UNAVAILABLE');
   }finally{await f.cleanup();}
 });
-test('changed source baseline never completes scope and cannot be retried as a replacement stage',async()=>{
+test('known current source mismatch retains FAILED scope, blocks plan, and stays terminal after restore/restart',async()=>{
+  const f=await fixture({registeredSource:true});try{
+    // A is a prepared baseline; live registered B is stable BEFORE granting.
+    // No provider transition between permit and adapter is required.
+    f.state.commit='b'.repeat(40);const ref=(await f.retain()).result.result.preparationRef;await f.instance(ref);
+    const started=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:'scope'},true);assert.equal(started.status,200,JSON.stringify(started));const id=started.result.result.stageRequestId;
+    let view;for(let n=0;n<80;n++){view=(await f.request('lifecycle.stage.request.inspect',{stageRequestId:id})).result;if(view.progress.terminal)break;await new Promise(r=>setTimeout(r,20));}
+    assert.equal(view.progress.phase,'FAILED',JSON.stringify(view));assert.equal(view.progress.terminal,true);assert.equal(view.progress.observation.outcome.status,'FAILED');assert(f.state.registeredChecks>0);
+    assert.deepEqual(view.progress.observation.outcome.checks.map(c=>[c.id,c.status]),[['base.scope.target-scope','FAIL']]);
+    const raw=await f.request('lifecycle.scope.evidence.read',{stageRequestId:id});assert.equal(raw.status,200);const e=raw.result.evidence,{digest,...body}=e;assert.equal(digest,valueDigest(body));assert.equal(e.schema,'runtime-scope-source-failure/v1');assert.equal(e.expectedSourceCommit,'a'.repeat(40));assert.equal(e.source.commit,'b'.repeat(40));assert.equal(e.requestDigest,view.request.digest);assert.equal(e.planDigest,view.request.planDigest);assert.equal(e.reason,'PREPARATION_SOURCE_CHANGED');assert.equal(view.progress.observation.outcome.checks[0].evidenceRef,e.digest);
+    const before=(await f.request('lifecycle.instance.inspect',{instanceId:'scope-instance'})).result.instance;assert.equal(before.stages.scope.status,'FAILED');const admission=await f.request('lifecycle.stage.admission',{instanceId:'scope-instance',stageId:'plan'});assert.equal(admission.status,200);assert.equal(admission.result.allowed,false);assert(admission.result.reasons.includes('PREDECESSOR_NOT_PASSED:scope'));
+    const reads=f.state.reads;f.state.commit='a'.repeat(40);await f.restart();await new Promise(r=>setTimeout(r,1200));assert.equal(f.state.reads,reads,'Historical terminal inspect performs no new provider read');assert.deepEqual((await f.request('lifecycle.scope.evidence.read',{stageRequestId:id})).result,raw.result);assert.deepEqual((await f.request('lifecycle.instance.inspect',{instanceId:'scope-instance'})).result.instance,before);
+    const terminal=await f.request('lifecycle.stage.advance',{stageRequestId:id},true);assert.equal(terminal.result.result.status,'TERMINAL');assert.equal(f.state.reads,reads);const retry=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:'scope'},true);assert.notEqual(retry.status,200,'Failure is not new attempt authority');
+  }finally{await f.cleanup();}
+});
+for(const fault of ['transport','timeout','permission','identity','expired','authority','persistence'])test('scope '+fault+' uncertainty remains UNKNOWN without confirmed failure evidence',async()=>{
   const f=await fixture();try{
     const ref=(await f.retain()).result.result.preparationRef;await f.instance(ref);f.state.commit='b'.repeat(40);
+    if(fault==='transport')f.state.sourceError='PLATFORM_OUTCOME_UNKNOWN';if(fault==='timeout')f.state.sourceWait=true;if(fault==='authority')f.state.afterRead=()=>{f.config.resources.find(r=>r.role==='config.release-decision.authorityPolicyRef').definition.principalIds=['reviewer'];f.save();};if(fault==='permission')f.state.sourceError='FORBIDDEN';if(fault==='identity')f.state.sourceOverride={repositoryId:'999'};if(fault==='expired')f.state.sourceOverride={expiresAt:new Date(Date.now()-1000).toISOString()};if(fault==='persistence')f.state.persistenceFault=true;
     const started=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:'scope'},true);assert.equal(started.status,200);const id=started.result.result.stageRequestId;
-    let r;for(let i=0;i<80;i++){r=await f.request('lifecycle.stage.request.inspect',{stageRequestId:id});if(r.result.progress.phase==='UNKNOWN')break;await new Promise(r=>setTimeout(r,20));}
-    assert.equal(r.result.progress.phase,'UNKNOWN');assert.equal(r.result.progress.reason,'PREPARATION_SOURCE_CHANGED');
-    assert.equal((await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:'scope'},true)).error.code,'STAGE_BLOCKED');
-    await f.restart();await new Promise(r=>setTimeout(r,1200));assert.equal(f.state.reads,1,'background inspection cannot complete an uncommitted scope or repeat source action');
+    let view;for(let n=0;n<80;n++){view=(await f.request('lifecycle.stage.request.inspect',{stageRequestId:id})).result;if(view.progress.phase==='UNKNOWN')break;await new Promise(r=>setTimeout(r,20));}
+    assert.equal(view.progress.phase,'UNKNOWN');assert.equal(view.progress.terminal,false);assert.equal(view.progress.observation.outcome.status,'UNKNOWN');assert.equal((await f.request('lifecycle.scope.evidence.read',{stageRequestId:id})).status,404);
   }finally{await f.cleanup();}
+});
+test('legacy scope request descriptor keeps original UNKNOWN mismatch behavior',async()=>{
+  const f=await fixture({legacyScope:true});try{const ref=(await f.retain()).result.result.preparationRef;await f.instance(ref);f.state.commit='b'.repeat(40);const start=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:'scope'},true),id=start.result.result.stageRequestId;let v;for(let n=0;n<80;n++){v=(await f.request('lifecycle.stage.request.inspect',{stageRequestId:id})).result;if(v.progress.phase==='UNKNOWN')break;await new Promise(r=>setTimeout(r,20));}assert.equal(v.progress.phase,'UNKNOWN');assert.equal(v.progress.reason,'PREPARATION_SOURCE_CHANGED');assert.equal((await f.request('lifecycle.scope.evidence.read',{stageRequestId:id})).status,404);await f.restart();assert.equal((await f.request('lifecycle.stage.request.inspect',{stageRequestId:id})).result.progress.phase,'UNKNOWN');}finally{await f.cleanup();}
+});
+test('legacy successful scope evidence remains readable and terminal',async()=>{
+  const f=await fixture({legacyScope:true});try{const ref=(await f.retain()).result.result.preparationRef;await f.instance(ref);const start=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:'scope'},true),id=start.result.result.stageRequestId;let v;for(let n=0;n<80;n++){v=(await f.request('lifecycle.stage.request.inspect',{stageRequestId:id})).result;if(v.progress.terminal)break;await new Promise(r=>setTimeout(r,20));}assert.equal(v.progress.phase,'COMPLETE');const e=await f.request('lifecycle.scope.evidence.read',{stageRequestId:id});assert.equal(e.result.evidence.schema,'runtime-scope-evidence/v1');const reads=f.state.reads;await f.restart();assert.deepEqual((await f.request('lifecycle.scope.evidence.read',{stageRequestId:id})).result,e.result);assert.equal(f.state.reads,reads);}finally{await f.cleanup();}
 });
 test('MCP uses the same preparation writer and cannot grant execution by submitting model-generated status',async()=>{
   const f=await fixture(),client=new Client({name:'synthetic-preparation-client',version:'1'});try{

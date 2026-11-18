@@ -419,6 +419,15 @@ selected installed candidate. This pure record verifier does not authenticate
 arbitrary local JSON: the caller must retain authenticated provider reads. Its
 result does not authorize publication, and it is not a replacement for E01–E20.
 
+The current source workflow requires all nine source/build/check/package steps
+to succeed. Only its five named LC20 producer steps may be `completed/skipped`:
+those belong to a different dispatch mode, not to the source regression suite.
+Every required source check and every source test must still pass without skips.
+The verifier binds the native source-mode run name, unique ordered command log
+groups and exact upload identity; an active LC20 step, unrelated skipped step or
+substituted workflow mode is rejected. Historical all-success source records
+retain their separate strict seven-step read profile.
+
 原 E01–E20 发布前记录核验要求全部 655 项，逐项绑定候选、收集器、选择文件、
 原用例结果及请求／响应／附件原始摘要。开发子集、遗漏、跳过、错误候选或修改后的
 原始记录不能通过。旧报告保留原样，不补写缺失证据；原目录的后置 9 项仍须实际

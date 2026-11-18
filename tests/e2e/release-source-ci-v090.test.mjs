@@ -3,6 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {crc32} from 'node:zlib';
 import {createHash} from 'node:crypto';
+import {readFileSync} from 'node:fs';
+import {parse as parseYaml} from 'yaml';
 import {inspectSourceCiRecords} from '../../dist/release/source-ci.js';
 const sha=b=>createHash('sha256').update(b).digest('hex');
 function zip(files){
@@ -39,4 +41,79 @@ test('zero, skipped, failed or duplicate counts and a different upload cannot bo
 test('original metadata, archive bytes, inner checksum allowlist and accepted package pins are independent checks',async()=>{
  for(const mutate of [v=>v.artifact.expired=true,v=>v.artifact.expires_at='2020-01-01T00:00:00Z',v=>v.artifact.workflow_run.id=99,v=>v.artifact.workflow_run.head_repository_id=5,v=>v.artifact.archive_download_url='https://example.invalid/archive',v=>v.artifact.size_in_bytes++,v=>v.artifactZip[0]=0,v=>v.manifestDigest='b'.repeat(64),v=>v.archiveDigest='b'.repeat(64)]){const f=fixture();mutate(f.input);await assert.rejects(f.audit);}
  for(const mutate of [m=>m.delete('runtime-dependency-lock.json'),m=>m.set('extra.txt',Buffer.from('extra')),m=>m.set('source-revision.txt',Buffer.from('b'.repeat(40)+'\n')),m=>m.set('SHA256SUMS',Buffer.from('')),m=>m.set('evopilot-next-runtime-0.9.0.tgz',Buffer.from('changed SDK'))])await assert.rejects(fixture(mutate).audit);
+});
+
+const currentRequired=['Verify the declared source-test platform','Run npm ci --ignore-scripts','Run npm run build','Check scoped correction code','Validate workflows with pinned actionlint','Verify source contracts','Run source regressions including generated properties','Pack exact candidate (not a Release)','Retain independently built candidate package'];
+const inactiveLc20=['Resolve the original protected LC20 producer','Check the original implementation source','Execute the original complete LC20 case','Observe the original LC20 input inventory','Retain the exact original Runtime CI archive'];
+const sourceCommands=['npm ci --ignore-scripts','npm run build','npm run lint:correction','npm run lint:workflows','npm run check'];
+function currentFixture(){
+ const f=fixture();f.input.run.display_title='evopilot:SOURCE_CHECKS:none';
+ const names=['Set up job','Run actions/checkout@v4','Run actions/setup-node@v4',...currentRequired,...inactiveLc20,'Post Run actions/setup-node@v4','Post Run actions/checkout@v4','Complete job'];
+ // The provider's post-action numbers are nonconsecutive; names and execution
+ // order bind the workflow, not an invented consecutive-number requirement.
+ f.input.jobs.jobs[0].steps=names.map((name,i)=>({name,number:i<17?i+1:i+16,status:'completed',conclusion:inactiveLc20.includes(name)?'skipped':'success'}));
+ f.input.jobLog=sourceCommands.map(command=>'##[group]Run '+command+'\n##[endgroup]\n').join('')+f.input.jobLog;
+ return f;
+}
+test('current source profile matches the checked-in workflow and only its five inapplicable LC20 steps',()=>{
+ const workflow=parseYaml(readFileSync(new URL('../../.github/workflows/ci.yml',import.meta.url),'utf8'));
+ assert.equal(workflow['run-name'],'evopilot:${{ inputs.runtime_request_id }}:${{ inputs.runtime_input_digest }}');
+ const steps=workflow.jobs.source.steps.slice(2);
+ assert.deepEqual(steps.map(s=>s.name??'Run '+s.run),[...currentRequired,...inactiveLc20]);
+ assert.deepEqual(steps.slice(1,7).map(s=>s.run),[...sourceCommands,'npm test']);
+ assert.equal(steps[9].if,"${{ github.event_name == 'workflow_dispatch' && inputs.runtime_request_id != '' && inputs.runtime_request_id != 'SOURCE_CHECKS' }}");
+ assert.deepEqual(steps.slice(10).map(s=>s.if),["${{ steps.lc20.outputs.mode == 'IMPLEMENTATION' }}","${{ steps.lc20.outputs.mode == 'EXECUTE' }}","${{ steps.lc20.outputs.mode == 'INVENTORY' }}","${{ success() && steps.lc20.outputs.mode != '' }}"]);
+});
+test('current native source job shape qualifies with command-named logs and exact inactive LC20 steps',async()=>{
+ for(const event of ['workflow_dispatch','push','pull_request']){
+  const f=currentFixture();f.input.run.event=event;if(event!=='workflow_dispatch')f.input.run.display_title='evopilot::';const r=await f.audit();assert.equal(r.recordIntegrity,'VERIFIED');assert.equal(r.counts.tests,7);assert.equal(r.counts.skipped,0);assert.equal(r.releaseAuthorized,false);assert.equal(r.productAcceptance,'NOT_EVALUATED');
+ }
+ const f=currentFixture();f.input.run.display_title='evopilot::none';assert.equal((await f.audit()).recordIntegrity,'VERIFIED');
+});
+test('every current required check remains mandatory, successful, completed and uniquely ordered',async()=>{
+ for(const name of currentRequired)for(const change of ['skipped','failure','cancelled','pending','missing','duplicate']){
+  const f=currentFixture(),steps=f.input.jobs.jobs[0].steps,index=steps.findIndex(s=>s.name===name);
+  if(change==='missing')steps.splice(index,1);else if(change==='duplicate')steps.push({...steps[index]});else if(change==='pending')steps[index].status='in_progress';else steps[index].conclusion=change;
+  await assert.rejects(f.audit,/SOURCE_CI_EVIDENCE/,name+': '+change);
+ }
+ const f=currentFixture();[f.input.jobs.jobs[0].steps[6],f.input.jobs.jobs[0].steps[7]]=[f.input.jobs.jobs[0].steps[7],f.input.jobs.jobs[0].steps[6]];await assert.rejects(f.audit,/step order/);
+});
+test('no other skipped step or active, missing, duplicated or reordered LC20 step qualifies',async()=>{
+ for(const name of inactiveLc20)for(const change of ['success','failure','cancelled','pending','missing','duplicate','renamed']){
+  const f=currentFixture(),steps=f.input.jobs.jobs[0].steps,index=steps.findIndex(s=>s.name===name);
+  if(change==='missing')steps.splice(index,1);else if(change==='duplicate')steps.push({...steps[index]});else if(change==='renamed')steps[index].name+=' unexpected';else if(change==='pending')steps[index].status='in_progress';else steps[index].conclusion=change;
+  await assert.rejects(f.audit,/SOURCE_CI_EVIDENCE/,name+': '+change);
+ }
+ for(const mutate of [s=>s.push({name:'Unrelated conditional step',status:'completed',conclusion:'skipped'}),s=>s[0].conclusion='skipped',s=>s.unshift(s.splice(12,1)[0])]){
+  const f=currentFixture();mutate(f.input.jobs.jobs[0].steps);await assert.rejects(f.audit,/SOURCE_CI_EVIDENCE/);
+ }
+});
+test('LC20 request mode and current-to-historical shape substitution cannot masquerade as Source checks',async()=>{
+ for(const title of [undefined,'Source checks','evopilot:request-1:'+('a'.repeat(64)),'evopilot:SOURCE_CHECKS_OTHER:none']){
+  const f=currentFixture();f.input.run.display_title=title;await assert.rejects(f.audit,/Source checks mode/);
+ }
+ for(const title of ['evopilot:SOURCE_CHECKS:none','evopilot:request-1:none']){
+  const f=fixture();f.input.run.display_title=title;await assert.rejects(f.audit,/SOURCE_CI_EVIDENCE/);
+ }
+ const f=currentFixture();f.input.jobs.jobs[0].labels=['runtime-lc20-isolated'];await assert.rejects(f.audit,/frozen macOS runner/);
+ const mixed=currentFixture();mixed.input.jobs.jobs[0].steps.push({name:'Run npm test',status:'completed',conclusion:'success'});await assert.rejects(mixed.audit,/Mixed historical/);
+});
+test('current command logs keep original names, complete source counts and exact uploaded artifact binding',async()=>{
+ for(const command of [...sourceCommands,'npm test']){
+  for(const duplicate of [false,true]){
+   const f=currentFixture(),marker='##[group]Run '+command+'\n';f.input.jobLog=f.input.jobLog.replace(marker,duplicate?marker+marker:'##[group]Different command\n');await assert.rejects(f.audit,/source command log/);
+  }
+ }
+ for(const change of [s=>s.replace('Run npm run build','Run TEMP').replace('Run npm run lint:correction','Run npm run build').replace('Run TEMP','Run npm run lint:correction'),s=>s.replace('tests 7','tests 0'),s=>s.replace('fail 0','fail 1'),s=>s.replace('skipped 0','skipped 1'),s=>s.replace('Artifact ID 23','Artifact ID 99')]){
+  const f=currentFixture();f.input.jobLog=change(f.input.jobLog);await assert.rejects(f.audit,/SOURCE_CI_EVIDENCE/);
+ }
+});
+
+test('current push and pull_request require the native empty-input title while historical source records remain valid',async()=>{
+ for(const event of ['push','pull_request']){
+  for(const title of [undefined,'Source checks','evopilot:SOURCE_CHECKS:none','evopilot:lc20-request:'+('a'.repeat(64)),'evopilot::none','evopilot:SOURCE_CHECKS:']){
+   const f=currentFixture();f.input.run.event=event;f.input.run.display_title=title;await assert.rejects(f.audit,/Source checks mode/);
+  }
+  const historical=fixture();historical.input.run.event=event;historical.input.run.display_title='Historical source checks';assert.equal((await historical.audit()).recordIntegrity,'VERIFIED');
+ }
 });

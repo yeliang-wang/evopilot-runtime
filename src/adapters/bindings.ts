@@ -515,7 +515,7 @@ export function createRegisteredQualificationService(store:RuntimeStore,configPa
       // An older or unclassified producer claim may belong to a current case.
       // Its absence cannot be guessed from today's producer mapping.
       const knownPredecessor=r.plan.bindingDigest===valueDigest(params)&&!Object.hasOwn(params,'workflowDigest')&&!Object.hasOwn(params,'qualificationProducer')&&(
-        r.stageId==='scope'&&r.plan.adapterId==='runtime-scope-stage-v1'&&r.plan.action==='base.scope'&&r.plan.adapterDigest===valueDigest({id:'runtime-scope-stage-v1',preparation:'runtime-preparation/v1',checks:['target-scope','requirements-mapping'],continuation:'explicit-local-commit'})||
+        r.stageId==='scope'&&r.plan.adapterId==='runtime-scope-stage-v1'&&r.plan.action==='base.scope'&&[valueDigest({id:'runtime-scope-stage-v1',preparation:'runtime-preparation/v1',checks:['target-scope','requirements-mapping'],continuation:'explicit-local-commit'}),valueDigest({id:'runtime-scope-stage-v1',preparation:'runtime-preparation/v1',checks:['target-scope','requirements-mapping'],continuation:'explicit-local-commit',failure:'observed-source-commit-mismatch/v1'})].includes(r.plan.adapterDigest)||
         r.stageId==='plan'&&r.plan.adapterId==='runtime-plan-stage-v1'&&r.plan.action==='base.plan'&&r.plan.adapterDigest===valueDigest({id:'runtime-plan-stage-v1',preparation:'runtime-preparation/v1',observation:'runtime-plan-observation/v1',owners:'native/v1',recovery:'inspect-original'}));
       // These two fixed preparation-stages.ts contracts produce scope/plan
       // evidence only. Unknown adapters or historical CI workflows stay unknown.

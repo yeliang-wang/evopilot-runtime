@@ -151,7 +151,7 @@ export function registeredPreparation(configPath:string,workspaceId:string):Prep
   };
 }
 
-const ID='runtime-scope-stage-v1',ADAPTER_DIGEST=valueDigest({id:ID,preparation:'runtime-preparation/v1',checks:['target-scope','requirements-mapping'],continuation:'explicit-local-commit'});
+const ID='runtime-scope-stage-v1',LEGACY_ADAPTER_DIGEST=valueDigest({id:ID,preparation:'runtime-preparation/v1',checks:['target-scope','requirements-mapping'],continuation:'explicit-local-commit'}),ADAPTER_DIGEST=valueDigest({id:ID,preparation:'runtime-preparation/v1',checks:['target-scope','requirements-mapping'],continuation:'explicit-local-commit',failure:'observed-source-commit-mismatch/v1'});
 interface ScopePlan {preparationRef:string;preparationDigest:string;factsDigest:string;platform:PlatformRegistration;sourceCommit:string;expectedChecks:string[];}
 export function createScopeStageAdapter(store:RuntimeStore,configPath:string,connections:Pick<BindingConnections,'platform'>):StageAdapter{
   const validate=registeredPreparation(configPath,store.workspaceId);
@@ -161,28 +161,45 @@ export function createScopeStageAdapter(store:RuntimeStore,configPath:string,con
   }
   function original(r:StageRequest,instance:LifecycleInstance,actor:Principal):{p:ScopePlan;packet:PreparationPacket}{
     authorize(actor,r.projectId,'read');const packet=selected(instance),p=r.plan.parameters as unknown as ScopePlan;
-    if(r.workspaceId!==store.workspaceId||r.projectId!==instance.pins.projectId||r.instanceId!==instance.id||r.pinsDigest!==instance.pinsDigest||r.stageId!=='scope'||r.plan.adapterId!==ID||r.plan.adapterDigest!==ADAPTER_DIGEST||r.plan.action!=='base.scope'||r.planDigest!==valueDigest(r.plan)||r.plan.bindingDigest!==valueDigest(p)||p.preparationRef!==instance.pins.targetRef||p.preparationDigest!==packet.digest||!same(p.expectedChecks,instance.definition.nodes.find(n=>n.id==='scope')!.checks))reject('STAGE_PLAN_MISMATCH','Scope evidence differs from its retained original plan',409);
+    if(r.workspaceId!==store.workspaceId||r.projectId!==instance.pins.projectId||r.instanceId!==instance.id||r.pinsDigest!==instance.pinsDigest||r.stageId!=='scope'||r.plan.adapterId!==ID||![LEGACY_ADAPTER_DIGEST,ADAPTER_DIGEST].includes(r.plan.adapterDigest)||r.plan.action!=='base.scope'||r.planDigest!==valueDigest(r.plan)||r.plan.bindingDigest!==valueDigest(p)||p.preparationRef!==instance.pins.targetRef||p.preparationDigest!==packet.digest||!same(p.expectedChecks,instance.definition.nodes.find(n=>n.id==='scope')!.checks))reject('STAGE_PLAN_MISMATCH','Scope evidence differs from its retained original plan',409);
     return{p,packet};
   }
-  function observation(r:StageRequest,p:ScopePlan,complete:boolean,evidenceRef:string):StageObservation{
-    return{requestId:r.id,inputDigest:r.inputDigest,adapterDigest:ADAPTER_DIGEST,phase:complete?'COMPLETE':'UNKNOWN',handle:{preparationRef:p.preparationRef},outcome:{requestId:r.id,inputDigest:r.inputDigest,receiptRef:'runtime:scope-stage/'+r.id,status:complete?'COMPLETE':'UNKNOWN',expiresAt:r.deadlineAt,checks:complete?p.expectedChecks.map(id=>({id,status:'PASS',evidenceRef})):[]}};
+  function observation(r:StageRequest,p:ScopePlan,phase:'COMPLETE'|'FAILED'|'UNKNOWN',evidenceRef:string):StageObservation{
+    const checks:StageObservation['outcome']['checks']=phase==='COMPLETE'?p.expectedChecks.map(id=>({id,status:'PASS',evidenceRef})):phase==='FAILED'?[{id:'base.scope.target-scope',status:'FAIL',evidenceRef}]:[];
+    return{requestId:r.id,inputDigest:r.inputDigest,adapterDigest:r.plan.adapterDigest,phase,handle:{preparationRef:p.preparationRef},outcome:{requestId:r.id,inputDigest:r.inputDigest,receiptRef:'runtime:scope-stage/'+r.id,status:phase,expiresAt:r.deadlineAt,checks}};
+  }
+  function sameSourceScope(source:Record<string,unknown>,r:StageRequest,p:ScopePlan,at:number):boolean{
+    return source.provider===p.platform.provider&&source.bindingDigest===valueDigest(p.platform)&&source.repositoryId===p.platform.repositoryId&&source.projectId===r.projectId&&typeof source.commit==='string'&&/^[a-f0-9]{40}$/.test(source.commit)&&typeof source.factsDigest==='string'&&/^sha256:[a-f0-9]{64}$/.test(source.factsDigest)&&typeof source.expiresAt==='string'&&Date.parse(source.expiresAt)>at;
   }
   async function inspect(r:StageRequest,instance:LifecycleInstance,_progress:unknown,actor:Principal,signal:AbortSignal):Promise<StageObservation>{
     signal.throwIfAborted();const{p}=original(r,instance,actor),raw=store.object(r.projectId,'scope-stage-evidence',r.id);
-    if(!raw)return observation(r,p,false,'runtime:scope-stage/'+r.id);
+    if(!raw)return observation(r,p,'UNKNOWN','runtime:scope-stage/'+r.id);
     const e=record(raw),{digest,...body}=e;
     if(digest!==valueDigest(body)||e.requestDigest!==r.digest||e.planDigest!==r.planDigest||e.preparationDigest!==p.preparationDigest)reject('CORRUPT_STAGE_EVIDENCE','Scope evidence changed',503);
-    return observation(r,p,true,String(digest));
+    if(e.schema==='runtime-scope-source-failure/v1'){
+      const source=record(e.source),at=Date.parse(String(e.verifiedAt));
+      if(r.plan.adapterDigest!==ADAPTER_DIGEST||e.reason!=='PREPARATION_SOURCE_CHANGED'||e.expectedSourceCommit!==p.sourceCommit||source.commit===p.sourceCommit||!Number.isFinite(at)||at<Date.parse(r.requestedAt)||at>Date.parse(r.deadlineAt)||!sameSourceScope(source,r,p,at)||e.authorityRef!==r.authorityRef||e.requirementsDigest!==instance.pins.requirementsDigest||valueDigest(e.facts)!==p.factsDigest)reject('CORRUPT_STAGE_EVIDENCE','Original confirmed source failure differs from its request',503);
+      return observation(r,p,'FAILED',String(digest));
+    }
+    if(e.schema!=='runtime-scope-evidence/v1')reject('CORRUPT_STAGE_EVIDENCE','Unsupported original scope evidence',503);
+    return observation(r,p,'COMPLETE',String(digest));
   }
   async function dispatch(r:StageRequest,instance:LifecycleInstance,permit:()=>Promise<Principal>,signal:AbortSignal):Promise<StageObservation>{
     let actor=await permit();const{p,packet}=original(r,instance,actor);
     if(store.object(r.projectId,'scope-stage-evidence',r.id))return inspect(r,instance,null,actor,signal);
     const facts=validate(packet,instance.definition,actor);if(valueDigest(facts)!==p.factsDigest)reject('PREPARATION_CHANGED','Reviewed preparation resources changed',409);
     const current=await connections.platform(p.platform).readiness(actor,signal);
-    if(current.commit!==p.sourceCommit||current.bindingDigest!==valueDigest(p.platform)||current.repositoryId!==p.platform.repositoryId||current.projectId!==r.projectId||Date.parse(current.expiresAt)<=Date.now())reject('PREPARATION_SOURCE_CHANGED','Exact reviewed source baseline is no longer current',409);
+    // Only a successful, live, correctly scoped provider observation can prove
+    // source mismatch. Transport/identity/expiry uncertainty still throws and
+    // is retained as UNKNOWN by the executor. Old request semantics stay intact.
+    if(!sameSourceScope(current as unknown as Record<string,unknown>,r,p,Date.now()))reject('PREPARATION_SOURCE_CHANGED','Exact reviewed source baseline is no longer current',409);
+    const failed=current.commit!==p.sourceCommit;
+    if(failed&&r.plan.adapterDigest===LEGACY_ADAPTER_DIGEST)reject('PREPARATION_SOURCE_CHANGED','Exact reviewed source baseline is no longer current',409);
     actor=await permit();signal.throwIfAborted();authorize(actor,r.projectId,'execution.request');
     if(actor.id!==r.initiatedBy.id||actor.revision!==r.initiatedBy.revision||Date.parse(r.deadlineAt)<=Date.now()||valueDigest(validate(packet,instance.definition,actor))!==p.factsDigest)reject('PREPARATION_CHANGED','Original scope authority or inputs changed before retention',409);
-    const body={schema:'runtime-scope-evidence/v1',requestDigest:r.digest,planDigest:r.planDigest,preparationDigest:packet.digest,authorityRef:r.authorityRef,requirementsDigest:instance.pins.requirementsDigest,facts,source:current,verifiedAt:new Date().toISOString(),softwareRelease:false},evidence={...body,digest:valueDigest(body)};
+    const verifiedAt=new Date().toISOString();
+    if(failed&&!sameSourceScope(current as unknown as Record<string,unknown>,r,p,Date.parse(verifiedAt)))reject('PREPARATION_SOURCE_CHANGED','Source observation expired before failure retention',409);
+    const body={schema:failed?'runtime-scope-source-failure/v1':'runtime-scope-evidence/v1',requestDigest:r.digest,planDigest:r.planDigest,preparationDigest:packet.digest,authorityRef:r.authorityRef,requirementsDigest:instance.pins.requirementsDigest,facts,source:current,verifiedAt,softwareRelease:false,...(failed?{reason:'PREPARATION_SOURCE_CHANGED',expectedSourceCommit:p.sourceCommit}:{})},evidence={...body,digest:valueDigest(body)};
     store.mutate(actor,{projectId:r.projectId,operation:'lifecycle.scope.evidence',requestId:'scope-fact-'+randomUUID(),expectedRevision:store.revision(r.projectId),input:{stageRequestId:r.id,digest:evidence.digest},permission:'execution.request'},()=>({objects:[{kind:'scope-stage-evidence',id:r.id,value:evidence}],value:{stageRequestId:r.id,evidenceRef:evidence.digest},event:{type:'scope-evidence-retained',data:{instanceId:r.instanceId,stageRequestId:r.id,evidenceRef:evidence.digest}}}));
     return inspect(r,instance,null,actor,signal);
   }
