@@ -204,6 +204,14 @@ export async function loadFixedAcceptanceRegistry(root) {
   const missingExports=[];for(const [load,name] of modules){const module=await load();if(typeof module[name]!=='function'){missingExports.push(name);continue;}const rows=module[name](catalog);assert(rows instanceof Map);for(const [id,row] of rows){assert(!registrations.has(id));assert.equal(id,row.caseInstanceId);assert.equal(typeof row.call,'function');registrations.set(id,row);}}
   const gaps=catalog.filter(c=>!registrations.has(c.caseInstanceId)).map(c=>({caseInstanceId:c.caseInstanceId,phase:c.phase,reason:'MISSING_IMPLEMENTED_CALLBACK'}));
   const cases=catalog.map(c=>{const r=registrations.get(c.caseInstanceId);return{id:c.caseInstanceId,phase:c.phase,dependsOn:r?[...new Set([...r.dependsOn,...r.evidenceDependsOn])]:[],entry:r?.entry??(c.collector??('tests/acceptance/v090/'+(c.scenario==='UT'?'usage':'correction')+'.test.mjs'))+'#'+c.caseInstanceId};});
+  // Keep E20's original 675 evidence obligations in its registration and reader.
+  // In the scheduling graph, its required CV07 node already requires all 447
+  // E03 siblings. Removing only those duplicate direct edges preserves reachability
+  // without increasing the public planner's bounded JSON input profile.
+  const inventory=cases.find(c=>c.id==='E03.CV07'),closure=cases.find(c=>c.id==='E20.journey');
+  if(inventory&&closure&&inventory.dependsOn.length===447&&closure.dependsOn.includes(inventory.id)&&inventory.dependsOn.every(id=>closure.dependsOn.includes(id))){
+    const throughInventory=new Set(inventory.dependsOn);closure.dependsOn=closure.dependsOn.filter(id=>!throughInventory.has(id));
+  }
   const entries=new Map([...registrations.values()].map(r=>[r.entry,r.call]));
   return{catalog,cases,entries,registrations,gaps,missingExports,fullCatalogCallable:gaps.length===0,productAcceptance:'NOT_EVALUATED',dispatchAuthorized:false};
 }

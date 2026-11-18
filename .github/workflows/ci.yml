@@ -54,6 +54,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # Compatibility tests execute a digest-pinned ancestor's real reader.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.runtime_request_id == '' || inputs.runtime_request_id == 'SOURCE_CHECKS' }}
         with:

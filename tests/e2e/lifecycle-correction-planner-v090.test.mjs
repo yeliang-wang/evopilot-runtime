@@ -1602,6 +1602,33 @@ test('LC02 fixed source registry identifies real native campaign dependencies an
  // it can read a selected installation, fixture or authorization file.
  for(const r of registry.registrations.values())await assert.rejects(r.call({selectionRef:'/must-not-open/selection.json',phase:r.phase==='PRE_RELEASE'?'POST_RELEASE':'PRE_RELEASE',signal:new AbortController().signal}),/POST callbacks cannot run/);
 });
+test('E03 coverage inventory executes after 447 originals while preserving the fixed campaign catalog',async()=>{
+ const {caseCampaignExecutionCases}=await import('../acceptance/v090/support.mjs');
+ const {loadFixedAcceptanceRegistry}=await import('../acceptance/v090/preflight.mjs');
+ const {fileURLToPath}=await import('node:url');
+ const registry=await loadFixedAcceptanceRegistry(fileURLToPath(new URL('../../',import.meta.url)));
+ const catalog=JSON.parse(fs.readFileSync(new URL('../../governance/parameter-matrix-v090.json',import.meta.url))).caseInstances;
+ const cases=catalog.filter(c=>c.scenario==='E03'),original=structuredClone(cases);
+ const ordered=caseCampaignExecutionCases('E03',cases),inventory=registry.registrations.get('E03.CV07');
+ assert.equal(cases.length,448);assert.equal(ordered.at(-1).caseInstanceId,'E03.CV07');
+ assert.deepEqual(ordered.slice(0,-1),cases.filter(c=>c.caseInstanceId!=='E03.CV07'));
+ assert.deepEqual(cases,original);assert.equal(new Set(ordered.map(c=>c.caseInstanceId)).size,448);
+ assert.deepEqual(inventory.evidenceDependsOn,ordered.slice(0,-1).map(c=>c.caseInstanceId));
+ assert.deepEqual(inventory.executionCaseIds,['E03.CV07'],'Inventory consumes original reports without rerunning siblings');
+ const nodes=new Map(registry.cases.map(c=>[c.id,c]));
+ const closure=id=>{const visited=new Set();function visit(key){for(const dependency of nodes.get(key).dependsOn){if(!visited.has(dependency)){visited.add(dependency);visit(dependency);}}}visit(id);return visited;};
+ const fullObligations=registry.registrations.get('E20.journey').evidenceDependsOn;
+ assert.equal(fullObligations.length,675,'E20 retains every original evidence obligation');
+ const graphObligations=closure('E20.journey');assert(fullObligations.every(id=>graphObligations.has(id)));
+ assert(nodes.get('E20.journey').dependsOn.includes('E03.CV07'));
+ assert(inventory.evidenceDependsOn.every(id=>!nodes.get('E20.journey').dependsOn.includes(id)));
+ assert(Buffer.byteLength(JSON.stringify(registry.cases))<250000,'Exact graph fits the existing public profile with binding headroom');
+ const executed=new Set();for(const c of ordered){if(c.caseInstanceId==='E03.CV07')assert(inventory.evidenceDependsOn.every(id=>executed.has(id)));assert(!executed.has(c.caseInstanceId));executed.add(c.caseInstanceId);}
+ assert.throws(()=>caseCampaignExecutionCases('E03',cases.slice(1)));
+ assert.throws(()=>caseCampaignExecutionCases('E03',cases.map((c,i)=>i===0?cases[1]:c)));
+ assert.throws(()=>caseCampaignExecutionCases('E03',cases.map(c=>c.caseInstanceId==='E03.CV07'?{...c,caseInstanceId:'E03.foreign'}:c)));
+ for(const scenario of ['E01','E02','E05','E10','E16','E17']){const other=catalog.filter(c=>c.scenario===scenario);assert.deepEqual(caseCampaignExecutionCases(scenario,other),other);}
+});
 test('LC02 callable admission binds exact case closure before reading live selected materials',async()=>{
  const {assertCallableSelection,registerFixedScenario}=await import('../acceptance/v090/preflight.mjs');
  const catalog=[{scenario:'E09',caseInstanceId:'E09.journey',phase:'PRE_RELEASE'},{scenario:'E09',caseInstanceId:'E09.CV07',phase:'PRE_RELEASE'}];let calls=0;
