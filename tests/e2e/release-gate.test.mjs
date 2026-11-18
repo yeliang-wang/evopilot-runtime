@@ -72,6 +72,19 @@ test('actual preparation adapter is read-only, preserves all six bytes and keeps
  const selected=JSON.parse(fs.readFileSync(join(f.input.outputRoot,'candidate-input.json')));assert.equal(selected.schema,'runtime-release-candidate-input/v1');assert.equal(selected.sourceCommit,f.input.sourceCommit);assert.equal(selected.sourceCi.artifactZip.sha256,f.input.artifactDigest);assert(selected.sourceCi.run.ref.includes('/source-ci/'));assert(!JSON.stringify(result).includes(f.root));
  await assert.rejects(f.prepare);assert.equal(f.calls.length,6,'Occupied outputs never start an automatic retry');
 });
+test('CI archive download uses the GitHub API media type while verifying the original binary ZIP',async t=>{
+ const f=fixture(t);let downloads=0;
+ const github=async(method,endpoint,options)=>{
+  if(endpoint.endsWith('/zip')){
+   downloads++;assert.equal(options.accept,'application/vnd.github+json');
+   assert.equal(options.maxBytes,128*1024*1024);
+  }
+  return f.github(method,endpoint,options);
+ };
+ const result=await prepareCiDistribution(f.input,{github});assert.equal(downloads,1);
+ assert.equal(result.artifactDigest,f.input.artifactDigest);
+ assert.equal(result.status,'PACKAGE_STAGED_ONLY');assert.equal(result.releaseAuthorized,false);
+});
 test('foreign/failed CI and ambiguous or changed artifacts stop preparation and retain safe failure evidence',async t=>{
  for(const mutate of [f=>f.run.repository={id:1,full_name:'foreign/repo'},f=>f.run.conclusion='failure',f=>f.artifact.digest='sha256:'+'0'.repeat(64),f=>f.values.get('repos/'+repository+'/actions/runs/12/artifacts?per_page=100').total_count=2]){const f=fixture(t);mutate(f);await assert.rejects(f.prepare);const failure=JSON.parse(fs.readFileSync(join(f.input.outputRoot,'failure.json')));assert.equal(failure.automaticRetry,false);assert.equal(failure.evidenceRetained,true);assert(!fs.existsSync(join(f.input.outputRoot,'candidate-input.json')));}
 });
