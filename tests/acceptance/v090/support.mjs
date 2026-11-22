@@ -148,8 +148,7 @@ export async function openScenario(scenario,callableRegistration,callableContext
   else{assert(selectedIds.every(id=>['E03.CV02','E03.MC03','E03.variant.09'].includes(id)),'E03 named principals require EX01 selected or an exact supported permission/reentry case');keys(selection.principals,selectedIds.includes('E03.CV02')?['activator','editor','monitor']:['activator','editor']);}
  }
 
- if(scenario==='E03'&&selectedIds.includes('E03.EX01')){
-  assert(selectedIds.includes('E03.EX01'),'E03 named principals require EX01 selected');
+ if(scenario==='E03'&&selectedIds.includes('E03.EX01')&&!selection.caseCampaign){
   assert(selection.principals,'E03.EX01 requires a protected beta connection');keys(selection.principals,['beta']);
   const beta=selection.principals.beta;keys(beta,['connectionRef','connectionSha256','principalId','projectId','expectedPermissions']);
   assert.equal(typeof beta.connectionRef,'string');assert(/^[a-f0-9]{64}$/.test(beta.connectionSha256));
@@ -163,7 +162,7 @@ export async function openScenario(scenario,callableRegistration,callableContext
  // EX02's positive controls must be explicit protected provider inputs, never
  // structurally generated fixtures or invented owner/platform readiness.
  const fieldClassificationPins=selection.fieldClassification===undefined?null:structuredClone(selection.fieldClassification);
- if(scenario==='E03'&&selectedIds.includes('E03.EX02'))assert(fieldClassificationPins,'E03.EX02 requires selected fieldClassification inputs');
+ if(scenario==='E03'&&selectedIds.includes('E03.EX02')&&!selection.caseCampaign)assert(fieldClassificationPins,'E03.EX02 requires selected fieldClassification inputs');
  if(Object.hasOwn(selection,'fieldClassification')){
   assert.equal(scenario,'E03','fieldClassification is scoped to E03.EX02');assert(selectedIds.includes('E03.EX02'),'fieldClassification requires E03.EX02 selected');
   keys(fieldClassificationPins,['github','gitlab']);

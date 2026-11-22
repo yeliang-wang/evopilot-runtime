@@ -604,6 +604,30 @@ test('E05 live parent campaign defers native EX11 fixture validation to its exac
  }finally{if(prior===undefined)delete process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;else process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION=prior;f.cleanup();}
 });
 
+test('E03 campaign defers EX01 and EX02 inputs while singleton checks remain strict',async()=>{
+ const {openScenario,sha}=await import('../acceptance/v090/support.mjs');
+ const fixture=collectorFixture(), prior=process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;
+ try{
+  const ref=path.join(fixture.root,'campaign.json'), bytes=Buffer.from('{}');
+  fs.writeFileSync(ref,bytes,{mode:0o600});
+  const filename=path.join(fixture.root,'selection.json'),installedRoot=path.join(fixture.root,'absent-installation');
+  const selection={schema:'runtime-v090-acceptance-selection/v1',installedRoot,expectedManifestDigest:'a'.repeat(64),connectionRef:path.join(installedRoot,'connection.json'),workspaceId:'test',projectId:'test',runId:'e03-neutral-anchor',outputRoot:path.join(fixture.root,'must-not-exist'),qualification:'DEVELOPMENT'};
+  process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION=filename;
+  const write=value=>fs.writeFileSync(filename,JSON.stringify(value),{mode:0o600});
+  write({...selection,caseIds:['E03.EX01','E03.EX02'],caseCampaign:{ref,sha256:sha(bytes)}});
+  await assert.rejects(openScenario('E03'),error=>error.code==='ENOENT'&&error.path.startsWith(installedRoot));
+  write({...selection,caseIds:['E03.EX01']});
+  await assert.rejects(openScenario('E03'),/requires a protected beta connection/);
+  write({...selection,caseIds:['E03.EX02']});
+  await assert.rejects(openScenario('E03'),/requires selected fieldClassification inputs/);
+  assert.equal(fs.existsSync(selection.outputRoot),false);
+ }finally{
+  if(prior===undefined)delete process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION;
+  else process.env.EVOPILOT_V090_ACCEPTANCE_SELECTION=prior;
+  fixture.cleanup();
+ }
+});
+
 // Guard regressions only: these synthetic inputs never establish native journeys.
 test('E05 journey preserves original Host stdout and rejects unrecognized output',async()=>{
  const {parseOriginalCodingHostStdout:parse}=await import('../acceptance/v090/execution.mjs');
