@@ -641,7 +641,7 @@
   "implementationBindings": {
     "governance/lifecycle-contract-v090.json": "5b18d80a73ec6ce249254aef2f78318aaac3c797d9b39d113993a4a66de966a1",
     "governance/parameter-matrix-v090.json": "27e01ab86483a5adf379f15c8987a4ba40017b222a5b31b699a5246143d43367",
-    "governance/environment-contract-v090.json": "08f292b80c942613af8ce70f99c680357f81ca4eab6609b3609c4144305f4cb5",
+    "governance/environment-contract-v090.json": "ba1f729e68c2f57c66c8c2a53835c04135ddb93913dafcffa2a6a1d2ec93052b",
     "governance/token-usage-v090.json": "644e7a3c4360f37db1184023e86fda71268cb6f34cef1179a33420a4b74d75e1",
     "governance/lifecycle-correction-v090.json": "46798eacfaac0e73fdaee91ca160dc5c2587e4acf834f0fef9867617df1ec365"
   },
