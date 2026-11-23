@@ -1697,3 +1697,11 @@ functionality or evidence that any acceptance instance has passed.
 ## Approved lifecycle correction addendum (2026-11-09)
 
 [The correction ADR](runtime-v090-correction.md) and `governance/lifecycle-correction-v090.json` add bounded correction, independent branch continuation and versioned evidence applicability. Original 688 acceptance cases remain unchanged; 21 additive cases make 709 (698 PRE, 11 POST). Three separate handoff cases target the exact `EvoPilot-ontology v0.9.0 Preview` chat after installed Runtime delivery. No new owner version or release decision is inferred.
+
+## Decision amendment for the public limited v0.9.0 Preview
+
+The public Preview is a distinct package profile tied to the exact distribution bytes. The package profile takes precedence over the full Runtime authority surface for this distribution. It allows authenticated status and definition reads, local YAML compilation, local draft writes, graph preview and read-only monitoring. It has no execution, activation, coding Agent, CI, provider, release, import or migration authority. The profile cannot be selected or lifted by a caller's HTTP input, CLI option, credential role or integration registration. The full engineering build and its acceptance plan retain the original contract.
+
+A documentation-only limitation would leave unsupported operations callable and cannot satisfy the agreed boundary. The chosen profile reuses the existing compiler, store and browser pages with server-side operation admission and installer restrictions. It uses a dedicated isolated state root. No live database conversion, shared configuration edit or daily Codex plugin switch is part of the cutover. Stop the isolated service to roll back its use and retain its data and original evidence. Moving a draft into a later full deployment requires the ordinary reviewed initialization flow.
+
+The limited acceptance observes package identity, native install and service control, authorized YAML/draft and graph behavior, read-only monitor behavior, rejection of prohibited calls on normal entries, and documented distribution boundaries. Downloaded package and native install readback occur after publication.

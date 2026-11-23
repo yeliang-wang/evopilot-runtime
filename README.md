@@ -8,6 +8,10 @@ Runtime is an independent lifecycle service. It owns project definitions, goals,
 
 [Operator guide](docs/runtime-v090.md) · [Lifecycle API](docs/lifecycle-api.md) · [Documentation](docs/README.md) · [Fixed acceptance](docs/acceptance-v090.md)
 
+## Public limited Preview
+
+The `limited-preview` package supports isolated local service control, Project Lifecycle YAML validation, draft editing, graph preview and read-only monitoring on macOS arm64. Install into a new private root with an `editor` or `reader` principal, `integrationsRef: null` and `codex: null`. Activation, execution, external providers, CI dispatch, upgrades and desktop registration are unavailable. The full engineering target is described below.
+
 ## Capabilities
 
 | Capability | Behavior |
@@ -36,9 +40,9 @@ chmod 600 distribution-manifest.json
 node unpacked/package/dist/server/cli.js help
 ```
 
-The standalone archive contains its runtime dependencies; it needs no parent source, development compiler or network dependency installation. The npm tarball is the compiled SDK package, accompanied by the exact dependency lock. GitHub Releases are the distribution channel; there is no npm registry publication.
+The standalone archive contains its runtime dependencies; it needs no parent source, development compiler or network dependency installation. The npm tarball ships the limited local commands with a separate dependency lock. GitHub Releases are the distribution channel; there is no npm registry publication.
 
-Prepare a protected exact installation plan using the [operator guide](docs/runtime-v090.md). The installer verifies the archive, complete file inventory, executable identity and selected scope before staging or starting the service. One installation registers the Runtime Skill and HTTP MCP connection together. Current Host readback remains required; a written configuration is not completed deployment. Preserve a verified stopped backup before migration and inspect original receipts after uncertainty.
+Prepare a protected exact installation plan using the [operator guide](docs/runtime-v090.md). The installer verifies the archive, complete file inventory, executable identity and selected scope before staging or starting the service. In the limited distribution, run `node unpacked/package/dist/installation/installer.js install --plan-ref <private-plan.json>`. Open the Dashboard using a one-use code from `browser-code`. Use the original draft receipt after an uncertain save.
 
 ### Develop from source
 

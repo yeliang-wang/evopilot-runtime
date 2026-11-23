@@ -8,6 +8,10 @@ Runtime 是独立生命周期服务，负责项目定义、目标、Target、实
 
 [使用指南](docs/zh-CN/runtime-v090.md) · [生命周期 API（英文）](docs/lifecycle-api.md) · [中文文档](docs/zh-CN/README.md) · [固定验收](docs/acceptance-v090.md)
 
+## 公开限定 Preview
+
+`limited-preview` 包在 macOS arm64 的新建隔离环境中提供本地服务启停、Project Lifecycle YAML 校验、草稿编辑、流程图预览与只读监控。安装计划使用 `editor` 或 `reader`，将字段设为 `integrationsRef: null` 和 `codex: null`。启用定义、执行业务、远端 Provider、触发 CI、升级和桌面插件注册均不可用。下文描述完整开发目标。
+
 ## 能力
 
 | 能力 | 行为 |
@@ -36,9 +40,9 @@ chmod 600 distribution-manifest.json
 node unpacked/package/dist/server/cli.js help
 ```
 
-独立归档包含运行依赖，无需父项目源码、开发编译器或联网安装依赖。npm tarball 是编译后的 SDK 包，附带准确依赖锁。发行渠道为 GitHub Releases，不向 npm registry 发布。
+独立归档包含运行依赖，无需父项目源码、开发编译器或联网安装依赖。npm tarball 提供限定本地命令，并附有依赖锁。发行渠道为 GitHub Releases，不向 npm registry 发布。
 
-按照[使用指南](docs/zh-CN/runtime-v090.md)准备受保护的精确安装计划。安装器在准备包或启动服务前核验归档、完整文件清单、可执行文件身份及选定范围。一次安装同时注册 Runtime Skill 与 HTTP MCP 连接；仍需当前 Host 实际回读，写入配置不等于部署完成。迁移前保留已核验的停止状态备份；结果不明时先检查原回执。
+按照[使用指南](docs/zh-CN/runtime-v090.md)准备受保护的精确安装计划。安装器在准备包或启动服务前核验归档、完整文件清单、可执行文件身份及选定范围。限定发行使用 `node unpacked/package/dist/installation/installer.js install --plan-ref <private-plan.json>` 安装，并用 `browser-code` 生成一次性代码打开本地 Dashboard。保存草稿结果不明时检查原回执。
 
 ### 从源码开发
 

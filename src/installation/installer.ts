@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {limitedPreview, previewRole, previewState, previewUnavailable} from '../server/preview.js';
 import {execFile} from 'node:child_process';
 import {verifyCodexExecutable} from '../adapters/external-agent.js';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
@@ -92,6 +93,8 @@ function verifyDistribution(root:string,manifest:Distribution,allowMissing=false
 function validatePlan(plan:RuntimeInstallPlan,retained=false):void{
   exact(record(plan),['schema','root','distribution','nodeExecutable','nodeSha256','workspaceId','projectId','principalId','role','credentialExpiresAt','port','integrationsRef','codex'],['legacyMigration','legacyOwnerHost','legacyProviders','workspaceOperator','workspaceSetup']);
   if(plan.schema!=='runtime-install-plan/v1'||!Object.hasOwn(ROLES,plan.role)||!Number.isSafeInteger(plan.port)||plan.port<1024||plan.port>65535)reject('INSTALLATION_PLAN','Invalid installation parameters');
+  previewRole(plan.role);
+  if(limitedPreview && (plan.integrationsRef!==null || plan.codex!==null || plan.legacyMigration || plan.legacyOwnerHost || plan.legacyProviders || plan.workspaceOperator || plan.workspaceSetup)) previewUnavailable();
   absolute(plan.root);(retained?absolute:existing)(plan.nodeExecutable);hash(plan.nodeSha256);slug(plan.workspaceId);slug(plan.projectId);slug(plan.principalId);
   if(!Number.isFinite(Date.parse(plan.credentialExpiresAt)))reject('INSTALLATION_PLAN','Choose an explicit credential expiration');
   if(plan.integrationsRef!==null){(retained?absolute:existing)(plan.integrationsRef);if(!retained)readPrivateJson(plan.integrationsRef);}
@@ -137,7 +140,7 @@ async function prepareMigration(plan:RuntimeInstallPlan,spec:UserServiceSpecific
   }finally{store.close();}
 }
 function bootstrap(plan:RuntimeInstallPlan):void{
-  const tokenRef=join(plan.root,'client.json'),state=join(plan.root,'data');ensurePrivateRoot(state);
+  const tokenRef=join(plan.root,'client.json'),state=join(plan.root,'data');previewState(state,plan.workspaceId,true);ensurePrivateRoot(state);
   if(!existsSync(tokenRef)){
     if(existsSync(join(state,'auth.json')))reject('INSTALLATION_CREDENTIAL','Existing authority has no matching retained client credential');
     if(Date.parse(plan.credentialExpiresAt)<=Date.now()||Date.parse(plan.credentialExpiresAt)>Date.now()+30*86400000)reject('INSTALLATION_CREDENTIAL','A new credential must expire within thirty days');
@@ -154,6 +157,12 @@ function stage(plan:RuntimeInstallPlan):UserServiceSpecification{
   if(plan.legacyProviders){const selected=readLegacyProviderConfiguration(plan.legacyProviders.ref);if(digest(selected)!==plan.legacyProviders.digest)reject('LEGACY_PROVIDER_CHANGED','Original provider selection differs from this immutable installation plan',409);if(selected.workspaceId!==plan.workspaceId||!selected.projects.includes(plan.projectId)||selected.legacyBindingRef!==join(plan.root,'legacy-binding.json'))reject('LEGACY_PROVIDER_SCOPE','Original provider selection must bind this exact installation migration',403);}
   if(plan.legacyOwnerHost){const selected=readLegacyOwnerHostConfiguration(plan.legacyOwnerHost.ref);if(digest(selected)!==plan.legacyOwnerHost.digest)reject('OWNER_HOST_CHANGED','Owner Host selection differs from this immutable installation plan',409);if(selected.workspaceId!==plan.workspaceId||selected.projectId!==plan.projectId||selected.legacyBindingRef!==join(plan.root,'legacy-binding.json'))reject('OWNER_HOST_SCOPE','Owner Host selection must bind this exact installation migration',403);}
   const manifest=readDistribution(plan),dest=join(plan.root,'package');
+  if(limitedPreview){
+    const bytes=readFileSync(join(plan.distribution.packageRoot,'package.json'));
+    const pin=manifest.files['package.json'];
+    if(pin?.type!=='file' || pin.sha256!==createHash('sha256').update(bytes).digest('hex') ||
+       record(JSON.parse(bytes.toString('utf8'))).evopilotDistributionProfile!=='limited-preview') previewUnavailable();
+  }
   if(!existsSync(dest))mkdirSync(dest,{mode:0o700});verifyDistribution(dest,manifest,true);
   const entries=Object.entries(manifest.files).sort((a,b)=>Number(a[1].type==='symlink')-Number(b[1].type==='symlink'));
   for(const [name,pin] of entries){const target=join(dest,name);if(entryExists(target))continue;mkdirSync(dirname(target),{recursive:true,mode:0o700});if(pin.type==='symlink')symlinkSync(pin.target,target);else copyFileSync(join(plan.distribution.packageRoot,name),target,constants.COPYFILE_EXCL);}
@@ -277,6 +286,7 @@ export async function runInstaller(plan:RuntimeInstallPlan,command:InstallerComm
 }
 export async function installerMain(argv:string[],output:{write(v:string):unknown}=process.stdout):Promise<number>{
   try{
+    if(limitedPreview && ['service-upgrade','online','online-worker','toolchain','service'].includes(argv[0])) previewUnavailable();
     if(argv[0]==='service-upgrade'){
       output.write(canonicalEvidence(await serviceUpgradeCommand(argv.slice(1)))+'\n');return 0;
     }

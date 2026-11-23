@@ -163,3 +163,9 @@ not restored. Strict TypeScript remains required for new core logic.
 ## Approved lifecycle correction addendum (2026-11-09)
 
 [The correction ADR](architecture/runtime-v090-correction.md) and `governance/lifecycle-correction-v090.json` add bounded correction, independent branch continuation and versioned evidence applicability. Original 688 acceptance cases remain unchanged; 21 additive cases make 709 (698 PRE, 11 POST). Three separate handoff cases target the exact `EvoPilot-ontology v0.9.0 Preview` chat after installed Runtime delivery. No new owner version or release decision is inferred.
+
+## Runtime v0.9.0 limited Preview
+
+The independently published Runtime Preview uses tag `v0.9.0` with the GitHub prerelease marker. Its macOS arm64 distribution supports local service control, Project Lifecycle YAML validation, draft editing, graph preview and read-only monitoring in a fresh isolated project. The distribution must enforce these limits across CLI, HTTP, MCP and Dashboard entry points.
+
+The limited gate is additive. The original full v0.9 acceptance catalogue and its evidence remain intact. The limited release does not certify real Desktop, full lifecycle operation, live CI or platform writes, workspace upgrade, or the daily installation. The release receipt must bind the exact candidate and the limited policy. A successful downloaded isolated installation precedes the separate Ontology handoff.

@@ -177,6 +177,16 @@ export function evaluateGovernance(root: string, request: GovernanceRequest): Ga
     }
     sameIds(ids(roadmap.value.milestones), ['M0','M1','M2','M3','M4','M5','M6'], 'Roadmap milestones changed');
     sameIds(list(target.value.milestones).map(text), ['M0','M1','M2','M3','M4','M5','M6'], 'Target milestones changed');
+    if (roadmap.value.limitedPreview !== undefined || target.value.limitedPreview !== undefined) {
+      const preview = object(roadmap.value.limitedPreview);
+      if (governanceDigest(JSON.stringify(preview)) !== governanceDigest(JSON.stringify(object(target.value.limitedPreview)))) fail('Limited Preview policy binding drift');
+      if (preview.id !== 'runtime-v090-limited-preview' || preview.tag !== 'v0.9.0' || preview.prerelease !== true ||
+          preview.distributionMode !== 'limited-preview' || preview.platform !== 'darwin-arm64' || preview.fullAcceptancePreserved !== true)
+        fail('Invalid limited Preview release identity');
+      sameIds(list(preview.preRelease).map(text), ['LP01','LP02','LP03','LP04','LP05','LP06'], 'Limited Preview pre-release cases changed');
+      sameIds(list(preview.postRelease).map(text), ['LP07','LP08'], 'Limited Preview post-release cases changed');
+      if (!object(target.value.workPackets).M6) fail('Limited Preview release work packet missing');
+    }
     if (request.mode === 'check') return result('VALID', 'Scope and coverage structure are consistent; product results are not evaluated.');
     if (request.mode === 'release') return result('BLOCKED', 'Governance structure is valid, but this scope-only command has no exact candidate evidence or authenticated release decision. Prepare the native review with node scripts/release-gate.mjs preflight <private-input.json> <new-private-output>; the trusted local publication entry rechecks this governance and verifies the existing exact release decision. No CLI flag or implementation authorization grants publication.');
     const match = /^runtime-v0\.9\/(M[0-6]):\s*\S.+$/.exec(request.intent ?? '');

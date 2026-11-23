@@ -15,6 +15,7 @@ import { IMPLEMENTATION_REVIEW_READS, IMPLEMENTATION_REVIEW_WRITES } from '../li
 import {EXTENSION_REVIEW_READS,EXTENSION_REVIEW_WRITES} from '../lifecycle/extension-review.js';
 import {LEGACY_READ,LEGACY_WRITE} from '../compat/catalog.js';
 import {USAGE_READS,USAGE_WRITES} from '../usage/service.js';
+import {limitedPreview, supportedOperations} from './preview.js';
 
 export const HTTP_PROTOCOLS = ['2025-06-18','2025-11-25'] as const;
 export const READ_OPERATIONS = ['runtime.status','runtime.projects.list','runtime.events.read','runtime.receipt.read',LEGACY_READ,...DEFINITION_READS,...AUTHORITY_READS,...EXECUTION_READS,...PREPARATION_READS,...AGENT_READS,...IMPLEMENTATION_REVIEW_READS,...EXTENSION_REVIEW_READS,...USAGE_READS,...CORRECTION_READS,...QUALIFICATION_READS] as const;
@@ -22,11 +23,11 @@ export const WRITE_OPERATIONS=[LEGACY_WRITE,...DEFINITION_WRITES,...AUTHORITY_WR
 /** The same scoped dispatcher serves HTTP and MCP; the transport never opens state itself. */
 export function runtimeToolDefinitions():Tool[]{return [{
     name: 'runtime_read', description: 'Read authenticated project lifecycle service state. This operation cannot activate definitions, execute work, or authorize a release.',
-    inputSchema: { type: 'object', properties: { operation: { type: 'string', enum: [...READ_OPERATIONS] }, projectId: { type: 'string' }, input: { type: 'object' } }, required: ['operation','projectId','input'], additionalProperties: false },
+    inputSchema: { type: 'object', properties: { operation: { type: 'string', enum: supportedOperations(READ_OPERATIONS) }, projectId: { type: 'string' }, input: { type: 'object' } }, required: ['operation','projectId','input'], additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },{
-    name:'runtime_write',description:'Use exact scoped mutations: save/activate definitions, retain evidence-bound decisions, create authorized instances, explicitly request a governed stage, or inspect its original provider request. Stage requests may dispatch external work only after separate current execution/release authority and fixed gates. Unknown outcomes cannot be blindly retried.',
-    inputSchema:{type:'object',properties:{operation:{type:'string',enum:[...WRITE_OPERATIONS]},projectId:{type:'string'},input:{type:'object'},requestId:{type:'string'},expectedRevision:{type:'integer',minimum:0}},required:['operation','projectId','input','requestId','expectedRevision'],additionalProperties:false},
+    name:'runtime_write',description:limitedPreview?'Save a scoped local lifecycle draft.':'Use exact scoped mutations: save/activate definitions, retain evidence-bound decisions, create authorized instances, explicitly request a governed stage, or inspect its original provider request. Stage requests may dispatch external work only after separate current execution/release authority and fixed gates. Unknown outcomes cannot be blindly retried.',
+    inputSchema:{type:'object',properties:{operation:{type:'string',enum:supportedOperations(WRITE_OPERATIONS)},projectId:{type:'string'},input:{type:'object'},requestId:{type:'string'},expectedRevision:{type:'integer',minimum:0}},required:['operation','projectId','input','requestId','expectedRevision'],additionalProperties:false},
     annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:true,openWorldHint:true},
   }];}
 export async function handleMcp(req: IncomingMessage, res: ServerResponse, body: unknown, version: string, dispatch: (value: unknown) => unknown|Promise<unknown>, requestId: string): Promise<void> {

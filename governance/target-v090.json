@@ -2,7 +2,7 @@
   "schema": "evopilot-evolution-target/v1",
   "id": "runtime-v090-independent-lifecycle",
   "targetVersion": "0.9.0",
-  "roadmapDigest": "2c793158b3109dcbb43a277ef4c6a839984cac8420bea120df0682d869bcadb8",
+  "roadmapDigest": "a8a7018cd4d9da5f9c955c6af438ac21a045d86d4dccbd7d4613d0a29eede798",
   "acceptanceDigest": "612f78eefdeae8af3f8170656cc6d31a7208ea91b7415a86ba49f2720091b023",
   "sourceBaseline": "cbf46c713f5448a4feacf7990be09913c3fa4cf6",
   "approvedPlanDigest": "aa69c9a0a448540d076704d3fad974303630abe089e1961ea02e6311cf1e839a",
@@ -627,6 +627,27 @@
         ]
       },
       "correctionAddendum": "governance/lifecycle-correction-v090.json"
+    },
+    "M6": {
+      "objective": "Publish the approved isolated limited Runtime v0.9.0 Preview with no business execution, using candidate-bound technical and release evidence.",
+      "paths": [
+        "src/server/preview.ts",
+        "src/server/http.ts",
+        "src/server/cli.ts",
+        "src/server/mcp.ts",
+        "src/installation/installer.ts",
+        "dashboard/src/Editor.tsx",
+        "dashboard/src/api.ts",
+        "scripts/package-distribution.mjs",
+        "scripts/release-gate.mjs",
+        "scripts/limited-preview-acceptance.mjs",
+        "scripts/limited-preview-release.mjs",
+        ".github/workflows/ci.yml",
+        "tests/e2e/limited-preview-v090.test.mjs",
+        "README.md",
+        "README_CN.md",
+        "docs/acceptance-v090.md"
+      ]
     }
   },
   "beforeProductImplementation": [
@@ -677,5 +698,41 @@
       "additionalRequiredInstances": 21,
       "releaseAuthorityUnchanged": true
     }
-  ]
+  ],
+  "limitedPreview": {
+    "id": "runtime-v090-limited-preview",
+    "tag": "v0.9.0",
+    "prerelease": true,
+    "distributionMode": "limited-preview",
+    "platform": "darwin-arm64",
+    "fullAcceptancePreserved": true,
+    "supported": [
+      "local-service",
+      "yaml-validation",
+      "draft-editing",
+      "graph-preview",
+      "readonly-monitor"
+    ],
+    "deferred": [
+      "desktop",
+      "activation",
+      "business-execution",
+      "external-provider",
+      "ci-dispatch",
+      "workspace-upgrade",
+      "daily-installation"
+    ],
+    "preRelease": [
+      "LP01",
+      "LP02",
+      "LP03",
+      "LP04",
+      "LP05",
+      "LP06"
+    ],
+    "postRelease": [
+      "LP07",
+      "LP08"
+    ]
+  }
 }

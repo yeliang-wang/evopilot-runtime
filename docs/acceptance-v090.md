@@ -871,3 +871,18 @@ public download/current installation evidence and actual Host usage. It remains
 independent of E21, E22 and LC12. The existing usage report's additive denominator
 remains 688; the overall Runtime denominator remains 709. PRE readers reject
 POST usage, and the usage collector now pins its preflight helper.
+
+## Limited public Preview acceptance
+
+The original full v0.9 matrix stays intact. These checks apply to the exact package with profile `limited-preview`.
+
+| ID | Phase | Required observation |
+| --- | --- | --- |
+| LP01 | Before release | Verify the candidate digest, manifest, archive and limited entry points. |
+| LP02 | Before release | Install in an isolated root. Verify native status, stop/start and persisted local state. |
+| LP03 | Before release | Observe YAML validation, exact draft persistence and graph preview through the installed Dashboard. |
+| LP04 | Before release | Observe read-only monitor state and native event delivery without instance dispatch. |
+| LP05 | Before release | Verify HTTP, MCP, Dashboard and installer refusal of prohibited operations. |
+| LP06 | Before release | Verify installed plugin declarations and bilingual guidance against the effective profile. |
+| LP07 | After release | Read GitHub tag and prerelease status and verify independently downloaded checksums. |
+| LP08 | After release | Reinstall downloaded bytes in a new isolated root and verify service identity and readback. |

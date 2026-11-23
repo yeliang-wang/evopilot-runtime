@@ -103,5 +103,41 @@
       "additionalRequiredInstances": 21,
       "releaseAuthorityUnchanged": true
     }
-  ]
+  ],
+  "limitedPreview": {
+    "id": "runtime-v090-limited-preview",
+    "tag": "v0.9.0",
+    "prerelease": true,
+    "distributionMode": "limited-preview",
+    "platform": "darwin-arm64",
+    "fullAcceptancePreserved": true,
+    "supported": [
+      "local-service",
+      "yaml-validation",
+      "draft-editing",
+      "graph-preview",
+      "readonly-monitor"
+    ],
+    "deferred": [
+      "desktop",
+      "activation",
+      "business-execution",
+      "external-provider",
+      "ci-dispatch",
+      "workspace-upgrade",
+      "daily-installation"
+    ],
+    "preRelease": [
+      "LP01",
+      "LP02",
+      "LP03",
+      "LP04",
+      "LP05",
+      "LP06"
+    ],
+    "postRelease": [
+      "LP07",
+      "LP08"
+    ]
+  }
 }

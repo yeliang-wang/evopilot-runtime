@@ -93,7 +93,11 @@ jobs:
         run: |
           set -euo pipefail
           package_dir="$RUNNER_TEMP/evopilot-package"
-          node scripts/package-distribution.mjs "$package_dir"
+          if [[ "$GITHUB_REF_NAME" == codex/runtime-v090-limited-preview ]]; then
+            node scripts/package-distribution.mjs "$package_dir" --limited-preview
+          else
+            node scripts/package-distribution.mjs "$package_dir"
+          fi
       - name: Retain independently built candidate package
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.runtime_request_id == '' || inputs.runtime_request_id == 'SOURCE_CHECKS' }}
         uses: actions/upload-artifact@v4
