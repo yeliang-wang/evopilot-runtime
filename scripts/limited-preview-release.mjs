@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { evaluateGovernance } from '../dist/governance.js';
 import { inspectSourceCiRecords } from '../dist/release/source-ci.js';
@@ -58,8 +58,8 @@ export async function prepareLimitedRuntimeReview(input) {
     assert.equal(row.outcome,'PASS');
     assert(row.artifacts.length>0&&row.artifacts.length<=512);
     for(const {ref,sha256:expected,bytes} of row.artifacts) {
-      assert(ref.startsWith(evidenceRoot)&&!evidence.has(ref));
-      assert.equal(verify({ref,sha256:expected},128*1024*1024).length,bytes);
+      assert(ref===basename(ref)&&!['','.','..'].includes(ref)&&!evidence.has(ref));
+      assert.equal(verify({ref:join(evidenceRoot,ref),sha256:expected},128*1024*1024).length,bytes);
       evidence.add(ref);
     }
   }

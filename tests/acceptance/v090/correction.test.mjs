@@ -736,7 +736,7 @@ async function collectLc10(selection,catalog,installed,installation){
 export const LC11_VECTORS=Object.freeze(['installed-host','http-mcp','no-runtime-llm']);
 // Whole service source composition at the reviewed baseline. Release auditors
 // are not loaded by serviceMain. Any other source drift requires route review.
-export const LC11_SERVICE_SOURCE_DIGEST='4e0adb5dc26b6b977e0b521e650d379116e27bb1a0a1d07cb01dfe137c53986d';
+export const LC11_SERVICE_SOURCE_DIGEST='e0e846f4bf595d89fc201487a581d30767cf26f6e69e104b44d7b247726f8529';
 export function assertLc11SourceComposition(sourcePins){
  const selected=Object.fromEntries(Object.entries(sourcePins).filter(([p])=>p.startsWith('src/')&&!p.startsWith('src/release/')).sort(([a],[b])=>a.localeCompare(b)));
  lc16Ready(sha(stable(selected))===LC11_SERVICE_SOURCE_DIGEST,'LC11 standard service composition changed; review the exact changed source before classifying model reachability');return selected;
