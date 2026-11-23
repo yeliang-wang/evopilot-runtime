@@ -259,7 +259,13 @@ export async function openScenario(scenario,callableRegistration,callableContext
    assert.equal(typeof rawBody,'string');assert(Buffer.byteLength(rawBody)<=262144);
    // The raw E09 entry is read-only. Only the typed configuration entry can supply
    // an exact configuration mutation; it never permits execution or authority.
-   if(rawBody.includes('runtime_write'))assert(mutation?.requestId&&['E03','E04','E06'].includes(scenario)&&JSON.parse(rawBody).params.arguments.requestId===mutation.requestId,'Protocol qualification must not dispatch business mutations');
+   if(rawBody.includes('runtime_write')){
+    const configurationCase=['E03','E04','E06'].includes(scenario)||(scenario==='E17'&&currentCase==='E17.CV01');
+    const call=JSON.parse(rawBody),args=call.params?.arguments;
+    assert(configurationCase&&mutation?.requestId&&call.method==='tools/call'&&call.params?.name==='runtime_write'&&
+     ['lifecycle.draft.save','lifecycle.definition.save-and-activate'].includes(args?.operation)&&args.requestId===mutation.requestId,
+    'Protocol qualification must not dispatch business mutations');
+   }
   }else assert.equal(rawBody,undefined);
   const safeHeaders={accept:'application/json, text/event-stream','content-type':'application/json',...extra};
   const id=String(++sequence).padStart(5,'0'),ref=id+'-protocol-request.json';

@@ -198,7 +198,8 @@ export async function collectInstalledBaseUpgrade(run,c,{chromium,expect,openBro
  }
  async function pendingInstance(api,revisionId,id,suffix){
   const preview=await api.read('lifecycle.definition.read',{revisionId}),budget=preview.compilation.effective.semantic.config.plan.budget;assert.equal(budget.timeoutSeconds,1);
-  const subject={instanceId:id,definitionRevisionId:revisionId,goalRef:'synthetic:ex10/'+run.selection.runId+'/goal',targetRef:'synthetic:ex10/'+run.selection.runId+'/target',loopRef:'synthetic:ex10/'+run.selection.runId+'/loop',budget,expiresAt:new Date(Date.now()+300000).toISOString()};
+  const lineage='synthetic:ex10/'+run.selection.runId+'/'+suffix;
+  const subject={instanceId:id,definitionRevisionId:revisionId,goalRef:lineage+'/goal',targetRef:lineage+'/target',loopRef:lineage+'/loop',budget,expiresAt:new Date(Date.now()+300000).toISOString()};
   const reviewed=await api.read('lifecycle.authority.preview',{kind:'execution',subject});
   const decisionSubject={owner:'runtime',operation:'lifecycle.authority.execution',workspaceId:a.workspaceId,scope:{visibility:'private',projectId:a.projectId},reviewDigest:reviewed.reviewDigest,decision:'APPROVE'};
   const sourceRef=reference('synthetic-decision-source',{synthetic:true,description:'Explicit isolated EX10 test attestation only; no human/domain/release authority',subject:decisionSubject});
