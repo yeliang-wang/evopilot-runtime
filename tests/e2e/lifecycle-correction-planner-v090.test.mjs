@@ -1781,6 +1781,30 @@ test('CV01 JIT does not refresh an expired fixture or wait beyond its original e
  const {awaitInitializationAuthority}=await import('../acceptance/v090/maintenance.mjs'),f=collectorFixture(),root=path.join(f.root,'exchange');fs.mkdirSync(root,{mode:0o700});const budget={timeoutSeconds:60,maxAttempts:1,maxConcurrency:1,maxLoops:1},definition={id:'revision',compilation:{effective:{semantic:{config:{plan:{budget}}}}}},item={entry:'http-api',instanceId:'one',authorityPreparation:{root,subject:{goalRef:'g',targetRef:'t',loopRef:'l',budget,expiresAt:new Date(Date.now()-1000).toISOString()}}};let calls=0;const run={read:async()=>{calls++;return new Promise(()=>{});}};try{await assert.rejects(awaitInitializationAuthority(run,{caseInstanceId:'E03.CV01'},item,definition,()=>{}),/original authority expiry/);assert.equal(calls,0);item.authorityPreparation.subject.expiresAt=new Date(Date.now()+30).toISOString();const began=Date.now();await assert.rejects(awaitInitializationAuthority(run,{caseInstanceId:'E03.CV01'},item,definition,()=>{}),/original authority expiry/);assert.equal(calls,1);assert(Date.now()-began<1000);assert.deepEqual(fs.readdirSync(root),[]);}finally{f.cleanup();}
 });
 
+test('E18 missing/unknown readback equality ignores only independent HTTP correlation IDs',async()=>{
+ const {e18MissingEvidenceIdentity:identity}=await import('../acceptance/v090/e18.test.mjs');
+ const first='a4720162-413a-4331-bea2-e59e35cdbb50',second='c9e4f9b3-1826-403c-9ebf-1bf997cd113c';
+ const missing={proof:{kind:'scope-original-evidence-absent',reason:'NOT_FOUND',operation:'lifecycle.scope.evidence.read'},readback:{status:404,body:{error:{code:'NOT_FOUND',message:'Original scope evidence is unavailable'},requestId:first}},history:[]};
+ const repeated=structuredClone(missing);repeated.readback.body.requestId=second;
+ assert.notDeepEqual(missing,repeated);
+ assert.deepEqual(identity(missing),identity(repeated));
+ assert.equal(missing.readback.body.requestId,first);
+ assert.equal(repeated.readback.body.requestId,second);
+ for(const affect of [
+  v=>{v.readback.status=409;},
+  v=>{v.readback.body.error.code='AUTHORITY_UNKNOWN';},
+  v=>{v.readback.body.error.message='Different evidence';},
+  v=>{v.proof.reason='CHANGED';},
+  v=>{v.history.push({observationRef:'changed'});},
+ ]){
+  const changed=structuredClone(repeated);affect(changed);assert.notDeepEqual(identity(missing),identity(changed));
+ }
+ const unknown={proof:null,readback:{status:200,body:{requestId:first,result:{evidence:{requestId:'original-native-request',digest:'pinned'}}}},history:[]};
+ const reread=structuredClone(unknown);reread.readback.body.requestId=second;assert.deepEqual(identity(unknown),identity(reread));
+ reread.readback.body.result.evidence.requestId='different-native-request';assert.notDeepEqual(identity(unknown),identity(reread));
+ assert.deepEqual(identity({proof:null,readback:null,history:[]}),{proof:null,readback:null,history:[]});
+ assert.throws(()=>identity({...missing,readback:{status:404,body:{error:missing.readback.body.error}}}));
+});
 // Execute the actual support writer: retained selection renames principals to
 // principalConnections. Input selector shape cannot substitute for this record.
 test('CV07 EX01 uses actual retained selection writer and rejects undeclared foreign instance scopes',async()=>{

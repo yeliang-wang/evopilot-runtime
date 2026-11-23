@@ -157,6 +157,16 @@ export function classifyE18MissingEvidence(retained,readback,history,digest,now=
  }
  return null;
 }
+export function e18MissingEvidenceIdentity(value){
+ if(value.readback===null)return value;
+ // The native server assigns each observation a different HTTP correlation ID.
+ // Retain the raw responses and compare every other field at the same path.
+ const {requestId,...body}=value.readback.body;
+ assert.equal(typeof requestId,'string');
+ assert.match(requestId,/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/);
+ return{...value,readback:{...value.readback,body}};
+}
+
 export function readE18DecisionOriginals(reference){
  const bytesOf=ref=>{const url=new URL(ref);assert.equal(url.protocol,'file:');assert.equal(url.host,'');assert.equal(url.search,'');assert(/^#sha256=[a-f0-9]{64}$/.test(url.hash));const expected=url.hash.slice(8);url.hash='';const filename=fileURLToPath(url);assert.equal(fs.realpathSync(filename),filename);const fd=fs.openSync(filename,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);let bytes;try{const st=fs.fstatSync(fd);assert(st.isFile()&&st.size>0&&st.size<=1048576);bytes=Buffer.alloc(st.size+1);let size=0;while(size<bytes.length){const n=fs.readSync(fd,bytes,size,bytes.length-size,null);if(!n)break;size+=n;}assert.equal(size,st.size);bytes=bytes.subarray(0,size);}finally{fs.closeSync(fd);}assert.equal(sha(bytes),expected);return{reference:ref,sha256:expected,bytes:bytes.length,base64:bytes.toString('base64')};};
  const decision=bytesOf(reference),value=JSON.parse(Buffer.from(decision.base64,'base64').toString('utf8'));assert.equal(value.schema,'evopilot-decision-evidence/v1');return{decision,source:bytesOf(value.source.reference)};
@@ -407,7 +417,7 @@ export async function executeE18(callableContext) {
    if(predecessorOutcome==='passed')assert.deepEqual(admission.reasons,[]);
    else assert(admission.reasons.includes('PREDECESSOR_NOT_PASSED:'+plan.predecessorId));
    const after=await installedInstance(before.id);assert.deepEqual(after,before,'Read-only admission changed the original instance');
-   if(selectedMissing){const finalOriginal=await original(originalPredecessor.request.id);assert.deepEqual(finalOriginal.request,originalPredecessor.request);assert.deepEqual(finalOriginal.progress,originalPredecessor.progress);const finalMissing=await missingEvidence(finalOriginal);assert.deepEqual(finalMissing,selectedMissing,'NOT_READY: original missing-evidence readback changed during admission');}
+   if(selectedMissing){const finalOriginal=await original(originalPredecessor.request.id);assert.deepEqual(finalOriginal.request,originalPredecessor.request);assert.deepEqual(finalOriginal.progress,originalPredecessor.progress);const finalMissing=await missingEvidence(finalOriginal);assert.deepEqual(e18MissingEvidenceIdentity(finalMissing),e18MissingEvidenceIdentity(selectedMissing),'NOT_READY: original missing-evidence readback changed during admission');}
    return{provider,stage,predecessorOutcome,instanceId:before.id,predecessorId:plan.predecessorId,admission,actualNativeObservation:true,...(selectedMissing?.proof?{missingEvidence:selectedMissing.proof,nativePredecessorStatus:before.stages[plan.predecessorId].status}:{}),executionDispatched:false};
   }
   function ciRequest(r){
