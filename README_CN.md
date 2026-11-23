@@ -1,16 +1,18 @@
-# EvoPilot Runtime · v0.8.3 Preview
+# EvoPilot Runtime · v0.9.0 限定 Preview
 
 [English](README.md) | 简体中文
 
-Runtime 是 [EvoPilot](https://github.com/yeliang-wang/evopilot/blob/main/README_CN.md) 的持久化执行层，负责项目、目标、经审阅的计划、决定、执行声明、回执与审计。[Ontology](https://github.com/yeliang-wang/evopilot-ontology/blob/main/README_CN.md) 管理语义模型，[Harness](https://github.com/yeliang-wang/evopilot-harness/blob/main/README_CN.md) 管理质量策略与证据评估。
-
-[快速开始](#快速开始) · [服务 API（英文）](docs/service.md) · [CLI（英文）](docs/cli.md) · [中文文档入口](docs/zh-CN/README.md) · [发行版](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.8.3)
-
-## v0.9.0 限定 Preview
-
 面向 macOS arm64 的独立预发行提供本地服务启停、Project Lifecycle YAML 校验、草稿编辑、流程图和只读监控。[隔离安装指南](docs/zh-CN/runtime-v090-preview.md)
 
-下文的 SDK 和 CLI 说明适用于 v0.8.3。
+[GitHub v0.9.0 预发行与下载](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.9.0)
+
+## v0.8.3 Preview 源码
+
+以下 API、命令和从源码构建的说明适用于 `main` 当前的 v0.8.3 源码。请使用上方的发行包安装 v0.9.0。
+
+Runtime 是 [EvoPilot](https://github.com/yeliang-wang/evopilot/blob/main/README_CN.md) 的持久化执行层，负责项目、目标、经审阅的计划、决定、执行声明、回执与审计。[Ontology](https://github.com/yeliang-wang/evopilot-ontology/blob/main/README_CN.md) 管理语义模型，[Harness](https://github.com/yeliang-wang/evopilot-harness/blob/main/README_CN.md) 管理质量策略与证据评估。
+
+[快速开始](#快速开始) · [服务 API（英文）](docs/service.md) · [CLI（英文）](docs/cli.md) · [中文文档入口](docs/zh-CN/README.md) · [v0.8.3 发行](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.8.3)
 
 ## 能力
 

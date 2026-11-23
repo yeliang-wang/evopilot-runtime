@@ -1,10 +1,17 @@
 # Runtime documentation
 
-Start with the [v0.8.3 Preview quickstart](../README.md#quickstart) for prerequisites and source setup.
+This index covers the v0.8.3 Preview SDK and the independent v0.9.0 limited Preview.
 
 English | [简体中文](zh-CN/README.md)
 
-For the independent v0.9.0 limited Preview, start with the [isolated installation and Dashboard guide](runtime-v090-preview.md). The guides below cover the v0.8.3 SDK and CLI.
+## v0.9.0 limited Preview
+
+- [Install the standalone release and use the Dashboard](runtime-v090-preview.md).
+- [Use the installed HTTP, MCP and CLI interfaces](runtime-v090-preview-api.md).
+
+## v0.8.3 SDK and source documentation
+
+Start with the [v0.8.3 Preview quickstart](../README.md#quickstart) for prerequisites and source setup.
 
 - [Conversation-driven planning](planning-api.md): scoped revisions, exact human decisions and immutable execution bindings.
 - [Service API](service.md): embed the durable service, configure trusted providers and recover uncertain execution.
@@ -15,7 +22,7 @@ For the independent v0.9.0 limited Preview, start with the [isolated installatio
 - [Roadmap](roadmap.md) and [changelog](../CHANGELOG.md): released capabilities, version contents and future targets.
 - [Contributing](../CONTRIBUTING.md) and [security](../SECURITY.md): source checks, repository workflow and local trust assumptions.
 
-## Installation paths
+### v0.8.3 installation paths
 
 For the standalone SDK and CLI, follow the [published Runtime tarball installation](../README.md#install-a-release-tarball). The package includes compiled JavaScript and declarations; its standalone CLI supplies no execution providers.
 

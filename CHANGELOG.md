@@ -1,5 +1,9 @@
 # Changelog
 
+**Independent v0.9.0 Limited Preview · 2026-11-23.** The independent macOS arm64 Preview ships local Runtime service control, Project Lifecycle YAML validation and draft editing, graph preview, and read-only monitoring. The publication covers the limited profile and its eight checks. [GitHub pre-release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.9.0) · [Installation guide](docs/runtime-v090-preview.md)
+
+The changelog entries below cover the source line on `main`.
+
 ## 0.8.3 Preview — 2026-10-27
 
 [Versioned Preview release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.8.3).

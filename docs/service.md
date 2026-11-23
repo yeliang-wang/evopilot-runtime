@@ -1,5 +1,7 @@
 # Runtime service and native evidence — v0.7.0 Preview
 
+This guide describes the native service API retained in the v0.8.3 SDK. For the v0.9.0 limited Preview loopback service, see its [HTTP and MCP API](runtime-v090-preview-api.md).
+
 Runtime coordinates exact project candidates, collection recipes, decisions, claims, receipts and completion. Ontology owns RDF/SHACL meaning and Harness owns Rego policy evaluation. The corrected `specifications/v1` flow uses the current shared native contract revision **1.1.0**, its content digest and each owner's exact standard/lock digests. A directory named `v1` is not sufficient identity.
 
 Import `createRuntimeService` from `@evopilot-next/runtime/service`. Construction and `capabilities()` do not initialize a Workspace. Call `initialize()` explicitly before operations, and `close()` when done. Node 24.14.0 or later is required. Source maintainers run `npm ci --ignore-scripts`, `npm run build`, `npm run check`, then `npm test`. Package exports include strict TypeScript declarations; installed distributions contain compiled code and omit development tests/scripts.

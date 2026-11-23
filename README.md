@@ -1,16 +1,18 @@
-# EvoPilot Runtime · v0.8.3 Preview
+# EvoPilot Runtime · v0.9.0 Limited Preview
 
 English | [简体中文](README_CN.md)
 
-Runtime is the durable execution layer of [EvoPilot](https://github.com/yeliang-wang/evopilot/blob/main/README.md). It owns projects, goals, reviewed plans, decisions, execution claims, receipts and audit. [Ontology](https://github.com/yeliang-wang/evopilot-ontology/blob/main/README.md) owns semantic models; [Harness](https://github.com/yeliang-wang/evopilot-harness/blob/main/README.md) owns quality policies and evidence evaluation.
-
-[Quickstart](#quickstart) · [Service API](docs/service.md) · [CLI](docs/cli.md) · [Documentation](docs/README.md) · [Release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.8.3)
-
-## v0.9.0 limited Preview
-
 The independent macOS arm64 preview supports local service control, Project Lifecycle YAML validation, draft editing, graph preview, and read-only monitoring. [Isolated installation guide](docs/runtime-v090-preview.md)
 
-The following SDK and CLI documentation covers v0.8.3.
+[GitHub v0.9.0 pre-release and downloads](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.9.0)
+
+## v0.8.3 Preview source
+
+The APIs, commands, and source build instructions below apply to the v0.8.3 source on `main`. Use the release downloads above to install v0.9.0.
+
+Runtime is the durable execution layer of [EvoPilot](https://github.com/yeliang-wang/evopilot/blob/main/README.md). It owns projects, goals, reviewed plans, decisions, execution claims, receipts and audit. [Ontology](https://github.com/yeliang-wang/evopilot-ontology/blob/main/README.md) owns semantic models; [Harness](https://github.com/yeliang-wang/evopilot-harness/blob/main/README.md) owns quality policies and evidence evaluation.
+
+[Quickstart](#quickstart) · [Service API](docs/service.md) · [CLI](docs/cli.md) · [Documentation](docs/README.md) · [v0.8.3 release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.8.3)
 
 ## Capabilities
 

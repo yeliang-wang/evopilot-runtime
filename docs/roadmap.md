@@ -1,6 +1,8 @@
 # Runtime roadmap
 
-Current edition: [RUN-F05 / v0.7 explainable workflow state and maintenance](#run-f05-v07-explainable-workflow-state-and-maintenance). Implemented for the v0.7 edition; exact publication and download records remain on the versioned Release page.
+The published [v0.9.0 limited Preview](runtime-v090-preview.md) covers isolated Project Lifecycle drafts and read-only monitoring. The independent v0.9 implementation has a broader engineering and acceptance plan; full v0.9 acceptance and desktop verification are deferred. [Tagged engineering and acceptance plan](https://github.com/yeliang-wang/evopilot-runtime/blob/v0.9.0/docs/acceptance-v090.md)
+
+The roadmap below describes the source line that retains the v0.8.3 SDK and CLI, including [RUN-F05 / v0.7 explainable workflow state and maintenance](#run-f05-v07-explainable-workflow-state-and-maintenance). Exact publication and download records remain on the versioned Release pages.
 
 Runtime owns project execution, decisions, durable claims, receipts and audit. Ontology and Harness own their respective assets and validation; the parent composes their public package APIs and provides the Expert and Codex entry. The [parent roadmap](https://github.com/yeliang-wang/evopilot/blob/main/docs/roadmap.md) coordinates product evolution and v1.0 readiness.
 

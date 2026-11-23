@@ -1,5 +1,7 @@
 # Runtime CLI
 
+This guide covers the v0.8.3 native CLI. For the independent service CLI shipped in the v0.9.0 limited Preview, see the [installed CLI reference](runtime-v090-preview-api.md#local-http-and-cli).
+
 Use Node 24.14.0 or later. The installed executable is `evopilot-next-runtime`; from a source checkout run `npm ci --ignore-scripts`, `npm run build`, then `node dist/cli.js`. Discovery commands do not initialize storage:
 
 ```text

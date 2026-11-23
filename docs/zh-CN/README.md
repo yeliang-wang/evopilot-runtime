@@ -2,9 +2,14 @@
 
 [English](../README.md) | 简体中文
 
-适用 v0.8.3 Preview。先阅读[中文首页](../../README_CN.md)，了解该组件职责、安装方式与边界。
+## v0.9.0 限定 Preview
 
-独立 v0.9.0 限定 Preview 的安装及 Dashboard 用法见[隔离安装指南](runtime-v090-preview.md)。下列入口适用于 v0.8.3。
+- [安装独立发行包并使用 Dashboard](runtime-v090-preview.md)。
+- [使用已安装的 HTTP、MCP 和 CLI 接口](runtime-v090-preview-api.md)。
+
+## v0.8.3 SDK 与源码文档
+
+阅读[中文首页](../../README_CN.md)，了解组件职责及 v0.8.3 的安装入口与边界。
 
 | 任务 | 入口 |
 |---|---|
