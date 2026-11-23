@@ -4,6 +4,8 @@
 
 适用 v0.8.3 Preview。先阅读[中文首页](../../README_CN.md)，了解该组件职责、安装方式与边界。
 
+独立 v0.9.0 限定 Preview 的安装及 Dashboard 用法见[隔离安装指南](runtime-v090-preview.md)。下列入口适用于 v0.8.3。
+
 | 任务 | 入口 |
 |---|---|
 | 在 Codex 使用组合产品 | [总项目中文安装指南](https://github.com/yeliang-wang/evopilot/blob/main/docs/zh-CN/installation.md) |

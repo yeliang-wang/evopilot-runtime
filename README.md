@@ -6,6 +6,12 @@ Runtime is the durable execution layer of [EvoPilot](https://github.com/yeliang-
 
 [Quickstart](#quickstart) · [Service API](docs/service.md) · [CLI](docs/cli.md) · [Documentation](docs/README.md) · [Release](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.8.3)
 
+## v0.9.0 limited Preview
+
+The independent macOS arm64 preview supports local service control, Project Lifecycle YAML validation, draft editing, graph preview, and read-only monitoring. [Isolated installation guide](docs/runtime-v090-preview.md)
+
+The following SDK and CLI documentation covers v0.8.3.
+
 ## Capabilities
 
 | Capability | Behavior |

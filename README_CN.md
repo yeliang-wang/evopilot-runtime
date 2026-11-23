@@ -6,6 +6,12 @@ Runtime 是 [EvoPilot](https://github.com/yeliang-wang/evopilot/blob/main/README
 
 [快速开始](#快速开始) · [服务 API（英文）](docs/service.md) · [CLI（英文）](docs/cli.md) · [中文文档入口](docs/zh-CN/README.md) · [发行版](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.8.3)
 
+## v0.9.0 限定 Preview
+
+面向 macOS arm64 的独立预发行提供本地服务启停、Project Lifecycle YAML 校验、草稿编辑、流程图和只读监控。[隔离安装指南](docs/zh-CN/runtime-v090-preview.md)
+
+下文的 SDK 和 CLI 说明适用于 v0.8.3。
+
 ## 能力
 
 | 能力 | 行为 |
