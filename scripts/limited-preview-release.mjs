@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { evaluateGovernance } from '../dist/governance.js';
 import { inspectSourceCiRecords } from '../dist/release/source-ci.js';
 import { assetNames, repository, sha256, validateDistributionFiles } from './release-gate.mjs';
@@ -25,7 +25,7 @@ function verify(pin,limit) {
   return bytes;
 }
 
-async function prepare(input) {
+export async function prepareLimitedRuntimeReview(input) {
   exact(input,['candidate','acceptance','notes']);
   const candidate=JSON.parse(verify(input.candidate,2097152));
   const reportBytes=verify(input.acceptance,2097152);
@@ -78,7 +78,7 @@ async function prepare(input) {
   },AbortSignal.timeout(120000));
   for(const name of assetNames) assert.equal(audit.files[name],candidate.files[name].sha256);
   const review={
-    schema:'runtime-limited-preview-publication-review/v1',repository,tag:'v0.9.0',prerelease:true,
+    schema:'runtime-limited-preview-publication-review/v1',repository,tag:'v0.9.0',title:'EvoPilot Runtime v0.9.0 Preview',prerelease:true,
     distributionProfile:'limited-preview',sourceCommit:candidate.sourceCommit,
     targetDigest:sha256(targetBytes),sourceCi:audit,
     pinnedAssets:Object.fromEntries([...files].map(([name,bytes])=>[name,{sha256:sha256(bytes),bytes:bytes.length}])),
@@ -86,15 +86,15 @@ async function prepare(input) {
     releaseNotes:{sha256:sha256(notes),bytes:notes.length},
     releaseAuthorized:false
   };
-  return {...review,reviewDigest:sha256(JSON.stringify(review))};
+  return {...review,reviewDigest:'sha256:'+sha256(JSON.stringify(review))};
 }
 
-try {
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href===import.meta.url) try {
   assert.equal(process.argv.length,4,'Usage: node scripts/limited-preview-release.mjs PRIVATE_INPUT NEW_PRIVATE_REVIEW');
   const input=JSON.parse(privateBytes(process.argv[2],65536));
   const output=process.argv[3];
   assert(isAbsolute(output)&&resolve(output)===output&&realpathSync(dirname(output))===dirname(output)&&!output.startsWith(root+sep));
-  const review=await prepare(input);
+  const review=await prepareLimitedRuntimeReview(input);
   writeFileSync(output,JSON.stringify(review,null,2)+'\n',{mode:0o600,flag:'wx'});
   console.log(review.reviewDigest);
 } catch(error) {

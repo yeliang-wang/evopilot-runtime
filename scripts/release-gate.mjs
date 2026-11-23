@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import {createHash} from 'node:crypto';
+import {createHash,randomBytes} from 'node:crypto';
 import {crc32} from 'node:zlib';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath,pathToFileURL} from 'node:url';
@@ -130,6 +130,69 @@ export async function publishQualifiedReviewedRuntime(raw,service,actor,authenti
  let publicationFailure;
  try{const current=()=>assertQualifiedRuntimeReleaseAuthorizationCurrent(authorization,signal),refresh=()=>refreshQualifiedRuntimeReleaseObservation(authorization,signal);return await publishAuthorizedRuntime(options,authorization,current,{github,signal,refresh});}catch(error){publicationFailure=error;throw error;}finally{try{await disposeQualifiedRuntimeReleaseAuthorization(authorization);}catch(cleanupError){if(publicationFailure)throw new AggregateError([publicationFailure,cleanupError],'PUBLICATION_STOPPED_INSPECT_ORIGINAL_EVIDENCE; OBSERVATION_CLEANUP_FAILED');throw cleanupError;}}
 }
+/** Limited Preview uses a distinct review and retains the original full gate. */
+export async function publishLimitedReviewedRuntime(raw,authenticate,{github=gitHubRequest,signal=AbortSignal.timeout(900000)}={}){
+ requireValue(typeof authenticate==='function','TRUSTED_LOCAL_OPERATOR_REQUIRED');
+ const selection=structuredClone(raw);
+ exact(selection,['input','expectedReviewDigest','decisionEvidence','outputRoot']);
+ const {prepareLimitedRuntimeReview}=await import('./limited-preview-release.mjs');
+ const {verifyDecisionEvidence}=await import('../vendor/compatibility/v1/decision-evidence.mjs');
+ const review=await prepareLimitedRuntimeReview(selection.input);
+ requireValue(review.reviewDigest===selection.expectedReviewDigest,'EXACT_LIMITED_REVIEW_REQUIRED');
+ const subject={owner:'runtime',operation:'release.publish',workspaceId:'runtime-limited-preview',
+  scope:{visibility:'private',projectId:'runtime-v090-limited-preview'},reviewDigest:review.reviewDigest,decision:'APPROVE'};
+ const decision=()=>verifyDecisionEvidence(pathToFileURL(selection.decisionEvidence.ref).href+'#sha256='+selection.decisionEvidence.sha256,subject);
+ pinned(selection.decisionEvidence,1048576);
+ decision();
+ const request={schema:'runtime-limited-preview-authentication-request/v1',challenge:randomBytes(32).toString('hex'),
+  review,subject,decisionEvidence:selection.decisionEvidence};
+ const bounded=AbortSignal.any([signal,AbortSignal.timeout(30000)]);
+ bounded.throwIfAborted();
+ const started=Date.now();
+ let onAbort;
+ let auth;
+ try{
+  const abort=new Promise((_,reject)=>{onAbort=()=>reject(Error('AUTHENTICATION_TIMEOUT'));bounded.addEventListener('abort',onAbort,{once:true});});
+  auth=structuredClone(await Promise.race([authenticate(structuredClone(request),bounded),abort]));
+ }finally{if(onAbort)bounded.removeEventListener('abort',onAbort);}
+ bounded.throwIfAborted();
+ exact(auth,['schema','challenge','reviewDigest','sourceCommit','decisionEvidenceDigest','decision','humanIdentity','decisionAuthentication','sourceCiAuthentication','acceptanceAuthentication','expiresAt']);
+ assert.equal(auth.schema,'runtime-limited-preview-authentication/v1');
+ assert.equal(auth.challenge,request.challenge);
+ assert.equal(auth.reviewDigest,review.reviewDigest);
+ assert.equal(auth.sourceCommit,review.sourceCommit);
+ assert.equal(auth.decisionEvidenceDigest,selection.decisionEvidence.sha256);
+ assert.equal(auth.decision,'APPROVE');
+ exact(auth.humanIdentity,['id','kind']);
+ assert.equal(auth.humanIdentity.kind,'human');
+ assert.match(auth.humanIdentity.id,/^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$/);
+ assert.equal(auth.decisionAuthentication,'AUTHENTICATED_HUMAN_DECISION');
+ assert.equal(auth.sourceCiAuthentication,'AUTHENTICATED_PROVIDER_READS');
+ assert.equal(auth.acceptanceAuthentication,'REVIEWED_ORIGINAL_EXECUTION');
+ const expires=Date.parse(auth.expiresAt);
+ requireValue(expires>Date.now()&&expires<=started+900000,'EXACT_LIMITED_RELEASE_EXPIRED');
+ const fresh=await prepareLimitedRuntimeReview(selection.input);
+ requireValue(fresh.reviewDigest===review.reviewDigest,'LIMITED_REVIEW_CHANGED_AFTER_AUTHENTICATION');
+ const candidate=parse(pinned(selection.input.candidate,2097152));
+ const input={candidate,releaseNotes:selection.input.notes};
+ const current=()=>{
+  signal.throwIfAborted();
+  requireValue(expires>Date.now(),'EXACT_LIMITED_RELEASE_EXPIRED');
+  cleanSource(sourceRoot,review.sourceCommit);
+  requireValue(sha256(read(path.join(sourceRoot,'governance/target-v090.json'),2097152,false))===review.targetDigest,'LIMITED_TARGET_CHANGED');
+  pinned(selection.input.acceptance,2097152);
+  pinned(selection.decisionEvidence,1048576);
+  decision();
+ };
+ current();
+ const authorization={schema:'runtime-limited-preview-release-authorization/v1',reviewDigest:review.reviewDigest,
+  publication:{repository,tag:review.tag,title:review.title,sourceCommit:review.sourceCommit,
+   files:review.pinnedAssets,releaseNotes:review.releaseNotes},
+  decisionEvidenceDigest:selection.decisionEvidence.sha256,expiresAt:auth.expiresAt,
+  postRelease:review.acceptance.postRelease,releaseAuthorized:true,authorizedOperation:'github.preview.publish'};
+ return await publishAuthorizedRuntime({repositoryRoot:sourceRoot,input,outputRoot:selection.outputRoot},authorization,current,{github,signal});
+}
+
 async function publishAuthorizedRuntime(options,authorization,current,{github,signal,refresh}){
  const publication=authorization.publication;requireValue(authorization.releaseAuthorized===true&&authorization.authorizedOperation==='github.preview.publish'&&publication.repository===repository&&publication.tag==='v0.9.0','EXACT_PUBLICATION_AUTHORITY_REQUIRED');
  newRoot(options.outputRoot,options.repositoryRoot);const evidence=path.join(options.outputRoot,'evidence'),staged=path.join(options.outputRoot,'assets');fs.mkdirSync(evidence,{mode:0o700});fs.mkdirSync(staged,{mode:0o700});const call=journal(evidence,async(method,endpoint,args)=>{if(method!=='GET'){if(refresh)await refresh();current();}return github(method,endpoint,args);}),prefix='repos/'+repository;
