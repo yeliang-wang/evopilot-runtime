@@ -95,8 +95,10 @@ async function unsupportedLimit(run,driver,c,plan){
  const before=await driver.instance(plan.instanceId),view=await run.read('lifecycle.definition.inspect');assert.equal(view.active.id,before.instance.pins.definitionRevisionId);
  const report=await usage(run,plan.targetVersion,plan.instanceId),status=await run.read('runtime.status'),pins=before.instance.pins;
  assert.equal(report.report.counts.total.recorded,null,'This branch requires genuinely unavailable exact usage, not a fabricated zero or a known metered total');
- const subject={instanceId:run.requestId(c.caseInstanceId,'unsupported-token-limit'),definitionRevisionId:pins.definitionRevisionId,goalRef:pins.goalRef,targetRef:pins.targetRef,loopRef:pins.loopRef,budget:{...pins.budget,maxTokens:1},expiresAt:new Date(Date.now()+30000).toISOString()};
- const rejected=await run.request('lifecycle.authority.preview',{kind:'execution',subject});assert.equal(rejected.status,400);assert.equal(rejected.body.error?.code,'INVALID_FIELDS','An unsupported exact usage limit must not silently become an unenforced authority');
+ const instanceId=run.requestId(c.caseInstanceId,'unsupported-token-limit'),lineage='synthetic:e13-limit/'+instanceId;
+ const subject={instanceId,definitionRevisionId:pins.definitionRevisionId,goalRef:lineage+'/goal',targetRef:lineage+'/target',loopRef:lineage+'/loop',budget:pins.budget,expiresAt:new Date(Date.now()+30000).toISOString()};
+ const control=await run.request('lifecycle.authority.preview',{kind:'execution',subject});assert.equal(control.status,200,JSON.stringify(control.body));
+ const rejected=await run.request('lifecycle.authority.preview',{kind:'execution',subject:{...subject,budget:{...subject.budget,maxTokens:1}}});assert.equal(rejected.status,400);assert.equal(rejected.body.error?.code,'INVALID_FIELDS','An unsupported exact usage limit must not silently become an unenforced authority');
  const after=await run.read('runtime.status');assert.equal(after.revision,status.revision);assert.deepEqual((await driver.instance(plan.instanceId)).instance,before.instance);
  const absent=await run.request('lifecycle.instance.inspect',{instanceId:subject.instanceId});assert.equal(absent.status,404);assert.equal(absent.body.error?.code,'NOT_FOUND');
  await usage(run,plan.targetVersion,plan.instanceId);
