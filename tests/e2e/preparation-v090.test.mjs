@@ -24,7 +24,7 @@ import {nativeSha256,NATIVE_CONTRACT_DIGEST} from '../../vendor/compatibility/v1
 
 // The actual HTTP/store/policy/scope adapters are exercised with explicit
 // synthetic asset admission and a read-only synthetic source platform.
-async function fixture({plan=false,extensions=[],extensionSlot='after-plan',missingCriterion=false,toolRecovery=false,repairConcurrency=1,registeredSource=false,legacyScope=false}={}){
+async function fixture({plan=false,extensions=[],extensionSlot='after-plan',missingCriterion=false,toolRecovery=false,repairConcurrency=1,registeredSource=false,legacyScope=false,planTimeoutSeconds=plan||registeredSource?60:undefined}={}){
   const dir=mkdtempSync(join(realpathSync(tmpdir()),'runtime-preparation-')),root=join(dir,'state'),workspaceId='synthetic',projectId='alpha',path=join(dir,'integrations.json'),expiry='2030-01-01T00:00:00Z';
   const pin=owner=>({product:owner,id:'synthetic-'+owner,version:'1.0.0',specVersion:'v1',visibility:'private',digest:valueDigest(owner),standardDigest:valueDigest(owner+'-standard'),standardLockDigest:valueDigest(owner+'-lock'),producer:{product:owner,version:'0.3.0'},contractDigest:NATIVE_CONTRACT_DIGEST});
   const platform={ref:'binding:alpha/platform',workspaceId,projectId,provider:'github',host:'https://github.com',repository:'synthetic/project',repositoryId:'42',defaultBranch:'main',credentialRef:'credential:alpha/platform',revision:1,expiresAt:expiry,workflowPath:'.github/workflows/build.yml',runner:'ubuntu-latest'};
@@ -38,7 +38,7 @@ async function fixture({plan=false,extensions=[],extensionSlot='after-plan',miss
       config.resources.find(r=>r.role==='config.verification.evidenceMappingRef').definition.rows.push(row);
     }
   }
-  if(plan||registeredSource)data.config.plan.budget.timeoutSeconds=60; // Explicit synthetic recovery budget; no production grant is changed.
+  if(planTimeoutSeconds!==undefined)data.config.plan.budget.timeoutSeconds=planTimeoutSeconds; // Explicit synthetic recovery budget; no production grant is changed.
   let recoveryTools=null;
   if(toolRecovery){
     // Isolated inert bytes; this fixture never executes a tool. Its owner below
@@ -158,7 +158,8 @@ test('the exact execution review contains the preparation and requires the confi
   }finally{await f.cleanup();}
 });
 test('scope completes from an exact preparation and actual adapter observations without synthetic predecessor seeding',async()=>{
-  const f=await fixture();try{
+  // Allow for the real HTTP round trips and restart on a loaded CI worker.
+  const f=await fixture({planTimeoutSeconds:60});try{
     const ref=(await f.retain()).result.result.preparationRef;await f.instance(ref);
     const started=await f.request('lifecycle.stage.request',{instanceId:'scope-instance',stageId:'scope'},true);assert.equal(started.status,200,JSON.stringify(started));const stageRequestId=started.result.result.stageRequestId;
     let result;for(let i=0;i<80;i++){result=await f.request('lifecycle.stage.request.inspect',{stageRequestId});if(result.result.progress.terminal)break;await new Promise(r=>setTimeout(r,20));}
