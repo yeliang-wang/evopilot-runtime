@@ -10,7 +10,7 @@ Runtime 是独立生命周期服务，负责项目定义、目标、Target、实
 
 ## 公开限定 Preview
 
-`limited-preview` 包在 macOS arm64 的新建隔离环境中提供本地服务启停、Project Lifecycle YAML 校验、草稿编辑、流程图预览与只读监控。安装计划使用 `editor` 或 `reader`，将字段设为 `integrationsRef: null` 和 `codex: null`。启用定义、执行业务、远端 Provider、触发 CI、升级和桌面插件注册均不可用。下文描述完整开发目标。
+`limited-preview` 包在 macOS arm64 的新建隔离环境中提供本地服务启停、Project Lifecycle YAML 校验、草稿编辑、流程图预览与只读监控。安装计划使用 `editor` 或 `reader`，将字段设为 `integrationsRef: null` 和 `codex: null`。启用定义、执行业务、远端 Provider、触发 CI、升级和桌面插件注册均不可用。下文描述完整开发目标。 在 `/lifecycle` 编辑草稿，在 `/monitor` 查看只读状态。
 
 ## 能力
 

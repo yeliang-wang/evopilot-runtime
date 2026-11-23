@@ -10,7 +10,7 @@ Runtime is an independent lifecycle service. It owns project definitions, goals,
 
 ## Public limited Preview
 
-The `limited-preview` package supports isolated local service control, Project Lifecycle YAML validation, draft editing, graph preview and read-only monitoring on macOS arm64. Install into a new private root with an `editor` or `reader` principal, `integrationsRef: null` and `codex: null`. Activation, execution, external providers, CI dispatch, upgrades and desktop registration are unavailable. The full engineering target is described below.
+The `limited-preview` package supports isolated local service control, Project Lifecycle YAML validation, draft editing, graph preview and read-only monitoring on macOS arm64. Install into a new private root with an `editor` or `reader` principal, `integrationsRef: null` and `codex: null`. Activation, execution, external providers, CI dispatch, upgrades and desktop registration are unavailable. The full engineering target is described below. Open `/lifecycle` to edit the draft and `/monitor` to view read-only state.
 
 ## Capabilities
 
