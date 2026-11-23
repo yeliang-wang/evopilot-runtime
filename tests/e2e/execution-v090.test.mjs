@@ -596,6 +596,9 @@ test('four pending continuation reservations preserve capacity and reject an ear
   const f=fixture(),{state,adapter,observe}=stageAdapter(f),bindings=f.bindings.provider;let pause=false,entered=0,release,prepared,releasePrepare,advances=0;
   const permits=new Promise(r=>release=r),inPrepare=new Promise(r=>prepared=r),prepareGate=new Promise(r=>releasePrepare=r);
   f.bindings.provider=async(...args)=>{if(pause){entered++;await permits;}return bindings(...args);};
+  // The provider still reports the original running receipt during this test.
+  // A polling tick must not publish a new receipt and invalidate the fifth request's CAS.
+  adapter.inspect=async(_request,_instance,progress)=>structuredClone(progress.observation);
   const originalPrepare=adapter.prepare;adapter.prepare=async(i,...args)=>{if(i.id==='five'){prepared();await prepareGate;}return originalPrepare(i,...args);};
   adapter.advance=async(r,i,p,permit)=>{await permit();advances++;const o=observe(r,i,'complete');o.handle=p.handle;return o;};state.mode='running';state.inspectMode='running';await f.open();
   const waiting=[];
