@@ -3,6 +3,7 @@ import { authorize, type Principal } from '../server/security.js';
 import type { RuntimeStore } from '../server/store.js';
 import { normalizeChannelEvent, type ChannelScope } from './channel.js';
 import { claimFeedbackMerge, feedbackReviewId, openFeedbackReview, recordFeedbackVeto, type MergeObservation, type ReviewCandidate } from './review.js';
+import type { createFeedbackGitHubAdapter, FeedbackGitHubMergeObservation } from './github.js';
 import {
   FEEDBACK_ACTIVATE, inspectFeedbackActivationBindings, parseFeedbackProjectDraft,
   readSavedFeedbackProjectDraft, type FeedbackBindingObservation, type FeedbackProjectDraft,
@@ -336,4 +337,78 @@ export function reserveFeedbackMerge(store: RuntimeStore, principal: Principal, 
     event:{type:'feedback-merge-reserved',data:{windowId,requestId:claim.requestId}},
   }));
   return updated;
+}
+
+type MergeAdapter = ReturnType<typeof createFeedbackGitHubAdapter>;
+type CurrentMergeAdmission = (candidate: ReviewCandidate) => Pick<MergeObservation,'policyCurrent'|'receiptCoverage'>;
+
+/** Internal worker entry using the registered provider and a synchronous check
+ * of the current policy and review-channel evidence. A saved claim only polls. */
+export async function advanceFeedbackMerge(
+  store: RuntimeStore, principal: Principal, projectId: string, windowId: string,
+  adapter: MergeAdapter, currentAdmission: CurrentMergeAdmission, reauthorize: () => Principal,
+  signal: AbortSignal, clock = Date.now,
+): Promise<FeedbackGitHubMergeObservation> {
+  const currentPrincipal = () => {
+    const fresh = reauthorize();
+    authorize(fresh,projectId,'execution.request');
+    if (fresh.id !== principal.id || fresh.revision !== principal.revision) {
+      reject('AUTHORITY_CHANGED','The registered merge worker authority changed.',409);
+    }
+    return fresh;
+  };
+  currentPrincipal();
+  let window: Window = readWindow(store,projectId,windowId);
+  requireScope(store,window.candidate.workspaceId,projectId,principal);
+  activeWindow(store,window);
+  const {candidate} = window;
+  let reservedNow = false;
+  if (!window.claim) {
+    if (window.veto) return reject('FEEDBACK_REVIEW_VETO','The selected candidate was vetoed.',409);
+    if (clock() < window.deadline) return reject('FEEDBACK_REVIEW_WAITING','The complete review window has not elapsed.',409);
+    const inspected = await adapter.inspect(candidate,signal);
+    window = readWindow(store,projectId,windowId);
+    if (!window.claim) {
+      window = reserveFeedbackMerge(store,currentPrincipal(),windowId,{...inspected,...currentAdmission(candidate)},clock);
+      reservedNow = true;
+    }
+  }
+  const claim = window.claim!;
+  const readOutcome = () => store.object(projectId,'feedback-merge-outcome',claim.requestId) as FeedbackGitHubMergeObservation | null;
+  const previous = readOutcome();
+  const request = {candidate,requestId:claim.requestId};
+  const result = reservedNow ? await adapter.dispatch(request,signal,() => {
+    currentPrincipal();
+    const fresh = readWindow(store,projectId,windowId);
+    activeWindow(store,fresh);
+    const admitted = currentAdmission(candidate);
+    const now = clock();
+    if (fresh.claim?.requestId !== claim.requestId || fresh.veto || !Number.isSafeInteger(now) || now < fresh.deadline ||
+        !admitted.policyCurrent || admitted.receiptCoverage !== 'COMPLETE') {
+      reject('FEEDBACK_MERGE_BLOCKED','The reserved request lost its current merge admission.',409);
+    }
+  }) : await adapter.reconcile(request,previous,signal);
+  if (result.requestId !== claim.requestId || result.candidateDigest !== window.candidateDigest) {
+    return reject('FEEDBACK_GITHUB_RECEIPT','GitHub evidence does not match the original Runtime claim.',409);
+  }
+  const retained = readOutcome();
+  if (retained?.operationId && result.operationId && retained.operationId !== result.operationId) {
+    return reject('FEEDBACK_GITHUB_RECEIPT','The original GitHub operation identity changed.',409);
+  }
+  if (retained && (digest(retained) === digest(result) || retained.status === 'MERGED' ||
+      retained.status === 'DENIED' || (retained.operationId && !result.operationId))) return retained;
+
+  const observationDigest = digest(result);
+  store.mutate(principal,{
+    projectId,operation:'feedback.merge.observe',
+    requestId:claim.requestId+':'+observationDigest,expectedRevision:store.revision(projectId),
+    permission:'execution.request',input:{windowId,observationDigest},
+  },() => ({
+    value:result,
+    objects:[{kind:'feedback-merge-outcome',id:claim.requestId,value:result}],
+    event:{type:'feedback-merge-observed',data:{
+      windowId,requestId:claim.requestId,status:result.status,source:result.source,mergeSha:result.mergeSha,
+    }},
+  }),currentPrincipal);
+  return result;
 }

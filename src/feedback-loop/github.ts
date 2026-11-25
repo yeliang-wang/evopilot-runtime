@@ -237,11 +237,14 @@ export function createFeedbackGitHubAdapter(configured: FeedbackGitHubBinding, r
     },
 
     /** Dispatch only after the owner has persisted the original claim. Recovered claims use reconcile. */
-    async dispatch(request: FeedbackGitHubMergeRequest, signal: AbortSignal): Promise<FeedbackGitHubMergeObservation> {
+    async dispatch(request: FeedbackGitHubMergeRequest, signal: AbortSignal, permit?: () => void): Promise<FeedbackGitHubMergeObservation> {
       const candidate = exactCandidate(request.candidate);
       let observation = initial({...request, candidate});
       const access = await installation(signal);
       await preflight(access, candidate);
+      if (!permit && source === 'GITHUB_PROVIDER') return blocked();
+      signal.throwIfAborted();
+      permit?.();
       try {
         const response = await access.request(`${repoPath}/pulls/${candidate.pullRequestId}/merge-async`, {
           sha: candidate.head, merge_method: 'rebase', merge_action: 'direct_merge', bypass_rules: false,

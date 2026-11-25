@@ -195,6 +195,56 @@ test('GitHub dispatch uses the exact protected expected head and reconciles via 
   await assert.rejects(adapter({...githubBinding,installationId:'105'}).reconcile(githubRequest,accepted,signal),{code:'FEEDBACK_GITHUB_RECEIPT'});
 });
 
+test('Runtime commits the merge claim, retains the original GitHub operation and reads it back after restart', async () => {
+  const {mkdtempSync,realpathSync,rmSync} = await import('node:fs');
+  const {tmpdir} = await import('node:os');
+  const {join} = await import('node:path');
+  const {RuntimeStore} = await import('../../dist/server/store.js');
+  const {advanceFeedbackMerge,retainFeedbackReview,reserveFeedbackReviewNotification} = await import('../../dist/feedback-loop/service.js');
+  const {target,adapter,finish,signal} = await githubFixture();
+  const root = mkdtempSync(join(realpathSync(tmpdir()),'runtime-v010-merge-recovery-'));
+  const actor = {id:'worker',projects:['tasks'],permissions:['execution.request'],revision:1,expiresAt:'2099-01-01T00:00:00Z'};
+  const scope = {workspaceId:'demo',projectId:'tasks',allowedActorIds:['reviewer'],
+    channel:{provider:'callback',installationId:'adapter',tenantId:'team',channelId:'review-channel'}};
+  let store = new RuntimeStore(root,'demo');
+  try {
+    const {intent} = reserveFeedbackReviewNotification(store,actor,scope,candidate);
+    const window = retainFeedbackReview(store,actor,scope,candidate,intent.intentRef,'notice-5',start);
+    const ready = () => ({policyCurrent:true,receiptCoverage:'COMPLETE'});
+    const advance = (time, admission = ready, reauthorize = () => actor) => advanceFeedbackMerge(
+      store,actor,'tasks',window.id,adapter(),admission,reauthorize,signal,() => time,
+    );
+    await assert.rejects(advance(window.deadline-1),{code:'FEEDBACK_REVIEW_WAITING'});
+    assert.equal(target.requests.length,0);
+    await assert.rejects(advance(window.deadline,() => ({...ready(),policyCurrent:false})),{code:'FEEDBACK_MERGE_BLOCKED'});
+    assert.equal(target.requests.filter(request => request.method==='PUT').length,0);
+    assert.equal(store.object('tasks','feedback-review-window',window.id).claim,null);
+    const observedClaims = [];
+    const pending = await advance(window.deadline,() => {
+      observedClaims.push(store.object('tasks','feedback-review-window',window.id).claim?.requestId ?? null);
+      return ready();
+    });
+    assert.deepEqual(observedClaims,[null,pending.requestId]);
+    assert.equal(pending.operationId,githubOperationId);
+    assert.deepEqual(store.object('tasks','feedback-merge-outcome',pending.requestId),pending);
+    store.close();
+    store = new RuntimeStore(root,'demo');
+    finish();
+    const merged = await advance(window.deadline+1);
+    assert.equal(merged.status,'MERGED');
+    assert.equal(merged.source,'FIXTURE');
+    assert.equal(merged.mergeSha,githubLandedSha);
+    assert.equal(merged.requestId,pending.requestId);
+    assert.equal(merged.operationId,pending.operationId);
+    assert.equal(target.requests.filter(request => request.method==='PUT').length,1);
+    await assert.rejects(advance(window.deadline+2,ready,() => ({...actor,revision:2})),{code:'AUTHORITY_CHANGED'});
+    assert.equal(store.revision('tasks'),5);
+  } finally {
+    store.close();
+    rmSync(root,{recursive:true,force:true});
+  }
+});
+
 test('GitHub changed refs, unrelated repositories and insufficient protection prevent a mutation', async () => {
   for (const change of [
     target => { target.pull.head = {...target.pull.head,sha:'e'.repeat(40)}; },
