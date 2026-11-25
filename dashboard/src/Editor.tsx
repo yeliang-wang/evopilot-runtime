@@ -1,7 +1,9 @@
-import {useEffect,useRef,useState} from 'react';
+import {useEffect,useRef,useState,type ReactNode} from 'react';
+import {stringify} from 'yaml';
 import {Graph} from './Graph';
-import {ApiError,call,source as readSource,savePending,loadPending,clearPending,recordCompletedAuthorityResponse} from './api';
-import {addExtension,at,changeExtension,changeField,connectExtension,data,diffLines,draftNodes,displayValue,extensions,fieldValue,moveNode,removeExtension,stageLabels} from './model';
+import {ApiError,call,source as readSource,savePending,loadPending,clearPending,recordCompletedAuthorityResponse,FEEDBACK_DRAFT_SAVE,inspectFeedbackDraft,validateFeedbackDraft,writeFeedbackDraft} from './api';
+import type {FeedbackDraftView,FeedbackDraftReceipt} from './api';
+import {addExtension,at,changeExtension,changeField,connectExtension,data,diffLines,document as yamlDocument,draftNodes,displayValue,extensions,fieldValue,moveNode,removeExtension,stageLabels} from './model';
 import type {Base,BaseTransitionPreview,DefinitionView,Field,GraphNode,Issue,Pending,Receipt,Session,Validation} from './types';
 
 function BaseTransition({value}:{value:BaseTransitionPreview}){
@@ -25,7 +27,9 @@ function FieldInput({field,value,disabled,onChange}:{field:Field;value:unknown;d
  {field.type==='enum'&&Array.isArray(field.rules.values)?<select id={id} value={text} disabled={disabled||locked} onChange={e=>update(e.target.value)}>{field.rules.values.map(v=><option key={String(v)} value={String(v)}>{String(v)}</option>)}</select>:<input id={id} value={text} disabled={disabled||locked} aria-invalid={!!error} onChange={e=>setText(e.target.value)} onBlur={()=>{if(text!==displayValue(value))update(text);}} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();update(text);}}}/>}
  {error?<span className="field-error" role="alert">{error}</span>:null}</div>;
 }
-export function Editor({session,onDirty,onAuthLost}:{session:Session;onDirty:(value:boolean)=>void;onAuthLost:()=>void}){
+interface EditorProps {session:Session;onDirty:(value:boolean)=>void;onAuthLost:()=>void;}
+
+function BaseEditor({session,onDirty,onAuthLost}:EditorProps){
  const [base,setBase]=useState<Base|null>(null),[view,setView]=useState<DefinitionView|null>(null),[text,setText]=useState(''),[saved,setSaved]=useState(''),[activeSource,setActiveSource]=useState(''),[selected,setSelected]=useState('scope'),[validation,setValidation]=useState<Validation|null>(null),[validatedSource,setValidatedSource]=useState(''),[previewSource,setPreviewSource]=useState<string|null>(null),[previewValidation,setPreviewValidation]=useState<Validation|null>(null),[message,setMessage]=useState(''),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[pending,setPending]=useState<Pending|null>(()=>loadPending(session)),[conflict,setConflict]=useState(false),[extensionJson,setExtensionJson]=useState(''),[addId,setAddId]=useState(''),[addSlot,setAddSlot]=useState('after-plan'),[addAction,setAddAction]=useState(''),[connectFrom,setConnectFrom]=useState('');
  const isLimitedPreview='distributionProfile' in session && session.distributionProfile==='limited-preview';
  const latest=useRef(text);latest.current=text;const mounted=useRef(true),canEdit=session.permissions.includes('draft.write'),canActivate=canEdit&&session.permissions.includes('definition.activate');
@@ -86,5 +90,325 @@ export function Editor({session,onDirty,onAuthLost}:{session:Session;onDirty:(va
   </section></div>
   {previewSource!==null?<section className="panel diff"><h2>与当前生效版本的准确差异</h2>{previewValidation?.baseTransition?<BaseTransition value={previewValidation.baseTransition}/>:null}<pre tabIndex={0}>{diffLines(activeSource,text)}</pre></section>:null}
   {issues.length?<section className="panel"><h2>需要处理的配置（{issues.length}）</h2><ul className="issues">{issues.map((i,n)=><li key={n}><code>{i.path}</code><strong>{i.code}</strong><p>{i.message}</p><small>{i.remedy}</small></li>)}</ul></section>:null}
+ </>;
+}
+
+const bindingLabels = {
+ feedbackBindingRef: '反馈通道',
+ linearTeamRef: 'Linear 团队',
+ cursorAgentRef: 'Cursor Agent',
+ githubRepositoryRef: 'GitHub 仓库',
+ harnessRuleRef: 'Harness 校验规则',
+ reviewBindingRef: '复核通道',
+ mergePolicyRef: '合并策略',
+} as const;
+type BindingField = keyof typeof bindingLabels;
+
+const feedbackStages = [
+ {id:'receive-feedback',label:'接收反馈',field:'feedbackBindingRef',icon:'M20 11a8 8 0 0 1-8 8H4l2-4a8 8 0 1 1 14-4Z'},
+ {id:'create-issue',label:'建单',field:'linearTeamRef',icon:'M6 3h8l4 4v14H6Z M14 3v5h4 M9 14h6 M12 11v6'},
+ {id:'reproduce',label:'复现',field:'cursorAgentRef',icon:'M9 6 6 3 M15 6l3-3 M4 10h4 M16 10h4 M4 16h4 M16 16h4 M8 11a4 4 0 1 1 8 0v5a4 4 0 1 1-8 0Z M8 12h8 M12 12v8'},
+ {id:'repair-pr',label:'修复 PR',field:'githubRepositoryRef',icon:'M7 6a2 2 0 1 0 0 .01 M7 20a2 2 0 1 0 0 .01 M19 8a2 2 0 1 0 0 .01 M5 8v10 M5 15h4a8 8 0 0 0 8-5'},
+ {id:'verify',label:'独立验证',field:'harnessRuleRef',icon:'m12 3 8 3v5a11 11 0 0 1-8 10 11 11 0 0 1-8-10V6Z M8 12l3 3 5-5'},
+ {id:'review',label:'人工复核',field:'reviewBindingRef',icon:'M17 7a5 5 0 1 1-10 0 5 5 0 0 1 10 0Z M4 21v-2a5 5 0 0 1 5-5h6a5 5 0 0 1 5 5v2'},
+ {id:'merge-writeback',label:'合并与回写',field:'mergePolicyRef',icon:'M7 5a2 2 0 1 0 0 .01 M7 20a2 2 0 1 0 0 .01 M19 16a2 2 0 1 0 0 .01 M5 7v11 M5 10h7a5 5 0 0 1 5 4'},
+] as const;
+type FeedbackStage = typeof feedbackStages[number];
+const feedbackReturns = [
+ {label:'补充信息',path:'M380 80 V48 Q380 34 366 34 H96 Q82 34 82 48 V78',x:174,y:20},
+ {label:'要求修改',path:'M835 80 V58 Q835 44 821 44 H550 Q536 44 536 58 V78',x:646,y:30},
+ {label:'验证失败',path:'M683 134 V162 Q683 176 669 176 H394 Q380 176 380 162 V136',x:493,y:162},
+] as const;
+
+function FeedbackGraph({selected,onSelect,children}:{
+ selected: FeedbackStage | null;
+ onSelect: (stage:FeedbackStage)=>void;
+ children: ReactNode;
+}){
+ return <section className="graph-card" aria-labelledby="feedback-graph-heading">
+  <header className="graph-toolbar section-heading"><h2 id="feedback-graph-heading">流程图</h2></header>
+  <div className="table-scroll">
+   <svg className="sc-svg" width="1068" height="205" viewBox="0 0 1068 205" aria-label="反馈生命周期流程和返回路径">
+    <defs>
+     <marker id="feedback-next" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+      <path d="M0 0 L7 3.5 L0 7 Z" fill="#4038db"/>
+     </marker>
+     <marker id="feedback-return" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+      <path d="M0 0 L7 3.5 L0 7 Z" fill="#bd7100"/>
+     </marker>
+    </defs>
+    {feedbackReturns.map(({label,path,x,y})=><g key={label}>
+     <path d={path} fill="none" stroke="#bd7100" strokeWidth="1.6" strokeDasharray="6 4" markerEnd="url(#feedback-return)"/>
+     <rect x={x} y={y} width="88" height="27" rx="7" fill="#fff0d6" stroke="#e9b460"/>
+     <text x={x+44} y={y+18} textAnchor="middle" fontSize="14" fontWeight="650" fill="#824400">{label}</text>
+    </g>)}
+    {feedbackStages.slice(1).map(({id},index)=>{
+     const start=149+151*index;
+     return <line key={id} x1={start} x2={start+17} y1="107" y2="107" stroke="#4038db" strokeWidth="1.6" markerEnd="url(#feedback-next)"/>;
+    })}
+    {feedbackStages.map((stage,index)=>{
+     const merge=stage.id==='merge-writeback';
+     const stroke=selected?.id===stage.id?'#2921b8':merge?'#128134':'#746cff';
+     return <g key={stage.id} role="button" tabIndex={0} data-sc-node={stage.id}
+      aria-pressed={selected?.id===stage.id} aria-controls={selected?.id===stage.id?'feedback-node-configuration':undefined}
+      aria-label={stage.label} transform={`translate(${14+151*index} 80)`}
+      onClick={()=>onSelect(stage)} onKeyDown={event=>{
+       if(event.key==='Enter'||event.key===' '){event.preventDefault();onSelect(stage);}
+      }}>
+      <rect width="134" height="54" rx="9" fill={merge?'#e4f9e9':selected?.id===stage.id?'#e2dfff':'#f0efff'}
+       stroke={stroke} strokeWidth={selected?.id===stage.id?2.5:1.2}/>
+      <path d={stage.icon} transform="translate(10 15)" fill="none" stroke={merge?'#087733':'#4038db'} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+      <text x="42" y="33" fontSize="15" fontWeight="650" fill={merge?'#0b6a2b':'#181936'}>{stage.label}</text>
+     </g>;
+    })}
+   </svg>
+  </div>
+  {children}
+ </section>;
+}
+
+const feedbackSourceLimit=16_384;
+const definiteDraftErrors=new Set([
+ 'REVISION_CONFLICT','INVALID_FIELDS','INVALID_INPUT','INVALID_REVISION','INVALID_REFERENCE',
+ 'INLINE_SECRET','FEEDBACK_YAML_LIMIT','FEEDBACK_YAML_INVALID','FEEDBACK_BINDING_REFERENCE',
+ 'FEEDBACK_REVIEW_WINDOW','FEEDBACK_PROJECT_SCOPE',
+]);
+
+function draftSource(view: FeedbackDraftView, session: Session){
+ return view.draft?.yaml ?? stringify(view.draft?.configuration ?? {
+  workspaceId:session.workspaceId,projectId:session.projectId,reviewWindowMinutes:60,
+ },{lineWidth:0});
+}
+
+function FeedbackEditor({session,onDirty,onAuthLost,initialView}:EditorProps & {initialView:FeedbackDraftView}){
+ const [view,setView]=useState(initialView);
+ const [saved,setSaved]=useState(()=>draftSource(initialView,session));
+ const [text,setText]=useState(saved);
+ const [selected,setSelected]=useState<FeedbackStage|null>(null);
+ const [message,setMessage]=useState<{text:string;error?:boolean}|null>(null);
+ const [busy,setBusy]=useState(false);
+ const inFlight=useRef(false);
+ const [pending,setPending]=useState(()=>loadPending(session));
+ const [conflict,setConflict]=useState(false);
+ const canEdit=session.permissions.includes('draft.write');
+ const locked=busy||!!pending||conflict||!canEdit;
+ const withinLimit=new TextEncoder().encode(text).length<=feedbackSourceLimit;
+ const dirty=text!==saved;
+ useEffect(()=>{onDirty(dirty);},[dirty]);
+ useEffect(()=>()=>onDirty(false),[]);
+
+ let fields:Record<string,unknown>|null=null;
+ let syntaxError='';
+ if(withinLimit){
+  try{fields=data(text);}catch(error){syntaxError=error instanceof Error?error.message:String(error);}
+ }
+
+ function fail(error:unknown){
+  setMessage({text:error instanceof Error?error.message:String(error),error:true});
+  if(error instanceof ApiError){
+   if(error.status===401)onAuthLost();
+   if(error.code==='REVISION_CONFLICT')setConflict(true);
+  }
+ }
+ async function run(action:()=>Promise<void>){
+  if(inFlight.current)return;
+  inFlight.current=true;
+  setBusy(true);
+  setMessage(null);
+  try{await action();}catch(error){fail(error);}finally{inFlight.current=false;setBusy(false);}
+ }
+ function change(next:string){
+  setText(next);
+  setMessage(null);
+ }
+ function editField(field:BindingField,value:string){
+  try{
+   const document=yamlDocument(text);
+   if(value)document.set(field,value);
+   else document.delete(field);
+   change(document.toString({lineWidth:0}));
+  }catch(error){fail(error);}
+ }
+ function useReadback(next:FeedbackDraftView){
+  const source=draftSource(next,session);
+  setView(next);
+  setText(source);
+  setSaved(source);
+  setConflict(false);
+ }
+ async function validate(){
+  const result=await validateFeedbackDraft(session,text);
+  if(result.structure!=='VALID')throw new Error('Runtime 未确认 YAML 校验通过。');
+  setMessage({text:'YAML 结构校验通过。绑定核对与精确启用由 Codex Runtime Expert 完成。'});
+ }
+ async function accept(receipt:FeedbackDraftReceipt,original:Pending,submitted?:string){
+  if(receipt.requestId!==original.requestId||receipt.operation!==FEEDBACK_DRAFT_SAVE||
+    receipt.projectId!==original.projectId||receipt.principalId!==original.principalId||
+    receipt.result.status!=='DRAFT'){
+   throw new Error('回执与原请求不一致。');
+  }
+  if(submitted!==undefined&&(receipt.result.yaml!==submitted||!receipt.result.yamlDigest)){
+   throw new Error('保存回执与提交的 YAML 不一致。');
+  }
+  const next=await inspectFeedbackDraft(session);
+  clearPending(session,original);
+  setPending(null);
+  if(next.draft?.draftDigest!==receipt.result.draftDigest||next.draft?.yaml!==receipt.result.yaml||
+    next.draft?.yamlDigest!==receipt.result.yamlDigest){
+   setConflict(true);
+   setMessage({text:'原请求已保存，服务端当前草稿已更新。请重新读取草稿。'});
+   return;
+  }
+  useReadback(next);
+  setMessage({text:'草稿已保存并读回。'});
+ }
+ async function save(){
+  const original=savePending(session,FEEDBACK_DRAFT_SAVE);
+  setPending(original);
+  let receipt:FeedbackDraftReceipt;
+  try{
+   receipt=await writeFeedbackDraft(session,text,original.requestId,view.revision);
+  }catch(error){
+   if(error instanceof ApiError&&definiteDraftErrors.has(error.code)){
+    clearPending(session,original);
+    setPending(null);
+   }else{
+    const observation=recordCompletedAuthorityResponse(session,original,error);
+    if(observation)setPending(observation);
+   }
+   throw error;
+  }
+  await accept(receipt,original,text);
+ }
+ async function reconcile(){
+  if(!pending)return;
+  let receipt:FeedbackDraftReceipt;
+  try{
+   receipt=await call<FeedbackDraftReceipt>(session,'runtime.receipt.read',{requestId:pending.requestId});
+  }catch(error){
+   if(!(error instanceof ApiError&&error.status===404&&error.code==='NOT_FOUND'))throw error;
+   if(pending.completedAuthorityResponse){
+    clearPending(session,pending);
+    setPending(null);
+    setMessage({text:'原请求已结束且未提交。当前 YAML 已保留。'});
+   }else{
+    setMessage({text:'原请求尚无回执，请继续核对。'});
+   }
+   return;
+  }
+  await accept(receipt,pending);
+ }
+
+ return <>
+  <div className="page-heading">
+   <div><h1>Project Lifecycle</h1><div className="badges">
+    <span className="badge">{dirty?'草稿有未保存变更':view.draft?'草稿已保存':'草稿'}</span>
+    {view.active?<span className="badge">{!dirty&&view.active.matchesSavedDraft?'当前草稿已启用':'已有启用版本'}</span>:null}
+   </div></div>
+   <div className="button-row">
+    <button type="button" disabled={busy||!!pending||!withinLimit} onClick={()=>void run(validate)}>校验 YAML</button>
+    <button type="button" className="primary" disabled={locked||!withinLimit||(!dirty&&!!view.draft?.yaml)}
+     onClick={()=>void run(save)}>保存草稿</button>
+   </div>
+  </div>
+  {message?<div className={`notice${message.error?' error':''}`} role={message.error?'alert':'status'}>{message.text}</div>:null}
+  {!canEdit?<div className="notice">当前身份仅可浏览和校验草稿。</div>:null}
+  {pending?<div className="notice warning">待核对原请求 <code>{pending.requestId}</code>。
+   <button type="button" disabled={busy} onClick={()=>void run(reconcile)}>核对原请求</button>
+  </div>:null}
+  {conflict?<div className="notice warning">服务端草稿已变化。当前 YAML 已保留。
+   <button type="button" disabled={busy} onClick={()=>{
+    if(!dirty||window.confirm('重新读取会替换当前未保存的 YAML，是否继续？')){
+     void run(async()=>useReadback(await inspectFeedbackDraft(session)));
+    }
+   }}>重新读取草稿</button>
+  </div>:null}
+  <FeedbackGraph selected={selected} onSelect={stage=>setSelected(previous=>previous?.id===stage.id?null:stage)}>
+   {selected?<div className="panel properties" id="feedback-node-configuration">
+    <h2>{selected.label}配置</h2>
+    <label htmlFor="feedback-binding">{bindingLabels[selected.field]}</label>
+    <input id="feedback-binding" value={typeof fields?.[selected.field]==='string'?String(fields[selected.field]):''}
+     autoComplete="off" spellCheck={false} placeholder="binding:provider/reference"
+     disabled={locked||!fields} onChange={event=>editField(selected.field,event.target.value)}/>
+    {selected.id==='review'?<p className="muted">复核窗口固定为 60 分钟。</p>:null}
+   </div>:<p className="graph-hint">选择节点以查看和修改绑定引用。</p>}
+  </FeedbackGraph>
+  <section className="panel source-panel" aria-labelledby="feedback-yaml-heading">
+   <div className="section-heading"><h2 id="feedback-yaml-heading">YAML 源码</h2><span className="muted">YAML 1.2</span></div>
+   <label className="sr-only" htmlFor="feedback-lifecycle-yaml">Feedback Project Lifecycle YAML</label>
+   <textarea id="feedback-lifecycle-yaml" className="code-editor" value={text} readOnly={locked} spellCheck={false}
+    onChange={event=>change(event.target.value)}/>
+   {!withinLimit?<p className="field-error" role="alert">YAML 超过 16 KiB。</p>:null}
+   {syntaxError?<p className="field-error" role="alert">{syntaxError}</p>:null}
+   <p className="muted">使用受保护的绑定引用。草稿启用由 Codex Runtime Expert 完成。</p>
+  </section>
+ </>;
+}
+
+export function Editor(props:EditorProps){
+ const {session,onDirty,onAuthLost}=props;
+ const [mode,setMode]=useState<'feedback'|'base'|null>(null);
+ const [view,setView]=useState<FeedbackDraftView|null>(null);
+ const dirty=useRef(false);
+ const [problem,setProblem]=useState('');
+ const [checking,setChecking]=useState(false);
+ const checked=useRef(false);
+ function trackDirty(next:boolean){
+  dirty.current=next;
+  onDirty(next);
+ }
+ async function connectFeedback(signal?:AbortSignal,open=false){
+  setChecking(true);
+  try{
+   const next=await inspectFeedbackDraft(session,signal);
+   if(signal?.aborted)return;
+   setView(next);
+   setProblem('');
+   const pending=loadPending(session);
+   if(open&&pending){
+    setProblem('请先核对原请求。');
+    return;
+   }
+   if(open&&dirty.current&&!window.confirm('切换编辑器会丢弃未保存的 YAML，是否继续？'))return;
+   const initialMode=pending?(pending.operation===FEEDBACK_DRAFT_SAVE?'feedback':'base'):next.draft?'feedback':'base';
+   setMode(current=>open?'feedback':current??initialMode);
+  }catch(error){
+   if(signal?.aborted)return;
+   if(error instanceof ApiError&&error.status===401)onAuthLost();
+   if(!(error instanceof ApiError&&['DASHBOARD_OPERATION','LIMITED_PREVIEW','UNKNOWN_OPERATION'].includes(error.code))){
+    setProblem(error instanceof Error?error.message:String(error));
+   }
+   setMode(current=>current??'base');
+  }finally{
+   if(!signal?.aborted)setChecking(false);
+  }
+ }
+ useEffect(()=>{
+  if(checked.current)return;
+  const controller=new AbortController();
+  void connectFeedback(controller.signal).then(()=>{if(!controller.signal.aborted)checked.current=true;});
+  return()=>controller.abort();
+ },[session]);
+ function switchMode(){
+  if(loadPending(session)){
+   setProblem('请先核对原请求。');
+   return;
+  }
+  setProblem('');
+  if(mode==='feedback'){
+   if(!dirty.current||window.confirm('切换编辑器会丢弃未保存的 YAML，是否继续？'))setMode('base');
+  }else void connectFeedback(undefined,true);
+ }
+ if(mode===null)return <div className="panel" role="status">正在读取项目配置…</div>;
+ const switchButton=view||problem?<div className="button-row">
+  <button type="button" disabled={checking} onClick={switchMode}>
+   {mode==='feedback'?'编辑 Base 定义':view?'编辑反馈流程配置':'重试读取反馈流程配置'}
+  </button>
+ </div>:null;
+ return <>
+  {problem?<div className="notice warning" role="status">{problem}</div>:null}
+  {mode==='feedback'&&view?<FeedbackEditor {...props} onDirty={trackDirty} initialView={view}/>:
+   <>{switchButton}<BaseEditor {...props} onDirty={trackDirty}/></>}
+  {mode==='feedback'?switchButton:null}
  </>;
 }

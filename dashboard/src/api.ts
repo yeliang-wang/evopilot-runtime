@@ -14,6 +14,38 @@ export const currentSession=()=>json<Session>('/api/v1/dashboard/session');
 export async function connect(code:string):Promise<Session>{await json('/api/v1/dashboard/session',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({code})});return currentSession();}
 export const disconnect=(s:Session)=>json('/api/v1/dashboard/logout',{method:'POST',headers:{'content-type':'application/json','x-runtime-csrf':s.csrf},body:'{}'});
 export const call=<T>(s:Session,operation:string,input:Record<string,unknown>={},extra:Record<string,unknown>={},signal?:AbortSignal)=>json<T>('/api/v1/dashboard/request',{method:'POST',headers:{'content-type':'application/json','x-runtime-csrf':s.csrf},body:JSON.stringify({operation,projectId:s.projectId,input,...extra}),signal});
+export const FEEDBACK_DRAFT_SAVE = 'feedback.project.draft.save';
+
+interface FeedbackDraft {
+ status: 'DRAFT';
+ draftDigest: string;
+ configuration: Record<string, unknown>;
+ missingFields: string[];
+ yaml?: string;
+ yamlDigest?: string;
+}
+
+export interface FeedbackDraftView {
+ revision: number;
+ draft: FeedbackDraft | null;
+ active?: {activationId: string; draftDigest: string; matchesSavedDraft: boolean};
+}
+
+export interface FeedbackDraftReceipt {
+ projectId: string;
+ requestId: string;
+ operation: string;
+ principalId: string;
+ revision: number;
+ result: FeedbackDraft;
+}
+
+export const inspectFeedbackDraft=(s:Session,signal?:AbortSignal)=>
+ call<FeedbackDraftView>(s,'feedback.project.inspect',{},{},signal);
+export const validateFeedbackDraft=(s:Session,yaml:string)=>
+ call<{structure:'VALID';draftDigest:string;providerBindings:'NOT_EVALUATED'}>(s,'feedback.project.validate',{yaml});
+export const writeFeedbackDraft=(s:Session,yaml:string,requestId:string,expectedRevision:number)=>
+ call<FeedbackDraftReceipt>(s,FEEDBACK_DRAFT_SAVE,{yaml},{requestId,expectedRevision});
 export async function source(s:Session,revisionId:string):Promise<string>{let offset=0;const parts:Uint8Array[]=[];let total=0;for(let n=0;n<9;n++){
  const page=await call<{revisionId:string;data:string;nextOffset:number|null;totalBytes:number}>(s,'lifecycle.definition.source.read',{revisionId,offset});
  if(page.revisionId!==revisionId||page.totalBytes>262144||page.totalBytes<0)throw new ApiError('SOURCE_CHANGED','源码读取与选定修订不一致。');
@@ -28,7 +60,7 @@ function completedAuthorityResponse(value:unknown):value is CompletedAuthorityRe
  const v=value as Record<string,unknown>;if(Object.keys(v).sort().join(',')!=='code,status')return false;
  return v.status===401&&(v.code==='UNAUTHENTICATED'||v.code==='BROWSER_SESSION_REVOKED')||v.status===403&&v.code==='FORBIDDEN';
 }
-const definitionWrite=(operation:string)=>operation==='lifecycle.draft.save'||operation==='lifecycle.definition.save-and-activate';
+const definitionWrite=(operation:string)=>operation==='lifecycle.draft.save'||operation==='lifecycle.definition.save-and-activate'||operation===FEEDBACK_DRAFT_SAVE;
 const samePending=(a:Pending|null,b:Pending)=>!!a&&(['serviceId','projectId','principalId','requestId','operation'] as const).every(key=>a[key]===b[key]);
 export function loadPending(s:Session):Pending|null{try{
  const raw=sessionStorage.getItem(pendingKey(s));if(!raw||raw.length>8192)return null;
