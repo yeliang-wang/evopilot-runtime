@@ -24,6 +24,9 @@ const LARGE_EVIDENCE_KINDS=new Set(['plan-stage-native-receipt','stage-native-re
 // state stays at version 1; the first committed feature write raises the same
 // database transaction to version 2 so an older constructor refuses to open it.
 const CORRECTION_STATE_KINDS=new Set(['lifecycle-correction-proposal','lifecycle-recovery-admission','lifecycle-recovery-ledger','lifecycle-evidence-qualification','ci-acceptance-capture']);
+const FEEDBACK_STATE_KINDS = new Set([
+  'feedback-project-draft','feedback-activation','feedback-channel-event','feedback-review-window','feedback-review-intent',
+]);
 
 /** Owns one local writer. The OS releases the separate SQLite exclusive lock after process death. */
 export class RuntimeStore {
@@ -173,10 +176,9 @@ export class RuntimeStore {
         slug(item.kind); string(item.id);
         this.db.prepare('INSERT INTO objects VALUES(?,?,?,?) ON CONFLICT(project_id,kind,id) DO UPDATE SET data=excluded.data').run(request.projectId,item.kind,item.id,LARGE_EVIDENCE_KINDS.has(item.kind)?canonicalEvidence(item.value):canonical(item.value));
       }
-      // Loop accounting needs a reader that enforces its finite window. Never
-      // downgrade it when a later ordinary correction record is retained.
-      const retainsFeedbackIngress = result.objects?.some(item => item.kind === 'feedback-channel-event' || item.kind === 'feedback-review-window' || item.kind === 'feedback-review-intent');
-      const featureVersion = retainsFeedbackIngress ? 4 :
+      // Fail closed when an older reader opens state with newer feedback or
+      // finite-loop semantics. Later writes must never lower this marker.
+      const featureVersion = result.objects?.some(item=>FEEDBACK_STATE_KINDS.has(item.kind)) ? 4 :
         result.objects?.some(item=>item.kind==='lifecycle-loop-budget') ? 3 :
         result.objects?.some(item=>CORRECTION_STATE_KINDS.has(item.kind)) ? 2 : 1;
       if(Number(this.db.prepare('PRAGMA user_version').get()!.user_version)<featureVersion)this.db.exec('PRAGMA user_version='+featureVersion+';');

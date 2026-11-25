@@ -13,6 +13,34 @@ const event = {
   action: { kind: 'feedback', text: '复现步骤 🧪\r\n\tReview the received request.  ' },
 };
 
+test('persisting a feedback draft marks the state before any provider traffic', async () => {
+  const {mkdtempSync,realpathSync,rmSync} = await import('node:fs');
+  const {tmpdir} = await import('node:os');
+  const {join} = await import('node:path');
+  const {DatabaseSync} = await import('node:sqlite');
+  const {RuntimeStore} = await import('../../dist/server/store.js');
+  const {saveFeedbackProjectDraft} = await import('../../dist/feedback-loop/project.js');
+  const root = mkdtempSync(join(realpathSync(tmpdir()),'runtime-v010-feedback-rollback-'));
+  const actor = {id:'editor',projects:['project'],permissions:['read','draft.write'],revision:1,expiresAt:'2099-01-01T00:00:00Z'};
+  const store = new RuntimeStore(root,'workspace');
+  try {
+    const state = new DatabaseSync(join(root,'service.sqlite'),{readOnly:true});
+    try {
+      assert.equal(state.prepare('PRAGMA user_version').get().user_version,1);
+      const draft = {workspaceId:'workspace',projectId:'project'};
+      assert.throws(() => saveFeedbackProjectDraft(store,actor,'project',draft,'stale',1,()=>actor),{code:'REVISION_CONFLICT'});
+      assert.equal(state.prepare('PRAGMA user_version').get().user_version,1);
+      saveFeedbackProjectDraft(store,actor,'project',draft,'draft',0,()=>actor);
+      assert.equal(state.prepare('PRAGMA user_version').get().user_version,4);
+    } finally {
+      state.close();
+    }
+  } finally {
+    store.close();
+    rmSync(root,{recursive:true,force:true});
+  }
+});
+
 test('normalized events keep exact text and original message and actor identities', () => {
   const first = normalizeChannelEvent(event, scope);
   const redelivery = normalizeChannelEvent({
