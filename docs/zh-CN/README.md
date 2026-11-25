@@ -2,6 +2,10 @@
 
 [English](../README.md) | 简体中文
 
+从 [v0.10.0 Preview 快速开始](../../README_CN.md#快速开始)和[反馈闭环使用指南](runtime-v010-preview.md)进入。[已批准计划（英文）](../runtime-v010-preview-plan.md)记录交付范围，[固定清单](../../governance/acceptance-v010.json)记录验收须观察的结果。
+
+## v0.9.0 Preview 参考
+
 独立 Runtime 0.9.0 Preview 请使用[中文使用指南](runtime-v090.md)、[生命周期 API（英文）](../lifecycle-api.md)、
 [兼容与迁移参考（英文）](../legacy-host.md)和[固定验收](../acceptance-v090.md)。
 文档描述版本能力与要求，不能替代验收或发布回执。发布状态和下载文件以[对应版本的 Release 页面](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.9.0)为准。
@@ -12,7 +16,7 @@
 
 | 任务 | 入口 |
 |---|---|
-| 安装独立 Runtime 与 Codex 插件 | [本组件安装入口](../../README_CN.md#安装发行包)、[使用指南](runtime-v090.md) |
+| 安装独立 Runtime 与 Codex 插件 | [v0.9 使用指南](runtime-v090.md) |
 | 首次建模与选择等级 | [首次使用](https://github.com/yeliang-wang/evopilot/blob/main/docs/zh-CN/first-journey.md)、[内容等级 v2](https://github.com/yeliang-wang/evopilot/blob/main/docs/zh-CN/asset-readiness.md) |
 | 升级已有工作区 | [本组件兼容与迁移参考（英文）](../legacy-host.md) |
 | 维护翻译 | [双语维护规则](documentation-languages.md) |

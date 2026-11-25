@@ -1,6 +1,6 @@
 # Runtime documentation
 
-Start with the [v0.9.0 Preview quickstart](../README.md#quickstart) for prerequisites and source setup. Consult the [versioned Release page](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.9.0) for publication status and downloads; verify applicable acceptance records separately.
+Start with the [v0.10.0 Preview quickstart](../README.md#quickstart) and [feedback-loop operator guide](runtime-v010-preview.md). The [accepted plan](runtime-v010-preview-plan.md) records the scope. The [fixed inventory](../governance/acceptance-v010.json) records what must be observed for acceptance.
 
 English | [简体中文](zh-CN/README.md)
 
@@ -24,8 +24,7 @@ stage/version reports and nonblocking collection recovery on the independent dev
 
 ## Installation paths
 
-Use the [independent distribution](../README.md#install-a-release-tarball) and
-[operator guide](runtime-v090.md). The standalone archive includes compiled
+For the v0.9 installation model, use the [v0.9 operator guide](runtime-v090.md). The standalone archive includes compiled
 JavaScript, declarations, static UI, one Runtime plugin and locked production
 dependencies. Installation uses a protected exact plan; service and current Host
 verification are separate results. No parent source or parent daemon is required.

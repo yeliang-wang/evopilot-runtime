@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.0 Preview
+
+This entry describes the scoped development target. Consult the [v0.10.0 Release page](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.10.0) for artifacts after a separately approved publication.
+
+- Add project-scoped feedback configuration with protected provider references, exact owner approval and readback through the Runtime Expert in Codex. The Lifecycle page places the flow graph above YAML and saves a draft for separate activation.
+- Define the feedback-to-PR journey through an authenticated channel, Linear, Cursor Cloud, independent verification and GitHub. Needs-info replies resume the original case. An acknowledged review notification starts a 60-minute window bound to the exact candidate, policy and evidence.
+- Retain original mutation identities for recovery and expose a read-only monitor for the current node, visited path, return reasons and review deadline.
+- Defer live Slack end-to-end acceptance. The authenticated callback is the reference channel for the representative journey. Exact source CI, actual Host and provider journeys, browser acceptance, publication and downloaded-package replay each require their own evidence.
+
 ## 0.9.0 Preview
 
 This entry describes the versioned changes. The [versioned Release page](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.9.0) records publication status and downloads. Verify exact package/source identities and the applicable acceptance records separately; this changelog is not a release or acceptance receipt.

@@ -1,48 +1,40 @@
-# EvoPilot Runtime · v0.9.0 Preview
+# EvoPilot Runtime · v0.10.0 Preview
 
 [English](README.md) | 简体中文
 
-**版本与发布证据：** 本指南描述 Runtime 0.9.0 Preview。发布状态和下载文件以[对应版本的 Release 页面](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.9.0)为准。使用前核对所选源码提交、制品校验和及适用验收记录；仅有源码不代表已发布或已完成验收。
+本源码树说明 Runtime 0.10.0 Preview 的交付目标。真实 Provider、Codex Desktop 和浏览器的验收须使用绑定到准确源码与制品的证据。另行批准并发布后，下载文件将列在 [v0.10.0 Release 页面](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.10.0)。
 
-Runtime 是独立生命周期服务，负责项目定义、目标、Target、实例、执行门禁、回执与审计。Codex 通过一个 Runtime Expert/HTTP MCP 插件承担推理与编码。Runtime 不需要 LLM Profile，也不运行自主模型循环。
+Runtime 是独立生命周期服务，管理项目定义、目标、Target、实例、执行门禁、回执和审计。Codex 中的 Runtime Expert 通过 Streamable HTTP MCP 配置项目并读回状态。反馈闭环由 Cursor Cloud 执行编码。
 
-[使用指南](docs/zh-CN/runtime-v090.md) · [生命周期 API（英文）](docs/lifecycle-api.md) · [中文文档](docs/zh-CN/README.md) · [固定验收](docs/acceptance-v090.md)
+[反馈闭环使用指南](docs/zh-CN/runtime-v010-preview.md) · [中文文档](docs/zh-CN/README.md) · [固定验收清单](governance/acceptance-v010.json)
 
-## 公开限定 Preview
+## 从反馈到 PR 合并
 
-`limited-preview` 包在 macOS arm64 的新建隔离环境中提供本地服务启停、Project Lifecycle YAML 校验、草稿编辑、流程图预览与只读监控。安装计划使用 `editor` 或 `reader`，将字段设为 `integrationsRef: null` 和 `codex: null`。启用定义、执行业务、远端 Provider、触发 CI、升级和桌面插件注册均不可用。下文描述完整开发目标。 在 `/lifecycle` 编辑草稿，在 `/monitor` 查看只读状态。
+1. 通过 Runtime Expert 配置隔离项目。在 `/lifecycle` 编辑流程图和 YAML、校验配置并保存草稿。由指定项目负责人另行审阅和启用准确候选。
+2. Runtime 将授权反馈转成 Linear 工单。需要补充信息时，回复继续原工单和实例。Cursor Cloud 复现问题，并创建或修订同一个 GitHub PR。独立验证针对准确的 PR head 和 base 执行。
+3. 审阅通知确认送达后，开启 60 分钟窗口。有效否决会阻止该 PR head 合并。到期后，Runtime 重新核验候选、证据、项目预授权和审阅渠道覆盖情况，再发起受 GitHub 分支保护约束的 rebase 合并。结案前须读回 GitHub 的合并结果。打开 `/monitor` 可查看当前节点、已走路径、实际回退边和审阅截止时间。
 
-## 能力
+Slack Socket Mode 是首个平台适配器。由于没有测试频道，真实 Slack 端到端验收已延期。代表性验收流程使用经过身份验证的回调通道，并连接真实 Linear、Cursor Cloud 和 GitHub 服务。
 
-| 能力 | 行为 |
-|---|---|
-| Base 与项目生命周期 | 发布者维护不可变 Base；八阶段强制配置；YAML 与受限扩展 |
-| 统一服务 | HTTP API、Streamable HTTP MCP 和 CLI 使用相同的服务端权限与状态 |
-| 两个 Dashboard 页面 | 生命周期图形/YAML 编辑与同页启用；独立的只读实例监控 |
-| Agent 与 CI | Codex 执行已授权工作；核验 GitHub Actions/GitLab CI 身份、制品和回执 |
-| 组件交互 | 消费已发布 Ontology/Harness API、固定资产与评定，保留反馈与恢复 |
-| 发行 | 严格 TypeScript 核心；编译 JavaScript、声明、静态页面、锁定生产依赖与一个插件 |
+![外部工作流示例，涵盖 Slack 反馈、Grok Bot 接单、Linear 工单、Cursor Cloud 修复和合并前人工审阅](docs/images/runtime-v010-workflow-reference.png)
 
-[Ontology](https://github.com/yeliang-wang/evopilot-ontology/blob/main/README_CN.md) 管理语义资产；[Harness](https://github.com/yeliang-wang/evopilot-harness/blob/main/README_CN.md) 管理验证资产与证据评定；[EvoPilot](https://github.com/yeliang-wang/evopilot/blob/main/README_CN.md) 提供导航。它们无需与 Runtime 使用相同版本。定义启用不批准 Target、不执行 Run，也不授权发布。
+*用户提供的外部工作流截图，展示 Grok Bot、Slack、Linear 与 Cursor。截图保留 QingYue807 的视频叠层，原视频帖子的链接尚待确认。Runtime 通过 Codex 配置并读回状态，由自身服务承担接单、编排与恢复。本图仅用于说明外部示例，Runtime Dashboard 使用单独的浏览器截图验收。* [原始图表](https://github.com/ythx-101/live-panel-skill/blob/main/examples/loop-poteto/preview-light.webp) · [上游声明](https://github.com/ythx-101/live-panel-skill/blob/main/NOTICE) · [Lauren Tan 的工作流原帖](https://x.com/poteto/status/2107510472601985336)
 
 ## 快速开始
 
 ### 安装发行包
 
-发布后，使用 **macOS arm64 和 Node 24.14.0**，从本组件 Release 获取全部六份制品：`evopilot-runtime-0.9.0-darwin-arm64.tar.gz`、`evopilot-next-runtime-0.9.0.tgz`、`distribution-manifest.json`、`runtime-dependency-lock.json`、`source-revision.txt` 和 `SHA256SUMS`。在新的私有下载目录执行：
+发布后，使用 **macOS arm64 和 Node 24.14.0**，从本组件 Release 获取全部六份制品：`evopilot-runtime-0.10.0-darwin-arm64.tar.gz`、`evopilot-next-runtime-0.10.0.tgz`、`distribution-manifest.json`、`runtime-dependency-lock.json`、`source-revision.txt` 和 `SHA256SUMS`。在新的私有下载目录执行：
 
 ```sh
 shasum -a 256 -c SHA256SUMS
 cat source-revision.txt
 mkdir unpacked
-tar -xzf evopilot-runtime-0.9.0-darwin-arm64.tar.gz -C unpacked
+tar -xzf evopilot-runtime-0.10.0-darwin-arm64.tar.gz -C unpacked
 chmod 600 distribution-manifest.json
-node unpacked/package/dist/server/cli.js help
 ```
 
-独立归档包含运行依赖，无需父项目源码、开发编译器或联网安装依赖。npm tarball 提供限定本地命令，并附有依赖锁。发行渠道为 GitHub Releases，不向 npm registry 发布。
-
-按照[使用指南](docs/zh-CN/runtime-v090.md)准备受保护的精确安装计划。安装器在准备包或启动服务前核验归档、完整文件清单、可执行文件身份及选定范围。限定发行使用 `node unpacked/package/dist/installation/installer.js install --plan-ref <private-plan.json>` 安装，并用 `browser-code` 生成一次性代码打开本地 Dashboard。保存草稿结果不明时检查原回执。
+独立归档包含运行依赖。制品通过 GitHub Releases 发行。准备受保护的隔离安装计划前，核对发布清单和获批的发行范围。反馈闭环的前置条件及制品、服务与 Host 证据的区别，见[使用指南](docs/zh-CN/runtime-v010-preview.md)。
 
 ### 从源码开发
 
@@ -53,7 +45,6 @@ npm ci --ignore-scripts
 npm run build
 npm run check
 npm test
-node dist/server/cli.js help
 ```
 
 源码测试属于隔离技术证据，不能替代固定验收、真实 Host 流程、发布及安装验证。候选制品准备只使用已提交且无修改的源码。
@@ -66,6 +57,8 @@ node dist/server/cli.js help
 
 ## 文档与贡献
 
+- [EvoPilot](https://github.com/yeliang-wang/evopilot/blob/main/README_CN.md) 提供组件导航，[Harness](https://github.com/yeliang-wang/evopilot-harness/blob/main/README_CN.md) 管理验证资产与证据评定，[Ontology](https://github.com/yeliang-wang/evopilot-ontology/blob/main/README_CN.md) 管理语义资产。
+- [v0.9 使用指南](docs/zh-CN/runtime-v090.md)与[生命周期 API（英文）](docs/lifecycle-api.md)。
 - [中文文档入口](docs/zh-CN/README.md)、[CLI（英文）](docs/cli.md)、[规划（英文）](docs/planning-api.md)和[可读 API（英文）](docs/readable-api.md)。
 - [已记录 Token 消耗](docs/zh-CN/token-usage-v090.md)：明确的 Codex 来源、Base 阶段快照和版本报告；统计不作为执行门禁。
 - [兼容与迁移（英文）](docs/legacy-host.md)、[反馈（英文）](docs/feedback.md)和[经审阅响应（英文）](docs/response.md)。
