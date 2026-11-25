@@ -251,7 +251,8 @@ export function readSavedFeedbackProjectDraft(store: RuntimeStore, actor: Princi
       subject.workspaceId !== store.workspaceId || subject.serviceId !== store.serviceId || subject.projectId !== projectId) {
     return reject('CORRUPT_FEEDBACK_ACTIVATION','The retained activation does not match the project.',503);
   }
-  return {...summary,active:{activationId,draftDigest:subject.draftDigest,matchesSavedDraft:subject.draftDigest===revision}};
+  const matchesSavedDraft = subject.draftDigest === revision && subject.yamlDigest === (source?.yamlDigest ?? null);
+  return {...summary,active:{activationId,draftDigest:subject.draftDigest,matchesSavedDraft}};
 }
 
 export const FEEDBACK_ACTIVATION_PREVIEW = 'feedback.project.activation.preview';

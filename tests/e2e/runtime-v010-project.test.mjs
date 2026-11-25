@@ -291,6 +291,18 @@ test('Expert transport enables only the exact current draft with independently v
     assert.deepEqual(restarted.active,{
       activationId:activationInput.candidateDigest,draftDigest:preview.result.subject.draftDigest,matchesSavedDraft:true,
     });
+    const editedYaml = browserSource.yaml.replace('审阅用 YAML 注释','重新编辑的 YAML 注释');
+    const edited = await request('feedback.project.draft.save',{yaml:editedYaml},{
+      requestId:'feedback-draft-comment-edit',expectedRevision:restarted.revision,
+    });
+    assert.equal(edited.status,200,JSON.stringify(edited));
+    assert.equal(edited.result.result.draftDigest,readback.draftDigest);
+    assert.notEqual(edited.result.result.yamlDigest,readback.yamlDigest);
+    const current = (await request('feedback.project.inspect')).result;
+    assert.equal(current.draft.yaml,editedYaml);
+    assert.deepEqual(current.active,{
+      activationId:activationInput.candidateDigest,draftDigest:preview.result.subject.draftDigest,matchesSavedDraft:false,
+    });
   } finally {
     await client.close();
     await server?.close();

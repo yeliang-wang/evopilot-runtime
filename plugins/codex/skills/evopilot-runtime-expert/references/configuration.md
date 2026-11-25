@@ -130,5 +130,7 @@ project revision with `feedback.project.activate` via `runtime_write`. Supply
 candidate or its preconditions changed. The activation receipt controls the
 feedback configuration only. Execution and release require their own authority.
 After activation, read `feedback.project.inspect` and confirm
-`active.activationId` matches the receipt. If `matchesSavedDraft` is false, the
-saved draft and active configuration refer to different revisions.
+`active.activationId` matches the receipt. `matchesSavedDraft` checks the
+configuration digest and the reviewed YAML digest. Changes to comments or
+formatting require a new activation review if the owner wants to activate
+that YAML.
