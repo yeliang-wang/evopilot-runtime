@@ -45,3 +45,53 @@ test('one registered connection may fill both roles with the correct capability 
   assert.equal(inspectFeedbackChannelReadiness(draft, [both], now).channelsReady, true);
   assert.equal(inspectFeedbackChannelReadiness(draft, [inbound], now).channelsReady, false);
 });
+
+test('actual HTTP and MCP share scoped draft validation and retain no activation', async () => {
+  const {mkdtempSync,realpathSync,rmSync} = await import('node:fs');
+  const {join} = await import('node:path');
+  const {tmpdir} = await import('node:os');
+  const {randomBytes} = await import('node:crypto');
+  const {Client} = await import('@modelcontextprotocol/sdk/client/index.js');
+  const {StreamableHTTPClientTransport} = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
+  const {initializeCredentials,tokenDigest} = await import('../../dist/server/security.js');
+  const {startRuntimeServer} = await import('../../dist/server/http.js');
+  const root = mkdtempSync(join(realpathSync(tmpdir()),'runtime-v010-project-http-'));
+  const token = randomBytes(32).toString('hex');
+  const authorization = 'Bearer ' + token;
+  const client = new Client({name:'feedback-expert-transport-probe',version:'1'});
+  let server;
+  try {
+    initializeCredentials(root,'demo',[{
+      id:'expert-reader',projects:['tasks'],permissions:['read'],revision:1,expiresAt:'2099-01-01T00:00:00Z',tokenDigest:tokenDigest(token),
+    }]);
+    server = await startRuntimeServer({stateRoot:root,workspaceId:'demo'});
+    const envelope = {operation:'feedback.project.validate',projectId:'tasks',input};
+    const request = body => fetch(server.url+'/api/v1/request',{
+      method:'POST',headers:{authorization,'content-type':'application/json'},body:JSON.stringify(body),
+    });
+    const response = await request(envelope);
+    assert.equal(response.status,200);
+    const {result} = await response.json();
+    assert.equal(result.structure,'VALID');
+    assert.equal(result.providerBindings,'NOT_EVALUATED');
+    assert.equal(result.activationAuthorized,false);
+    assert.equal((await request({...envelope,input:{...input,workspaceId:'foreign'}})).status,403);
+    assert.equal((await request({...envelope,projectId:'foreign'})).status,403);
+    assert.equal((await request({...envelope,input:{...input,token:'fixture'}})).status,400);
+    await client.connect(new StreamableHTTPClientTransport(new URL(server.url+'/mcp'),{requestInit:{headers:{authorization}}}));
+    const tools = await client.listTools();
+    const read = tools.tools.find(row => row.name==='runtime_read');
+    const write = tools.tools.find(row => row.name==='runtime_write');
+    assert(read.inputSchema.properties.operation.enum.includes(envelope.operation));
+    assert(!write.inputSchema.properties.operation.enum.includes(envelope.operation));
+    const mcp = await client.callTool({name:'runtime_read',arguments:envelope});
+    assert.notEqual(mcp.isError,true);
+    assert.deepEqual(JSON.parse(mcp.content[0].text).result,result);
+    const status = await request({operation:'runtime.status',projectId:'tasks',input:{}});
+    assert.equal((await status.json()).result.revision,0);
+  } finally {
+    await client.close();
+    await server?.close();
+    rmSync(root,{recursive:true,force:true});
+  }
+});

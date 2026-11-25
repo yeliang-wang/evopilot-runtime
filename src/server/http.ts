@@ -1,3 +1,4 @@
+import { FEEDBACK_PROJECT_VALIDATE, inspectFeedbackProjectDraft } from '../feedback-loop/project.js';
 import { createCorrectionService, CORRECTION_READS, CORRECTION_WRITES } from '../lifecycle/correction.js';
 import { QUALIFICATION_READS, QUALIFICATION_WRITES } from '../lifecycle/evidence-qualification.js';
 import type {RegisteredQualificationService} from '../adapters/bindings.js';
@@ -122,6 +123,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     if(EXTENSION_REVIEW_READS.includes(operation as typeof EXTENSION_REVIEW_READS[number]))return extensionReviews.read(actor,projectId,operation,input);
     if(IMPLEMENTATION_REVIEW_READS.includes(operation as typeof IMPLEMENTATION_REVIEW_READS[number]))return implementationReviews.read(actor,projectId,operation,input);
     switch (operation) {
+      case FEEDBACK_PROJECT_VALIDATE: return inspectFeedbackProjectDraft(input, options.workspaceId, projectId);
       case 'runtime.status': exact(input,[]); return { ...status(), projectId, revision: store.revision(projectId),observationWorker:execution?.health(projectId)??null,usageWorker:usageWorker?.health(projectId)??null };
       case 'runtime.projects.list': exact(input,[],['cursor','limit']); return store.projects(actor,input.cursor===undefined?undefined:string(input.cursor,2048),input.limit===undefined?50:input.limit as number);
       case 'runtime.events.read': exact(input,[],['cursor']); return store.events(actor,projectId,input.cursor === undefined ? undefined : string(input.cursor,1024));

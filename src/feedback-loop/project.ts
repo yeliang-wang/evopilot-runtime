@@ -94,3 +94,21 @@ export function inspectFeedbackChannelReadiness(
     review: results[1],
   };
 }
+
+export const FEEDBACK_PROJECT_VALIDATE = 'feedback.project.validate';
+
+/** Expert previews only the scoped draft. Provider registration and activation
+ * have separate authority and are never inferred from a successful read. */
+export function inspectFeedbackProjectDraft(input: unknown, workspaceId: string, projectId: string) {
+  const draft = parseFeedbackProjectDraft(input);
+  if (draft.workspaceId !== workspaceId || draft.projectId !== projectId) {
+    reject('FEEDBACK_PROJECT_SCOPE', 'Feedback draft does not match the authenticated project.', 403);
+  }
+  return {
+    draftDigest: digest(draft),
+    structure: 'VALID',
+    validatedProject: {workspaceId, projectId},
+    providerBindings: 'NOT_EVALUATED',
+    activationAuthorized: false,
+  };
+}

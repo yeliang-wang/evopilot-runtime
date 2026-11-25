@@ -83,3 +83,19 @@ If the service reports a legacy binding, its original records can inform the
 wizard. Keep their scopes, IDs and receipt meanings intact. The separate
 `runtime.legacy.*` transport uses its original family revision; new lifecycle
 mutations continue using the current project revision from this service.
+
+## Feedback-driven lifecycle configuration
+
+On a Runtime build that advertises `feedback.project.validate`, use
+`runtime_read` to check the proposed feedback configuration in the selected
+workspace and project. The operation takes the workspace and project IDs,
+`feedbackBindingRef`, `reviewBindingRef`, `linearTeamRef`,
+`githubRepositoryRef`, `cursorAgentRef`, `harnessRuleRef`,
+`mergePolicyRef` and `reviewWindowMinutes: 60`. Reuse protected registered
+binding references. The feedback and review bindings may identify the same
+connection when it supports both roles.
+
+Show the returned draft digest and structural errors. A `VALID` structure
+and `providerBindings: NOT_EVALUATED` preserve the draft review boundary.
+Provider binding verification and the exact owner activation decision take
+place through their separately advertised operations.
