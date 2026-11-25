@@ -3,7 +3,8 @@ import { authorize, type Principal } from '../server/security.js';
 import type { RuntimeStore } from '../server/store.js';
 import {
   linearIssueDescription, prepareLinearIssueIntent, type createLinearIssueAdapter,
-  type LinearCreateIntent, type LinearIssueReceipt, type LinearIssueScope,
+  type LinearCreateIntent, type LinearIssueIntent, type LinearIssueReceipt,
+  type LinearIssueResult, type LinearIssueScope,
 } from './linear.js';
 import { normalizeChannelEvent, type ChannelScope, type NormalizedChannelEvent } from './channel.js';
 
@@ -37,6 +38,23 @@ interface RetainedEvent {
   caseId: string;
   event: NormalizedChannelEvent;
   receivedAt: number;
+}
+
+type LinearBinding = {
+  scope: LinearIssueScope;
+  adapter: ReturnType<typeof createLinearIssueAdapter>;
+};
+
+function requireFeedbackCase(store: RuntimeStore, route: RegisteredRoute, receiver: Principal, caseId: string) {
+  const projectId = slug(route.projectId);
+  if (route.workspaceId !== store.workspaceId) reject('CHANNEL_SCOPE_MISMATCH','Route belongs to another workspace.',403);
+  authorize(receiver,projectId,'execution.request');
+  const original = store.object(projectId,'feedback-case',caseId) as FeedbackCase | null;
+  if (!original || original.id !== caseId || original.workspaceId !== route.workspaceId ||
+      original.projectId !== projectId || digest(original.scope) !== digest(route.scope)) {
+    return reject('FEEDBACK_CASE_UNKNOWN','A retained case in the registered route is required.',404);
+  }
+  return original;
 }
 
 /** Owner-only ingress. The transport must authenticate the envelope and actor,
@@ -87,16 +105,10 @@ export function retainFeedbackChannelEvent(store: RuntimeStore, route: Registere
  * Linear scope and transport. A retained intent is only eligible for readback. */
 export async function bindFeedbackCaseIssue(
   store: RuntimeStore, route: RegisteredRoute, receiver: Principal, caseId: string,
-  linear: {scope:LinearIssueScope; adapter:ReturnType<typeof createLinearIssueAdapter>},
+  linear: LinearBinding,
 ) {
-  const projectId = slug(route.projectId);
-  if (route.workspaceId !== store.workspaceId) reject('CHANNEL_SCOPE_MISMATCH','Route belongs to another workspace.',403);
-  authorize(receiver,projectId,'execution.request');
-  const original = store.object(projectId,'feedback-case',caseId) as FeedbackCase | null;
-  if (!original || original.id !== caseId || original.workspaceId !== route.workspaceId ||
-      original.projectId !== projectId || digest(original.scope) !== digest(route.scope)) {
-    return reject('FEEDBACK_CASE_UNKNOWN','A retained case in the registered route is required.',404);
-  }
+  const original = requireFeedbackCase(store,route,receiver,caseId);
+  const {projectId} = original;
   const originalEvent = store.object(projectId,'feedback-channel-event',original.originalEventKey) as RetainedEvent | null;
   if (!originalEvent || originalEvent.caseId !== caseId || originalEvent.event.action.kind !== 'feedback' ||
       originalEvent.event.eventKey !== original.originalEventKey ||
@@ -152,6 +164,97 @@ export async function bindFeedbackCaseIssue(
     value:receipt,
     objects:[{kind:'feedback-case-issue',id:caseId,value:receipt}],
     event:{type:'feedback-case-issue-confirmed',data:{caseId,issueId:receipt.issueId,source:receipt.source}},
+  }));
+  return result;
+}
+
+type IssueChange =
+  | {kind:'needs-info'; triageRef:string; prompt:string}
+  | {kind:'resume'; supplementEventKey:string};
+
+type StoredIssueChange = {
+  intent: LinearIssueIntent;
+  result: Exclude<LinearIssueResult,{status:'UNKNOWN'}> | null;
+};
+
+/** The worker may request more information using a retained triage reference.
+ * Resumption uses the exact authenticated supplement already bound to this case. */
+export async function changeFeedbackCaseIssue(
+  store: RuntimeStore, route: RegisteredRoute, receiver: Principal, caseId: string,
+  linear: LinearBinding, change: IssueChange,
+): Promise<LinearIssueResult> {
+  const {projectId} = requireFeedbackCase(store,route,receiver,caseId);
+  const original = store.object(projectId,'feedback-case-issue-intent',caseId) as LinearCreateIntent | null;
+  const initialReceipt = store.object(projectId,'feedback-case-issue',caseId) as LinearIssueReceipt | null;
+  if (!original || !initialReceipt || original.scopeDigest !== digest(linear.scope) ||
+      initialReceipt.issueId !== original.issueId || initialReceipt.intentId !== original.intentId) {
+    return reject('LINEAR_ORIGINAL_REQUIRED','A confirmed original issue in its fixed scope is required.',409);
+  }
+  const sourceRef = string(change.kind === 'needs-info' ? change.triageRef : change.supplementEventKey);
+  let body: string;
+  if (change.kind === 'needs-info') {
+    body = change.prompt;
+  } else {
+    const retained = store.object(projectId,'feedback-channel-event',sourceRef) as RetainedEvent | null;
+    const action = retained?.event.action;
+    if (!retained || retained.caseId !== caseId || retained.event.eventKey !== sourceRef ||
+        digest(retained.event.scope) !== digest(route.scope) || action?.kind !== 'supplement' ||
+        action.caseId !== caseId) {
+      return reject('FEEDBACK_SUPPLEMENT_REQUIRED','Resumption requires an authenticated supplement to the original case.',409);
+    }
+    body = action.text;
+  }
+
+  const requestId = 'feedback-issue-change:'+digest({caseId,kind:change.kind,sourceRef});
+  const readChange = (id: string) => store.object(projectId,'feedback-case-issue-change',id) as StoredIssueChange | null;
+  const saved = readChange(requestId);
+  if (saved && (saved.intent.kind !== change.kind || saved.intent.body !== body)) {
+    return reject('LINEAR_CHANGE_CONFLICT','The original transition already binds different content.',409);
+  }
+  if (saved?.result) return saved.result;
+
+  const current = store.object(projectId,'feedback-case-issue-latest',caseId) as string | null;
+  const previous = current ? readChange(current) : null;
+  if (!saved && current && previous?.result?.status !== 'CONFIRMED') {
+    return reject('LINEAR_RECONCILE_ORIGINAL','Inspect the original issue change before making another.',409);
+  }
+  const prior = previous?.result?.status === 'CONFIRMED' ? previous.result.receipt : initialReceipt;
+  const intent = saved?.intent ?? prepareLinearIssueIntent(linear.scope,{kind:change.kind,original,prior,requestId,body});
+  if (!saved) {
+    store.mutate(receiver,{
+      projectId,operation:'feedback.case.issue.change.reserve',requestId,
+      expectedRevision:store.revision(projectId),permission:'execution.request',input:{caseId,intentId:intent.intentId,sourceRef},
+    },() => ({
+      value:{intentId:intent.intentId,issueId:intent.issueId},
+      objects:[
+        {kind:'feedback-case-issue-change',id:requestId,value:{intent,result:null}},
+        {kind:'feedback-case-issue-latest',id:caseId,value:requestId},
+      ],
+      event:{type:'feedback-case-issue-change-reserved',data:{caseId,issueId:intent.issueId,kind:change.kind}},
+    }));
+  }
+  const result = saved ? await linear.adapter.reconcile(intent) : await linear.adapter.dispatch(intent,'RESERVED');
+  if (result.status === 'UNKNOWN') return result;
+  if (result.status === 'CONFIRMED' &&
+      (result.receipt.intentId !== intent.intentId || result.receipt.originalIntentId !== original.intentId ||
+       result.receipt.issueId !== original.issueId || result.receipt.scopeDigest !== intent.scopeDigest ||
+       result.receipt.stateId !== intent.stateId || result.receipt.descriptionDigest !== digest(linearIssueDescription(intent)))) {
+    return reject('LINEAR_RECEIPT_MISMATCH','Issue readback does not match its original scoped transition.',409);
+  }
+  const concurrent = readChange(requestId)?.result;
+  if (concurrent) {
+    if (digest(concurrent) !== digest(result)) {
+      return reject('LINEAR_RECEIPT_MISMATCH','Another readback retained different issue evidence.',409);
+    }
+    return concurrent;
+  }
+  store.mutate(receiver,{
+    projectId,operation:'feedback.case.issue.change.resolve',requestId:requestId+':resolved',
+    expectedRevision:store.revision(projectId),permission:'execution.request',input:{caseId,intentId:intent.intentId,result},
+  },() => ({
+    value:result,
+    objects:[{kind:'feedback-case-issue-change',id:requestId,value:{intent,result}}],
+    event:{type:'feedback-case-issue-change-resolved',data:{caseId,issueId:intent.issueId,kind:change.kind,status:result.status}},
   }));
   return result;
 }

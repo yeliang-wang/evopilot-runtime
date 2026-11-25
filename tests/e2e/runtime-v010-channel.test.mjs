@@ -455,6 +455,69 @@ test('retained feedback reserves one Linear issue and confirms it once after a r
   }
 });
 
+test('needs-info resumes the same Linear issue only from the original case supplement', async () => {
+  const {mkdtempSync, realpathSync, rmSync} = await import('node:fs');
+  const {tmpdir} = await import('node:os');
+  const {join} = await import('node:path');
+  const {RuntimeStore} = await import('../../dist/server/store.js');
+  const {bindFeedbackCaseIssue, changeFeedbackCaseIssue, retainFeedbackChannelEvent} = await import('../../dist/feedback-loop/ingress.js');
+  const {createLinearIssueAdapter} = await import('../../dist/feedback-loop/linear.js');
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'runtime-v010-linear-resume-'));
+  const route = {workspaceId: 'workspace', projectId: 'project', scope};
+  const actor = {id: 'receiver', projects: ['project'], permissions: ['read', 'execution.request'], revision: 1, expiresAt: '2099-01-01T00:00:00Z'};
+  const fixture = linearFixture();
+  const binding = {scope: linearScope, adapter: createLinearIssueAdapter(linearScope, fixture)};
+  let store = new RuntimeStore(root, route.workspaceId);
+  try {
+    const {caseId, eventKey: originalKey} = retainFeedbackChannelEvent(store, route, actor, event);
+    const supplement = retainFeedbackChannelEvent(store, route, actor, {
+      ...event, eventId: 'EvSupplement', messageId: '1732471201.001000',
+      action: {kind: 'supplement', caseId, text: 'It happens on save in Chromium.'},
+    });
+    const {receipt: created} = await bindFeedbackCaseIssue(store, route, actor, caseId, binding);
+    const prompt = {kind: 'needs-info', triageRef: 'triage:single-attempt', prompt: 'Which browser?'};
+    const resume = {kind: 'resume', supplementEventKey: supplement.eventKey};
+    await assert.rejects(changeFeedbackCaseIssue(store, route, actor, caseId, binding, resume), {
+      code: 'LINEAR_ORIGINAL_REQUIRED',
+    });
+    fixture.loseMutationResponse = true;
+    fixture.losePostMutationReadback = true;
+    const pending = await changeFeedbackCaseIssue(store, route, actor, caseId, binding, prompt);
+    assert.equal(pending.status, 'UNKNOWN');
+    await assert.rejects(changeFeedbackCaseIssue(store, route, actor, caseId, binding, resume), {
+      code: 'LINEAR_RECONCILE_ORIGINAL',
+    });
+    store.close();
+    store = new RuntimeStore(root, route.workspaceId);
+    fixture.loseReadback = false;
+    fixture.loseMutationResponse = false;
+    fixture.losePostMutationReadback = false;
+    const waiting = await changeFeedbackCaseIssue(store, route, actor, caseId, binding, prompt);
+    assert.equal(waiting.status, 'CONFIRMED');
+    assert.equal(waiting.receipt.stateId, linearScope.needsInfoStateId);
+    assert.equal(waiting.receipt.intentId, pending.intentId);
+    await assert.rejects(changeFeedbackCaseIssue(store, route, actor, caseId, binding, {
+      ...prompt, prompt: 'A different question',
+    }), {code: 'LINEAR_CHANGE_CONFLICT'});
+    await assert.rejects(changeFeedbackCaseIssue(store, route, actor, caseId, binding, {
+      ...resume, supplementEventKey: originalKey,
+    }), {code: 'FEEDBACK_SUPPLEMENT_REQUIRED'});
+    const resumed = await changeFeedbackCaseIssue(store, route, actor, caseId, binding, resume);
+    assert.equal(resumed.status, 'CONFIRMED');
+    assert.equal(resumed.receipt.stateId, linearScope.openStateId);
+    assert.equal(resumed.receipt.originalIntentId, created.intentId);
+    assert.equal(resumed.receipt.issueId, created.issueId);
+    assert.deepEqual(await changeFeedbackCaseIssue(store, route, actor, caseId, binding, resume), resumed);
+    assert.match(fixture.issue.description, /It happens on save in Chromium\.$/);
+    assert.deepEqual(fixture.calls.filter(call => call.operation === 'RuntimeLinearUpdate').map(call => call.variables.id), [
+      created.issueId, created.issueId,
+    ]);
+  } finally {
+    store.close();
+    rmSync(root, {recursive: true, force: true});
+  }
+});
+
 test('Linear changes verify the original issue and correlate the exact body and state', async () => {
   const {createLinearIssueAdapter, prepareLinearIssueIntent} = await import('../../dist/feedback-loop/linear.js');
   const linear = linearFixture();
