@@ -1,4 +1,4 @@
-import { FEEDBACK_PROJECT_VALIDATE, inspectFeedbackProjectDraft } from '../feedback-loop/project.js';
+import { FEEDBACK_PROJECT_INSPECT, FEEDBACK_PROJECT_SAVE, FEEDBACK_PROJECT_VALIDATE, inspectFeedbackProjectDraft, readSavedFeedbackProjectDraft, saveFeedbackProjectDraft } from '../feedback-loop/project.js';
 import { createCorrectionService, CORRECTION_READS, CORRECTION_WRITES } from '../lifecycle/correction.js';
 import { QUALIFICATION_READS, QUALIFICATION_WRITES } from '../lifecycle/evidence-qualification.js';
 import type {RegisteredQualificationService} from '../adapters/bindings.js';
@@ -106,6 +106,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     }
     if(WRITE_OPERATIONS.includes(operation as typeof WRITE_OPERATIONS[number])){
       exact(envelope,['operation','projectId','input','requestId','expectedRevision']);if(!Number.isSafeInteger(envelope.expectedRevision)||Number(envelope.expectedRevision)<0)reject('INVALID_REVISION','Expected a nonnegative revision');
+      if (operation===FEEDBACK_PROJECT_SAVE) return saveFeedbackProjectDraft(store,actor,projectId,input,string(envelope.requestId),Number(envelope.expectedRevision),reauthenticate);
       if(QUALIFICATION_WRITES.includes(operation as typeof QUALIFICATION_WRITES[number])){if(!qualifications)reject('QUALIFICATION_UNAVAILABLE','No registered qualification service is configured',409);return qualifications.write(actor,projectId,operation,input,string(envelope.requestId),Number(envelope.expectedRevision),reauthenticate);}
       if(USAGE_WRITES.includes(operation as typeof USAGE_WRITES[number]))return usage.write(actor,projectId,operation,input,string(envelope.requestId),Number(envelope.expectedRevision),reauthenticate);
       const service=CORRECTION_WRITES.includes(operation as typeof CORRECTION_WRITES[number])?corrections:EXTENSION_REVIEW_WRITES.includes(operation as typeof EXTENSION_REVIEW_WRITES[number])?extensionReviews:IMPLEMENTATION_REVIEW_WRITES.includes(operation as typeof IMPLEMENTATION_REVIEW_WRITES[number])?implementationReviews:AGENT_WRITES.includes(operation as typeof AGENT_WRITES[number])?agents:PREPARATION_WRITES.includes(operation as typeof PREPARATION_WRITES[number])?preparations:AUTHORITY_WRITES.includes(operation as typeof AUTHORITY_WRITES[number])?authorities:EXECUTION_WRITES.includes(operation as typeof EXECUTION_WRITES[number])?getExecution():definitions;
@@ -123,6 +124,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     if(EXTENSION_REVIEW_READS.includes(operation as typeof EXTENSION_REVIEW_READS[number]))return extensionReviews.read(actor,projectId,operation,input);
     if(IMPLEMENTATION_REVIEW_READS.includes(operation as typeof IMPLEMENTATION_REVIEW_READS[number]))return implementationReviews.read(actor,projectId,operation,input);
     switch (operation) {
+      case FEEDBACK_PROJECT_INSPECT: exact(input,[]); return readSavedFeedbackProjectDraft(store,actor,projectId);
       case FEEDBACK_PROJECT_VALIDATE: return inspectFeedbackProjectDraft(input, options.workspaceId, projectId);
       case 'runtime.status': exact(input,[]); return { ...status(), projectId, revision: store.revision(projectId),observationWorker:execution?.health(projectId)??null,usageWorker:usageWorker?.health(projectId)??null };
       case 'runtime.projects.list': exact(input,[],['cursor','limit']); return store.projects(actor,input.cursor===undefined?undefined:string(input.cursor,2048),input.limit===undefined?50:input.limit as number);

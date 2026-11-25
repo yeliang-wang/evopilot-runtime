@@ -99,3 +99,9 @@ Show the returned draft digest and structural errors. A `VALID` structure
 and `providerBindings: NOT_EVALUATED` preserve the draft review boundary.
 Provider binding verification and the exact owner activation decision take
 place through their separately advertised operations.
+
+Use `feedback.project.inspect` to obtain the current revision and retained
+configuration, or `feedback.project.draft.save` with the scoped project IDs
+and the fields collected so far. Use the returned `missingFields` to guide
+remaining questions. Preserve the original request ID for exact replay.
+A saved draft does not take effect or authorize external work.

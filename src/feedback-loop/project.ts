@@ -1,3 +1,5 @@
+import { authorize, type Principal } from '../server/security.js';
+import type { RuntimeStore } from '../server/store.js';
 import { digest, exact, record, reject, slug, string } from '../server/errors.js';
 
 export type FeedbackCapability = 'receive-feedback' | 'reply' | 'notify' | 'review-action';
@@ -27,6 +29,15 @@ export interface FeedbackConnectionObservation {
   validUntil: number;
 }
 
+const bindingFields = [
+  'feedbackBindingRef', 'reviewBindingRef', 'linearTeamRef', 'githubRepositoryRef',
+  'cursorAgentRef', 'harnessRuleRef', 'mergePolicyRef',
+] as const;
+const configFields = [...bindingFields, 'reviewWindowMinutes'] as const;
+const draftScope = ['workspaceId', 'projectId'] as const;
+type DraftConfiguration = Pick<FeedbackProjectDraft, typeof draftScope[number]> &
+  Partial<Pick<FeedbackProjectDraft, typeof configFields[number]>>;
+
 type BindingRequirement = { reference: string; capabilities: readonly FeedbackCapability[] };
 const reference = (value: unknown) => {
   const ref = string(value, 200);
@@ -38,10 +49,7 @@ const reference = (value: unknown) => {
 
 export function parseFeedbackProjectDraft(value: unknown): FeedbackProjectDraft {
   const row = record(value);
-  exact(row, [
-    'workspaceId', 'projectId', 'feedbackBindingRef', 'reviewBindingRef', 'linearTeamRef',
-    'githubRepositoryRef', 'cursorAgentRef', 'harnessRuleRef', 'mergePolicyRef', 'reviewWindowMinutes',
-  ]);
+  exact(row, [...draftScope, ...configFields]);
   if (row.reviewWindowMinutes !== 60) {
     return reject('FEEDBACK_REVIEW_WINDOW', 'The v0.10 Preview review window is sixty minutes.');
   }
@@ -101,9 +109,7 @@ export const FEEDBACK_PROJECT_VALIDATE = 'feedback.project.validate';
  * have separate authority and are never inferred from a successful read. */
 export function inspectFeedbackProjectDraft(input: unknown, workspaceId: string, projectId: string) {
   const draft = parseFeedbackProjectDraft(input);
-  if (draft.workspaceId !== workspaceId || draft.projectId !== projectId) {
-    reject('FEEDBACK_PROJECT_SCOPE', 'Feedback draft does not match the authenticated project.', 403);
-  }
+  requireDraftScope(draft, workspaceId, projectId);
   return {
     draftDigest: digest(draft),
     structure: 'VALID',
@@ -111,4 +117,70 @@ export function inspectFeedbackProjectDraft(input: unknown, workspaceId: string,
     providerBindings: 'NOT_EVALUATED',
     activationAuthorized: false,
   };
+}
+
+export const FEEDBACK_PROJECT_INSPECT = 'feedback.project.inspect';
+export const FEEDBACK_PROJECT_SAVE = 'feedback.project.draft.save';
+
+function requireDraftScope(draft: Pick<DraftConfiguration,'workspaceId'|'projectId'>, workspaceId: string, projectId: string) {
+  if (draft.workspaceId !== workspaceId || draft.projectId !== projectId) {
+    reject('FEEDBACK_PROJECT_SCOPE', 'Feedback draft does not match the authenticated project.', 403);
+  }
+}
+
+function readDraftEdit(value: unknown): DraftConfiguration {
+  const row = record(value);
+  exact(row, draftScope, configFields);
+  const draft: DraftConfiguration = {workspaceId:slug(row.workspaceId),projectId:slug(row.projectId)};
+  for (const field of bindingFields) {
+    if (Object.hasOwn(row, field)) draft[field] = reference(row[field]);
+  }
+  if (Object.hasOwn(row, 'reviewWindowMinutes')) {
+    if (row.reviewWindowMinutes !== 60) reject('FEEDBACK_REVIEW_WINDOW', 'The v0.10 Preview review window is sixty minutes.');
+    draft.reviewWindowMinutes = 60;
+  }
+  return draft;
+}
+
+function summarizeDraft(configuration: DraftConfiguration) {
+  return {
+    status:'DRAFT' as const,
+    draftDigest:digest(configuration),
+    configuration,
+    missingFields:configFields.filter(field => !Object.hasOwn(configuration,field)),
+    providerBindings:'NOT_EVALUATED' as const,
+    activationAuthorized:false as const,
+  };
+}
+
+export function readSavedFeedbackProjectDraft(store: RuntimeStore, actor: Principal, projectId: string) {
+  authorize(actor,projectId,'read');
+  const pointer = store.object(projectId,'feedback-project-draft-pointer','current');
+  if (pointer === null) return {revision:store.revision(projectId),draft:null};
+  const revision = string(pointer,64);
+  const value = store.object(projectId,'feedback-project-draft',revision);
+  if (!value || digest(value) !== revision) reject('CORRUPT_FEEDBACK_DRAFT','Saved draft does not match its pointer.',503);
+  const configuration = readDraftEdit(value);
+  requireDraftScope(configuration,store.workspaceId,projectId);
+  return {revision:store.revision(projectId),draft:summarizeDraft(configuration)};
+}
+
+export function saveFeedbackProjectDraft(
+  store: RuntimeStore, actor: Principal, projectId: string, input: Record<string,unknown>,
+  requestId: string, expectedRevision: number, reauthorize: () => Principal,
+) {
+  authorize(actor,projectId,'draft.write');
+  const draft = readDraftEdit(input);
+  requireDraftScope(draft,store.workspaceId,projectId);
+  const summary = summarizeDraft(draft);
+  return store.mutate(actor,{
+    projectId,operation:FEEDBACK_PROJECT_SAVE,requestId,expectedRevision,input,permission:'draft.write',
+  },() => ({
+    value:summary,
+    objects:[
+      {kind:'feedback-project-draft',id:summary.draftDigest,value:draft},
+      {kind:'feedback-project-draft-pointer',id:'current',value:summary.draftDigest},
+    ],
+    event:{type:'feedback-project-draft-saved',data:{draftDigest:summary.draftDigest}},
+  }),reauthorize);
 }

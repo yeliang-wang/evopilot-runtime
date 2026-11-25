@@ -46,7 +46,7 @@ test('one registered connection may fill both roles with the correct capability 
   assert.equal(inspectFeedbackChannelReadiness(draft, [inbound], now).channelsReady, false);
 });
 
-test('actual HTTP and MCP share scoped draft validation and retain no activation', async () => {
+test('actual HTTP and MCP share validation and persist incomplete drafts without activation', async () => {
   const {mkdtempSync,realpathSync,rmSync} = await import('node:fs');
   const {join} = await import('node:path');
   const {tmpdir} = await import('node:os');
@@ -58,16 +58,21 @@ test('actual HTTP and MCP share scoped draft validation and retain no activation
   const root = mkdtempSync(join(realpathSync(tmpdir()),'runtime-v010-project-http-'));
   const token = randomBytes(32).toString('hex');
   const authorization = 'Bearer ' + token;
+  const editorToken = randomBytes(32).toString('hex');
+  const editorAuthorization = 'Bearer ' + editorToken;
+  const editor = new Client({name:'feedback-expert-editor-probe',version:'1'});
   const client = new Client({name:'feedback-expert-transport-probe',version:'1'});
   let server;
   try {
     initializeCredentials(root,'demo',[{
       id:'expert-reader',projects:['tasks'],permissions:['read'],revision:1,expiresAt:'2099-01-01T00:00:00Z',tokenDigest:tokenDigest(token),
+    },{
+      id:'expert-editor',projects:['tasks'],permissions:['read','draft.write'],revision:1,expiresAt:'2099-01-01T00:00:00Z',tokenDigest:tokenDigest(editorToken),
     }]);
     server = await startRuntimeServer({stateRoot:root,workspaceId:'demo'});
     const envelope = {operation:'feedback.project.validate',projectId:'tasks',input};
-    const request = body => fetch(server.url+'/api/v1/request',{
-      method:'POST',headers:{authorization,'content-type':'application/json'},body:JSON.stringify(body),
+    const request = (body, auth=authorization) => fetch(server.url+'/api/v1/request',{
+      method:'POST',headers:{authorization:auth,'content-type':'application/json'},body:JSON.stringify(body),
     });
     const response = await request(envelope);
     assert.equal(response.status,200);
@@ -89,7 +94,31 @@ test('actual HTTP and MCP share scoped draft validation and retain no activation
     assert.deepEqual(JSON.parse(mcp.content[0].text).result,result);
     const status = await request({operation:'runtime.status',projectId:'tasks',input:{}});
     assert.equal((await status.json()).result.revision,0);
+
+    const edit = {
+      operation:'feedback.project.draft.save',projectId:'tasks',requestId:'draft-1',expectedRevision:0,
+      input:{workspaceId:'demo',projectId:'tasks',feedbackBindingRef:input.feedbackBindingRef},
+    };
+    assert.equal((await request(edit)).status,403);
+    await editor.connect(new StreamableHTTPClientTransport(new URL(server.url+'/mcp'),{requestInit:{headers:{authorization:editorAuthorization}}}));
+    const saved = await editor.callTool({name:'runtime_write',arguments:edit});
+    assert.notEqual(saved.isError,true);
+    const receipt = JSON.parse(saved.content[0].text).result;
+    assert.equal(receipt.result.status,'DRAFT');
+    assert.equal(receipt.result.activationAuthorized,false);
+    assert(receipt.result.missingFields.includes('reviewBindingRef'));
+    assert.deepEqual((await (await request(edit,editorAuthorization)).json()).result,receipt);
+    assert.equal((await request({...edit,requestId:'draft-stale'},editorAuthorization)).status,409);
+    assert.equal((await request({...edit,input:{...edit.input,providerBindings:'READY'}},editorAuthorization)).status,400);
+
+    await editor.close();
+    await client.close();
+    await server.close();
+    server = await startRuntimeServer({stateRoot:root,workspaceId:'demo'});
+    const inspected = await request({operation:'feedback.project.inspect',projectId:'tasks',input:{}});
+    assert.deepEqual((await inspected.json()).result,{revision:1,draft:receipt.result});
   } finally {
+    await editor.close();
     await client.close();
     await server?.close();
     rmSync(root,{recursive:true,force:true});
