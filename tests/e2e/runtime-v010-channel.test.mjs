@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { setImmediate } from 'node:timers/promises';
 import { normalizeChannelEvent } from '../../dist/feedback-loop/channel.js';
-import { normalizeSlackSocketModeEvent } from '../../dist/feedback-loop/slack.js';
+import { createSlackSocketModeTransport, normalizeSlackSocketModeEvent } from '../../dist/feedback-loop/slack.js';
 
 const scope = { provider: 'slack', installationId: 'A00', tenantId: 'T00', channelId: 'C00' };
 const event = {
@@ -12,6 +13,124 @@ const event = {
   actorId: 'U00',
   action: { kind: 'feedback', text: '复现步骤 🧪\r\n\tReview the received request.  ' },
 };
+
+test('signed outbound reference delivery recovers the original message across both peer restarts', async () => {
+  const {mkdirSync,mkdtempSync,realpathSync,rmSync} = await import('node:fs');
+  const {tmpdir} = await import('node:os');
+  const {join} = await import('node:path');
+  const {randomBytes} = await import('node:crypto');
+  const {RuntimeStore} = await import('../../dist/server/store.js');
+  const {prepareFeedbackDelivery} = await import('../../dist/feedback-loop/channel.js');
+  const {createReferenceDeliveryAdapter,startReferenceDeliveryInbox} = await import('../../dist/feedback-loop/callback-channel.js');
+  const {bindFeedbackCaseIssue,changeFeedbackCaseIssue,retainFeedbackChannelEvent} = await import('../../dist/feedback-loop/ingress.js');
+  const {createLinearIssueAdapter} = await import('../../dist/feedback-loop/linear.js');
+  const {advanceFeedbackDelivery,feedbackClosureDeliveryId,retainFeedbackReview,
+    reserveFeedbackMerge,reserveFeedbackReviewNotification} = await import('../../dist/feedback-loop/service.js');
+  const root = mkdtempSync(join(realpathSync(tmpdir()),'runtime-v010-reference-outbound-'));
+  const senderRoot = join(root,'sender'), peerRoot = join(root,'peer');
+  mkdirSync(senderRoot,{mode:0o700});
+  mkdirSync(peerRoot,{mode:0o700});
+  const route = {workspaceId:'workspace',projectId:'project',scope:{...scope,provider:'callback'}};
+  const actor = {id:'receiver',projects:['project'],permissions:['read','execution.request'],revision:1,expiresAt:'2099-01-01T00:00:00Z'};
+  const key = randomBytes(32);
+  let sender, peer, inbox, adapter;
+  try {
+    sender = new RuntimeStore(senderRoot,route.workspaceId);
+    peer = new RuntimeStore(peerRoot,'callback-peer');
+    const {caseId} = retainFeedbackChannelEvent(sender,route,actor,{...event,scope:route.scope});
+    const message = {
+      kind:'needs-info',caseId,requestId:'request-more-info',scope:route.scope,
+      originalMessageId:event.messageId,text:'Which browser and version did you use?',
+    };
+    const intent = prepareFeedbackDelivery(message);
+    const startPeer = () => startReferenceDeliveryInbox({store:peer,projectId:route.projectId,scope:route.scope,key,principal:() => actor});
+    inbox = await startPeer();
+    const operations = [];
+    let inspection;
+    const transport = async (url,options) => {
+      operations.push(url.pathname);
+      if (url.pathname === '/inspect') inspection = options;
+      const response = await fetch(url,options);
+      if (url.pathname === '/deliver') {
+        assert(sender.object(route.projectId,'feedback-delivery-intent',intent.requestId));
+        assert.equal(response.status,201);
+        await response.arrayBuffer();
+        throw Error('Original outbound response lost');
+      }
+      return response;
+    };
+    adapter = createReferenceDeliveryAdapter(inbox.url,route.scope,key,transport);
+    const advance = selected => advanceFeedbackDelivery(sender,actor,route.projectId,route.scope,selected,adapter,() => actor);
+    assert.equal((await advance(intent)).status,'UNKNOWN');
+    assert.equal(peer.revision(route.projectId),1);
+    await inbox.close();
+    inbox = null;
+    sender.close();
+    peer.close();
+    sender = new RuntimeStore(senderRoot,route.workspaceId);
+    peer = new RuntimeStore(peerRoot,'callback-peer');
+    inbox = await startPeer();
+    adapter.close();
+    adapter = createReferenceDeliveryAdapter(inbox.url,route.scope,key,transport);
+    const recovered = await advance(intent);
+    assert.equal(recovered.status,'DELIVERED');
+    assert.equal(recovered.receipt.source,'REFERENCE_CALLBACK');
+    assert.match(recovered.receipt.messageId,/^callback-message:[a-f0-9]{64}$/);
+    assert.deepEqual(await advance(intent),recovered);
+    assert.equal(peer.revision(route.projectId),1);
+    assert.deepEqual(operations,['/deliver','/inspect']);
+    // An authenticated readback request cannot be repurposed as a delivery.
+    assert.equal((await fetch(new URL('/deliver',inbox.url),inspection)).status,401);
+    await assert.rejects(advance(prepareFeedbackDelivery({...message,text:'Different content'})),{code:'FEEDBACK_DELIVERY_CONFLICT'});
+    await assert.rejects(advance(prepareFeedbackDelivery({...message,originalMessageId:'different-thread'})),{code:'FEEDBACK_DELIVERY_SCOPE'});
+    assert.equal(peer.revision(route.projectId),1);
+
+    // The peer carries an authenticated notice and the original thread reply.
+    // Independent Linear and GitHub state are fixture evidence in this test.
+    const linear = linearFixture();
+    const linearBinding = {scope:linearScope,adapter:createLinearIssueAdapter(linearScope,linear)};
+    const issue = await bindFeedbackCaseIssue(sender,route,actor,caseId,linearBinding);
+    const candidate = {workspaceId:route.workspaceId,projectId:route.projectId,repositoryId:'4',pullRequestId:'8',
+      head:'a'.repeat(40),base:'b'.repeat(40),evidenceDigest:'c'.repeat(64),policyDigest:'d'.repeat(64)};
+    const reviewScope = {workspaceId:route.workspaceId,projectId:route.projectId,channel:route.scope,allowedActorIds:['reviewer']};
+    const {intent:notice} = reserveFeedbackReviewNotification(sender,actor,reviewScope,candidate);
+    const noticeIntent = prepareFeedbackDelivery({
+      kind:'review',caseId,requestId:notice.intentRef,scope:route.scope,text:'Review the exact PR head.',reviewId:notice.windowId,
+    });
+    assert.equal((await advance(noticeIntent)).status,'UNKNOWN');
+    const noticeReceipt = (await advance(noticeIntent)).receipt;
+    const review = retainFeedbackReview(sender,actor,reviewScope,candidate,notice.intentRef,noticeReceipt.messageId,noticeReceipt.deliveredAt);
+    const closure = prepareFeedbackDelivery({
+      ...message,kind:'closed',requestId:feedbackClosureDeliveryId(caseId,review.id),text:'Merged and verified.',
+    });
+    const closeIssue = () => changeFeedbackCaseIssue(sender,route,actor,caseId,linearBinding,{kind:'close',windowId:review.id});
+    await assert.rejects(closeIssue(),{code:'FEEDBACK_CLOSURE_NOT_CONFIRMED'});
+    await assert.rejects(advance(closure),{code:'FEEDBACK_DELIVERY_CLOSURE_REQUIRED'});
+    const claimed = reserveFeedbackMerge(sender,actor,review.id,{candidate,policyCurrent:true,githubChecksPassed:true,
+      baseProtected:true,receiptCoverage:'COMPLETE'},() => review.deadline);
+    const mergeSha = 'e'.repeat(40);
+    sender.mutate(actor,{projectId:route.projectId,operation:'fixture.merge',requestId:'fixture-merge',
+      expectedRevision:sender.revision(route.projectId),permission:'execution.request',input:{}},() => ({
+      value:{},event:{type:'fixture-merge',data:{}},objects:[{kind:'feedback-merge-outcome',id:claimed.claim.requestId,value:{
+        status:'MERGED',source:'FIXTURE',requestId:claimed.claim.requestId,candidateDigest:review.candidateDigest,mergeSha,
+      }}],
+    }));
+    await assert.rejects(advance(closure),{code:'FEEDBACK_DELIVERY_CLOSURE_REQUIRED'});
+    const closed = await closeIssue();
+    assert.equal(closed.status,'CONFIRMED');
+    assert.equal(closed.receipt.issueId,issue.receipt.issueId);
+    assert.equal(closed.receipt.stateId,linearScope.closedStateId);
+    assert.equal((await advance(closure)).status,'UNKNOWN');
+    assert.equal((await advance(closure)).status,'DELIVERED');
+    assert.equal(peer.revision(route.projectId),3);
+  } finally {
+    adapter?.close();
+    await inbox?.close();
+    sender?.close();
+    peer?.close();
+    rmSync(root,{recursive:true,force:true});
+  }
+});
 
 test('persisting a feedback draft marks the state before any provider traffic', async () => {
   const {mkdtempSync,realpathSync,rmSync} = await import('node:fs');
@@ -613,4 +732,252 @@ test('Linear changes verify the original issue and correlate the exact body and 
     linear.calls.filter(call => call.operation === 'RuntimeLinearUpdate').map(call => call.variables.id),
     Array(3).fill(original.issueId),
   );
+});
+
+const slackSocketScope = {provider:'slack', installationId:'A01', tenantId:'T01', channelId:'C01'};
+
+class SlackProtocolSocket extends EventTarget {
+  readyState = 1;
+  sent = [];
+  close() { this.readyState = 3; }
+  send(data) { this.sent.push(JSON.parse(data)); }
+  frame(frame) { this.dispatchEvent(new MessageEvent('message', {data:JSON.stringify(frame)})); }
+  hello(appId = slackSocketScope.installationId) { this.frame({type:'hello', connection_info:{app_id:appId}}); }
+}
+
+function slackProtocolHarness() {
+  const controller = new AbortController();
+  const sockets = [];
+  const statuses = [];
+  const resolved = [];
+  const requests = [];
+  const transport = createSlackSocketModeTransport(slackSocketScope, 'credential:slack/test-app', (reference, signal) => {
+    assert.ok(signal instanceof AbortSignal && !signal.aborted);
+    resolved.push(reference);
+    return {kind:'app-level', value:'xapp-protocol-fixture'};
+  }, {
+    async fetch(url, init) {
+      requests.push({url, init});
+      return Response.json({ok:true, url:'wss://wss-primary.slack.com/link/?ticket=fixture-' + requests.length});
+    },
+    openSocket(url) {
+      const socket = new SlackProtocolSocket();
+      sockets.push({socket, url});
+      return socket;
+    },
+  });
+  return {controller, sockets, statuses, resolved, requests, start(onEvent, resolveThreadCase) {
+    return transport.run({signal:controller.signal, onEvent, onStatus:status => statuses.push(status), resolveThreadCase});
+  }};
+}
+
+function slackProtocolMessage(id, event = {}, callback = {}) {
+  return {
+    type:'events_api', envelope_id:id, accepts_response_payload:false,
+    payload:{type:'event_callback', api_app_id:'A01', team_id:'T01', event_id:'Ev01', ...callback,
+      event:{type:'message', user:'U01', channel:'C01', ts:'1234567890.000001', text:'Reproduce the reported behavior', ...event}},
+  };
+}
+
+test('Slack Socket Mode posts protected app credentials and ACKs only after durable admission; reconnect redelivery keeps its identity', {timeout:5000}, async t => {
+  const fixture = slackProtocolHarness();
+  t.after(() => fixture.controller.abort());
+  const retained = new Map();
+  const delivered = [];
+  let onRetain;
+  const barrier = new Promise(resolve => { onRetain = resolve; });
+  const completion = fixture.start(async event => {
+    delivered.push(event);
+    if (retained.has(event.eventKey)) return {status:'REUSED'};
+    await barrier;
+    retained.set(event.eventKey, event.payloadDigest);
+    return {status:'RETAINED'};
+  });
+  await setImmediate();
+  assert.equal(fixture.sockets.length, 1);
+  const [{socket}] = fixture.sockets;
+  assert.deepEqual(fixture.resolved, ['credential:slack/test-app']);
+  assert.equal(fixture.requests[0].url, 'https://slack.com/api/apps.connections.open');
+  assert.equal(fixture.requests[0].init.method, 'POST');
+  assert.equal(fixture.requests[0].init.headers.Authorization, 'Bearer xapp-protocol-fixture');
+  assert.equal(fixture.requests[0].init.body, undefined);
+  assert.equal(fixture.requests[0].init.redirect, 'error');
+  assert.equal(fixture.sockets[0].url.hostname, 'wss-primary.slack.com');
+
+  socket.frame(slackProtocolMessage('too-early'));
+  await setImmediate();
+  assert.deepEqual(socket.sent, []);
+  assert.deepEqual(delivered, []);
+  socket.hello();
+  socket.frame(slackProtocolMessage('first'));
+  await setImmediate();
+  assert.equal(delivered.length, 1);
+  assert.deepEqual(socket.sent, []);
+  onRetain();
+  await setImmediate();
+  assert.deepEqual(socket.sent, [{envelope_id:'first'}]);
+
+  socket.frame({type:'disconnect', reason:'refresh_requested'});
+  await setImmediate();
+  assert.equal(socket.readyState, 3);
+  assert.equal(fixture.sockets.length, 2);
+  assert.equal(fixture.resolved.length, 2);
+  assert.notEqual(fixture.sockets[0].url.search, fixture.sockets[1].url.search);
+  const replacement = fixture.sockets[1].socket;
+  replacement.hello();
+  replacement.frame(slackProtocolMessage('redelivery', {}, {event_time:42}));
+  await setImmediate();
+  assert.deepEqual(delivered[1], delivered[0]);
+  assert.equal(retained.size, 1);
+  assert.deepEqual(replacement.sent, [{envelope_id:'redelivery'}]);
+  fixture.controller.abort();
+  assert.equal(await completion, 'STOPPED');
+  assert.equal(replacement.readyState, 3);
+  assert.deepEqual(fixture.statuses, ['INTERRUPTED','READY','INTERRUPTED','READY','INTERRUPTED']);
+});
+
+test('Slack Socket Mode routes only authenticated app, workspace and conversation messages and isolates malformed deliveries', {timeout:5000}, async t => {
+  const fixture = slackProtocolHarness();
+  t.after(() => fixture.controller.abort());
+  const admitted = [];
+  const originalTs = '1234567890.000001';
+  const result = fixture.start(event => {
+    admitted.push(event);
+    return {status:'RETAINED'};
+  }, (route, timestamp) => {
+    assert.deepEqual(route, slackSocketScope);
+    return timestamp === originalTs ? 'feedback-case:fixture' : undefined;
+  });
+  await setImmediate();
+  const {socket} = fixture.sockets[0];
+  socket.hello();
+  socket.dispatchEvent(new MessageEvent('message', {data:'{'}));
+  socket.frame({type:'events_api', envelope_id:'bad-payload', payload:{}});
+  socket.frame(slackProtocolMessage('bad-event', {text:null}));
+  socket.frame(slackProtocolMessage('bad\n-id'));
+  socket.frame(slackProtocolMessage('different-installation', {}, {api_app_id:'A99'}));
+  socket.frame(slackProtocolMessage('different-workspace', {}, {team_id:'T99'}));
+  socket.frame(slackProtocolMessage('different-conversation', {channel:'C99'}));
+  socket.frame(slackProtocolMessage('bot', {bot_id:'B01'}));
+  socket.frame(slackProtocolMessage('thread', {thread_ts:originalTs, ts:'1234567890.000002'}, {event_id:'Ev02'}));
+  await setImmediate();
+  assert.deepEqual(admitted.map(event => event.action), [
+    {kind:'supplement', caseId:'feedback-case:fixture', text:'Reproduce the reported behavior'},
+  ]);
+  assert.deepEqual(socket.sent.map(frame => frame.envelope_id),
+    ['different-installation', 'different-workspace', 'different-conversation', 'bot', 'thread']);
+  fixture.controller.abort();
+  assert.equal(await result, 'STOPPED');
+
+  const wrong = slackProtocolHarness();
+  t.after(() => wrong.controller.abort());
+  const blocked = wrong.start(() => assert.fail('Unbound app reached the owner'));
+  await setImmediate();
+  wrong.sockets[0].socket.hello('A99');
+  assert.equal(await blocked, 'BLOCKED');
+  assert.deepEqual(wrong.statuses, ['INTERRUPTED','BLOCKED']);
+  assert.deepEqual(wrong.sockets[0].socket.sent, []);
+});
+
+test('Slack Socket Mode rejects nonofficial socket hosts and unsafe socket URLs before connecting', {timeout:5000}, async () => {
+  for (const url of [
+    'wss://wss.slack.com.example.invalid/link/?ticket=fixture',
+    'wss://wss-evil.slack.com.example.invalid/link/?ticket=fixture',
+    'wss://elsewhere.slack.com/link/?ticket=fixture',
+    'wss://wss.slack.com@elsewhere.invalid/link/?ticket=fixture',
+    'wss://user@wss.slack.com/link/?ticket=fixture',
+    'ws://wss.slack.com/link/?ticket=fixture',
+    'wss://wss.slack.com:8443/link/?ticket=fixture',
+    'wss://wss.slack.com/unexpected/?ticket=fixture',
+    'wss://wss.slack.com/link/?ticket=fixture&ticket=duplicate',
+    'wss://wss.slack.com/link/?ticket=fixture#secret',
+  ]) {
+    let dialed = false;
+    const transport = createSlackSocketModeTransport(slackSocketScope, 'credential:slack/test-app',
+      () => ({kind:'app-level', value:'xapp-protocol-fixture'}), {
+        async fetch() { return Response.json({ok:true, url}); },
+        openSocket() { dialed = true; return new SlackProtocolSocket(); },
+      });
+    assert.equal(await transport.run({signal:AbortSignal.timeout(1000), onEvent:() => assert.fail()}), 'BLOCKED');
+    assert.equal(dialed, false);
+  }
+});
+
+test('Slack Socket Mode leaves owner failures unacknowledged and aborts an unresolved credential read', {timeout:5000}, async t => {
+  const fixture = slackProtocolHarness();
+  t.after(() => fixture.controller.abort());
+  const completion = fixture.start(() => { throw new Error('Fixture retention failure'); });
+  await setImmediate();
+  const {socket} = fixture.sockets[0];
+  socket.hello();
+  socket.frame(slackProtocolMessage('unretained'));
+  await setImmediate();
+  assert.deepEqual(socket.sent, []);
+  assert.equal(socket.readyState, 3);
+  assert.deepEqual(fixture.statuses, ['INTERRUPTED','READY','INTERRUPTED']);
+  fixture.controller.abort();
+  assert.equal(await completion, 'STOPPED');
+
+  const controller = new AbortController();
+  const stalled = createSlackSocketModeTransport(slackSocketScope, 'credential:slack/test-app',
+    () => new Promise(() => {}), {async fetch() { assert.fail('Credential resolution never finished'); }});
+  const stopping = stalled.run({signal:controller.signal, onEvent:() => assert.fail()});
+  controller.abort();
+  assert.equal(await stopping, 'STOPPED');
+});
+
+test('Slack Socket Mode reuses real Runtime retention when the socket closes before the first ACK', {timeout:5000}, async t => {
+  const {mkdtempSync, realpathSync, rmSync} = await import('node:fs');
+  const {join} = await import('node:path');
+  const {tmpdir} = await import('node:os');
+  const {RuntimeStore} = await import('../../dist/server/store.js');
+  const {retainFeedbackChannelEvent} = await import('../../dist/feedback-loop/ingress.js');
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'runtime-slack-protocol-'));
+  const fixture = slackProtocolHarness();
+  const route = {workspaceId:'workspace', projectId:'project', scope:slackSocketScope};
+  const actor = {id:'receiver', projects:['project'], permissions:['read','execution.request'],
+    revision:1, expiresAt:'2099-01-01T00:00:00Z'};
+  let store = new RuntimeStore(root, route.workspaceId);
+  t.after(() => {
+    fixture.controller.abort();
+    store.close();
+    rmSync(root, {recursive:true, force:true});
+  });
+
+  const seen = [];
+  let releaseFirst;
+  const delayedResult = new Promise(resolve => { releaseFirst = resolve; });
+  const completion = fixture.start(async (event, signal) => {
+    const {eventKey, payloadDigest, ...input} = event;
+    const result = retainFeedbackChannelEvent(store, route, actor, input);
+    seen.push({result, signal});
+    if (result.status === 'RETAINED') await delayedResult;
+    return result;
+  });
+  await setImmediate();
+  const first = fixture.sockets[0].socket;
+  first.hello();
+  first.frame(slackProtocolMessage('original'));
+  assert.equal(store.revision(route.projectId), 1);
+  assert.deepEqual(first.sent, []);
+  first.frame({type:'disconnect', reason:'refresh_requested'});
+  assert.equal(seen[0].signal.aborted, true);
+  store.close();
+  store = new RuntimeStore(root, route.workspaceId);
+
+  await setImmediate();
+  const second = fixture.sockets[1].socket;
+  second.hello();
+  second.frame(slackProtocolMessage('replayed'));
+  await setImmediate();
+  assert.equal(seen[1].result.status, 'REUSED');
+  assert.equal(seen[1].result.caseId, seen[0].result.caseId);
+  assert.equal(store.revision(route.projectId), 1);
+  assert.deepEqual(second.sent, [{envelope_id:'replayed'}]);
+  releaseFirst();
+  await setImmediate();
+  assert.deepEqual(first.sent, []);
+  assert.deepEqual(second.sent, [{envelope_id:'replayed'}]);
+  fixture.controller.abort();
+  assert.equal(await completion, 'STOPPED');
 });

@@ -1,7 +1,10 @@
 import { digest, exact, reject, string } from '../server/errors.js';
 import { authorize, type Principal } from '../server/security.js';
 import type { RuntimeStore } from '../server/store.js';
-import { normalizeChannelEvent, type ChannelScope } from './channel.js';
+import {
+  normalizeChannelEvent, readFeedbackDeliveryIntent, readFeedbackDeliveryReceipt,
+  type ChannelScope, type FeedbackDeliveryIntent, type FeedbackDeliveryReceipt, type FeedbackDeliveryResult,
+} from './channel.js';
 import { claimFeedbackMerge, feedbackReviewId, openFeedbackReview, recordFeedbackVeto, type MergeObservation, type ReviewCandidate } from './review.js';
 import type { createFeedbackGitHubAdapter, FeedbackGitHubMergeObservation } from './github.js';
 import {
@@ -525,4 +528,113 @@ export function feedbackMonitorSnapshot(
     projectId,revision,observedAt:new Date().toISOString(),readOnly:true,cases,
     nextAfter:rows.length > cases.length ? cases.at(-1)!.id : null,
   };
+}
+
+export interface FeedbackDeliveryAdapter {
+  source: FeedbackDeliveryReceipt['source'];
+  dispatch(intent: FeedbackDeliveryIntent,reservation: 'RESERVED'): Promise<FeedbackDeliveryResult>;
+  reconcile(intent: FeedbackDeliveryIntent): Promise<FeedbackDeliveryResult>;
+}
+
+export function readFeedbackClosureMerge(store: RuntimeStore,projectId: string,caseId: string,windowId: string) {
+  const window = readWindow(store,projectId,windowId);
+  const requestId = window.claim?.requestId;
+  const merge = requestId ? store.object(projectId,'feedback-merge-outcome',requestId) as FeedbackGitHubMergeObservation | null : null;
+  const notice = store.object(projectId,'feedback-delivery-intent',window.notificationIntentRef) as {
+    intent:FeedbackDeliveryIntent;source:FeedbackDeliveryReceipt['source'];
+  } | null;
+  const receipt = notice ? store.object(projectId,'feedback-delivery-receipt',notice.intent.requestId) : null;
+  if (window.candidate.workspaceId !== store.workspaceId || window.candidate.projectId !== projectId ||
+      window.veto || !merge || merge.status !== 'MERGED' || merge.requestId !== requestId ||
+      merge.candidateDigest !== window.candidateDigest || !merge.mergeSha || !/^[a-f0-9]{40}$/.test(merge.mergeSha) ||
+      notice?.intent.kind !== 'review' || notice.intent.caseId !== caseId || notice.intent.reviewId !== windowId ||
+      !receipt || readFeedbackDeliveryReceipt(receipt,notice.intent,notice.source).messageId !== window.notificationRef) {
+    return reject('FEEDBACK_CLOSURE_NOT_CONFIRMED','The original case has no verified GitHub merge and review delivery.',409);
+  }
+  return {requestId,mergeSha:merge.mergeSha,source:merge.source,pullRequestId:window.candidate.pullRequestId};
+}
+
+export const feedbackClosureDeliveryId = (caseId: string,windowId: string) => 'feedback-closure:'+digest({caseId,windowId});
+
+/** Runtime owns the outbound intent. A restarted worker only inspects the
+ * original operation; verified receipt identity never changes on replay. */
+export async function advanceFeedbackDelivery(
+  store: RuntimeStore, principal: Principal, projectId: string, scope: ChannelScope,
+  input: FeedbackDeliveryIntent, adapter: FeedbackDeliveryAdapter, reauthorize: () => Principal,
+) {
+  const latestActor = () => {
+    const actor = reauthorize();
+    authorize(actor,projectId,'execution.request');
+    if (actor.id !== principal.id || actor.revision !== principal.revision) {
+      reject('AUTHORITY_CHANGED','The registered delivery worker authority changed.',409);
+    }
+    return actor;
+  };
+  latestActor();
+  const intent = readFeedbackDeliveryIntent(input,scope);
+  const original = store.object(projectId,'feedback-case',intent.caseId) as {
+    id:string;workspaceId:string;projectId:string;scope:ChannelScope;originalMessageId:string;
+  } | null;
+  if (!original || original.id !== intent.caseId || original.workspaceId !== store.workspaceId || original.projectId !== projectId) {
+    return reject('FEEDBACK_CASE_UNKNOWN','The original delivery case is unavailable.',404);
+  }
+  if (intent.kind === 'review') {
+    const reservation = store.object(projectId,'feedback-review-intent',intent.requestId) as ReviewNotificationIntent | null;
+    if (reservation?.windowId !== intent.reviewId) {
+      return reject('FEEDBACK_REVIEW_NOTIFICATION_UNRESERVED','Review delivery requires the original reserved notification.',409);
+    }
+  } else if (digest(scope) !== digest(original.scope) || intent.originalMessageId !== original.originalMessageId) {
+    return reject('FEEDBACK_DELIVERY_SCOPE','Replies must use the original feedback thread.',409);
+  }
+  const id = intent.requestId;
+  const saved = store.object(projectId,'feedback-delivery-intent',id) as {
+    intentDigest:string;source:FeedbackDeliveryAdapter['source'];
+  } | null;
+  if (saved && (saved.intentDigest !== intent.intentDigest || saved.source !== adapter.source)) {
+    return reject('FEEDBACK_DELIVERY_CONFLICT','The original delivery already binds different content or transport.',409);
+  }
+  const receipt = () => {
+    const retained = store.object(projectId,'feedback-delivery-receipt',id);
+    return retained ? readFeedbackDeliveryReceipt(retained,intent,adapter.source) : null;
+  };
+  const verified = receipt();
+  if (verified) return {status:'DELIVERED' as const,receipt:verified};
+  if (!saved) {
+    if (intent.kind === 'closed') {
+      const closure = store.object(projectId,'feedback-case-closure',intent.caseId) as {
+        windowId:string;issueId:string;mergeSha:string;receiptIntentId:string;
+      } | null;
+      if (!closure || id !== feedbackClosureDeliveryId(intent.caseId,closure.windowId) ||
+          readFeedbackClosureMerge(store,projectId,intent.caseId,closure.windowId).mergeSha !== closure.mergeSha) {
+        return reject('FEEDBACK_DELIVERY_CLOSURE_REQUIRED','Closure must follow the original verified merge and issue receipt.',409);
+      }
+    }
+    store.mutate(principal,{
+      projectId,operation:'feedback.delivery.reserve',requestId:'feedback-delivery:'+digest(id),
+      expectedRevision:store.revision(projectId),permission:'execution.request',input:{intentDigest:intent.intentDigest,source:adapter.source},
+    },() => ({
+      value:{requestId:id,intentDigest:intent.intentDigest},
+      objects:[{kind:'feedback-delivery-intent',id,value:{intentDigest:intent.intentDigest,intent,source:adapter.source}}],
+      event:{type:'feedback-delivery-reserved',data:{caseId:intent.caseId,kind:intent.kind,requestId:id}},
+    }),latestActor);
+  }
+  const result = saved ? await adapter.reconcile(intent) : await adapter.dispatch(intent,'RESERVED');
+  if (result.status !== 'DELIVERED') return result;
+  const originalReceipt = readFeedbackDeliveryReceipt(result.receipt,intent,adapter.source);
+  const concurrent = receipt();
+  if (concurrent) {
+    if (digest(concurrent) !== digest(originalReceipt)) {
+      return reject('FEEDBACK_DELIVERY_RECEIPT','The original channel receipt changed.',409);
+    }
+    return {status:'DELIVERED' as const,receipt:concurrent};
+  }
+  store.mutate(principal,{
+    projectId,operation:'feedback.delivery.confirm',requestId:'feedback-delivery-confirm:'+digest(id),
+    expectedRevision:store.revision(projectId),permission:'execution.request',input:{receiptDigest:digest(originalReceipt)},
+  },() => ({
+    value:originalReceipt,
+    objects:[{kind:'feedback-delivery-receipt',id,value:originalReceipt}],
+    event:{type:'feedback-delivery-confirmed',data:{caseId:intent.caseId,kind:intent.kind,requestId:id,messageId:originalReceipt.messageId}},
+  }),latestActor);
+  return {status:'DELIVERED' as const,receipt:originalReceipt};
 }

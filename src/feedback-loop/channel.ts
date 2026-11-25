@@ -26,6 +26,29 @@ export interface NormalizedChannelEvent extends ChannelEvent {
   readonly payloadDigest: string;
 }
 
+export type FeedbackDelivery = {
+  readonly caseId: string;
+  readonly requestId: string;
+  readonly scope: ChannelScope;
+  readonly text: string;
+} & (
+  | {readonly kind: 'review'; readonly reviewId: string}
+  | {readonly kind: 'needs-info' | 'closed'; readonly originalMessageId: string}
+);
+
+export type FeedbackDeliveryIntent = FeedbackDelivery & {readonly intentDigest: string};
+
+export interface FeedbackDeliveryReceipt {
+  readonly intentDigest: string;
+  readonly requestId: string;
+  readonly messageId: string;
+  readonly deliveredAt: number;
+  readonly source: 'REFERENCE_CALLBACK' | 'SLACK_PROVIDER';
+}
+
+export type FeedbackDeliveryResult = {status:'DELIVERED';receipt:FeedbackDeliveryReceipt} |
+  {status:'UNKNOWN';requestId:string;intentDigest:string};
+
 const MAX_TEXT_BYTES = 16 * 1024;
 
 function platformId(value: unknown): string {
@@ -73,6 +96,40 @@ function readAction(input: unknown): ChannelAction {
     default:
       return reject('INVALID_INPUT', 'Unsupported feedback channel action');
   }
+}
+
+export function prepareFeedbackDelivery(input: FeedbackDelivery): FeedbackDeliveryIntent {
+  const common = {
+    scope:readChannelScope(input.scope),requestId:platformId(input.requestId),caseId:platformId(input.caseId),
+    text:feedbackText(input.text),
+  };
+  let delivery: FeedbackDelivery;
+  if (input.kind === 'review') delivery = {...common,kind:'review',reviewId:platformId(input.reviewId)};
+  else if (input.kind === 'needs-info' || input.kind === 'closed') {
+    delivery = {...common,kind:input.kind,originalMessageId:platformId(input.originalMessageId)};
+  } else return reject('FEEDBACK_DELIVERY_KIND','Unsupported outbound feedback action.');
+  return {...delivery,intentDigest:'sha256:'+digest(delivery)};
+}
+
+export function readFeedbackDeliveryIntent(input: unknown, scope: ChannelScope): FeedbackDeliveryIntent {
+  const row = record(input);
+  exact(row,['scope','kind','caseId','requestId','text','intentDigest',row.kind==='review'?'reviewId':'originalMessageId']);
+  const material = prepareFeedbackDelivery(row as FeedbackDelivery);
+  if (digest(material.scope) !== digest(scope) || material.intentDigest !== row.intentDigest) {
+    return reject('FEEDBACK_DELIVERY_SCOPE','The outbound delivery no longer matches the registered scope.',409);
+  }
+  return material;
+}
+
+export function readFeedbackDeliveryReceipt(input: unknown, intent: FeedbackDeliveryIntent,source: FeedbackDeliveryReceipt['source']) {
+  const row = record(input);
+  exact(row,['intentDigest','requestId','messageId','deliveredAt','source']);
+  if (row.intentDigest !== intent.intentDigest || row.requestId !== intent.requestId || row.source !== source ||
+      !Number.isSafeInteger(row.deliveredAt) || Number(row.deliveredAt) < 1) {
+    return reject('FEEDBACK_DELIVERY_RECEIPT','The retained message does not prove the original delivery.',409);
+  }
+  return {intentDigest:intent.intentDigest,requestId:intent.requestId,messageId:platformId(row.messageId),
+    deliveredAt:Number(row.deliveredAt),source};
 }
 
 /** The adapter authenticates the event and actor before applying the configured route scope. */

@@ -7,6 +7,7 @@ import {
   type LinearIssueResult, type LinearIssueScope,
 } from './linear.js';
 import { normalizeChannelEvent, type ChannelScope, type NormalizedChannelEvent } from './channel.js';
+import { readFeedbackClosureMerge } from './service.js';
 
 interface RegisteredRoute {
   workspaceId: string;
@@ -170,7 +171,8 @@ export async function bindFeedbackCaseIssue(
 
 type IssueChange =
   | {kind:'needs-info'; triageRef:string; prompt:string}
-  | {kind:'resume'; supplementEventKey:string};
+  | {kind:'resume'; supplementEventKey:string}
+  | {kind:'close'; windowId:string};
 
 type StoredIssueChange = {
   intent: LinearIssueIntent;
@@ -190,10 +192,17 @@ export async function changeFeedbackCaseIssue(
       initialReceipt.issueId !== original.issueId || initialReceipt.intentId !== original.intentId) {
     return reject('LINEAR_ORIGINAL_REQUIRED','A confirmed original issue in its fixed scope is required.',409);
   }
-  const sourceRef = string(change.kind === 'needs-info' ? change.triageRef : change.supplementEventKey);
+  const sourceRef = string(change.kind === 'needs-info' ? change.triageRef :
+    change.kind === 'resume' ? change.supplementEventKey : change.windowId);
+  const closure = change.kind === 'close' ? readFeedbackClosureMerge(store,projectId,caseId,change.windowId) : null;
   let body: string;
   if (change.kind === 'needs-info') {
     body = change.prompt;
+  } else if (closure) {
+    if ((closure.source === 'FIXTURE') !== (initialReceipt.source === 'FIXTURE')) {
+      return reject('FEEDBACK_CLOSURE_NOT_CONFIRMED','The original issue and merge require matching provider provenance.',409);
+    }
+    body = 'Merged PR #'+closure.pullRequestId+' at '+closure.mergeSha+'.';
   } else {
     const retained = store.object(projectId,'feedback-channel-event',sourceRef) as RetainedEvent | null;
     const action = retained?.event.action;
@@ -238,7 +247,8 @@ export async function changeFeedbackCaseIssue(
   if (result.status === 'CONFIRMED' &&
       (result.receipt.intentId !== intent.intentId || result.receipt.originalIntentId !== original.intentId ||
        result.receipt.issueId !== original.issueId || result.receipt.scopeDigest !== intent.scopeDigest ||
-       result.receipt.stateId !== intent.stateId || result.receipt.descriptionDigest !== digest(linearIssueDescription(intent)))) {
+       result.receipt.stateId !== intent.stateId || result.receipt.source !== initialReceipt.source ||
+       result.receipt.descriptionDigest !== digest(linearIssueDescription(intent)))) {
     return reject('LINEAR_RECEIPT_MISMATCH','Issue readback does not match its original scoped transition.',409);
   }
   const concurrent = readChange(requestId)?.result;
@@ -253,7 +263,14 @@ export async function changeFeedbackCaseIssue(
     expectedRevision:store.revision(projectId),permission:'execution.request',input:{caseId,intentId:intent.intentId,result},
   },() => ({
     value:result,
-    objects:[{kind:'feedback-case-issue-change',id:requestId,value:{intent,result}}],
+    objects:[
+      {kind:'feedback-case-issue-change',id:requestId,value:{intent,result}},
+      ...(closure && result.status === 'CONFIRMED' ? [{
+        kind:'feedback-case-closure',id:caseId,value:{
+          windowId:sourceRef,issueId:result.receipt.issueId,mergeSha:closure.mergeSha,receiptIntentId:result.receipt.intentId,
+        },
+      }] : []),
+    ],
     event:{type:'feedback-case-issue-change-resolved',data:{caseId,issueId:intent.issueId,kind:change.kind,status:result.status}},
   }));
   return result;
