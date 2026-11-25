@@ -44,5 +44,24 @@
       "Cursor Cloud Agents",
       "GitHub"
     ]
+  },
+  "releaseIntegration": {
+    "originalTargetDigest": "19999c3ace88475e3dfaf9a9f7bdb02aa1d1e76754b62eed285a850dc3b7a587",
+    "reviewDigest": "e08ef4d7b74743393c2a0882de8fcacbd69621a68562ac849f4b3e687404408a",
+    "paths": [
+      "src/index.ts",
+      "plugins/codex/.codex-plugin/plugin.json",
+      "dashboard/src/App.tsx",
+      "src/server/cli.ts",
+      "src/adapters/config.ts",
+      "src/adapters/bindings.ts",
+      "scripts/check.mjs",
+      "scripts/roadmap.mjs",
+      "scripts/roadmap-v010.mjs",
+      "governance/target-v010.json",
+      "governance/roadmap-v010.json",
+      "tests/e2e/cli.test.mjs",
+      "tests/e2e/reference.test.mjs"
+    ]
   }
 }

@@ -3,9 +3,9 @@
   "id": "runtime-v010-feedback-loop",
   "targetVersion": "0.10.0",
   "sourceBaseline": "81777f07e856ba5a3615b373de5f6709dc3b3e9b",
-  "roadmapDigest": "17b33c79b5a99bbb260d16380992386f83e58ba9d0c07d0325663060a7fb2572",
+  "roadmapDigest": "df3ddc1186221c25489ccad72a00521f1dddde4e99c753d1c1f1e950a0c558e7",
   "pins": {
-    "governance/roadmap-v010.json": "17b33c79b5a99bbb260d16380992386f83e58ba9d0c07d0325663060a7fb2572",
+    "governance/roadmap-v010.json": "df3ddc1186221c25489ccad72a00521f1dddde4e99c753d1c1f1e950a0c558e7",
     "governance/acceptance-v010.json": "7ca27ee2578216c80067b73400104c4b6e89719c8a3e76c20c4734a5ce0baf35",
     "docs/architecture/runtime-v010-feedback-loop.md": "c439115a029a4de563915025405450c38eac0f6e4fab77d59b0476632ad75e70",
     "docs/runtime-v010-preview-plan.md": "6ac7cc2f346550bd0aa6b3391fb3368569332781db59d689138e5584941599a1"
@@ -107,7 +107,20 @@
         "docs/runtime-v010-preview.md",
         "docs/zh-CN/runtime-v010-preview.md",
         "docs/images/runtime-v010-workflow-reference.png",
-        "tests/acceptance/v010/release-readback.mjs"
+        "tests/acceptance/v010/release-readback.mjs",
+        "src/index.ts",
+        "plugins/codex/.codex-plugin/plugin.json",
+        "dashboard/src/App.tsx",
+        "src/server/cli.ts",
+        "src/adapters/config.ts",
+        "src/adapters/bindings.ts",
+        "scripts/check.mjs",
+        "scripts/roadmap.mjs",
+        "scripts/roadmap-v010.mjs",
+        "governance/target-v010.json",
+        "governance/roadmap-v010.json",
+        "tests/e2e/cli.test.mjs",
+        "tests/e2e/reference.test.mjs"
       ],
       "acceptance": [
         "DOCS-CI",

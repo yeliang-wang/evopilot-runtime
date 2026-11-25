@@ -48,6 +48,13 @@ export function evaluateV010(root, request) {
     assert.equal(target.roadmapDigest, target.pins['governance/roadmap-v010.json']);
     assert.deepEqual(roadmap.milestones, Object.keys(required));
     assert.deepEqual(Object.keys(target.workPackets), Object.keys(required));
+    const integration = roadmap.releaseIntegration;
+    if (integration) {
+      assert.match(integration.originalTargetDigest,/^[a-f0-9]{64}$/);
+      assert.match(integration.reviewDigest,/^[a-f0-9]{64}$/);
+      assert(Array.isArray(integration.paths) && new Set(integration.paths).size===integration.paths.length);
+      for (const file of integration.paths) assert(target.workPackets.M6.paths.includes(file));
+    }
     assert.deepEqual(inventory.cases.map(entry => entry.id), Object.values(required).flat());
     for (const [milestone, ids] of Object.entries(required)) {
       assert.deepEqual(inventory.cases.filter(entry => entry.milestone === milestone).map(entry => entry.id), ids);
@@ -65,7 +72,7 @@ export function evaluateV010(root, request) {
     if (!match) return check('UNKNOWN', 'Use runtime-v0.10/Mn: concrete intent.');
     if (!request.authorization || !request.files?.length) return check('BLOCKED', 'Exact files and the private approval binding are required.');
     const approval = privateJSON(request.authorization);
-    assert.equal(approval.schema, 'runtime-v010-implementation-authorization/v1');
+    assert.equal(approval.schema, integration ? 'runtime-v010-implementation-authorization/v2' : 'runtime-v010-implementation-authorization/v1');
     assert.equal(approval.decision, 'IMPLEMENT');
     assert.equal(approval.targetId, target.id);
     assert.equal(approval.targetDigest, digest(readFileSync(targetPath)));
@@ -82,6 +89,36 @@ export function evaluateV010(root, request) {
     const change = deferral.items.find(item => item.id === approval.slackDeferral.messageId);
     assert.equal(change?.type, 'userMessage');
     assert(change.content.some(item => item.text.includes('没有Slack 测试频道，可以直接跳过这部分的E2E。')));
+    if (integration) {
+      const amendment = approval.scopeAmendment;
+      const original = privateJSON(amendment.originalTarget.ref);
+      assert.equal(digest(readFileSync(amendment.originalTarget.ref)),amendment.originalTarget.sha256);
+      assert.equal(amendment.originalTarget.sha256,integration.originalTargetDigest);
+      for (const milestone of Object.keys(required)) {
+        const paths = milestone==='M6' ? [...original.workPackets.M6.paths,...integration.paths] : original.workPackets[milestone].paths;
+        assert.deepEqual(target.workPackets[milestone].paths,paths,'Scope amendment changed an unreviewed path');
+      }
+      for (const [file,pin] of Object.entries(original.pins)) {
+        if (file!=='governance/roadmap-v010.json') assert.equal(target.pins[file],pin);
+      }
+      const reviewBytes = readFileSync(amendment.review.ref);
+      assert.equal(digest(reviewBytes),amendment.review.sha256);
+      assert.equal(amendment.review.sha256,integration.reviewDigest);
+      const section = reviewBytes.toString('utf8').split('## 精确范围\n')[1]?.split('\n## ')[0] ?? '';
+      const reviewedPaths = section.split('\n').filter(line=>line.startsWith('| `'))
+        .flatMap(line=>[...line.split('|')[1].matchAll(/`([a-zA-Z0-9_./-]+)`/g)].map(match=>match[1]));
+      assert.deepEqual([...integration.paths].sort(),reviewedPaths.sort(),'Machine scope differs from the user-reviewed file set');
+      const decision = privateJSON(amendment.decision.ref);
+      assert.equal(digest(readFileSync(amendment.decision.ref)),amendment.decision.sha256);
+      assert.equal(decision.message.type,'userMessage');
+      assert.equal(decision.message.id,amendment.messageId);
+      assert.equal(decision.question.id,amendment.questionId);
+      const reply = /^<send_user_message_question_reply>\s*([\s\S]+)\s*<\/send_user_message_question_reply>$/.exec(decision.message.content.map(item=>item.text).join('').trim());
+      assert(reply);
+      const selection = JSON.parse(reply[1]).find(item=>item.questionItemId===JSON.stringify(['request_user_input_async',amendment.questionId,0]));
+      assert.equal(selection?.answer,'批准精确文件增补并继续');
+      assert(selection.question.includes(amendment.review.ref));
+    }
     for (const file of request.files) {
       if (!target.workPackets[match[1]].paths.includes(file)) return check('BOUNDARY_CHANGE', 'Outside exact work packet: ' + file);
     }
