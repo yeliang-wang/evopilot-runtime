@@ -412,3 +412,117 @@ export async function advanceFeedbackMerge(
   }),currentPrincipal);
   return result;
 }
+
+const feedbackStages = ['receive','issue','reproduce','repair','verify','review','close'] as const;
+type FeedbackStage = typeof feedbackStages[number];
+const feedbackStatuses = ['WAITING','RUNNING','UNKNOWN','FAILED','COMPLETE'] as const;
+type FeedbackStatus = typeof feedbackStatuses[number];
+const progressTransitions: Record<FeedbackStage,readonly FeedbackStage[]> = {
+  receive:['issue'],issue:['reproduce'],reproduce:['receive','repair'],repair:['verify'],
+  verify:['repair','review'],review:['repair','close'],close:[],
+};
+
+interface FeedbackProgress {
+  stage: FeedbackStage;
+  status: FeedbackStatus;
+  reason: string;
+  ref: string | null;
+  reviewId?: string;
+}
+
+type ProgressEntry = Omit<FeedbackProgress,'reviewId'> & {id:string;at:string;returnFrom:FeedbackStage|null};
+type ProgressState = {
+  stage: FeedbackStage;
+  status: FeedbackStatus;
+  visited: readonly FeedbackStage[];
+  timeline: readonly ProgressEntry[];
+  reviewId: string | null;
+};
+
+function feedbackCaseState(store: RuntimeStore, projectId: string, caseId: string): ProgressState {
+  const original = store.object(projectId,'feedback-case',caseId) as {
+    id:string;workspaceId:string;projectId:string;receivedAt:number;originalEventKey:string;
+  } | null;
+  if (!original || original.id !== caseId || original.workspaceId !== store.workspaceId || original.projectId !== projectId) {
+    return reject('FEEDBACK_CASE_UNKNOWN','The original feedback case is unavailable.',404);
+  }
+  return (store.object(projectId,'feedback-case-progress',caseId) as ProgressState | null) ?? {
+    stage:'receive',status:'COMPLETE',visited:['receive'],reviewId:null,timeline:[{
+      id:original.originalEventKey,stage:'receive',status:'COMPLETE',at:new Date(original.receivedAt).toISOString(),
+      reason:'FEEDBACK_RECEIVED',ref:original.originalEventKey,returnFrom:null,
+    }],
+  };
+}
+
+/** Internal projection of retained case transitions. This writes viewing
+ * evidence only; provider dispatch and case authority cannot read it as a grant. */
+export function retainFeedbackProgress(
+  store: RuntimeStore, actor: Principal, projectId: string, caseId: string, progress: FeedbackProgress,
+) {
+  authorize(actor,projectId,'execution.request');
+  const previous = feedbackCaseState(store,projectId,caseId);
+  if (!feedbackStages.includes(progress.stage) || !feedbackStatuses.includes(progress.status) ||
+      typeof progress.reason !== 'string' || !/^[A-Z][A-Z0-9_]{0,79}$/.test(progress.reason) ||
+      (progress.ref !== null && !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,255}$/.test(progress.ref)) ||
+      (progress.reviewId !== undefined && progress.stage !== 'review')) {
+    return reject('FEEDBACK_PROGRESS_INVALID','Use an owned transition with a bounded status and receipt reference.');
+  }
+  const id = 'feedback-progress:'+digest({caseId,progress});
+  if (store.object(projectId,'feedback-progress-entry',id)) return previous;
+  if (progress.stage !== previous.stage && !progressTransitions[previous.stage].includes(progress.stage)) {
+    return reject('FEEDBACK_PROGRESS_INVALID','The recorded case stage does not permit this transition.',409);
+  }
+  if (progress.stage === 'close' && previous.status === 'COMPLETE' && previous.stage === 'close') {
+    return reject('FEEDBACK_PROGRESS_FINAL','The feedback lifecycle is closed.',409);
+  }
+  if (progress.reviewId) readWindow(store,projectId,progress.reviewId);
+  const entry = {
+    id,at:new Date().toISOString(),stage:progress.stage,status:progress.status,reason:progress.reason,ref:progress.ref,
+    returnFrom:feedbackStages.indexOf(progress.stage) < feedbackStages.indexOf(previous.stage) ? previous.stage : null,
+  };
+  const value: ProgressState = {
+    stage:progress.stage,status:progress.status,visited:[...new Set([...previous.visited,progress.stage])],
+    timeline:[...previous.timeline,entry].slice(-24),
+    reviewId:progress.reviewId ?? previous.reviewId,
+  };
+  store.mutate(actor,{
+    projectId,operation:'feedback.progress.retain',requestId:id,expectedRevision:store.revision(projectId),
+    permission:'execution.request',input:{caseId,progress},
+  },() => ({
+    value:{caseId,id},
+    objects:[
+      {kind:'feedback-progress-entry',id,value:{caseId,entry}},
+      {kind:'feedback-case-progress',id:caseId,value},
+    ],
+    event:{type:'feedback-progress-retained',data:{caseId,id,stage:entry.stage,status:entry.status}},
+  }));
+  return value;
+}
+
+export function feedbackMonitorSnapshot(
+  store: RuntimeStore, actor: Principal, projectId: string, after?: string, expectedRevision?: number,
+) {
+  authorize(actor,projectId,'read');
+  const revision = store.revision(projectId);
+  if (after !== undefined && expectedRevision === undefined) {
+    return reject('MONITOR_REVISION_REQUIRED','Feedback pagination must retain its original project revision.');
+  }
+  if (expectedRevision !== undefined && expectedRevision !== revision) {
+    return reject('MONITOR_REVISION_CHANGED','Refresh the feedback snapshot before continuing pagination.',409);
+  }
+  const rows = store.objectsPage(projectId,'feedback-case',after ?? '',21);
+  const cases = rows.slice(0,20).map(({id}) => {
+    const {reviewId,...progress} = feedbackCaseState(store,projectId,id);
+    const reviewWindow = reviewId ? readWindow(store,projectId,reviewId) : null;
+    const review = reviewWindow ? {
+      deadline:reviewWindow.deadline,head:reviewWindow.candidate.head,pullRequestId:reviewWindow.candidate.pullRequestId,
+      state:reviewWindow.veto ? 'VETOED' as const :
+        progress.stage === 'review' && !reviewWindow.claim ? 'OPEN' as const : 'CLOSED' as const,
+    } : null;
+    return {id,...progress,review};
+  });
+  return {
+    projectId,revision,observedAt:new Date().toISOString(),readOnly:true,cases,
+    nextAfter:rows.length > cases.length ? cases.at(-1)!.id : null,
+  };
+}

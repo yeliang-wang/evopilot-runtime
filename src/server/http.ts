@@ -1,5 +1,5 @@
 import { FEEDBACK_ACTIVATE, FEEDBACK_ACTIVATION_PREVIEW, FEEDBACK_PROJECT_INSPECT, FEEDBACK_PROJECT_SAVE, FEEDBACK_PROJECT_VALIDATE, inspectFeedbackProjectDraft, readSavedFeedbackProjectDraft, saveFeedbackProjectDraft } from '../feedback-loop/project.js';
-import { createFeedbackActivationService, type FeedbackActivationRegistry } from '../feedback-loop/service.js';
+import { createFeedbackActivationService, feedbackMonitorSnapshot, type FeedbackActivationRegistry } from '../feedback-loop/service.js';
 import { createCorrectionService, CORRECTION_READS, CORRECTION_WRITES } from '../lifecycle/correction.js';
 import { QUALIFICATION_READS, QUALIFICATION_WRITES } from '../lifecycle/evidence-qualification.js';
 import type {RegisteredQualificationService} from '../adapters/bindings.js';
@@ -256,6 +256,14 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
         if(url.pathname==='/api/v1/dashboard/monitor'&&req.method==='GET'){
           const input=Object.fromEntries(url.searchParams);exact(input,[],['after','revision']);
           const result=monitorSnapshot(store,session.actor,session.projectId,{...(input.after?{after:input.after}:{}),...(input.revision!==undefined?{revision:Number(input.revision)}:{})});
+          const feedbackMonitor=!limitedPreview && store.objectsPage(session.projectId,'feedback-case','',1).length>0;
+          json(res,200,{requestId,result:feedbackMonitor?{...result,feedbackMonitor}:result});return;
+        }
+        if(url.pathname==='/api/v1/dashboard/feedback-monitor'&&req.method==='GET'){
+          if(limitedPreview)previewUnavailable();
+          const input=Object.fromEntries(url.searchParams);exact(input,[],['after','revision']);
+          const result=feedbackMonitorSnapshot(store,session.actor,session.projectId,
+            input.after===undefined?undefined:string(input.after),input.revision===undefined?undefined:Number(input.revision));
           json(res,200,{requestId,result});return;
         }
         if(url.pathname==='/api/v1/dashboard/events'&&req.method==='GET'){
