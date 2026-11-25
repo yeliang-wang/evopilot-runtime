@@ -282,6 +282,17 @@ test('signed reference callbacks retain feedback and veto through actual loopbac
     const replay = await send('/feedback',signer,first);
     assert.deepEqual(replay,{status:200,body:{...retained.body,status:'REUSED'}});
     assert.equal(store.revision('project'),1);
+    const caseId = retained.body.caseId;
+    const {resolveOriginalFeedbackCase} = await import('../../dist/feedback-loop/ingress.js');
+    assert.equal(resolveOriginalFeedbackCase(store,feedback.route,first.messageId),caseId);
+    const duplicateMessage = await send('/feedback',signer,{...first,eventId:'same-message-new-delivery'});
+    assert.equal(duplicateMessage.body.caseId,caseId);
+    assert.equal(store.objectsPage('project','feedback-case').length,1);
+    const supplement = { ...first, eventId:'supplement-1', messageId:'reply-1', action:{kind:'supplement',caseId,text:'More detail'} };
+    assert.equal((await send('/feedback',signer,supplement)).body.caseId,caseId);
+    assert.deepEqual(await send('/feedback',signer,{...supplement,eventId:'unknown-case',action:{...supplement.action,caseId:'unknown'}}),
+      {status:404,body:{error:'FEEDBACK_CASE_UNKNOWN'}});
+    assert.equal(store.object('project','feedback-case',caseId).originalEventKey,retained.body.eventKey);
 
     const candidate = {
       ...projectRoute,repositoryId:'repo',pullRequestId:'1',head:'a'.repeat(40),base:'b'.repeat(40),
