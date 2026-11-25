@@ -67,7 +67,7 @@ type CursorOperation =
   | {readonly kind: 'agent' | 'runs'; readonly agentId: string}
   | {readonly kind: 'run'; readonly agentId: string; readonly runId: string};
 export interface CursorTransport {
-  request(operation: CursorOperation): Promise<unknown>;
+  request(operation: CursorOperation, permit?: () => void): Promise<unknown>;
 }
 
 interface LaunchBody {
@@ -243,13 +243,17 @@ export function createCursorProviderTransport(
     reject('CURSOR_CREDENTIAL_REFERENCE', 'Use a protected Cursor credential reference.');
   }
   const transport: CursorTransport = {
-    async request(operation) {
+    async request(operation, permit) {
       const url = operationUrl(operation);
       const key = await resolveCredential(credentialRef);
       if (!matches(/^[\x21-\x7e]{1,4096}$/, key)) {
         return reject('CURSOR_CREDENTIAL_UNAVAILABLE', 'The protected Cursor credential is unavailable.', 503);
       }
       const write = operation.kind === 'launch';
+      if (write) {
+        if (!permit) return reject('CURSOR_AUTHORITY_REQUIRED', 'Live launch requires the original Runtime reservation.', 409);
+        permit();
+      }
       const headers = {Authorization: 'Bearer ' + key, Accept: 'application/json'};
       const request = write ?
         {method: 'POST', headers: {...headers, 'Content-Type': 'application/json'}, body: JSON.stringify(operation.body)} :
@@ -379,24 +383,34 @@ export function createCursorAgentAdapter(scope: CursorScope, transport: CursorTr
 
   /** Only the owner that just committed a new reservation may dispatch. All
    * other paths call reconcile and use only the saved Agent and Run identities. */
-  async function dispatch(retained: CursorWorkIntent, reservation: 'RESERVED'): Promise<CursorWorkResult> {
+  async function dispatch(retained: CursorWorkIntent, reservation: 'RESERVED', permit?: () => void): Promise<CursorWorkResult> {
     if (reservation !== 'RESERVED') {
       reject('CURSOR_RECONCILE_ORIGINAL', 'Read back the original Cursor intent.', 409);
     }
     const intent = retainedIntent(retained);
+    if (!permit && source === 'CURSOR_PROVIDER') {
+      return reject('CURSOR_AUTHORITY_REQUIRED', 'Live launch requires the original Runtime reservation.', 409);
+    }
+    if (source === 'FIXTURE') permit?.();
     const body = launchBody(fixed, intent);
     let runId: string | undefined;
+    let admissionError: unknown;
+    let admissionDenied = false;
     try {
-      const submitted = record(await request({kind: 'launch', body}));
+      const submitted = record(await request({kind: 'launch', body},permit && (() => {
+        try { permit(); }
+        catch (error) { admissionError = error; admissionDenied = true; throw error; }
+      })));
       const latest = observedAgent(submitted.agent, body);
       observedRun(submitted.run, intent.agentId, latest);
       runId = latest;
     } catch {
+      if (admissionDenied) throw admissionError;
       // Cursor supports caller-assigned Agent IDs. A lost launch response does
       // not require a retry or a newest-Agent heuristic.
     }
     return readBack(intent, runId);
   }
 
-  return Object.freeze({dispatch, reconcile});
+  return Object.freeze({dispatch, reconcile, source, scopeDigest:digest(fixed)});
 }

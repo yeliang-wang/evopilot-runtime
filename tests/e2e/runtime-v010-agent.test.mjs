@@ -5,6 +5,12 @@ import {
   createCursorProviderTransport,
   prepareCursorWorkIntent,
 } from '../../dist/feedback-loop/cursor.js';
+import {
+  createFeedbackVerification, feedbackVerificationExecutionId, prepareFeedbackVerification,
+  prepareFeedbackVerificationEvaluation,
+} from '../../dist/feedback-loop/verification.js';
+import {digest} from '../../dist/server/errors.js';
+import {NATIVE_CONTRACT_DIGEST, nativeSha256} from '../../vendor/compatibility/v1/native.mjs';
 
 const scope = {repository:'https://github.com/example/feedback-lab', branch:'main'};
 const issueId = '2be61638-313b-449d-bc53-f2c267c343b9';
@@ -53,6 +59,91 @@ function cursorFixture(runId = firstRunId) {
     },
   };
 }
+
+test('Runtime owns the original Cursor reservation across restart and admits repair only on its existing PR', async () => {
+  const {mkdtempSync,realpathSync,rmSync} = await import('node:fs');
+  const {tmpdir} = await import('node:os');
+  const {join} = await import('node:path');
+  const {digest} = await import('../../dist/server/errors.js');
+  const {RuntimeStore} = await import('../../dist/server/store.js');
+  const {createFeedbackCursorWorker} = await import('../../dist/feedback-loop/worker.js');
+  const root = mkdtempSync(join(realpathSync(tmpdir()),'runtime-v010-cursor-worker-'));
+  const actor = {id:'worker',projects:['feedback'],permissions:['read','execution.request'],revision:1,expiresAt:'2099-01-01T00:00:00Z'};
+  const selection = {projectId:'feedback',caseId:originalWork.caseId,round:0};
+  const provider = cursorFixture();
+  provider.dropLaunchResponse();
+  provider.shapeResponse(() => { throw new Error('Readback temporarily unavailable'); });
+  let store = new RuntimeStore(root,'demo');
+  try {
+    const activation = {workspaceId:'demo',projectId:selection.projectId,serviceId:store.serviceId};
+    const activationId = 'sha256:'+digest(activation);
+    store.mutate(actor,{
+      projectId:selection.projectId,operation:'fixture.ready',requestId:'ready',expectedRevision:0,input:{},
+      permission:'execution.request',
+    },() => ({
+      value:{},event:{type:'fixture-ready',data:{}},
+      objects:[
+        {kind:'feedback-case',id:selection.caseId,value:{
+          id:selection.caseId,workspaceId:'demo',projectId:selection.projectId,
+        }},
+        {kind:'feedback-case-issue',id:selection.caseId,value:{source:'FIXTURE',issueId}},
+        {kind:'feedback-activation',id:activationId,value:{subject:activation,candidateDigest:activationId}},
+        {kind:'feedback-activation-pointer',id:'current',value:activationId},
+      ],
+    }));
+    let canRepair = false;
+    const expiresAt = Date.now()+60000;
+    const readGrant = subject => {
+      if (subject.round && !canRepair) return null;
+      assert.equal(subject.issueId,issueId);
+      assert.equal(subject.activationId,activationId);
+      return {
+        subjectDigest:digest(subject),evidenceRef:'evidence:fixture/'+subject.round,
+        prompt:originalWork.prompt,expiresAt,maxRepairs:1,
+      };
+    };
+    const worker = (transport, permit = readGrant) =>
+      createFeedbackCursorWorker(store,scope,createCursorAgentAdapter(scope,transport),permit,() => actor);
+    let reservationAtLaunch;
+    const trackingTransport = {async request(operation) {
+      if (operation.kind === 'launch') {
+        const [saved] = store.objectsPage(selection.projectId,'feedback-cursor-attempt');
+        reservationAtLaunch = saved.value.intent;
+      }
+      return provider.transport.request(operation);
+    }};
+    const initial = await worker(trackingTransport).advance(actor,selection);
+    assert.equal(initial.status,'UNKNOWN');
+    assert.equal(reservationAtLaunch.agentId,initial.agentId);
+    assert.equal(reservationAtLaunch.requestId,store.objectsPage(selection.projectId,'feedback-cursor-attempt')[0].id);
+    store.close();
+    store = new RuntimeStore(root,'demo');
+    provider.shapeResponse((_operation,response) => response);
+    provider.finish();
+    const resumed = await worker(provider.transport,() => {throw Error('Recovery must use the original intent');}).advance(actor,selection);
+    assert.equal(resumed.realization.runId,firstRunId);
+    assert.deepEqual(resumed.realization.pullRequest,originalPR);
+    assert.equal(provider.trace.filter(item => item.kind==='launch').length,1);
+    const repairProvider = cursorFixture(repairRunId);
+    const repairWorker = worker(repairProvider.transport);
+    const selectionRepair = {...selection,round:1};
+    await assert.rejects(repairWorker.advance(actor,selectionRepair),{code:'FEEDBACK_CURSOR_ADMISSION'});
+    assert.equal(repairProvider.trace.length,0);
+    canRepair = true;
+    await repairWorker.advance(actor,selectionRepair);
+    repairProvider.finish(null);
+    const repaired = await repairWorker.advance(actor,selectionRepair);
+    assert.equal(repaired.realization.runId,repairRunId);
+    assert.deepEqual(repaired.realization.pullRequest,originalPR);
+    const launches = repairProvider.trace.filter(item => item.kind==='launch');
+    assert.equal(launches.length,1);
+    assert.deepEqual(launches[0].body.repos,[{url:scope.repository,prUrl:originalPR.url}]);
+    await assert.rejects(repairWorker.advance(actor,{...selection,round:2}),{code:'FEEDBACK_CURSOR_ADMISSION'});
+  } finally {
+    store.close();
+    rmSync(root,{recursive:true,force:true});
+  }
+});
 
 test('retains the original Cursor launch across a lost response and a new adapter instance', async () => {
   const provider = cursorFixture();
@@ -185,7 +276,14 @@ test('provider HTTP transport uses the protected reference, fixed API host and b
   });
   const intent = prepareCursorWorkIntent(scope, originalWork);
   const adapter = createCursorAgentAdapter(scope, transport);
-  assert.equal((await adapter.dispatch(intent, 'RESERVED')).status, 'UNKNOWN');
+  await assert.rejects(adapter.dispatch(intent, 'RESERVED'), {code:'CURSOR_AUTHORITY_REQUIRED'});
+  const revoked = new Error('Fixture authority revoked.');
+  await assert.rejects(adapter.dispatch(intent, 'RESERVED', () => {throw revoked;}), error => error === revoked);
+  assert.equal(calls.length,0);
+  resolved.length = 0;
+  let checked = false;
+  assert.equal((await adapter.dispatch(intent, 'RESERVED', () => {checked = true;})).status, 'UNKNOWN');
+  assert.equal(checked,true);
   assert.deepEqual(resolved, [ref,ref]);
   assert.equal(calls.length, 2);
   assert.equal(calls[0].url, 'https://api.cursor.com/v1/agents');
@@ -201,3 +299,166 @@ test('provider HTTP transport uses the protected reference, fixed API host and b
   assert.equal(JSON.parse(calls[0].options.body).prompt.text, originalWork.prompt);
   assert.ok(!calls[0].options.body.includes(key));
 });
+
+{
+  const projectId = 'feedback-lab', workspaceId = 'fixture-workspace', caseId = 'fixture-case';
+  const now = Date.now(), clock = delta => new Date(now + delta).toISOString();
+  const actor = {id:'fixture', revision:1, projects:[projectId], permissions:['read'], expiresAt:clock(60000)};
+  const cursorScope = {repository:'https://github.com/example/feedback-lab', branch:'main'};
+  const originalPR = {number:13, url:cursorScope.repository + '/pull/13', branch:'cursor/repair'};
+  const pullRequest = {source:'FIXTURE', repositoryId:'42', number:13, branch:originalPR.branch, head:'6'.repeat(40), base:'7'.repeat(40)};
+  const workInput = {caseId, issueId:'linear-issue', requestId:'original-request', prompt:'Reproduce and repair the fixture defect.'};
+  const initialIntent = prepareCursorWorkIntent(cursorScope, {...workInput, kind:'initial'});
+  function finished(intent, id, start, finish) {
+    return {source:'FIXTURE', status:'FINISHED', agentId:intent.agentId, intentId:intent.intentId, scopeDigest:intent.scopeDigest,
+      runId:`run-00000000-0000-0000-0000-00000000000${id}`, resultDigest:digest('Cursor claimed success'),
+      pullRequest:originalPR, createdAt:clock(start), updatedAt:clock(finish)};
+  }
+  const original = {intent:initialIntent, run:finished(initialIntent, 1, -5000, -4000)};
+  const repairIntent = prepareCursorWorkIntent(cursorScope, {...workInput, kind:'repair', requestId:'repair-request',
+    prompt:'Fix the original PR', original:original.intent, prior:original.run});
+  const repair = {intent:repairIntent, run:finished(repairIntent, 2, -3500, -3000)};
+  const rule = {
+    bindingRef:'binding:harness/feedback-quality', ownerRegistrationDigest:nativeSha256('synthetic-harness-registration'),
+    publicationRequestId:'synthetic-publication', toolchainLockDigest:nativeSha256('synthetic-toolchain'),
+    effectiveConfigDigest:nativeSha256('synthetic-config'), executorRef:'binding:executor/functional-verifier',
+    executorBindingDigest:nativeSha256('synthetic-verifier-registration'), validUntil:now + 60000,
+    scope:{projectId, visibility:'private'}, reference:{product:'harness', id:'feedback-check', version:'1.0.0', specVersion:'v1',
+      visibility:'private', digest:nativeSha256('rule'), standardDigest:nativeSha256('standard'), standardLockDigest:nativeSha256('lock'),
+      producer:{product:'harness', version:'0.3.0'}, contractDigest:NATIVE_CONTRACT_DIGEST},
+  };
+  const subjectInput = {workspaceId, projectId, caseId, activationId:nativeSha256('activation'), scope:cursorScope, original,
+    work:original, pullRequest, rule};
+  const initial = prepareFeedbackVerification(subjectInput);
+  const repaired = prepareFeedbackVerification({...subjectInput, work:repair, pullRequest:{...pullRequest, head:'8'.repeat(40)}});
+
+  const publishedPackage = {manifest:{entrypoints:{coverage:'coverage.json'}},
+    files:{'coverage.json':JSON.stringify({requirements:[{id:'H001', caseIds:['functional']}]})}};
+  function fixture() {
+    const executions = new Map(), receipts = new Map();
+    const baseline = {reference:rule.reference, effectiveConfigDigest:rule.effectiveConfigDigest,
+      executionStatus:'SUCCEEDED', qualityStatus:'PASS'};
+    const publishedResult = {published:true, reference:rule.reference};
+    receipts.set(rule.publicationRequestId, {operation:'native.package.publish', requestId:rule.publicationRequestId,
+      status:'SUCCEEDED', scope:rule.scope, result:publishedResult});
+    const owner = {
+      owner:'harness', workspaceId, capabilities:() => ({registrationDigest:rule.ownerRegistrationDigest}),
+      async readPackage() {
+        return {published:true, workspaceId, scope:rule.scope, reference:rule.reference, package:publishedPackage,
+          validation:{...baseline, reportDigest:nativeSha256(baseline)}};
+      },
+      async read(_actor, project, request) {
+        assert.equal(project, projectId);
+        assert.equal(request.operation, 'native.receipt.inspect');
+        return structuredClone(receipts.get(request.input.requestId));
+      },
+    };
+    function retain(subject, status, transformReport = value => value) {
+      const requestId = feedbackVerificationExecutionId(subject);
+      const original = {schema:'runtime-feedback-verification-execution/v1', source:'FIXTURE', subjectDigest:subject.subjectDigest,
+        requestId, executorRef:rule.executorRef, executorBindingDigest:rule.executorBindingDigest, executionId:`test-run-${requestId}`,
+        startedAt:now-2000, completedAt:now-1000, expiresAt:now+60000, receiptRef:`fixture:execution/${requestId}`,
+        receiptDigest:nativeSha256({requestId, status}), reportDigest:nativeSha256({requestId, result:status}), status};
+      executions.set(requestId, original);
+      const {request, action, pin} = prepareFeedbackVerificationEvaluation(subject, original, publishedPackage);
+      const criteria = pin.criteria.map(criterion => ({...criterion, status, evidenceDigest:nativeSha256(criterion)}));
+      const report = transformReport({schema:'evopilot-native-validation/v1', owner:'harness', context:action.context,
+        toolchainLockDigest:rule.toolchainLockDigest, effectiveConfigDigest:rule.effectiveConfigDigest, reference:rule.reference,
+        qualityStatus:status, executionStatus:'SUCCEEDED', observationDigest:action.observationDigest, criteria, rawReports:[]});
+      receipts.set(request.requestId, {requestId:request.requestId, operation:request.operation, scope:request.scope,
+        status:'SUCCEEDED', requestDigest:nativeSha256({operation:request.operation, scope:request.scope, input:request.input}),
+        result:{...report, reportDigest:nativeSha256(report)}});
+      return {execution:original, request, receipt:receipts.get(request.requestId)};
+    }
+    function verifier(source = 'FIXTURE') {
+      return createFeedbackVerification({source, owner, async readExecution(_actor, subject, requestId) {
+        assert.equal(feedbackVerificationExecutionId(subject),requestId);
+        return structuredClone(executions.get(requestId) ?? null);
+      }});
+    }
+    return {owner, verifier, retain, executions, receipts};
+  }
+  const inspect = (fixture, subject, readCandidate = async () => subject.pullRequest) =>
+    fixture.verifier().inspect(actor, structuredClone(subject), {signal:new AbortController().signal, readCandidate});
+
+  test('binds independent FAIL and PASS to successive heads in the same original Cursor case', async () => {
+    const f = fixture(), first = f.retain(initial, 'FAIL');
+    const failure = await inspect(f, initial);
+    assert.equal(failure.status, 'FAIL');
+    assert.equal(failure.evidence.source, 'FIXTURE');
+    assert.equal(failure.evidence.execution.receiptDigest, first.execution.receiptDigest);
+    assert.equal(failure.evidence.harnessReceiptDigest, nativeSha256(first.receipt));
+    assert.equal(failure.evidenceDigest, digest(failure.evidence));
+    assert.deepEqual(await inspect(f, initial), failure, 'Original evidence survives recreation of the consumer');
+    assert.equal((await inspect(f, initial, async () => repaired.pullRequest)).reason, 'CANDIDATE_CHANGED');
+    f.executions.set(feedbackVerificationExecutionId(repaired), first.execution);
+    assert.equal((await inspect(f, repaired)).reason, 'EXECUTION_MISMATCH');
+    const second = f.retain(repaired, 'PASS');
+    const pass = await inspect(f, repaired);
+    assert.equal(pass.status, 'PASS');
+    assert.notEqual(pass.evidenceDigest, failure.evidenceDigest);
+    assert.notEqual(first.request.requestId, second.request.requestId);
+    assert.equal(repaired.original.run.runId, initial.original.run.runId);
+    assert.equal(repaired.pullRequest.number, initial.pullRequest.number);
+  });
+
+  test('holds after a concurrent head or base change and covers missing observations', async () => {
+    const f = fixture();
+    f.retain(initial,'PASS');
+    for (const field of ['head','base']) {
+      let reads = 0;
+      assert.equal((await inspect(f, initial, async () => ++reads === 1 ? pullRequest : {...pullRequest, [field]:'f'.repeat(40)})).reason,
+        'CANDIDATE_CHANGED');
+      assert.equal(reads, 2);
+    }
+    assert.equal((await inspect(f, initial, async () => null)).reason,'CANDIDATE_UNAVAILABLE');
+  });
+
+  test('requires exact current independently recorded evidence and an original published native verdict', async () => {
+    const f = fixture();
+    assert.equal((await inspect(f,initial)).reason,'EXECUTION_UNAVAILABLE');
+    const {execution, request, receipt} = f.retain(initial,'PASS');
+    f.executions.set(execution.requestId,{...execution, expiresAt:now - 1});
+    assert.equal((await inspect(f,initial)).reason,'EXECUTION_STALE');
+    f.executions.set(execution.requestId,{...execution, reportDigest:nativeSha256('another raw report')});
+    assert.equal((await inspect(f,initial)).reason,'HARNESS_UNDECIDABLE');
+    f.executions.set(execution.requestId,execution);
+    f.receipts.set(request.requestId,{...receipt,status:'RUNNING'});
+    assert.equal((await inspect(f,initial)).reason,'HARNESS_UNDECIDABLE');
+    f.receipts.set(request.requestId,{...receipt,status:'FAILED'});
+    assert.equal((await inspect(f,initial)).reason,'HARNESS_UNDECIDABLE');
+    f.retain(initial,'PASS', report => ({...report, criteria:report.criteria.slice(1)}));
+    assert.equal((await inspect(f,initial)).reason,'HARNESS_UNDECIDABLE');
+    f.retain(initial,'FAIL', report => ({...report,criteria:report.criteria.map(criterion => ({...criterion,status:'SKIPPED'}))}));
+    assert.equal((await inspect(f,initial)).reason,'HARNESS_UNDECIDABLE');
+    f.retain(initial,'PASS', report => ({...report,qualityStatus:'FAIL',criteria:report.criteria.map(criterion => ({...criterion,status:'FAIL'}))}));
+    assert.equal((await inspect(f,initial)).reason,'VERDICT_MISMATCH');
+    f.retain(initial,'PASS');
+    f.receipts.delete(rule.publicationRequestId);
+    assert.equal((await inspect(f,initial)).reason,'RULE_UNVERIFIED');
+    const expired = prepareFeedbackVerification({...subjectInput, rule:{...rule,validUntil:now-1}});
+    assert.equal((await inspect(f,expired)).reason,'RULE_STALE');
+  });
+
+  test('holds mixed provider provenance and binds case, activation, original run and rule', async () => {
+    const f = fixture();
+    const work = f.retain(initial,'PASS');
+    assert.throws(() => prepareFeedbackVerification({...subjectInput,pullRequest:{...pullRequest,source:'GITHUB_PROVIDER'}}),
+      {code:'FEEDBACK_VERIFICATION_PROVENANCE'});
+    assert.equal((await f.verifier('PROTECTED').inspect(actor, initial, {signal:new AbortController().signal,
+      readCandidate:async () => pullRequest})).reason,'PROVENANCE_MISMATCH');
+    f.executions.set(work.execution.requestId,{...work.execution,source:'PROTECTED'});
+    assert.equal((await inspect(f,initial)).reason,'PROVENANCE_MISMATCH');
+    assert.throws(() => prepareFeedbackVerification({...subjectInput,caseId:'other-case'}), {code:'FEEDBACK_VERIFICATION_SUBJECT'});
+    for (const variation of [
+      {activationId:nativeSha256('new-activation')},
+      {rule:{...rule, publicationRequestId:'another-publication'}},
+      {pullRequest:{...pullRequest,base:'e'.repeat(40)}},
+      (() => {const changed = {...original, run:{...original.run,runId:'run-10000000-0000-0000-0000-000000000001'}};
+        return {original:changed,work:changed};})(),
+    ]) {
+      const changed = prepareFeedbackVerification({...subjectInput, ...variation});
+      assert.notEqual(changed.subjectDigest, initial.subjectDigest);
+    }
+  });
+}
