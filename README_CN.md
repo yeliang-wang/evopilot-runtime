@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-本源码树说明 Runtime 0.10.0 Preview 的交付目标。真实 Provider、Codex Desktop 和浏览器的验收须使用绑定到准确源码与制品的证据。另行批准并发布后，下载文件将列在 [v0.10.0 Release 页面](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.10.0)。
+本源码树说明 Runtime 0.10.0 Preview 的交付目标。真实端到端验收通过 Codex Desktop 中已安装的 Runtime Expert，经 HTTP MCP 连接到准确候选。外部适配器和 Dashboard 通过本地自动化检查验收。另行批准并发布后，下载文件将列在 [v0.10.0 Release 页面](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.10.0)。
 
 Runtime 是独立生命周期服务，管理项目定义、目标、Target、实例、执行门禁、回执和审计。Codex 中的 Runtime Expert 通过 Streamable HTTP MCP 配置项目并读回状态。反馈闭环由 Cursor Cloud 执行编码。
 
@@ -14,7 +14,7 @@ Runtime 是独立生命周期服务，管理项目定义、目标、Target、实
 2. Runtime 将授权反馈转成 Linear 工单。需要补充信息时，回复继续原工单和实例。Cursor Cloud 复现问题，并创建或修订同一个 GitHub PR。独立验证针对准确的 PR head 和 base 执行。
 3. 审阅通知确认送达后，开启 60 分钟窗口。有效否决会阻止该 PR head 合并。到期后，Runtime 重新核验候选、证据、项目预授权和审阅渠道覆盖情况，再发起受 GitHub 分支保护约束的 rebase 合并。结案前须读回 GitHub 的合并结果。打开 `/monitor` 可查看当前节点、已走路径、实际回退边和审阅截止时间。
 
-Slack Socket Mode 是首个平台适配器。由于没有测试频道，真实 Slack 端到端验收已延期。代表性验收流程使用经过身份验证的回调通道，并连接真实 Linear、Cursor Cloud 和 GitHub 服务。
+Slack Socket Mode 是首个平台适配器。本地契约检查覆盖已认证回调通道、Linear、Cursor Cloud 和 GitHub App 接口。真实 Slack 验收已延期。
 
 ![外部工作流示例，涵盖 Slack 反馈、Grok Bot 接单、Linear 工单、Cursor Cloud 修复和合并前人工审阅](docs/images/runtime-v010-workflow-reference.png)
 

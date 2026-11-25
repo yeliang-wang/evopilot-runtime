@@ -2,7 +2,7 @@
 
 English | [简体中文](README_CN.md)
 
-This source tree documents the Runtime 0.10.0 Preview target. Live provider, Codex Desktop and browser acceptance require evidence bound to the exact source and package. The [v0.10.0 Release page](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.10.0) is the intended location for downloads after a separately approved publication.
+This source tree documents the Runtime 0.10.0 Preview target. Live end-to-end acceptance uses the installed Runtime Expert in Codex Desktop and its HTTP MCP connection to the exact candidate. Provider and Dashboard behavior is checked in local automated tests. The [v0.10.0 Release page](https://github.com/yeliang-wang/evopilot-runtime/releases/tag/v0.10.0) is the intended location for downloads after a separately approved publication.
 
 Runtime is an independent lifecycle service. It owns project definitions, goals, targets, instances, execution gates, receipts and audit. The Runtime Expert in Codex uses Streamable HTTP MCP for project configuration and readback. The feedback loop delegates coding to Cursor Cloud.
 
@@ -14,7 +14,7 @@ Runtime is an independent lifecycle service. It owns project definitions, goals,
 2. Runtime routes authorized feedback into a Linear issue. When more information is needed, a reply resumes the original issue and instance. Cursor Cloud reproduces the defect and prepares or revises the same GitHub PR. Independent verification evaluates the exact PR head and base.
 3. An acknowledged review notification starts a 60-minute window. A valid veto blocks that head. After the deadline, Runtime rechecks the candidate, evidence, project preauthorization and channel coverage before requesting a protected GitHub rebase merge. Confirmed GitHub readback is required before closure. Use `/monitor` to inspect the current node, visited path, actual return edges and review deadline.
 
-Slack Socket Mode is the first platform adapter. Live Slack end-to-end acceptance is deferred because a test channel is unavailable. The representative journey calls for an authenticated callback channel and actual Linear, Cursor Cloud and GitHub services.
+Slack Socket Mode is the first platform adapter. Local contract checks cover the authenticated callback channel, Linear, Cursor Cloud and GitHub App interfaces. Live Slack testing is deferred.
 
 ![External workflow example with Slack feedback, Grok Bot intake, Linear issues, Cursor Cloud fixes and human review before merge](docs/images/runtime-v010-workflow-reference.png)
 

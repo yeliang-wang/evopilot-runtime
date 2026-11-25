@@ -10,15 +10,17 @@ Use a fresh private root and a dedicated project. For a published macOS arm64 pa
 
 Use a build that advertises the feedback project operations and a service with protected bindings registered for the selected project. The project needs an active Project Lifecycle and references for feedback intake and reply, review notification and actions, the Linear team, the GitHub repository, the Cursor Agent, a published Harness rule and the merge policy. The two channel references can resolve to one connection with all four capabilities. Keep credential material in the operator's protected configuration. Use the [feedback configuration reference](../plugins/codex/skills/evopilot-runtime-expert/references/configuration.md#feedback-driven-lifecycle-configuration) for the exact operations.
 
-Slack Socket Mode is the first platform adapter. The live Slack case `CHANNEL-REAL` is deferred. The representative live journey uses the authenticated callback reference channel together with the selected Linear, Cursor Cloud and GitHub services. Protocol tests exercise Slack separately.
+For real-use acceptance, open an actual signed-in Codex Desktop conversation with the installed Runtime Expert connected to the Runtime HTTP MCP. Record the signed-in identity, observed conversation model, package identity and original HTTP request receipts in private evidence. Use isolated protected test bindings backed by fixture provider data for the activation check. The named project owner records the actual decision for the exact activation candidate.
 
-For the timed merge case, bind project preauthorization to the repository, branch, low-risk paths, reviewer audience, required evidence and expiry. Use the approved GitHub installation and preserve the branch protection configured for the target branch. The representative journey includes Runtime worker continuation after closing Codex.
+Slack Socket Mode is the first platform adapter. Local automated tests cover the Slack protocol, authenticated callback reference and provider contracts. The live Slack case `CHANNEL-REAL` is deferred. Real Linear, Cursor Cloud and GitHub App operations are outside this release’s acceptance scope.
+
+For an operational timed merge, bind project preauthorization to the repository, branch, low-risk paths, reviewer audience, required evidence and expiry. Use the approved GitHub installation and preserve the branch protection configured for the target branch. Local automated tests exercise the merge rule with a controlled clock and worker continuation after the client disconnects.
 
 ## Save and activate the configuration
 
-1. In `/lifecycle`, open the feedback configuration. The graph is above the YAML editor. Edit the permitted inputs from a node or the YAML source. The editor accepts a single flat YAML 1.2 document up to 16 KiB.
-2. Validate and save a draft. Read back the retained source and draft revision. On a lost response, inspect the original save receipt before deciding whether to retry.
-3. In the Runtime Expert, inspect the saved draft and have the named owner review the exact activation preview. The service checks the seven binding roles against current observations. The preview binds the draft, active lifecycle, binding and policy revisions and expiry. Submit the owner's recorded approval for that exact candidate. If those inputs change, request a fresh preview and decision. Read back the activation receipt.
+1. In the Runtime Expert, validate the feedback configuration through Runtime HTTP MCP. Verify that invalid input is rejected. Supply a single flat YAML 1.2 document up to 16 KiB and save the valid draft.
+2. Read back the original save receipt, exact YAML and draft revision. Restart the isolated Runtime, reconnect from the signed-in Codex Desktop session and read back the same draft and receipt. On a lost response, inspect the original save receipt before deciding whether to retry.
+3. Have the named project owner review the exact activation preview. The service checks the seven binding roles against current observations. The preview binds the draft, active lifecycle, binding and policy revisions and expiry. Submit the owner's recorded approval for that exact candidate through the Expert. If those inputs change, request a fresh preview and decision. Read back the activation receipt and confirm the active configuration matches the reviewed draft.
 
 Draft validation checks structure. Saving retains the draft. Activation applies the reviewed configuration. Execution and release each require their own authority.
 
@@ -33,4 +35,6 @@ If a provider call has an unknown outcome, inspect the retained intent and recon
 
 ## Read the acceptance and release status
 
-Treat live Expert, real provider, independent verifier, 60-minute merge, recovery and both real browser journeys as candidate-bound evidence. The README image is an external example. Dashboard acceptance uses the approved design references, actual browser captures and matching event receipts. The package publication decision is separate from code merge and technical validation. Public readback and fresh replay are post-publication cases.
+`EXPERT-REAL` is the pre-publication real-use E2E. Local automated cases cover the integrated feedback loop, independent verification, the 60-minute merge rule and recovery. The two Dashboard cases use local automated browser runs and the approved design references. Retain screenshots and matching event receipts for the graph above the YAML editor on `/lifecycle` and the read-only run projection on `/monitor`. The README image is an external example.
+
+Exact candidate GitHub CI and bilingual documentation are pre-publication checks. Publishing the exact package requires a separate approval. After publication, `PUBLIC-READBACK` checks the GitHub prerelease, tag and anonymous download digests. `FRESH-REPLAY` installs the exact downloaded package into a fresh private root and repeats the signed-in Codex Desktop Expert and Runtime HTTP MCP journey, including the owner-approved activation.

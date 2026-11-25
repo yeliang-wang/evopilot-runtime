@@ -9,12 +9,14 @@ import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {inspectAcceptanceEvidence,inspectE20PrerequisiteEvidence} from '../../dist/release/evidence.js';
 
-const repository=fileURLToPath(new URL('../../',import.meta.url)),sha=b=>createHash('sha256').update(b).digest('hex');
+import { historicalRuntimeFile, historicalRuntimePaths } from '../fixtures/historical-runtime-v090.mjs';
+const repository=fileURLToPath(new URL('../../',import.meta.url));
+const sha=b=>createHash('sha256').update(b).digest('hex');
 function fixture(t,{prerequisitesOnly=false}={}){
  const root=fs.mkdtempSync(join(fs.realpathSync(tmpdir()),'runtime-evidence-audit-')),source=join(root,'source'),evidenceRoot=join(root,'evidence');
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));fs.mkdirSync(source);fs.mkdirSync(evidenceRoot,{mode:0o700});
  const put=(file,value)=>{fs.mkdirSync(dirname(file),{recursive:true});const bytes=Buffer.isBuffer(value)?value:Buffer.from(typeof value==='string'?value:JSON.stringify(value,null,2)+'\n');fs.writeFileSync(file,bytes,{mode:0o600});return{ref:file,sha256:sha(bytes)};};
- for(const file of ['package.json','package-lock.json',...fs.readdirSync(join(repository,'governance')).filter(n=>n.endsWith('.json')).map(n=>'governance/'+n)])put(join(source,file),fs.readFileSync(join(repository,file)));
+ for(const file of ['package.json','package-lock.json',...historicalRuntimePaths('governance').filter(n=>n.endsWith('.json'))])put(join(source,file),historicalRuntimeFile(file));
  for(const file of ['support.mjs','preflight.mjs','browser.mjs','maintenance.mjs','execution.mjs',...Array.from({length:22},(_,i)=>'e'+String(i+1).padStart(2,'0')+'.test.mjs')])put(join(source,'tests/acceptance/v090',file),'// SYNTHETIC collector identity fixture; never represents actual E2E.\n');
  const git=args=>execFileSync('git',['-c','core.fsmonitor=false','-C',source,...args],{stdio:['ignore','pipe','pipe']}).toString();
  git(['init','--quiet']);git(['add','.']);git(['-c','user.name=Synthetic evidence test','-c','user.email=synthetic@example.invalid','-c','commit.gpgsign=false','commit','--quiet','-m','Synthetic audit fixture, not product evidence']);const sourceCommit=git(['rev-parse','HEAD']).trim();

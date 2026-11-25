@@ -25,6 +25,7 @@ test('LC native original pins cannot supply alternate requests or rewritten outc
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash as lc16CreateHash} from 'node:crypto';
+import { historicalRuntimeFile, historicalRuntimePaths } from '../fixtures/historical-runtime-v090.mjs';
 import { CORRECTION_BINDING_KEYS, preflightCorrection, planCorrectionBranches } from '../../dist/lifecycle/correction-planner.js';
 const phase = 'PRE_RELEASE';
 // LC13 native reachability controls. These use the publisher compiler and native
@@ -1513,8 +1514,13 @@ test('LC11 exact Host envelope rejects permission writes and caller-defined oper
  const {assertLc11HostEnvelope:check}=await import('../acceptance/v090/e22.test.mjs');const e={operation:'lifecycle.stage.request',projectId:'p',input:{instanceId:'i',stageId:'project.check'},requestId:'original-mutation',expectedRevision:3};assert.doesNotThrow(()=>check(e));for(const operation of ['lifecycle.authority.grant','lifecycle.stage.advance','runtime.execute'])assert.throws(()=>check({...e,operation}));assert.throws(()=>check({...e,complete:true}));
 });
 test('LC11 service composition pin rejects changed or added reachable source',async()=>{
- const {assertLc11SourceComposition:check}=await import('../acceptance/v090/correction.test.mjs'),fs=await import('node:fs'),{createHash}=await import('node:crypto'),root=(await import('node:url')).fileURLToPath(new URL('../../',import.meta.url)),pins={};
- const walk=dir=>{for(const item of fs.readdirSync(root+dir,{withFileTypes:true})){const p=dir+'/'+item.name;if(item.isDirectory())walk(p);else pins[p]=createHash('sha256').update(fs.readFileSync(root+p)).digest('hex');}};walk('src');assert.doesNotThrow(()=>check(pins));assert.throws(()=>check({...pins,'src/server/cli.ts':'b'.repeat(64)}));assert.throws(()=>check({...pins,'src/new-model.ts':'c'.repeat(64)}));
+ const {assertLc11SourceComposition:check}=await import('../acceptance/v090/correction.test.mjs');
+ const pins=Object.fromEntries(historicalRuntimePaths('src').map(file=>[
+   file,lc16CreateHash('sha256').update(historicalRuntimeFile(file)).digest('hex'),
+ ]));
+ assert.doesNotThrow(()=>check(pins));
+ assert.throws(()=>check({...pins,'src/server/cli.ts':'b'.repeat(64)}));
+ assert.throws(()=>check({...pins,'src/new-model.ts':'c'.repeat(64)}));
 });
 
 test('LC11 selector is PRE only and rejects fixture claims of zero or completeness',async()=>{

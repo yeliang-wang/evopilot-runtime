@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateAcceptanceCatalog, validateTokenUsageAddendum, validateCorrectionAddendum, evaluateGovernance, governanceDigest } from '../dist/governance.js';
+import { historicalRuntimeFile } from './fixtures/historical-runtime-v090.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const catalog = JSON.parse(readFileSync(join(root,'governance/acceptance-v090.json')));
@@ -35,7 +36,9 @@ test('scope gate rejects drift, unbound milestones, unapproved files and release
   try {
     mkdirSync(join(dir,'governance'));
     for (const name of ['roadmap.json','target-v090.json','acceptance-v090.json','lifecycle-contract-v090.json','parameter-matrix-v090.json','environment-contract-v090.json','token-usage-v090.json','lifecycle-correction-v090.json']) writeFileSync(join(dir,'governance',name),readFileSync(join(root,'governance',name)));
-    writeFileSync(join(dir,'package-lock.json'),readFileSync(join(root,'package-lock.json')));
+    // This fixture evaluates the frozen v0.9 contract while the checkout may
+    // already carry a newer lockfile. Read the exact published baseline bytes.
+    writeFileSync(join(dir,'package-lock.json'),historicalRuntimeFile('package-lock.json'));
     const targetBytes=readFileSync(join(dir,'governance/target-v090.json'));
     const target=JSON.parse(targetBytes);
     const authorization=join(dir,'synthetic-test-authorization.json');

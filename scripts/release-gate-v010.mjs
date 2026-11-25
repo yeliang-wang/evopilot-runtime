@@ -73,8 +73,21 @@ export function verifyV010Files(files,sourceCommit) {
   assert.equal(lock.lockfileVersion,3);
 }
 
-/** Structural review only. Protect pins here and reauthenticate actual
- * source CI, provider runs and acceptance in the native owner composition. */
+export function verifyV010AcceptanceCoverage(report, inventory, boundary) {
+  assert.equal(report.liveEntry, boundary.liveEntry);
+  assert.deepEqual(report.deferred, boundary.deferred);
+  const pre = new Map(inventory.cases.filter(entry=>entry.phase==='pre').map(entry=>[entry.id,entry.verification]));
+  assert(Array.isArray(report.cases));
+  assert.deepEqual(report.cases.map(row=>row.id).sort(),[...pre.keys()].sort());
+  for (const row of report.cases) {
+    keys(row,['id','status','evidenceKind','artifacts']);
+    assert(row.status==='PASS' && row.evidenceKind===pre.get(row.id) && Array.isArray(row.artifacts) &&
+      row.artifacts.length>0 && row.artifacts.length<=64,'Required evidence mode missing for '+row.id);
+  }
+}
+
+/** Structural review only. Protect pins here and reauthenticate actual Codex
+ * Desktop, local verification and source CI in the native owner composition. */
 export function prepareV010ReleaseReview(raw) {
   const input = structuredClone(raw);
   keys(input,['sourceCommit','sourceCi','files','acceptance','releaseNotes']);
@@ -90,6 +103,7 @@ export function prepareV010ReleaseReview(raw) {
   assert.equal(pkg.version,version);
   assert.equal(evaluateV010(root,{mode:'check'}).status,'VALID');
   const inventory = json(readFileSync(join(root,'governance/acceptance-v010.json')));
+  const boundary = json(readFileSync(join(root,'governance/roadmap-v010.json'))).acceptanceBoundary;
   const pre = inventory.cases.filter(entry=>entry.phase==='pre').map(entry=>entry.id);
   const post = inventory.cases.filter(entry=>entry.phase==='post').map(entry=>entry.id);
   const deferred = inventory.cases.filter(entry=>entry.phase==='deferred').map(entry=>entry.id);
@@ -105,19 +119,13 @@ export function prepareV010ReleaseReview(raw) {
   assert.equal(source.conclusion,'success');
   const reportBytes = readPin(input.acceptance,2*1024*1024);
   const report = json(reportBytes);
-  keys(report,['schema','sourceCommit','manifestSha256','archiveSha256','representativeChannel','deferred','cases']);
-  assert.equal(report.schema,'runtime-v010-pre-release-evidence/v1');
+  keys(report,['schema','sourceCommit','manifestSha256','archiveSha256','liveEntry','deferred','cases']);
+  assert.equal(report.schema,'runtime-v010-pre-release-evidence/v2');
   assert.equal(report.sourceCommit,input.sourceCommit);
   assert.equal(report.manifestSha256,input.files['distribution-manifest.json'].sha256);
   assert.equal(report.archiveSha256,input.files['evopilot-runtime-'+version+'-darwin-arm64.tar.gz'].sha256);
-  assert.equal(report.representativeChannel,'callback-reference');
-  assert.deepEqual(report.deferred,deferred);
-  assert(Array.isArray(report.cases));
-  assert.deepEqual(report.cases.map(row=>row.id).sort(),[...pre].sort());
+  verifyV010AcceptanceCoverage(report,inventory,boundary);
   for (const row of report.cases) {
-    keys(row,['id','status','evidenceKind','artifacts']);
-    assert(row.status==='PASS' && row.evidenceKind==='ORIGINAL_EXECUTION' && Array.isArray(row.artifacts) &&
-      row.artifacts.length>0 && row.artifacts.length<=64,'Actual exact acceptance evidence required');
     const refs = new Set();
     for (const pin of row.artifacts) {
       const evidenceDirectory = dirname(input.acceptance.ref);
@@ -134,7 +142,8 @@ export function prepareV010ReleaseReview(raw) {
     sourceCommit:input.sourceCommit,sourceCi:source,
     targetDigest:sha(readFileSync(join(root,'governance/target-v010.json'))),
     files:Object.fromEntries(assetNames.map(name=>[name,{sha256:input.files[name].sha256,bytes:input.files[name].bytes}])),
-    acceptance:{reportSha256:input.acceptance.sha256,pre,post,deferred,design:inventory.design},
+    acceptance:{reportSha256:input.acceptance.sha256,pre,post,deferred,design:inventory.design,
+      liveEntry:boundary.liveEntry,liveE2E:boundary.liveE2E},
     notesSha256:input.releaseNotes.sha256,releaseAuthorized:false,
   };
   return {review:{...body,reviewDigest:'sha256:'+sha(JSON.stringify(body))},report};

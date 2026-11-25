@@ -34,16 +34,21 @@
     "M6"
   ],
   "acceptanceBoundary": {
+    "liveEntry": "codex-expert",
+    "liveE2E": [
+      "EXPERT-REAL",
+      "FRESH-REPLAY"
+    ],
     "deferred": [
       "CHANNEL-REAL"
     ],
-    "reason": "Slack live test channel unavailable; user deferred live Slack E2E. Slack adapter remains in implementation scope.",
-    "representativeChannel": "callback-reference",
-    "integratedProviders": [
+    "externalLiveProvidersExcluded": [
+      "Slack",
       "Linear",
       "Cursor Cloud Agents",
-      "GitHub"
-    ]
+      "GitHub App"
+    ],
+    "reason": "The operator uses Runtime v0.10 through Codex Expert. External provider and Dashboard coverage uses local automated checks; live Slack remains explicitly deferred."
   },
   "releaseIntegration": {
     "originalTargetDigest": "19999c3ace88475e3dfaf9a9f7bdb02aa1d1e76754b62eed285a850dc3b7a587",
@@ -62,6 +67,21 @@
       "governance/roadmap-v010.json",
       "tests/e2e/cli.test.mjs",
       "tests/e2e/reference.test.mjs"
+    ]
+  },
+  "acceptanceRevision": {
+    "previousTargetDigest": "0c54db9e51012bf12e3e86b0c305a797074af2dfb4ba338a99433289302f4f02",
+    "paths": [
+      "governance/acceptance-v010.json",
+      "docs/runtime-v010-preview-plan.md",
+      "docs/architecture/runtime-v010-feedback-loop.md",
+      "tests/e2e/runtime-v010-governance.test.mjs",
+      "tests/governance.test.mjs",
+      "tests/fixtures/historical-runtime-v090.mjs",
+      "tests/e2e/lifecycle-correction-planner-v090.test.mjs",
+      "tests/e2e/release-evidence-v090.test.mjs",
+      "tests/e2e/release-gate-v090.test.mjs",
+      "tests/e2e/token-usage-evidence-v090.test.mjs"
     ]
   }
 }

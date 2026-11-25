@@ -5,14 +5,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {join,dirname} from 'node:path';
 import {tmpdir} from 'node:os';
-import {fileURLToPath,pathToFileURL} from 'node:url';
+import {pathToFileURL} from 'node:url';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {crc32} from 'node:zlib';
 import {RUNTIME_RELEASE_ASSETS,inspectRuntimeReleaseCandidate,prepareRuntimeRelease,verifyRuntimeReleaseDecision,verifyRuntimeReleaseGovernanceCurrent} from '../../dist/release/gate.js';
 import {inspectQualifiedAcceptanceEvidence,closeQualifiedAcceptanceObservation} from '../../dist/release/evidence.js';
 
-const repository=fileURLToPath(new URL('../../',import.meta.url)),sha=value=>createHash('sha256').update(value).digest('hex');
+import { historicalRuntimeFile, historicalRuntimePaths } from '../fixtures/historical-runtime-v090.mjs';
+const sha=value=>createHash('sha256').update(value).digest('hex');
 const signal=()=>AbortSignal.timeout(30000);
 function zip(files){
  const local=[],central=[];let offset=0;
@@ -27,7 +28,7 @@ function fixture(t,changeGovernance){
  const root=fs.mkdtempSync(join(fs.realpathSync(tmpdir()),'runtime-release-gate-')),source=join(root,'source'),evidence=join(root,'private');
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));fs.mkdirSync(source);fs.mkdirSync(evidence,{mode:0o700});
  const put=(file,value)=>{fs.mkdirSync(dirname(file),{recursive:true});const bytes=Buffer.isBuffer(value)?value:Buffer.from(typeof value==='string'?value:JSON.stringify(value,null,2)+'\n');fs.writeFileSync(file,bytes,{mode:0o600});return{ref:file,sha256:sha(bytes)};};
- for(const file of ['package.json','package-lock.json',...fs.readdirSync(join(repository,'governance')).filter(n=>n.endsWith('.json')).map(n=>'governance/'+n)])put(join(source,file),fs.readFileSync(join(repository,file)));
+ for(const file of ['package.json','package-lock.json',...historicalRuntimePaths('governance').filter(n=>n.endsWith('.json'))])put(join(source,file),historicalRuntimeFile(file));
  for(const name of ['support.mjs','preflight.mjs','browser.mjs','maintenance.mjs','execution.mjs','usage.test.mjs','correction.test.mjs',...Array.from({length:22},(_,i)=>'e'+String(i+1).padStart(2,'0')+'.test.mjs')])put(join(source,'tests/acceptance/v090',name),'// Synthetic collector identity only.\n');
  put(join(source,'scripts/release-gate.mjs'),'// Synthetic release adapter identity only.\n');
  changeGovernance?.({source,put});

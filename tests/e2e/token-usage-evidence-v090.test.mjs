@@ -10,6 +10,7 @@ import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {inspectUsageAcceptanceEvidence} from '../../dist/release/usage-evidence.js';
 
+import { historicalRuntimeFile, historicalRuntimePaths } from '../fixtures/historical-runtime-v090.mjs';
 const repository=fileURLToPath(new URL('../../',import.meta.url));
 const sha=b=>createHash('sha256').update(b).digest('hex');
 const ids=Array.from({length:23},(_,i)=>'UT'+String(i+1).padStart(2,'0'));
@@ -17,7 +18,7 @@ function fixture(t){
   const root=fs.mkdtempSync(join(fs.realpathSync(tmpdir()),'runtime-usage-audit-')),source=join(root,'source'),evidenceRoot=join(root,'evidence');
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));fs.mkdirSync(source);fs.mkdirSync(evidenceRoot,{mode:0o700});
   const put=(file,value)=>{fs.mkdirSync(dirname(file),{recursive:true});const bytes=Buffer.isBuffer(value)?value:Buffer.from(typeof value==='string'?value:JSON.stringify(value,null,2)+'\n');fs.writeFileSync(file,bytes,{mode:0o600});return{ref:file,sha256:sha(bytes)};};
-  for(const file of ['package.json','package-lock.json',...fs.readdirSync(join(repository,'governance')).filter(n=>n.endsWith('.json')).map(n=>'governance/'+n)])put(join(source,file),fs.readFileSync(join(repository,file)));
+  for(const file of ['package.json','package-lock.json',...historicalRuntimePaths('governance').filter(n=>n.endsWith('.json'))])put(join(source,file),historicalRuntimeFile(file));
   const collector='tests/acceptance/v090/usage.test.mjs';put(join(source,collector),'// SYNTHETIC identity fixture; never actual acceptance.\n');
   put(join(source,'tests/acceptance/v090/preflight.mjs'),'// SYNTHETIC preflight identity only.\n');
   const git=args=>execFileSync('/usr/bin/git',['-c','core.fsmonitor=false','-C',source,...args],{env:{...process.env,GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1'},stdio:['ignore','pipe','pipe']}).toString();

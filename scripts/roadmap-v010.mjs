@@ -14,6 +14,24 @@ const required = {
   M5: ['UNKNOWN-RECOVERY', 'LOOP-INTEGRATED', 'DASH-02'],
   M6: ['DOCS-CI', 'PUBLIC-READBACK', 'FRESH-REPLAY'],
 };
+const liveCases = ['EXPERT-REAL', 'FRESH-REPLAY'];
+const artifactCases = ['DOCS-CI', 'PUBLIC-READBACK'];
+const deferredCases = ['CHANNEL-REAL'];
+const revisedContracts = [
+  'governance/acceptance-v010.json',
+  'docs/runtime-v010-preview-plan.md',
+  'docs/architecture/runtime-v010-feedback-loop.md',
+];
+const revisionPaths = [
+  ...revisedContracts, 'tests/e2e/runtime-v010-governance.test.mjs', 'tests/governance.test.mjs',
+  'tests/fixtures/historical-runtime-v090.mjs',
+  'tests/e2e/lifecycle-correction-planner-v090.test.mjs',
+  'tests/e2e/release-evidence-v090.test.mjs',
+  'tests/e2e/release-gate-v090.test.mjs',
+  'tests/e2e/token-usage-evidence-v090.test.mjs',
+];
+const verification = id => liveCases.includes(id) ? 'CODEX_DESKTOP_E2E' :
+  artifactCases.includes(id) ? 'RELEASE_ARTIFACT' : deferredCases.includes(id) ? 'DEFERRED' : 'LOCAL_AUTOMATED';
 
 function privateJSON(ref) {
   assert(path.isAbsolute(ref) && realpathSync(ref) === ref, 'Canonical authorization path required');
@@ -49,6 +67,10 @@ export function evaluateV010(root, request) {
     assert.deepEqual(roadmap.milestones, Object.keys(required));
     assert.deepEqual(Object.keys(target.workPackets), Object.keys(required));
     const integration = roadmap.releaseIntegration;
+    const acceptanceRevision = roadmap.acceptanceRevision;
+    assert.match(acceptanceRevision.previousTargetDigest, /^[a-f0-9]{64}$/);
+    assert.deepEqual(acceptanceRevision.paths, revisionPaths);
+    for (const file of acceptanceRevision.paths) assert(target.workPackets.M6.paths.includes(file));
     if (integration) {
       assert.match(integration.originalTargetDigest,/^[a-f0-9]{64}$/);
       assert.match(integration.reviewDigest,/^[a-f0-9]{64}$/);
@@ -60,8 +82,17 @@ export function evaluateV010(root, request) {
       assert.deepEqual(inventory.cases.filter(entry => entry.milestone === milestone).map(entry => entry.id), ids);
       assert.deepEqual(target.workPackets[milestone].acceptance, ids);
     }
-    assert.deepEqual(inventory.cases.filter(entry => entry.phase === 'deferred').map(entry => entry.id), ['CHANNEL-REAL']);
-    assert.deepEqual(roadmap.acceptanceBoundary.deferred, ['CHANNEL-REAL']);
+    for (const entry of inventory.cases) {
+      assert.equal(entry.verification, verification(entry.id), 'Evidence mode changed for ' + entry.id);
+      const phase = deferredCases.includes(entry.id) ? 'deferred' :
+        ['PUBLIC-READBACK','FRESH-REPLAY'].includes(entry.id) ? 'post' : 'pre';
+      assert.equal(entry.phase, phase, 'Acceptance phase changed for ' + entry.id);
+    }
+    assert.deepEqual(inventory.cases.filter(entry => entry.phase === 'deferred').map(entry => entry.id), deferredCases);
+    assert.deepEqual(roadmap.acceptanceBoundary.deferred, deferredCases);
+    assert.equal(roadmap.acceptanceBoundary.liveEntry, 'codex-expert');
+    assert.deepEqual(roadmap.acceptanceBoundary.liveE2E, liveCases);
+    assert.deepEqual(roadmap.acceptanceBoundary.externalLiveProvidersExcluded, ['Slack','Linear','Cursor Cloud Agents','GitHub App']);
     assert.deepEqual(inventory.cases.filter(entry => entry.phase === 'post').map(entry => entry.id), ['PUBLIC-READBACK','FRESH-REPLAY']);
     assert.deepEqual(Object.keys(inventory.design).sort(), ['DASH-01', 'DASH-02']);
     for (const value of Object.values(inventory.design)) assert.match(value, /^[a-f0-9]{64}$/);
@@ -72,7 +103,7 @@ export function evaluateV010(root, request) {
     if (!match) return check('UNKNOWN', 'Use runtime-v0.10/Mn: concrete intent.');
     if (!request.authorization || !request.files?.length) return check('BLOCKED', 'Exact files and the private approval binding are required.');
     const approval = privateJSON(request.authorization);
-    assert.equal(approval.schema, integration ? 'runtime-v010-implementation-authorization/v2' : 'runtime-v010-implementation-authorization/v1');
+    assert.equal(approval.schema, 'runtime-v010-implementation-authorization/v3');
     assert.equal(approval.decision, 'IMPLEMENT');
     assert.equal(approval.targetId, target.id);
     assert.equal(approval.targetDigest, digest(readFileSync(targetPath)));
@@ -95,11 +126,11 @@ export function evaluateV010(root, request) {
       assert.equal(digest(readFileSync(amendment.originalTarget.ref)),amendment.originalTarget.sha256);
       assert.equal(amendment.originalTarget.sha256,integration.originalTargetDigest);
       for (const milestone of Object.keys(required)) {
-        const paths = milestone==='M6' ? [...original.workPackets.M6.paths,...integration.paths] : original.workPackets[milestone].paths;
+        const paths = milestone==='M6' ? [...original.workPackets.M6.paths,...integration.paths,...acceptanceRevision.paths] : original.workPackets[milestone].paths;
         assert.deepEqual(target.workPackets[milestone].paths,paths,'Scope amendment changed an unreviewed path');
       }
       for (const [file,pin] of Object.entries(original.pins)) {
-        if (file!=='governance/roadmap-v010.json') assert.equal(target.pins[file],pin);
+        if (file!=='governance/roadmap-v010.json' && !revisedContracts.includes(file)) assert.equal(target.pins[file],pin);
       }
       const reviewBytes = readFileSync(amendment.review.ref);
       assert.equal(digest(reviewBytes),amendment.review.sha256);
@@ -119,6 +150,24 @@ export function evaluateV010(root, request) {
       assert.equal(selection?.answer,'批准精确文件增补并继续');
       assert(selection.question.includes(amendment.review.ref));
     }
+    const revision = approval.acceptanceRevision;
+    const previous = privateJSON(revision.previousTarget.ref);
+    assert.equal(digest(readFileSync(revision.previousTarget.ref)), revision.previousTarget.sha256);
+    assert.equal(revision.previousTarget.sha256, acceptanceRevision.previousTargetDigest);
+    for (const milestone of Object.keys(required)) {
+      const paths = previous.workPackets[milestone].paths;
+      assert.deepEqual(target.workPackets[milestone].paths, milestone === 'M6' ? [...paths, ...revisionPaths] : paths);
+      assert.deepEqual(target.workPackets[milestone].acceptance, previous.workPackets[milestone].acceptance);
+    }
+    const decision = privateJSON(revision.decision.ref);
+    assert.equal(digest(readFileSync(revision.decision.ref)), revision.decision.sha256);
+    assert.equal(decision.schema, 'runtime-v010-acceptance-decision/v1');
+    assert.equal(decision.threadId, revision.threadId);
+    assert.equal(decision.turnId, revision.turnId);
+    assert.equal(decision.message.type, 'userMessage');
+    assert.equal(decision.message.id, revision.messageId);
+    assert.equal(decision.message.content.map(item => item.text).join('').trim(),
+      'v0.10，我只会通过codex expert实际使用，所以只需要在e2e验收中实际验收这点。');
     for (const file of request.files) {
       if (!target.workPackets[match[1]].paths.includes(file)) return check('BOUNDARY_CHANGE', 'Outside exact work packet: ' + file);
     }

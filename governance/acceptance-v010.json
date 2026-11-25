@@ -10,91 +10,106 @@
       "id": "EXPERT-REAL",
       "milestone": "M1",
       "phase": "pre",
-      "observe": "Codex Desktop invokes installed Expert and HTTP MCP; invalid input fails, owner decides, exact activation is read back."
+      "observe": "In an actual signed-in Codex Desktop conversation, observe the real model invoke the installed Expert and Runtime HTTP MCP on the exact isolated package. Reject invalid input, save exact YAML, read its original receipt, then restart the service and read the same draft and receipt after reconnect. With protected test bindings, record the real named project owner decision and read back the exact feedback activation.",
+      "verification": "CODEX_DESKTOP_E2E"
     },
     {
       "id": "DASH-01",
       "milestone": "M1",
       "phase": "pre",
-      "observe": "Graph above YAML, allowed input edits, validation, saved draft and real browser byte readback; save grants no activation."
+      "observe": "Use a local automated browser to compare the approved graph-over-YAML design, edit permissible inputs, reject invalid edits and read back exact saved YAML without activation.",
+      "verification": "LOCAL_AUTOMATED"
     },
     {
       "id": "CHANNEL-REAL",
       "milestone": "M2",
       "phase": "deferred",
-      "observe": "Original live Slack E2E is explicitly deferred for this Preview. Report it as deferred, with no pass credit."
+      "observe": "Original live Slack E2E is explicitly deferred for this Preview. Report it as deferred, with no pass credit.",
+      "verification": "DEFERRED"
     },
     {
       "id": "CHANNEL-REFERENCE",
       "milestone": "M2",
       "phase": "pre",
-      "observe": "Run Slack protocol fixtures and the independently authenticated callback reference through intake, notification, and veto. With the reference adapter exercise duplicate events, restart, distinct feedback/review bindings and cross-tenant rejection."
+      "observe": "Use local Slack protocol and authenticated callback fixtures for intake, reply, acknowledged notification, review, duplicate events, restart, distinct channel bindings and cross-tenant rejection.",
+      "verification": "LOCAL_AUTOMATED"
     },
     {
       "id": "NEEDS-INFO",
       "milestone": "M2",
       "phase": "pre",
-      "observe": "Incomplete defect explicitly waits; reply resumes original Linear issue and instance."
+      "observe": "With the local issue adapter fixture, verify that an incomplete report waits and the reply resumes the original issue and instance.",
+      "verification": "LOCAL_AUTOMATED"
     },
     {
       "id": "AGENT-ACTUAL",
       "milestone": "M3",
       "phase": "pre",
-      "observe": "Original Cursor Run reproduces, opens PR, and runtime continues while Codex is closed."
+      "observe": "Use a local coding-adapter protocol fixture to verify reproduction, original Run identity, opening the same PR and worker continuation with the Codex client disconnected.",
+      "verification": "LOCAL_AUTOMATED"
     },
     {
       "id": "VERIFY-REPAIR",
       "milestone": "M3",
       "phase": "pre",
-      "observe": "Independent actual verifier rejects first head, same PR is repaired, and prior head evidence cannot admit new head."
+      "observe": "Use local isolated verifier evidence and provider fixtures to reject the first head, repair the same PR and deny reuse of old-head evidence.",
+      "verification": "LOCAL_AUTOMATED"
     },
     {
       "id": "TIMED-MERGE",
       "milestone": "M4",
       "phase": "pre",
-      "observe": "Actual sixty-minute no-veto window through the reference channel, eligible protected GitHub rebase merge and exact readback."
+      "observe": "Exercise the full sixty-minute rule with a controlled clock and protected GitHub adapter fixture. Verify no early merge, exact eligible rebase merge and original receipt readback.",
+      "verification": "LOCAL_AUTOMATED"
     },
     {
       "id": "VETO-RACE",
       "milestone": "M4",
       "phase": "pre",
-      "observe": "Review veto, stale action, changed head/base, lost channel, revoked policy, GitHub denial and concurrent deadline do not admit a forbidden merge."
+      "observe": "Use local guarded state and adapter fixtures to exercise veto, stale action, changed head/base, lost channel, revoked policy, GitHub denial and deadline concurrency.",
+      "verification": "LOCAL_AUTOMATED"
     },
     {
       "id": "UNKNOWN-RECOVERY",
       "milestone": "M5",
       "phase": "pre",
-      "observe": "Lost responses for issue, Agent and merge are reconciled after restart without duplicate side effects."
+      "observe": "Use local fault injection across issue, coding Agent and merge adapters to reconcile uncertain requests after restart without duplicate side effects.",
+      "verification": "LOCAL_AUTOMATED"
     },
     {
       "id": "LOOP-INTEGRATED",
       "milestone": "M5",
       "phase": "pre",
-      "observe": "Authenticated reference callback traces original actual Linear issue, Cursor Run, validated GitHub head, review, GitHub merge and closure readbacks; Codex Expert reads the same run. Record the reference channel identity."
+      "observe": "Run the complete reference callback, issue, coding, verification, review, merge and closure path with local isolated adapters. Verify shared run identity and original receipt readback.",
+      "verification": "LOCAL_AUTOMATED"
     },
     {
       "id": "DASH-02",
       "milestone": "M5",
       "phase": "pre",
-      "observe": "Real browser read-only instance graph, visited path, needs-info/return edges and reasons, event detail, deadline, disconnection and checked recovery; retain screenshots and original receipts."
+      "observe": "Use a local automated browser to compare the approved read-only monitor design, visited and return edges, reasons, event detail, deadline and cursor recovery. Retain screenshots and matching event receipts.",
+      "verification": "LOCAL_AUTOMATED"
     },
     {
       "id": "DOCS-CI",
       "milestone": "M6",
       "phase": "pre",
-      "observe": "Exact candidate source CI, bilingual documentation, README external workflow image attribution and both design references verified."
+      "observe": "Exact candidate source CI, bilingual documentation, README external workflow image attribution and both design references verified.",
+      "verification": "RELEASE_ARTIFACT"
     },
     {
       "id": "PUBLIC-READBACK",
       "milestone": "M6",
       "phase": "post",
-      "observe": "Read exact GitHub prerelease/tag and verify all anonymously downloaded attachment digests."
+      "observe": "Read exact GitHub prerelease/tag and verify all anonymously downloaded attachment digests.",
+      "verification": "RELEASE_ARTIFACT"
     },
     {
       "id": "FRESH-REPLAY",
       "milestone": "M6",
       "phase": "post",
-      "observe": "Reinstall downloaded package into fresh root and repeat a representative integrated reference-channel journey including both Dashboard pages and Expert readback."
+      "observe": "Reinstall the exact downloaded package into a fresh root and repeat EXPERT-REAL, including the native model turn, original HTTP receipts, Runtime restart and exact named-owner activation readback.",
+      "verification": "CODEX_DESKTOP_E2E"
     }
   ]
 }

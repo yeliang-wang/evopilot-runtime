@@ -3,12 +3,12 @@
   "id": "runtime-v010-feedback-loop",
   "targetVersion": "0.10.0",
   "sourceBaseline": "81777f07e856ba5a3615b373de5f6709dc3b3e9b",
-  "roadmapDigest": "df3ddc1186221c25489ccad72a00521f1dddde4e99c753d1c1f1e950a0c558e7",
+  "roadmapDigest": "422440711c5590ada217e77a8f9e5b552904e3c27923cc8dcc76fec8a0223bed",
   "pins": {
-    "governance/roadmap-v010.json": "df3ddc1186221c25489ccad72a00521f1dddde4e99c753d1c1f1e950a0c558e7",
-    "governance/acceptance-v010.json": "7ca27ee2578216c80067b73400104c4b6e89719c8a3e76c20c4734a5ce0baf35",
-    "docs/architecture/runtime-v010-feedback-loop.md": "c439115a029a4de563915025405450c38eac0f6e4fab77d59b0476632ad75e70",
-    "docs/runtime-v010-preview-plan.md": "6ac7cc2f346550bd0aa6b3391fb3368569332781db59d689138e5584941599a1"
+    "governance/roadmap-v010.json": "422440711c5590ada217e77a8f9e5b552904e3c27923cc8dcc76fec8a0223bed",
+    "governance/acceptance-v010.json": "a769d5ef5f3933a5a4467c8acac88841b040e126ed57d40960be9dd933d80504",
+    "docs/architecture/runtime-v010-feedback-loop.md": "f88336b63b9557374d43cd971b828025f7d39d715aa911e6e6aecb989720dde3",
+    "docs/runtime-v010-preview-plan.md": "b8a1418d52f4f459878e2234e583dee146b3d76849d8feb301f9819bf981b61e"
   },
   "workPackets": {
     "M1": {
@@ -120,7 +120,17 @@
         "governance/target-v010.json",
         "governance/roadmap-v010.json",
         "tests/e2e/cli.test.mjs",
-        "tests/e2e/reference.test.mjs"
+        "tests/e2e/reference.test.mjs",
+        "governance/acceptance-v010.json",
+        "docs/runtime-v010-preview-plan.md",
+        "docs/architecture/runtime-v010-feedback-loop.md",
+        "tests/e2e/runtime-v010-governance.test.mjs",
+        "tests/governance.test.mjs",
+        "tests/fixtures/historical-runtime-v090.mjs",
+        "tests/e2e/lifecycle-correction-planner-v090.test.mjs",
+        "tests/e2e/release-evidence-v090.test.mjs",
+        "tests/e2e/release-gate-v090.test.mjs",
+        "tests/e2e/token-usage-evidence-v090.test.mjs"
       ],
       "acceptance": [
         "DOCS-CI",
