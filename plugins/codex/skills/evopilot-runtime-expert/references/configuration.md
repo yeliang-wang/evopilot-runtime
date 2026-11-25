@@ -73,9 +73,9 @@ state and preserve the draft; do not overwrite another client's changes.
 Read back `lifecycle.definition.inspect`, the active revision and its compiled
 definition. Activation changes only the project definition. It does not create
 an instance, start coding/CI, approve assets or authorize a software release.
-The user can complete this same unit in Dashboard's graph/YAML editor; do not
-force them back to Codex for a second definition approval. The monitor is
-read-only and does not expose editing or business action controls.
+The user can also activate this Base Project Lifecycle in Dashboard's
+graph/YAML editor. Feedback configuration has a separate activation workflow
+described below. The monitor is read-only.
 
 An imported legacy project/goal/asset-validation Run is historical domain data;
 it does not supply missing lifecycle settings or become an active definition.
@@ -106,6 +106,14 @@ and the fields collected so far. Use the returned `missingFields` to guide
 remaining questions. Preserve the original request ID for exact replay.
 A saved draft does not take effect or authorize external work.
 
+When the user supplies feedback YAML, pass the original text as `input: {yaml}`
+for validation and saving. Keep `workspaceId` and `projectId` inside the YAML,
+and use that same project in the outer tool envelope. Save against the revision
+from `feedback.project.inspect`. On readback, check `draft.yamlDigest` and the
+original `draft.yaml` so comments and formatting survive. After an uncertain
+save, read the original `runtime.receipt.read` request before attempting
+another mutation.
+
 If the operator defers provider setup, save the available configuration and
 read it back. Report the saved draft digest and unresolved bindings.
 `FEEDBACK_ACTIVATION_UNAVAILABLE`, `FEEDBACK_BINDINGS_UNVERIFIED` and
@@ -121,3 +129,6 @@ project revision with `feedback.project.activate` via `runtime_write`. Supply
 `candidateDigest`, `decision: approve` and `evidenceRef`. Review again if the
 candidate or its preconditions changed. The activation receipt controls the
 feedback configuration only. Execution and release require their own authority.
+After activation, read `feedback.project.inspect` and confirm
+`active.activationId` matches the receipt. If `matchesSavedDraft` is false, the
+saved draft and active configuration refer to different revisions.
