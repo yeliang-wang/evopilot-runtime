@@ -32,17 +32,22 @@ function activeWindow(store: RuntimeStore, window: Window) {
 }
 
 /** Internal entry for a verified provider notification, with evidence bound by the caller. */
-export function retainFeedbackReview(store: RuntimeStore, principal: Principal, scope: ReviewScope, candidate: ReviewCandidate, notificationRef: string, observedAt: number): Window {
+export function retainFeedbackReview(store: RuntimeStore, principal: Principal, scope: ReviewScope, candidate: ReviewCandidate, notificationIntentRef: string, notificationRef: string, observedAt: number): Window {
   requireScope(store, scope.workspaceId, scope.projectId, principal);
   if (scope.workspaceId !== candidate.workspaceId || scope.projectId !== candidate.projectId || !scope.allowedActorIds.length) {
     reject('FEEDBACK_REVIEW_FORBIDDEN', 'A verified project reviewer audience is required.', 403);
   }
-  const window = {...openFeedbackReview(candidate, notificationRef, observedAt), audienceDigest:audienceDigest(scope)};
+  const window = {...openFeedbackReview(candidate, notificationIntentRef, notificationRef, observedAt), audienceDigest:audienceDigest(scope)};
   const projectId = candidate.projectId;
   const pointer = pointerId(candidate);
+  const noticeKey = digest({channel:scope.channel, notificationRef});
+  const originalWindow = store.object(projectId, 'feedback-review-notification', noticeKey);
+  if (originalWindow !== null && originalWindow !== window.id) {
+    reject('FEEDBACK_REVIEW_NOTIFICATION_CONFLICT', 'The original provider message binds another review.', 409);
+  }
   const prior = store.object(projectId, windowKind, window.id) as StoredWindow | null;
   if (prior) {
-    if (prior.audienceDigest !== window.audienceDigest) reject('FEEDBACK_REVIEW_AUDIENCE_CHANGED', 'The original notification binds a different audience.', 409);
+    if (prior.audienceDigest !== window.audienceDigest || prior.notificationRef !== notificationRef) reject('FEEDBACK_REVIEW_AUDIENCE_CHANGED', 'The original notification binds a different audience.', 409);
     return prior;
   }
   if (store.object(projectId, 'feedback-vetoed-head', vetoIndexId(candidate))) {
@@ -59,7 +64,11 @@ export function retainFeedbackReview(store: RuntimeStore, principal: Principal, 
     expectedRevision:store.revision(projectId), permission:'execution.request', input:{candidateDigest:window.candidateDigest},
   }, () => ({
     value:{windowId:window.id, deadline:window.deadline},
-    objects:[{kind:windowKind,id:window.id,value:window},{kind:'feedback-review-current',id:pointer,value:window.id}],
+    objects:[
+      {kind:windowKind,id:window.id,value:window},
+      {kind:'feedback-review-current',id:pointer,value:window.id},
+      {kind:'feedback-review-notification',id:noticeKey,value:window.id},
+    ],
     event:{type:'feedback-review-opened',data:{windowId:window.id, deadline:window.deadline}},
   }));
   return window;

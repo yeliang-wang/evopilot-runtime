@@ -19,6 +19,7 @@ interface ReviewWindow {
   candidate: ReviewCandidate;
   candidateDigest: string;
   notificationRef: string;
+  notificationIntentRef: string;
   openedAt: number;
   deadline: number;
   veto: { actorRef: string; eventKey: string; observedAt: number } | null;
@@ -32,8 +33,13 @@ function time(at: number): number {
   return at;
 }
 
+/** A delivery intent reserves this identity before the provider assigns a message ID. */
+export function feedbackReviewId(candidate: ReviewCandidate, notificationIntentRef: string): string {
+  return 'feedback-review:' + digest({candidate, intent:string(notificationIntentRef)});
+}
+
 /** Accepts only the operator's verified notification and candidate observation. */
-export function openFeedbackReview(candidate: ReviewCandidate, notificationRef: string, observedAt: number): ReviewWindow {
+export function openFeedbackReview(candidate: ReviewCandidate, notificationIntentRef: string, notificationRef: string, observedAt: number): ReviewWindow {
   time(observedAt);
   if (![candidate.head, candidate.base].every(value => commit.test(value)) ||
       ![candidate.evidenceDigest, candidate.policyDigest].every(value => sha256.test(value))) {
@@ -45,10 +51,11 @@ export function openFeedbackReview(candidate: ReviewCandidate, notificationRef: 
   const candidateDigest = digest(candidate);
   const notice = string(notificationRef);
   return {
-    id: 'feedback-review:' + digest({ candidateDigest, notice, observedAt }),
+    id: feedbackReviewId(candidate, notificationIntentRef),
     candidate: {...candidate},
     candidateDigest,
     notificationRef: notice,
+    notificationIntentRef,
     openedAt: observedAt,
     deadline: observedAt + windowMs,
     veto: null,

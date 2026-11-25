@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { claimFeedbackMerge, openFeedbackReview, recordFeedbackVeto } from '../../dist/feedback-loop/review.js';
+import { claimFeedbackMerge, feedbackReviewId, openFeedbackReview, recordFeedbackVeto } from '../../dist/feedback-loop/review.js';
 
 const candidate = {
   workspaceId:'demo', projectId:'tasks', repositoryId:'21', pullRequestId:'5',
   head:'a'.repeat(40), base:'b'.repeat(40), evidenceDigest:'c'.repeat(64), policyDigest:'d'.repeat(64),
 };
 const start = 1_800_000_000_000;
-const fixture = () => openFeedbackReview(candidate, 'notice-5', start);
+const fixture = () => openFeedbackReview(candidate, 'intent-5', 'notice-5', start);
 const observed = window => ({
   candidate, now:window.deadline, policyCurrent:true, receiptCoverage:'COMPLETE',
   githubChecksPassed:true, baseProtected:true,
@@ -53,7 +53,10 @@ test('veto and merge share durable state; stale notification, duplicate delivery
   };
   let store = new RuntimeStore(root, 'demo');
   try {
-    const window = retainFeedbackReview(store, actor, scope, candidate, 'notice-5', start);
+    const window = retainFeedbackReview(store, actor, scope, candidate, 'intent-5', 'notice-5', start);
+    assert.equal(window.id, feedbackReviewId(candidate, 'intent-5'));
+    assert.deepEqual(retainFeedbackReview(store, actor, scope, candidate, 'intent-5', 'notice-5', start + 2000), window);
+    assert.throws(() => retainFeedbackReview(store, actor, scope, candidate, 'other-intent', 'notice-5', start + 2000), {code:'FEEDBACK_REVIEW_NOTIFICATION_CONFLICT'});
     const original = {
       schema:'runtime-feedback-channel-event/v1',scope:scope.channel,eventId:'veto-1',messageId:'notice-5',
       actorId:'reviewer',action:{kind:'veto',reviewId:window.id},
@@ -65,11 +68,11 @@ test('veto and merge share durable state; stale notification, duplicate delivery
     store = new RuntimeStore(root, 'demo');
     assert.equal(retainFeedbackVeto(store, actor, scope, original, () => start+2).veto.eventKey,vetoed.veto.eventKey);
     assert.throws(() => reserveFeedbackMerge(store, actor, window.id, observed(window), () => window.deadline), {code:'FEEDBACK_REVIEW_VETO'});
-    assert.throws(() => retainFeedbackReview(store, actor, scope, candidate, 'notice-retry', start+9), {code:'FEEDBACK_REVIEW_VETO'});
+    assert.throws(() => retainFeedbackReview(store, actor, scope, candidate, 'intent-retry', 'notice-retry', start+9), {code:'FEEDBACK_REVIEW_VETO'});
     const newCandidate = {...candidate,head:'e'.repeat(40)};
-    const next = retainFeedbackReview(store, actor, scope, newCandidate,'notice-6',start+10);
+    const next = retainFeedbackReview(store, actor, scope, newCandidate,'intent-6','notice-6',start+10);
     assert.throws(() => retainFeedbackVeto(store, actor, scope, {...original,eventId:'veto-2'},() => start+12), {code:'FEEDBACK_REVIEW_CLOSED'});
-    assert.throws(() => retainFeedbackReview(store, actor, scope, candidate,'notice-reopened',start+11), {code:'FEEDBACK_REVIEW_VETO'});
+    assert.throws(() => retainFeedbackReview(store, actor, scope, candidate,'intent-reopened','notice-reopened',start+11), {code:'FEEDBACK_REVIEW_VETO'});
     const admission = {...observed(next),candidate:newCandidate};
     assert(reserveFeedbackMerge(store, actor, next.id, admission, () => next.deadline).claim);
     assert.throws(() => reserveFeedbackMerge(store, actor, next.id, admission, () => next.deadline), {code:'FEEDBACK_RECONCILE_ORIGINAL'});
