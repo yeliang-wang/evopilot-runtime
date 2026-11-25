@@ -6,7 +6,7 @@ export type FeedbackCapability = 'receive-feedback' | 'reply' | 'notify' | 'revi
 const feedbackCapabilities = ['receive-feedback', 'reply'] as const;
 const reviewCapabilities = ['notify', 'review-action'] as const;
 
-interface FeedbackProjectDraft {
+export interface FeedbackProjectDraft {
   workspaceId: string;
   projectId: string;
   feedbackBindingRef: string;
@@ -140,7 +140,9 @@ export function inspectFeedbackActivationBindings(
   const draftDigest = digest(draft);
   return {
     draftDigest,bindings,
-    bindingStamp:complete ? digest({draftDigest,bindings}) : null,
+    bindingStamp:complete ? digest({
+      draftDigest,bindings:verified.map(({role,reference,revision,factsDigest}) => ({role,reference,revision,factsDigest})),
+    }) : null,
     validUntil:complete ? Math.min(...verified.map(binding => binding.validUntil)) : null,
   };
 }
@@ -204,8 +206,20 @@ export function readSavedFeedbackProjectDraft(store: RuntimeStore, actor: Princi
   if (!value || digest(value) !== revision) reject('CORRUPT_FEEDBACK_DRAFT','Saved draft does not match its pointer.',503);
   const configuration = readDraftEdit(value);
   requireDraftScope(configuration,store.workspaceId,projectId);
-  return {revision:store.revision(projectId),draft:summarizeDraft(configuration)};
+  const summary = {revision:store.revision(projectId),draft:summarizeDraft(configuration)};
+  const activationId = store.object(projectId,'feedback-activation-pointer','current');
+  if (activationId === null) return summary;
+  const activation = record(store.object(projectId,'feedback-activation',string(activationId,71)));
+  const subject = record(activation.subject);
+  if (activation.candidateDigest !== activationId || 'sha256:'+digest(subject) !== activationId ||
+      subject.workspaceId !== store.workspaceId || subject.serviceId !== store.serviceId || subject.projectId !== projectId) {
+    return reject('CORRUPT_FEEDBACK_ACTIVATION','The retained activation does not match the project.',503);
+  }
+  return {...summary,active:{activationId,draftDigest:subject.draftDigest,matchesSavedDraft:subject.draftDigest===revision}};
 }
+
+export const FEEDBACK_ACTIVATION_PREVIEW = 'feedback.project.activation.preview';
+export const FEEDBACK_ACTIVATE = 'feedback.project.activate';
 
 export function saveFeedbackProjectDraft(
   store: RuntimeStore, actor: Principal, projectId: string, input: Record<string,unknown>,

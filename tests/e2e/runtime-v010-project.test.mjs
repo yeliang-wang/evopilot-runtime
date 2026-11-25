@@ -157,3 +157,100 @@ test('actual HTTP and MCP share validation and persist incomplete drafts without
     rmSync(root,{recursive:true,force:true});
   }
 });
+
+test('Expert transport enables only the exact current draft with independently verified owner approval', async () => {
+  const {mkdtempSync,realpathSync,rmSync} = await import('node:fs');
+  const {join} = await import('node:path');
+  const {tmpdir} = await import('node:os');
+  const {randomBytes} = await import('node:crypto');
+  const {Client} = await import('@modelcontextprotocol/sdk/client/index.js');
+  const {StreamableHTTPClientTransport} = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
+  const {initializeCredentials,tokenDigest} = await import('../../dist/server/security.js');
+  const {startRuntimeServer} = await import('../../dist/server/http.js');
+  const {lifecycle,syntheticBindings,yaml} = await import('../fixtures/lifecycle-v090.mjs');
+  const root = mkdtempSync(join(realpathSync(tmpdir()),'runtime-v010-activation-http-'));
+  const owner = 'accountable-owner';
+  const ownerToken = randomBytes(32).toString('hex'), otherToken = randomBytes(32).toString('hex');
+  const ownerPermissions = ['read','draft.write','definition.activate','decision.record'];
+  const bindings = syntheticBindings();
+  const roles = ['feedbackBindingRef','reviewBindingRef','linearTeamRef','githubRepositoryRef','cursorAgentRef','harnessRuleRef','mergePolicyRef'];
+  let approval = null, policyRevision = 1, providerReads = 0;
+  const registry = {
+    async observe() {
+      providerReads++;
+      return roles.map((role,index) => ({
+        ...observe(input[role],index === 0 ? inbound.capabilities : index === 1 ? review.capabilities : []),
+        role,validUntil:Date.now()+60_000,evidenceRef:`evidence:fixture/${providerReads}-${index}`,
+        factsDigest:'sha256:' + String(index).repeat(64),
+      }));
+    },
+    policy:() => ({revision:policyRevision,digest:'sha256:'+'a'.repeat(64),ownerId:owner,ownerRevision:1,validUntil:Date.now()+60_000}),
+    // The fixture models a protected reviewer record independently of the request.
+    verifyDecision: decision => approval !== null && Object.entries(approval).every(([key,value]) => decision[key] === value),
+  };
+  const client = new Client({name:'feedback-activation-fixture',version:'1'});
+  let server;
+  try {
+    initializeCredentials(root,'demo',[{id:owner,token:ownerToken},{id:'other-editor',token:otherToken}].map(({id,token}) => ({
+      id,projects:['tasks'],permissions:ownerPermissions,revision:1,expiresAt:'2099-01-01T00:00:00Z',tokenDigest:tokenDigest(token),
+    })));
+    server = await startRuntimeServer({stateRoot:root,workspaceId:'demo'},bindings.provider,
+      undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,registry);
+    const request = async (operation, input={}, meta={}, token=ownerToken) => {
+      const response = await fetch(server.url+'/api/v1/request',{
+        method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},
+        body:JSON.stringify({operation,projectId:'tasks',input,...meta}),
+      });
+      return {status:response.status,...await response.json()};
+    };
+    const source = yaml(lifecycle('github','tasks'));
+    const validated = await request('lifecycle.definition.validate',{yaml:source});
+    assert.equal(validated.status,200,JSON.stringify(validated));
+    const active = await request('lifecycle.definition.save-and-activate',{
+      yaml:source,validationDigest:validated.result.validationDigest,
+    },{requestId:'native-definition-enable',expectedRevision:0});
+    assert.equal(active.result.result.status,'ACTIVE',JSON.stringify(active));
+    const saved = await request('feedback.project.draft.save',input,{requestId:'feedback-draft',expectedRevision:1});
+    assert.equal(saved.status,200,JSON.stringify(saved));
+    const previewOp = 'feedback.project.activation.preview', activateOp = 'feedback.project.activate';
+    assert.equal((await request(previewOp,{},{},otherToken)).error.code,'FEEDBACK_ACTIVATION_OWNER');
+    const preview = await request(previewOp);
+    assert.equal(preview.status,200,JSON.stringify(preview));
+    assert.equal(preview.result.subject.definitionRevision,active.result.result.activeRevisionId);
+    assert.equal(preview.result.executionAuthorized,false);
+    const activationInput = {candidateDigest:preview.result.candidateDigest,decision:'approve',evidenceRef:'evidence:approval/owner-1'};
+    const meta = {requestId:'approved-feedback-activation',expectedRevision:preview.result.subject.projectRevision};
+    assert.equal((await request(activateOp,activationInput,meta)).error.code,'FEEDBACK_ACTIVATION_DECISION');
+    approval = {
+      ...activationInput,projectId:'tasks',workspaceId:'demo',actorId:owner,actorRevision:1,
+    };
+    policyRevision++;
+    assert.equal((await request(activateOp,activationInput,meta)).error.code,'FEEDBACK_ACTIVATION_STALE');
+    policyRevision--;
+    bindings.state.revision = 'native-binding-2';
+    assert.equal((await request(activateOp,activationInput,meta)).error.code,'FEEDBACK_LIFECYCLE_BINDINGS');
+    bindings.state.revision = 'synthetic-1';
+    await client.connect(new StreamableHTTPClientTransport(new URL(server.url+'/mcp'),{
+      requestInit:{headers:{authorization:'Bearer '+ownerToken}},
+    }));
+    const call = await client.callTool({name:'runtime_write',arguments:{operation:activateOp,projectId:'tasks',input:activationInput,...meta}});
+    assert.notEqual(call.isError,true,JSON.stringify(call));
+    const receipt = JSON.parse(call.content[0].text).result;
+    assert.deepEqual(receipt.result,{status:'ACTIVE',activationId:activationInput.candidateDigest,executionAuthorized:false,releaseAuthorized:false});
+    const readsAfterActivation = providerReads;
+    assert.deepEqual((await request(activateOp,activationInput,meta)).result,receipt);
+    assert.equal(providerReads,readsAfterActivation);
+    assert.equal((await request(activateOp,{...activationInput,evidenceRef:'evidence:approval/other'},meta)).error.code,'REQUEST_CONFLICT');
+    assert.equal((await request('lifecycle.definition.inspect')).result.active.id,active.result.result.activeRevisionId);
+    await client.close();
+    await server.close();
+    server = await startRuntimeServer({stateRoot:root,workspaceId:'demo'});
+    assert.deepEqual((await request('feedback.project.inspect')).result.active,{
+      activationId:activationInput.candidateDigest,draftDigest:preview.result.subject.draftDigest,matchesSavedDraft:true,
+    });
+  } finally {
+    await client.close();
+    await server?.close();
+    rmSync(root,{recursive:true,force:true});
+  }
+});

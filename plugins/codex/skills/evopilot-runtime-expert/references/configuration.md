@@ -105,3 +105,13 @@ configuration, or `feedback.project.draft.save` with the scoped project IDs
 and the fields collected so far. Use the returned `missingFields` to guide
 remaining questions. Preserve the original request ID for exact replay.
 A saved draft does not take effect or authorize external work.
+
+With an active Project Lifecycle and all seven registered bindings available,
+the named owner can call `feedback.project.activation.preview` via `runtime_read`.
+Present the exact candidate digest, draft, lifecycle, binding and policy revisions,
+and expiry. Record the owner's explicit approval for that candidate through the
+registered decision source. Use its evidence reference and the preview's
+project revision with `feedback.project.activate` via `runtime_write`. Supply
+`candidateDigest`, `decision: approve` and `evidenceRef`. Review again if the
+candidate or its preconditions changed. The activation receipt controls the
+feedback configuration only. Execution and release require their own authority.

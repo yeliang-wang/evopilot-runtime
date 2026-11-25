@@ -1,8 +1,169 @@
-import { digest, reject } from '../server/errors.js';
+import { digest, exact, reject, string } from '../server/errors.js';
 import { authorize, type Principal } from '../server/security.js';
 import type { RuntimeStore } from '../server/store.js';
 import { normalizeChannelEvent, type ChannelScope } from './channel.js';
 import { claimFeedbackMerge, feedbackReviewId, openFeedbackReview, recordFeedbackVeto, type MergeObservation, type ReviewCandidate } from './review.js';
+import {
+  FEEDBACK_ACTIVATE, inspectFeedbackActivationBindings, parseFeedbackProjectDraft,
+  readSavedFeedbackProjectDraft, type FeedbackBindingObservation, type FeedbackProjectDraft,
+} from './project.js';
+
+interface ActivationPolicy {
+  revision: number;
+  digest: string;
+  ownerId: string;
+  ownerRevision: number;
+  validUntil: number;
+}
+
+interface LifecycleBinding {
+  revisionId: string;
+  semanticDigest: string;
+  bindingStamp: string;
+  validUntil: number;
+}
+
+export interface FeedbackActivationRegistry {
+  observe(draft: FeedbackProjectDraft, actor: Principal, signal: AbortSignal): Promise<readonly FeedbackBindingObservation[]>;
+  policy(draft: FeedbackProjectDraft): ActivationPolicy | null;
+  verifyDecision(decision: {
+    workspaceId: string;
+    projectId: string;
+    actorId: string;
+    actorRevision: number;
+    candidateDigest: string;
+    evidenceRef: string;
+    decision: 'approve';
+  }): boolean;
+}
+
+export function createFeedbackActivationService(
+  store: RuntimeStore,
+  lifecycle: (actor: Principal, projectId: string) => Promise<LifecycleBinding>,
+  registry?: FeedbackActivationRegistry,
+) {
+  const digestPattern = /^sha256:[a-f0-9]{64}$/;
+  const verifyPolicy = (draft: FeedbackProjectDraft, actor: Principal) => {
+    const policy = registry?.policy(draft);
+    if (!policy || !digestPattern.test(policy.digest) ||
+        !Number.isSafeInteger(policy.revision) || policy.revision <= 0 ||
+        !Number.isSafeInteger(policy.validUntil) || policy.validUntil <= Date.now()) {
+      return reject('FEEDBACK_POLICY_UNAVAILABLE','Verify the current registered activation policy first.',409);
+    }
+    if (policy.ownerId !== actor.id || policy.ownerRevision !== actor.revision) {
+      return reject('FEEDBACK_ACTIVATION_OWNER','The named project owner must review the candidate.',403);
+    }
+    return policy;
+  };
+  const activePointer = (projectId: string) => store.object(projectId,'feedback-activation-pointer','current');
+  const lifecyclePointer = (projectId: string) => store.object(projectId,'definition-pointer','active');
+  const draftPointer = (projectId: string) => store.object(projectId,'feedback-project-draft-pointer','current');
+  const requireOwnerPermission = (actor: Principal, projectId: string) => {
+    authorize(actor,projectId,'definition.activate');
+    authorize(actor,projectId,'decision.record');
+  };
+
+  async function prepare(actor: Principal, projectId: string) {
+    requireOwnerPermission(actor,projectId);
+    if (!registry) return reject('FEEDBACK_ACTIVATION_UNAVAILABLE','Register the protected feedback bindings first.',409);
+    const saved = readSavedFeedbackProjectDraft(store,actor,projectId);
+    if (!saved.draft || saved.draft.missingFields.length) {
+      return reject('FEEDBACK_DRAFT_INCOMPLETE','Save all required fields before requesting activation review.',409);
+    }
+    const draft = Object.freeze(parseFeedbackProjectDraft(saved.draft.configuration));
+    verifyPolicy(draft,actor);
+    const definitionPointer = digest(lifecyclePointer(projectId));
+    const priorActivation = activePointer(projectId);
+    const signal = AbortSignal.timeout(5000);
+    const [definition,observations] = await Promise.all([
+      lifecycle(actor,projectId),
+      Promise.race([
+        registry.observe(draft,actor,signal),
+        new Promise<never>((_resolve,rejectPromise) => {
+          signal.addEventListener('abort',() => rejectPromise(new Error('Feedback observation timeout')),{once:true});
+        }),
+      ]).catch(() => reject('FEEDBACK_BINDINGS_UNAVAILABLE','Current provider observation did not complete.',409)),
+    ]);
+    const now = Date.now();
+    const policy = verifyPolicy(draft,actor);
+    const evidence = inspectFeedbackActivationBindings(draft,observations,now);
+    if (!evidence.bindingStamp || !evidence.validUntil) {
+      return reject('FEEDBACK_BINDINGS_UNVERIFIED','All seven project bindings require current verified evidence.',409);
+    }
+    if (store.revision(projectId) !== saved.revision || digest(lifecyclePointer(projectId)) !== definitionPointer ||
+        definition.validUntil <= now) {
+      return reject('FEEDBACK_ACTIVATION_STALE','The active lifecycle or feedback draft changed during review.',409);
+    }
+    const subject = {
+      serviceId:store.serviceId,workspaceId:store.workspaceId,projectId,projectRevision:saved.revision,
+      draftDigest:evidence.draftDigest,definitionPointer,definitionRevision:definition.revisionId,
+      lifecycleDigest:definition.semanticDigest,lifecycleBindingStamp:definition.bindingStamp,
+      feedbackBindingStamp:evidence.bindingStamp,policyRevision:policy.revision,policyDigest:policy.digest,
+      ownerId:policy.ownerId,ownerRevision:policy.ownerRevision,priorActivation,
+    };
+    return {
+      draft,candidate:{
+        subject,candidateDigest:'sha256:'+digest(subject),
+        validUntil:Math.min(definition.validUntil,evidence.validUntil,policy.validUntil,Date.parse(actor.expiresAt)),
+      },
+    };
+  }
+
+  async function preview(actor: Principal, projectId: string) {
+    const {candidate} = await prepare(actor,projectId);
+    return {status:'READY_FOR_REVIEW',...candidate,executionAuthorized:false,releaseAuthorized:false};
+  }
+
+  async function activate(actor: Principal, projectId: string, input: Record<string,unknown>,
+    requestId: string, expectedRevision: number, reauthorize: () => Principal) {
+    requireOwnerPermission(actor,projectId);
+    exact(input,['candidateDigest','decision','evidenceRef']);
+    const candidateDigest = string(input.candidateDigest,71), evidenceRef = string(input.evidenceRef,1024);
+    if (!digestPattern.test(candidateDigest) || input.decision !== 'approve') {
+      return reject('FEEDBACK_ACTIVATION_DECISION','An explicit approval for the exact candidate is required.',409);
+    }
+    const checkActor = () => {
+      const current = reauthorize();
+      requireOwnerPermission(current,projectId);
+      return current;
+    };
+    const mutation = {projectId,operation:FEEDBACK_ACTIVATE,requestId,expectedRevision,input,permission:'definition.activate' as const};
+    if (store.findReceipt(actor,projectId,requestId)) {
+      return store.mutate(actor,mutation,() => {throw new Error('Unreachable replay callback');},checkActor);
+    }
+    const {draft,candidate} = await prepare(actor,projectId);
+    if (candidate.candidateDigest !== candidateDigest || expectedRevision !== candidate.subject.projectRevision) {
+      return reject('FEEDBACK_ACTIVATION_STALE','Review the exact current candidate again.',409);
+    }
+    return store.mutate(actor,mutation,() => {
+      const current = checkActor(), policy = verifyPolicy(draft,current);
+      const {subject,validUntil} = candidate;
+      if (Math.min(validUntil,policy.validUntil) <= Date.now() || policy.digest !== subject.policyDigest ||
+          policy.revision !== subject.policyRevision || current.id !== subject.ownerId ||
+          current.revision !== subject.ownerRevision || draftPointer(projectId) !== subject.draftDigest ||
+          digest(lifecyclePointer(projectId)) !== subject.definitionPointer ||
+          digest(activePointer(projectId)) !== digest(subject.priorActivation)) {
+        return reject('FEEDBACK_ACTIVATION_STALE','The reviewed draft, binding, lifecycle or authority changed.',409);
+      }
+      if (registry?.verifyDecision({
+        workspaceId:store.workspaceId,projectId,actorId:current.id,actorRevision:current.revision,
+        candidateDigest,evidenceRef,decision:'approve',
+      }) !== true) {
+        return reject('FEEDBACK_ACTIVATION_DECISION','The original owner approval could not be verified.',409);
+      }
+      const value = {status:'ACTIVE',activationId:candidateDigest,executionAuthorized:false,releaseAuthorized:false};
+      return {
+        value,
+        objects:[
+          {kind:'feedback-activation',id:candidateDigest,value:{...candidate,evidenceRef,activatedBy:current.id}},
+          {kind:'feedback-activation-pointer',id:'current',value:candidateDigest},
+        ],
+        event:{type:'feedback-project-activated',data:{activationId:candidateDigest,draftDigest:subject.draftDigest}},
+      };
+    },checkActor);
+  }
+  return {preview,activate};
+}
 
 type Window = ReturnType<typeof openFeedbackReview>;
 type ReviewScope = {workspaceId:string; projectId:string; channel:ChannelScope; allowedActorIds:readonly string[]};

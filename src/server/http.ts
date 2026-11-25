@@ -1,4 +1,5 @@
-import { FEEDBACK_PROJECT_INSPECT, FEEDBACK_PROJECT_SAVE, FEEDBACK_PROJECT_VALIDATE, inspectFeedbackProjectDraft, readSavedFeedbackProjectDraft, saveFeedbackProjectDraft } from '../feedback-loop/project.js';
+import { FEEDBACK_ACTIVATE, FEEDBACK_ACTIVATION_PREVIEW, FEEDBACK_PROJECT_INSPECT, FEEDBACK_PROJECT_SAVE, FEEDBACK_PROJECT_VALIDATE, inspectFeedbackProjectDraft, readSavedFeedbackProjectDraft, saveFeedbackProjectDraft } from '../feedback-loop/project.js';
+import { createFeedbackActivationService, type FeedbackActivationRegistry } from '../feedback-loop/service.js';
 import { createCorrectionService, CORRECTION_READS, CORRECTION_WRITES } from '../lifecycle/correction.js';
 import { QUALIFICATION_READS, QUALIFICATION_WRITES } from '../lifecycle/evidence-qualification.js';
 import type {RegisteredQualificationService} from '../adapters/bindings.js';
@@ -11,7 +12,8 @@ import { authenticate, authorize, assertCredentials, currentPrincipal } from './
 import { RuntimeStore,type DashboardEventPage } from './store.js';
 import { handleMcp, HTTP_PROTOCOLS, READ_OPERATIONS, WRITE_OPERATIONS } from './mcp.js';
 import { createDefinitionService, DEFINITION_READS } from '../lifecycle/service.js';
-import type { DefinitionBindingProvider } from '../lifecycle/bindings.js';
+import { validateBindings, type DefinitionBindingProvider } from '../lifecycle/bindings.js';
+import type { Compilation } from '../lifecycle/compiler.js';
 import type { AuthorityResolver } from '../lifecycle/instance.js';
 import { createAuthorityService, AUTHORITY_READS, AUTHORITY_WRITES, type AuthorityPolicyProvider } from '../adapters/authority.js';
 import { createExecutionService, EXECUTION_READS, EXECUTION_WRITES, type StageAdapter, type StageServices, type StageRequest, type StageProgress } from '../lifecycle/execution.js';
@@ -34,12 +36,12 @@ import {acquireUpgradeSourceLease,loadServiceUpgradeContext,verifyHistoricalReco
 
 const VERSION = String(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version);
 export interface ServerOptions { stateRoot: string; workspaceId: string; port?: number; legacyBindingRef?:string; }
-export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver, trustedPolicy?:AuthorityPolicyProvider, trustedExecutor?:StageAdapter|((store:RuntimeStore,services:StageServices)=>StageAdapter), trustedPreparation?:PreparationValidator, trustedImplementationReview?:ImplementationReviewBindings, trustedExtensionReview?:((store:RuntimeStore)=>ExtensionReviewBindings), trustedLegacyProviders?:LegacyProviders|LegacyProviderFactory, trustedQualification?:((store:RuntimeStore,principals:PrincipalLookup)=>RegisteredQualificationService)) {
+export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver, trustedPolicy?:AuthorityPolicyProvider, trustedExecutor?:StageAdapter|((store:RuntimeStore,services:StageServices)=>StageAdapter), trustedPreparation?:PreparationValidator, trustedImplementationReview?:ImplementationReviewBindings, trustedExtensionReview?:((store:RuntimeStore)=>ExtensionReviewBindings), trustedLegacyProviders?:LegacyProviders|LegacyProviderFactory, trustedQualification?:((store:RuntimeStore,principals:PrincipalLookup)=>RegisteredQualificationService), trustedFeedback?:FeedbackActivationRegistry) {
   const config = record(options); exact(config,['stateRoot','workspaceId'],['port','legacyBindingRef']);
   string(options.stateRoot,4096); slug(options.workspaceId);
   if(options.legacyBindingRef!==undefined)string(options.legacyBindingRef,4096);
   if (options.port !== undefined && (!Number.isSafeInteger(options.port) || options.port < 0 || options.port > 65535)) reject('INVALID_PORT','Invalid loopback port');
-  if (limitedPreview && (options.legacyBindingRef || trustedBindings || trustedAuthorities || trustedPolicy || trustedExecutor || trustedPreparation || trustedImplementationReview || trustedExtensionReview || trustedLegacyProviders || trustedQualification)) previewUnavailable();
+  if (limitedPreview && (options.legacyBindingRef || trustedBindings || trustedAuthorities || trustedPolicy || trustedExecutor || trustedPreparation || trustedImplementationReview || trustedExtensionReview || trustedLegacyProviders || trustedQualification || trustedFeedback)) previewUnavailable();
   previewState(options.stateRoot, options.workspaceId);
   assertCredentials(options.stateRoot,options.workspaceId);
   const sourceLease=limitedPreview?null:await acquireUpgradeSourceLease(options.stateRoot);
@@ -65,6 +67,22 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     initialServices={preparations,authorities,definitions,extensionReviews};
   }catch(error){closeStore([error]);throw error;}
   const {preparations,authorities,definitions,extensionReviews}=initialServices;
+  const feedbackActivation = createFeedbackActivationService(store,async (actor,projectId) => {
+    const active = store.object(projectId,'definition-pointer','active') as {
+      revisionId:string; semanticDigest:string; bindingStamp:string;
+    } | null;
+    if (!active) return reject('FEEDBACK_LIFECYCLE_REQUIRED','Activate the exact Project Lifecycle first.',409);
+    const {compilation} = await definitions.read(actor,projectId,'lifecycle.definition.read',{revisionId:active.revisionId}) as {compilation:Compilation};
+    const definition = compilation.effective;
+    if (!compilation.valid || !definition || definition.semanticDigest !== active.semanticDigest) {
+      return reject('FEEDBACK_LIFECYCLE_REQUIRED','The active Project Lifecycle failed integrity checks.',409);
+    }
+    const checked = await validateBindings(definition,actor,trustedBindings);
+    if (!checked.ready || !checked.stamp || checked.stamp !== active.bindingStamp || !checked.expiresAt) {
+      return reject('FEEDBACK_LIFECYCLE_BINDINGS','Verify the current Project Lifecycle bindings first.',409);
+    }
+    return {revisionId:active.revisionId,semanticDigest:active.semanticDigest,bindingStamp:checked.stamp,validUntil:Date.parse(checked.expiresAt)};
+  },trustedFeedback);
   let qualifications:RegisteredQualificationService|undefined;
   try{qualifications=trustedQualification?.(store,id=>currentPrincipal(options.stateRoot,options.workspaceId,id));}catch(error){closeStore([error]);throw error;}
   let execution:ReturnType<typeof createExecutionService>|null;
@@ -107,6 +125,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     if(WRITE_OPERATIONS.includes(operation as typeof WRITE_OPERATIONS[number])){
       exact(envelope,['operation','projectId','input','requestId','expectedRevision']);if(!Number.isSafeInteger(envelope.expectedRevision)||Number(envelope.expectedRevision)<0)reject('INVALID_REVISION','Expected a nonnegative revision');
       if (operation===FEEDBACK_PROJECT_SAVE) return saveFeedbackProjectDraft(store,actor,projectId,input,string(envelope.requestId),Number(envelope.expectedRevision),reauthenticate);
+      if (operation===FEEDBACK_ACTIVATE) return feedbackActivation.activate(actor,projectId,input,string(envelope.requestId),Number(envelope.expectedRevision),reauthenticate);
       if(QUALIFICATION_WRITES.includes(operation as typeof QUALIFICATION_WRITES[number])){if(!qualifications)reject('QUALIFICATION_UNAVAILABLE','No registered qualification service is configured',409);return qualifications.write(actor,projectId,operation,input,string(envelope.requestId),Number(envelope.expectedRevision),reauthenticate);}
       if(USAGE_WRITES.includes(operation as typeof USAGE_WRITES[number]))return usage.write(actor,projectId,operation,input,string(envelope.requestId),Number(envelope.expectedRevision),reauthenticate);
       const service=CORRECTION_WRITES.includes(operation as typeof CORRECTION_WRITES[number])?corrections:EXTENSION_REVIEW_WRITES.includes(operation as typeof EXTENSION_REVIEW_WRITES[number])?extensionReviews:IMPLEMENTATION_REVIEW_WRITES.includes(operation as typeof IMPLEMENTATION_REVIEW_WRITES[number])?implementationReviews:AGENT_WRITES.includes(operation as typeof AGENT_WRITES[number])?agents:PREPARATION_WRITES.includes(operation as typeof PREPARATION_WRITES[number])?preparations:AUTHORITY_WRITES.includes(operation as typeof AUTHORITY_WRITES[number])?authorities:EXECUTION_WRITES.includes(operation as typeof EXECUTION_WRITES[number])?getExecution():definitions;
@@ -124,6 +143,7 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
     if(EXTENSION_REVIEW_READS.includes(operation as typeof EXTENSION_REVIEW_READS[number]))return extensionReviews.read(actor,projectId,operation,input);
     if(IMPLEMENTATION_REVIEW_READS.includes(operation as typeof IMPLEMENTATION_REVIEW_READS[number]))return implementationReviews.read(actor,projectId,operation,input);
     switch (operation) {
+      case FEEDBACK_ACTIVATION_PREVIEW: exact(input,[]); return feedbackActivation.preview(actor,projectId);
       case FEEDBACK_PROJECT_INSPECT: exact(input,[]); return readSavedFeedbackProjectDraft(store,actor,projectId);
       case FEEDBACK_PROJECT_VALIDATE: return inspectFeedbackProjectDraft(input, options.workspaceId, projectId);
       case 'runtime.status': exact(input,[]); return { ...status(), projectId, revision: store.revision(projectId),observationWorker:execution?.health(projectId)??null,usageWorker:usageWorker?.health(projectId)??null };
