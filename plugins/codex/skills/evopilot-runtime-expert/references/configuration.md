@@ -106,6 +106,12 @@ and the fields collected so far. Use the returned `missingFields` to guide
 remaining questions. Preserve the original request ID for exact replay.
 A saved draft does not take effect or authorize external work.
 
+If the operator defers provider setup, save the available configuration and
+read it back. Report the saved draft digest and unresolved bindings.
+`FEEDBACK_ACTIVATION_UNAVAILABLE`, `FEEDBACK_BINDINGS_UNVERIFIED` and
+`NOT_EVALUATED` leave the draft saved and activation pending. Leave the
+same draft available for the next properly configured session.
+
 With an active Project Lifecycle and all seven registered bindings available,
 the named owner can call `feedback.project.activation.preview` via `runtime_read`.
 Present the exact candidate digest, draft, lifecycle, binding and policy revisions,

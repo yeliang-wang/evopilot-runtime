@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as api from '../../dist/index.js';
+import * as api from '@evopilot-next/runtime';
 import { CONTRACT_REVISION, inspectReference } from '../../vendor/compatibility/v1/reference.mjs';
 
 const ref = (product = 'ontology') => ({ product, id: 'asset-a', version: '0.1.0', specVersion: 'v1', digest: 'sha256:' + 'a'.repeat(64), visibility: 'private' });
@@ -38,12 +38,12 @@ test('package boundary: changed bindings and unsupported input fail closed', () 
 });
 
 test('package boundary: default capabilities are truthful immutable data', () => {
-  assert.equal(api.VERSION, '0.9.0');
+  assert.equal(api.VERSION, '0.10.0');
   assert.equal(api.PRODUCT, 'runtime');
   const capabilities = api.capabilities();
   assert.deepEqual(capabilities, {
     product: 'runtime',
-    version: '0.9.0',
+    version: '0.10.0',
     implementationStage: "NATIVE_STANDARDS",
     businessOperationsReady: true,
     persistentBusinessOperationsReady: true,

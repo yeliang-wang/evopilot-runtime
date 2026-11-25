@@ -1,11 +1,15 @@
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { mainV010 } from './roadmap-v010.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const raw = process.argv.slice(2);
+const packageVersion = JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).version;
 const args = raw[0] === '--release' && raw[1] === '0.10.0'
   ? ['--release','--version','0.10.0',...raw.slice(2)]
-  : raw;
+  : raw[0] === '--check' && !raw.includes('--version') && packageVersion === '0.10.0'
+    ? [...raw,'--version','0.10.0']
+    : raw;
 const intent = args[args.indexOf('--intent') + 1];
 const version = args.includes('--version') ? args[args.indexOf('--version') + 1] : null;
 if (version === '0.10.0' || intent?.startsWith('runtime-v0.10/')) mainV010(root, args);

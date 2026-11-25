@@ -31,6 +31,9 @@ credentials, start a second Agent loop or infer authority from an Agent result.
 - For first use or definition changes, follow [configuration](references/configuration.md).
   Reuse current answers, ask only missing mandatory information, and finish
   validation and activation in this conversation. Opening Dashboard is optional.
+- For a feedback loop, follow [feedback configuration](references/configuration.md#feedback-driven-lifecycle-configuration).
+  Keep an exact saved draft if required provider bindings are unavailable.
+  Resume from that draft when the operator supplies the protected bindings.
 - For an authorized goal/target/loop, follow [execution](references/execution.md).
   Bind exact preparation and authority before requesting stages. Continue routine
   reversible work within existing authority without repeated confirmation.

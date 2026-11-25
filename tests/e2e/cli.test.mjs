@@ -32,7 +32,7 @@ function invoke(args, input = '', status = 0, flags = []) {
   assert.equal(envelope.ok, status === 0);
   assert.equal(envelope.authority, false);
   assert.deepEqual(Object.keys(envelope).sort(), (status === 0 ? ['ok', 'product', 'version', 'result', 'authority'] : ['ok', 'error', 'authority']).sort());
-  if (status === 0) { assert.equal(envelope.product, 'runtime'); assert.equal(envelope.version, '0.9.0'); }
+  if (status === 0) { assert.equal(envelope.product, 'runtime'); assert.equal(envelope.version, '0.10.0'); }
   return status === 0 ? envelope.result : envelope.error;
 }
 function setup(t) {
@@ -50,7 +50,8 @@ test('CLI discovery/help/version run without write permission or workspace', () 
   assert.deepEqual(capabilities.asyncOperations, ['run.reconcile']);
   assert.deepEqual(capabilities.providers, { resolveOntology: false, resolveHarness: false, execute: false, inspectReceipt: false });
   assert(capabilities.historicalRunsReadOnly);
-  for (const command of ['help', '--help', 'version', '--version']) invoke([command], '', 0, flags);
+  for (const command of ['help', '--help']) invoke([command], '', 0, flags);
+  for (const command of ['version', '--version']) assert.deepEqual(invoke([command], '', 0, flags), { product: 'runtime', version: '0.10.0' });
   for (const args of [[], ['unknown'], ['help', 'extra'], ['capabilities', '--workspace', '/unused'], ['request'], ['request', '--workspace', 'relative', '--workspace-id', 'test']]) {
     assert.equal(invoke(args, '', 2, flags).code, 'USAGE');
   }

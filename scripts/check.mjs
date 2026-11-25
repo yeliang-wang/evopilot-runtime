@@ -14,7 +14,7 @@ const PIN = 'c613b972cee9aa5638797880fab6a48839e74ee79545fdfb74ebe9b2b23c9a11';
 const LEGACY_PIN = 'df4f7246ae35ef9114e2b93663d520e7ff4f44f14f886ac8ba43e9fc080ddc9a';
 const expected = {
   "name": "@evopilot-next/runtime",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -32,6 +32,7 @@ const expected = {
     "SECURITY.md",
     "CHANGELOG.md",
     "docs",
+    "governance",
     "LICENSE",
     "NOTICE",
     "provenance"
@@ -228,7 +229,9 @@ export async function checkSource() {
     assert.doesNotMatch(checkedSource, /\bimport\s*\(|\brequire\s*\(|\beval\s*\(|\/Users\/|\/home\/|EVOPILOT_HARNESS_HOME|defaultHarnessHome|\.evopilot-harness|\bprocess\s*(?:\.\s*(?:env|cwd|chdir)|\[)|\bglobalThis\s*(?:\.|\[)|\bm0\//);
     for (const specifier of specifiers(source)) {
       if (isBuiltin(specifier)) continue;
-      if((path.endsWith('/src/lifecycle/compiler.ts')||path.endsWith('/src/adapters/github.ts')||path.endsWith('/src/adapters/gitlab.ts'))&&specifier==='yaml')continue;
+      if (specifier === 'yaml' && [
+        '/src/lifecycle/compiler.ts', '/src/adapters/github.ts', '/src/adapters/gitlab.ts', '/src/feedback-loop/project.ts',
+      ].some(file => path.endsWith(file))) continue;
       if(path.endsWith('/src/adapters/artifacts.ts')&&specifier==='yauzl')continue;
       if (path.endsWith('/src/server/mcp.ts') && ['@modelcontextprotocol/sdk/server/index.js','@modelcontextprotocol/sdk/server/streamableHttp.js','@modelcontextprotocol/sdk/types.js'].includes(specifier)) continue;
       if (['/src/host/bridge.ts','/src/installation/workspace-host.ts'].some(file=>path.endsWith(file)) && ['@modelcontextprotocol/sdk/server/index.js','@modelcontextprotocol/sdk/server/stdio.js','@modelcontextprotocol/sdk/types.js'].includes(specifier)) continue;
@@ -249,7 +252,7 @@ export async function checkSource() {
     "import assert from 'node:assert/strict';",
     'const api = await import(' + JSON.stringify(pathToFileURL(resolve(ROOT, 'dist/index.js')).href) + ');',
     'assert.equal(api.PRODUCT, ' + JSON.stringify(PRODUCT) + ');',
-    "assert.equal(api.VERSION, '0.9.0');",
+    'assert.equal(api.VERSION, ' + JSON.stringify(expected.version) + ');',
     'assert.equal(api.capabilities().authority, false);',
     "assert.equal(api.capabilities().implementationStage, \"NATIVE_STANDARDS\");",
     "assert.equal(api.capabilities().businessOperationsReady, true);",

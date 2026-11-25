@@ -14,6 +14,7 @@ import {openRegisteredLegacyProviders} from '../compat/registered-providers.js';
 import {inspectCodexSource,inspectCodexCursor} from '../usage/codex.js';
 import {readHostUsage,installUsageGrant} from '../host/usage.js';
 import {limitedPreview, previewRole, previewState, previewUnavailable} from './preview.js';
+import { VERSION } from '../index.js';
 
 export async function serviceMain(argv: string[], output: { write(value: string): unknown } = process.stdout): Promise<number> {
   const print=(v:unknown)=>output.write(canonical(v)+'\n');
@@ -29,7 +30,7 @@ export async function serviceMain(argv: string[], output: { write(value: string)
       const result=await readHostUsage(flags['connection-ref'],flags['query-ref'],flags.format as 'json'|'markdown');
       if(flags.format==='markdown')output.write(String(record(result.result).markdown));else print(result);return 0;
     }
-    if(command==='help' || !command){exact(flags,[]);print({commands:['auth-init','serve','status','request','browser-code',...(limitedPreview?[]:['usage-inspect','usage-grant','usage-report'])],developmentTarget:'0.9.0',releaseReady:false,credentials:'Use protected credential files; do not pass raw tokens on the command line.',request:'request --url <origin> --token-ref <protected file> --project <id> --request-ref <protected JSON envelope>; no automatic retry after uncertain transport results.',browser:'browser-code --connection-ref <protected connection>; enter the one-use code on /monitor or /lifecycle. No token in the URL.'});return 0;}
+    if(command==='help' || !command){exact(flags,[]);print({commands:['auth-init','serve','status','request','browser-code',...(limitedPreview?[]:['usage-inspect','usage-grant','usage-report'])],developmentTarget:VERSION,releaseReady:false,credentials:'Use protected credential files; do not pass raw tokens on the command line.',request:'request --url <origin> --token-ref <protected file> --project <id> --request-ref <protected JSON envelope>; no automatic retry after uncertain transport results.',browser:'browser-code --connection-ref <protected connection>; enter the one-use code on /monitor or /lifecycle. No token in the URL.'});return 0;}
     if(command==='browser-code'){
       exact(flags,['connection-ref']);const connection=readHostConnection(flags['connection-ref']);await createRuntimeHttpClient(flags['connection-ref']).status();
       const response=await fetch(connection.origin+'/api/v1/dashboard-code',{method:'POST',headers:{...hostHeaders(connection),'content-type':'application/json'},body:canonical({projectId:connection.projectId}),signal:AbortSignal.timeout(10000),redirect:'error'});
