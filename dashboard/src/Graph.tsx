@@ -1,6 +1,7 @@
-import {useEffect,useMemo,useRef,useState} from 'react';
+import {useEffect,useId,useMemo,useRef,useState} from 'react';
 import {render} from '../vendor/seecode/lib/render/graph/graph.mjs';
-import {stageLabels,graphLayout} from './model';
+import {stageLabels,graphLayout,feedbackStageLabels,feedbackStages,feedbackStatusLabels,feedbackReturnLabel} from './model';
+import type {FeedbackCase,FeedbackStage} from './model';
 import type {GraphNode,Stage} from './types';
 
 interface Props {nodes:GraphNode[];layout?:Record<string,{x:number;y:number}>;selected?:string;states?:Record<string,Stage>;onSelect?:(id:string)=>void;onMove?:(id:string,x:number,y:number)=>void;}
@@ -41,5 +42,85 @@ export function Graph({nodes,layout={},selected,states,onSelect,onMove}:Props){
     onKeyDown={e=>{const id=idOf(e.target);if(!id)return;if(e.key==='Enter'||e.key===' '){e.preventDefault();onSelect?.(id);}if(onMove&&['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)&&result&&!('error'in result)){e.preventDefault();const p=result.positions[id];onMove(id,p.x+(e.key==='ArrowLeft'?-200:e.key==='ArrowRight'?200:0),p.y+(e.key==='ArrowUp'?-90:e.key==='ArrowDown'?90:0));}}}/>
   </div>}
   <p className="graph-hint">{onMove?'点击节点查看配置；拖动或使用方向键调整布局。Base 流程关系由发布者锁定。':'实例固定其启动时的生命周期版本。此视图只读。'}</p>
+ </section>;
+}
+
+const feedbackColors = {
+ visited: {fill:'#e7f6ed',stroke:'#287649',text:'#1b5937'},
+ upcoming: {fill:'#f1f4f6',stroke:'#a6b3bf',text:'#526373'},
+ current: {fill:'#eeedff',stroke:'#4038db',text:'#2b249e'},
+ waiting: {fill:'#fff4d7',stroke:'#9b680d',text:'#784c00'},
+ failed: {fill:'#fdebec',stroke:'#b53c3c',text:'#9b2d2d'},
+};
+const nodeCenter = (stage: FeedbackStage) => 75 + feedbackStages.indexOf(stage)*143;
+
+export function FeedbackMonitorGraph({entry}:{entry:FeedbackCase}) {
+ const title = useId(), description = useId(), arrow = useId();
+ const visited = new Set(entry.visited);
+ const forward = new Set<string>();
+ const returns = new Map<string,{from:FeedbackStage;to:FeedbackStage;reason:string}>();
+ for (let index=0; index<entry.timeline.length; index++) {
+  const event = entry.timeline[index];
+  if (event.returnFrom) {
+   returns.set(event.returnFrom+'>'+event.stage,{from:event.returnFrom,to:event.stage,reason:event.reason});
+  } else if (index > 0) {
+   forward.add(entry.timeline[index-1].stage+'>'+event.stage);
+  }
+ }
+ const nodeTop = 29 + returns.size*25;
+ const nodeMiddle = nodeTop + 35;
+ return <section className="graph-card" aria-labelledby={title}>
+  <div className="graph-toolbar"><h2 id={title} style={{margin:0}}>执行流程</h2></div>
+  <div className="table-scroll">
+   <svg className="sc-svg" role="img" aria-labelledby={title} aria-describedby={description}
+    width="100%" viewBox={`0 0 1008 ${nodeTop+91}`} style={{minWidth:740}}>
+    <desc id={description}>{'当前阶段 '+feedbackStageLabels[entry.stage]+'，'+feedbackStatusLabels[entry.status]+
+     '。已到达 '+entry.visited.map(stage=>feedbackStageLabels[stage]).join('、')+
+     '。'+[...returns.values()].map(({from,to,reason})=>feedbackStageLabels[from]+' → '+feedbackStageLabels[to]+'，'+reason).join('。')}</desc>
+    <defs><marker id={arrow} markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+     <path d="M0 0 L7 3.5 L0 7 Z" fill="#9b680d"/>
+    </marker></defs>
+    {[...returns.values()].map(({from,to,reason},index)=>{
+     const start = nodeCenter(from) + (from===to ? 27 : 0);
+     const end = nodeCenter(to) - (from===to ? 27 : 0);
+     const lane = 26 + index*25;
+     return <g key={from+'>'+to} data-return-from={from} data-return-to={to}>
+      <title>{reason}</title>
+      <path d={`M${start} ${nodeTop-2} V${lane} H${end} V${nodeTop-3}`} fill="none"
+       stroke="#9b680d" strokeWidth="2" strokeDasharray="6 4" markerEnd={`url(#${arrow})`}/>
+      <text x={(start+end)/2} y={lane-7} textAnchor="middle" fill="#784c00" fontSize="15" fontWeight="650">
+       {feedbackReturnLabel(from,to)}
+      </text>
+     </g>;
+    })}
+    {feedbackStages.slice(1).map((stage,index)=>{
+     const from = feedbackStages[index];
+     const walked = forward.has(from+'>'+stage);
+     const color = walked ? feedbackColors.visited.stroke : feedbackColors.upcoming.stroke;
+     const start = nodeCenter(from)+60, end = nodeCenter(stage)-60;
+     return <g key={stage} data-from={from} data-to={stage} data-visited={walked}>
+      <line x1={start} x2={end-7} y1={nodeMiddle} y2={nodeMiddle} stroke={color} strokeWidth="2"/>
+      <path d={`M${end-7} ${nodeMiddle-5} L${end} ${nodeMiddle} L${end-7} ${nodeMiddle+5} Z`} fill={color}/>
+     </g>;
+    })}
+    {feedbackStages.map(stage=>{
+     const current = entry.stage===stage;
+     let variant = visited.has(stage) ? feedbackColors.visited : feedbackColors.upcoming;
+     if (current && entry.status!=='COMPLETE') {
+      variant = entry.status==='FAILED' ? feedbackColors.failed :
+       entry.status==='WAITING'||entry.status==='UNKNOWN' ? feedbackColors.waiting : feedbackColors.current;
+     }
+     const x = nodeCenter(stage);
+     return <g key={stage} data-feedback-stage={stage} data-current={current} data-visited={visited.has(stage)}
+      data-status={current ? entry.status : undefined}>
+      <rect x={x-58} y={nodeTop} width="116" height="70" rx="9" fill={variant.fill} stroke={variant.stroke} strokeWidth={current?3:1.5}/>
+      <text x={x} y={nodeTop+28} textAnchor="middle" fill={variant.text} fontSize="17" fontWeight="650">{feedbackStageLabels[stage]}</text>
+      <text x={x} y={nodeTop+50} textAnchor="middle" fill={variant.text} fontSize="13">
+       {current ? '当前 · '+feedbackStatusLabels[entry.status] : visited.has(stage) ? '已到达' : '待到达'}
+      </text>
+     </g>;
+    })}
+   </svg>
+  </div>
  </section>;
 }

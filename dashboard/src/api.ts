@@ -1,4 +1,5 @@
 import type {Session,MonitorPage,Pending,CompletedAuthorityResponse} from './types';
+import {isFeedbackMonitorPage} from './model';
 export class ApiError extends Error {constructor(readonly code:string,message:string,readonly status=0){super(message);}}
 export async function json<T>(path:string,options:RequestInit={}):Promise<T>{
  let response:Response;try{response=await fetch(path,{...options,credentials:'same-origin',redirect:'error',signal:options.signal??AbortSignal.timeout(20000)});}catch{throw new ApiError('TRANSPORT_UNKNOWN','连接中断。请核对原请求，不要重复提交。');}
@@ -52,7 +53,16 @@ export async function source(s:Session,revisionId:string):Promise<string>{let of
  const bytes=Uint8Array.from(atob(page.data),c=>c.charCodeAt(0));total+=bytes.length;if(total>page.totalBytes||page.nextOffset!==null&&page.nextOffset!==total)throw new ApiError('SOURCE_CHANGED','源码分块不连续。');parts.push(bytes);
  if(page.nextOffset===null){if(total!==page.totalBytes)throw new ApiError('SOURCE_CHANGED','源码分块不完整。');const all=new Uint8Array(total);let at=0;for(const part of parts){all.set(part,at);at+=part.length;}return new TextDecoder('utf-8',{fatal:true}).decode(all);}offset=page.nextOffset;
  }throw new ApiError('SOURCE_LIMIT','源码分块超过上限。');}
-export const monitor=(after?:string,revision?:number)=>json<MonitorPage>('/api/v1/dashboard/monitor'+(after?'?'+new URLSearchParams({after,revision:String(revision)}).toString():''));
+type LifecycleMonitorPage = MonitorPage & {feedbackMonitor?: true};
+const monitorQuery = (after?: string, revision?: number) =>
+ after ? '?' + new URLSearchParams({after,revision:String(revision)}).toString() : '';
+export const monitor = (after?: string, revision?: number) =>
+ json<LifecycleMonitorPage>('/api/v1/dashboard/monitor' + monitorQuery(after,revision));
+export async function feedbackMonitor(after?: string, revision?: number) {
+ const result = await json<unknown>('/api/v1/dashboard/feedback-monitor' + monitorQuery(after,revision));
+ if (!isFeedbackMonitorPage(result)) throw new ApiError('INVALID_RESPONSE','反馈监控快照无效。');
+ return result;
+}
 const pendingKey=(s:Session)=>'evopilot.pending.'+s.serviceId+'.'+s.projectId+'.'+s.principalId;
 export function savePending(s:Session,operation:string):Pending{const pending={projectId:s.projectId,principalId:s.principalId,serviceId:s.serviceId,requestId:crypto.randomUUID(),operation};sessionStorage.setItem(pendingKey(s),JSON.stringify(pending));return pending;}
 function completedAuthorityResponse(value:unknown):value is CompletedAuthorityResponse{

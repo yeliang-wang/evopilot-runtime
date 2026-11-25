@@ -2,6 +2,82 @@ import {parseDocument,visit,isAlias,isNode} from 'yaml';
 import type {Base,Field,GraphNode} from './types';
 
 export const stageLabels:Record<string,string>={scope:'范围定义',plan:'方案设计',implementation:'实现与评审',candidate:'候选构建',verification:'验收验证','release-decision':'发布决定',publication:'版本发布',closure:'交付闭环'};
+
+export const feedbackStageLabels = {
+ receive: '接收反馈', issue: 'Linear 建单', reproduce: '复现', repair: '修复 PR',
+ verify: '独立验证', review: '人工复核', close: '合并与回写',
+} as const;
+export type FeedbackStage = keyof typeof feedbackStageLabels;
+export const feedbackStages = Object.keys(feedbackStageLabels) as FeedbackStage[];
+export const feedbackStatusLabels = {
+ WAITING: '等待', RUNNING: '进行中', UNKNOWN: '结果待核对', FAILED: '未通过', COMPLETE: '已完成',
+} as const;
+export type FeedbackStatus = keyof typeof feedbackStatusLabels;
+export interface FeedbackEvent {
+ id: string;
+ at: string;
+ stage: FeedbackStage;
+ status: FeedbackStatus;
+ reason: string;
+ ref: string | null;
+ returnFrom: FeedbackStage | null;
+}
+export interface FeedbackReview {
+ deadline: number;
+ state: 'OPEN' | 'VETOED' | 'CLOSED';
+ head: string;
+ pullRequestId: string;
+}
+export interface FeedbackCase {
+ id: string;
+ stage: FeedbackStage;
+ status: FeedbackStatus;
+ visited: FeedbackStage[];
+ timeline: FeedbackEvent[];
+ review: FeedbackReview | null;
+}
+export interface FeedbackMonitorPage {
+ projectId: string;
+ revision: number;
+ observedAt: string;
+ readOnly: true;
+ cases: FeedbackCase[];
+ nextAfter: string | null;
+}
+
+const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+const id = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
+const instant = (v: unknown): v is string => typeof v === 'string' && Number.isFinite(Date.parse(v));
+const stage = (v: unknown): v is FeedbackStage => typeof v === 'string' && Object.hasOwn(feedbackStageLabels,v);
+const status = (v: unknown): v is FeedbackStatus => typeof v === 'string' && Object.hasOwn(feedbackStatusLabels,v);
+function feedbackEvent(v: unknown): v is FeedbackEvent {
+ return record(v) && id(v.id) && instant(v.at) && stage(v.stage) && status(v.status) &&
+  typeof v.reason === 'string' && (v.ref === null || id(v.ref)) && (v.returnFrom === null || stage(v.returnFrom));
+}
+function feedbackReview(v: unknown): v is FeedbackReview {
+ return record(v) && typeof v.deadline === 'number' && Number.isSafeInteger(v.deadline) && v.deadline > 0 &&
+  Number.isFinite(new Date(v.deadline).getTime()) &&
+  (v.state === 'OPEN' || v.state === 'VETOED' || v.state === 'CLOSED') && id(v.head) && id(v.pullRequestId);
+}
+function feedbackCase(v: unknown): v is FeedbackCase {
+ return record(v) && id(v.id) && stage(v.stage) && status(v.status) && Array.isArray(v.visited) &&
+  v.visited.every(stage) && Array.isArray(v.timeline) && v.timeline.every(feedbackEvent) &&
+  new Set(v.timeline.map(event => event.id)).size === v.timeline.length && (v.review === null || feedbackReview(v.review));
+}
+export function isFeedbackMonitorPage(v: unknown): v is FeedbackMonitorPage {
+ return record(v) && id(v.projectId) && typeof v.revision === 'number' && Number.isSafeInteger(v.revision) &&
+  v.revision >= 0 && instant(v.observedAt) && v.readOnly === true && Array.isArray(v.cases) &&
+  v.cases.every(feedbackCase) && new Set(v.cases.map(entry => entry.id)).size === v.cases.length &&
+  (v.nextAfter === null || id(v.nextAfter));
+}
+
+export function feedbackReturnLabel(from: FeedbackStage, to: FeedbackStage) {
+ if (from === 'reproduce' && to === 'receive') return '等待补充信息';
+ if (from === 'verify' && to === 'repair') return '验证失败后回修';
+ if (from === 'review' && to === 'repair') return '人工要求修改';
+ return from === to ? '在原阶段继续' : '返回' + feedbackStageLabels[to];
+}
+
 export function object(v:unknown):Record<string,unknown>{if(!v||typeof v!=='object'||Array.isArray(v))throw Error('需要一个 YAML 映射。');return v as Record<string,unknown>;}
 export function document(source:string){
  if(new TextEncoder().encode(source).length>262144)throw Error('YAML 超过 256 KiB。');
