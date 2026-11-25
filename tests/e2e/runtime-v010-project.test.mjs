@@ -210,9 +210,30 @@ test('Expert transport enables only the exact current draft with independently v
       yaml:source,validationDigest:validated.result.validationDigest,
     },{requestId:'native-definition-enable',expectedRevision:0});
     assert.equal(active.result.result.status,'ACTIVE',JSON.stringify(active));
-    const saved = await request('feedback.project.draft.save',input,{requestId:'feedback-draft',expectedRevision:1});
+    const jsonPost = (path,input,headers) => fetch(server.url+path,{
+      method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(input),
+    });
+    const issue = await jsonPost('/api/v1/dashboard-code',{projectId:'tasks'},{authorization:'Bearer '+ownerToken});
+    assert.equal(issue.status,200);
+    const exchange = await jsonPost('/api/v1/dashboard/session',{code:(await issue.json()).result.code},{origin:server.url});
+    assert.equal(exchange.status,200);
+    const headers = {
+      origin:server.url,cookie:exchange.headers.get('set-cookie').split(';')[0],
+      'x-runtime-csrf':(await exchange.json()).result.csrf,
+    };
+    const browser = (operation,input={},meta={},overrides={}) => jsonPost('/api/v1/dashboard/request',{
+      operation,projectId:'tasks',input,...meta,
+    },{...headers,...overrides});
+    const saveMeta = {requestId:'feedback-draft',expectedRevision:1};
+    assert.equal((await browser('feedback.project.draft.save',input,saveMeta,{'x-runtime-csrf':'incorrect'})).status,403);
+    assert.equal((await browser('feedback.project.draft.save',input,{...saveMeta,projectId:'foreign'})).status,403);
+    const saved = await browser('feedback.project.draft.save',input,saveMeta);
     assert.equal(saved.status,200,JSON.stringify(saved));
+    assert.equal((await saved.json()).result.result.activationAuthorized,false);
+    assert.equal((await browser('feedback.project.inspect')).status,200);
+    assert.equal((await browser('feedback.project.validate',input)).status,200);
     const previewOp = 'feedback.project.activation.preview', activateOp = 'feedback.project.activate';
+    assert.equal((await browser(previewOp)).status,403);
     assert.equal((await request(previewOp,{},{},otherToken)).error.code,'FEEDBACK_ACTIVATION_OWNER');
     const preview = await request(previewOp);
     assert.equal(preview.status,200,JSON.stringify(preview));
@@ -224,6 +245,9 @@ test('Expert transport enables only the exact current draft with independently v
     approval = {
       ...activationInput,projectId:'tasks',workspaceId:'demo',actorId:owner,actorRevision:1,
     };
+    const browserActivation = await browser(activateOp,activationInput,meta);
+    assert.equal(browserActivation.status,403);
+    assert.equal((await browserActivation.json()).error.code,'DASHBOARD_OPERATION');
     policyRevision++;
     assert.equal((await request(activateOp,activationInput,meta)).error.code,'FEEDBACK_ACTIVATION_STALE');
     policyRevision--;

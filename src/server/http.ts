@@ -246,7 +246,11 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
           exact(record(await body(req)),[]);res.setHeader('set-cookie',browserSessions.close(req.headers.cookie,origin,string(req.headers['x-runtime-csrf'],128)));json(res,200,{requestId,result:{disconnected:true}});return;
         }
         if(url.pathname==='/api/v1/dashboard/request'&&req.method==='POST'){
-          const envelope=dashboardEnvelope(await body(req),session.projectId),result=await dispatch(req,envelope,()=>authenticated().actor);
+          const request=record(await body(req));
+          const feedbackDraft=[FEEDBACK_PROJECT_INSPECT,FEEDBACK_PROJECT_SAVE,FEEDBACK_PROJECT_VALIDATE].some(operation=>operation===request.operation);
+          if(feedbackDraft&&request.projectId!==session.projectId)reject('FORBIDDEN','Browser request belongs to another project',403);
+          const envelope=feedbackDraft?request:dashboardEnvelope(request,session.projectId);
+          const result=await dispatch(req,envelope,()=>authenticated().actor);
           authenticated();json(res,200,{requestId,result},envelope.operation);return;
         }
         if(url.pathname==='/api/v1/dashboard/monitor'&&req.method==='GET'){
