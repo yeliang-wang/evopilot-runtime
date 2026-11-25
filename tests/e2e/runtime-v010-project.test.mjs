@@ -225,19 +225,35 @@ test('Expert transport enables only the exact current draft with independently v
       operation,projectId:'tasks',input,...meta,
     },{...headers,...overrides});
     const saveMeta = {requestId:'feedback-draft',expectedRevision:1};
-    assert.equal((await browser('feedback.project.draft.save',input,saveMeta,{'x-runtime-csrf':'incorrect'})).status,403);
-    assert.equal((await browser('feedback.project.draft.save',input,{...saveMeta,projectId:'foreign'})).status,403);
-    const saved = await browser('feedback.project.draft.save',input,saveMeta);
+    const browserSource = {yaml:'# 审阅用 YAML 注释\r\n'+yaml(input).replaceAll('\n','\r\n')};
+    assert.equal((await browser('feedback.project.draft.save',browserSource,saveMeta,{'x-runtime-csrf':'incorrect'})).status,403);
+    assert.equal((await browser('feedback.project.draft.save',browserSource,{...saveMeta,projectId:'foreign'})).status,403);
+    for (const [invalid,error] of [
+      [browserSource.yaml+'workspaceId: demo\n','FEEDBACK_YAML_INVALID'],
+      [browserSource.yaml.replace('workspaceId: demo','workspaceId: &scope demo'),'FEEDBACK_YAML_INVALID'],
+      [browserSource.yaml.replace('workspaceId: demo','workspaceId: foreign'),'FEEDBACK_PROJECT_SCOPE'],
+      [browserSource.yaml+'token: plaintext\n','INLINE_SECRET'],
+      ['# '+ '中'.repeat(6000),'FEEDBACK_YAML_LIMIT'],
+    ]) {
+      const denied = await browser('feedback.project.draft.save',{yaml:invalid},saveMeta);
+      assert.equal((await denied.json()).error.code,error);
+    }
+    const saved = await browser('feedback.project.draft.save',browserSource,saveMeta);
     assert.equal(saved.status,200,JSON.stringify(saved));
     assert.equal((await saved.json()).result.result.activationAuthorized,false);
-    assert.equal((await browser('feedback.project.inspect')).status,200);
-    assert.equal((await browser('feedback.project.validate',input)).status,200);
+    const readback = (await (await browser('feedback.project.inspect')).json()).result.draft;
+    assert.equal(readback.yaml,browserSource.yaml);
+    assert.deepEqual(readback.configuration,input);
+    const checked = (await (await browser('feedback.project.validate',browserSource)).json()).result;
+    assert.equal(checked.structure,'VALID');
+    assert.equal(checked.yamlDigest,readback.yamlDigest);
     const previewOp = 'feedback.project.activation.preview', activateOp = 'feedback.project.activate';
     assert.equal((await browser(previewOp)).status,403);
     assert.equal((await request(previewOp,{},{},otherToken)).error.code,'FEEDBACK_ACTIVATION_OWNER');
     const preview = await request(previewOp);
     assert.equal(preview.status,200,JSON.stringify(preview));
     assert.equal(preview.result.subject.definitionRevision,active.result.result.activeRevisionId);
+    assert.equal(preview.result.subject.yamlDigest,readback.yamlDigest);
     assert.equal(preview.result.executionAuthorized,false);
     const activationInput = {candidateDigest:preview.result.candidateDigest,decision:'approve',evidenceRef:'evidence:approval/owner-1'};
     const meta = {requestId:'approved-feedback-activation',expectedRevision:preview.result.subject.projectRevision};
@@ -269,7 +285,10 @@ test('Expert transport enables only the exact current draft with independently v
     await client.close();
     await server.close();
     server = await startRuntimeServer({stateRoot:root,workspaceId:'demo'});
-    assert.deepEqual((await request('feedback.project.inspect')).result.active,{
+    const restarted = (await request('feedback.project.inspect')).result;
+    assert.equal(restarted.draft.yaml,browserSource.yaml);
+    assert.equal(restarted.draft.yamlDigest,readback.yamlDigest);
+    assert.deepEqual(restarted.active,{
       activationId:activationInput.candidateDigest,draftDigest:preview.result.subject.draftDigest,matchesSavedDraft:true,
     });
   } finally {

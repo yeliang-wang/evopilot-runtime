@@ -96,7 +96,8 @@ export function createFeedbackActivationService(
     }
     const subject = {
       serviceId:store.serviceId,workspaceId:store.workspaceId,projectId,projectRevision:saved.revision,
-      draftDigest:evidence.draftDigest,definitionPointer,definitionRevision:definition.revisionId,
+      draftDigest:evidence.draftDigest,yamlDigest:saved.draft.yamlDigest ?? null,
+      definitionPointer,definitionRevision:definition.revisionId,
       lifecycleDigest:definition.semanticDigest,lifecycleBindingStamp:definition.bindingStamp,
       feedbackBindingStamp:evidence.bindingStamp,policyRevision:policy.revision,policyDigest:policy.digest,
       ownerId:policy.ownerId,ownerRevision:policy.ownerRevision,priorActivation,

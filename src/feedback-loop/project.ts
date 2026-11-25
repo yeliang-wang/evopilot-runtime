@@ -1,3 +1,6 @@
+import { isAlias, isNode, parseDocument, visit } from 'yaml';
+import { byteDigest } from '../lifecycle/base.js';
+import { containsInlineSecret } from '../lifecycle/compiler.js';
 import { authorize, type Principal } from '../server/security.js';
 import type { RuntimeStore } from '../server/store.js';
 import { digest, exact, record, reject, slug, string } from '../server/errors.js';
@@ -152,10 +155,12 @@ export const FEEDBACK_PROJECT_VALIDATE = 'feedback.project.validate';
 /** Expert previews only the scoped draft. Provider registration and activation
  * have separate authority and are never inferred from a successful read. */
 export function inspectFeedbackProjectDraft(input: unknown, workspaceId: string, projectId: string) {
-  const draft = parseFeedbackProjectDraft(input);
+  const {configuration,source} = draftInput(record(input));
+  const draft = parseFeedbackProjectDraft(configuration);
   requireDraftScope(draft, workspaceId, projectId);
   return {
     draftDigest: digest(draft),
+    ...(source ? {yamlDigest:source.yamlDigest} : {}),
     structure: 'VALID',
     validatedProject: {workspaceId, projectId},
     providerBindings: 'NOT_EVALUATED',
@@ -186,6 +191,31 @@ function readDraftEdit(value: unknown): DraftConfiguration {
   return draft;
 }
 
+function draftInput(input: Record<string,unknown>) {
+  if (!Object.hasOwn(input,'yaml')) return {configuration:readDraftEdit(input),source:null};
+  exact(input,['yaml']);
+  const {yaml} = input;
+  if (typeof yaml !== 'string' || Buffer.byteLength(yaml) > 16_384) {
+    return reject('FEEDBACK_YAML_LIMIT','Feedback YAML must be at most 16 KiB.',413);
+  }
+  if (containsInlineSecret(yaml)) {
+    return reject('INLINE_SECRET','Use protected binding references in feedback YAML.');
+  }
+  const document = parseDocument(yaml,{version:'1.2',strict:true,uniqueKeys:true,stringKeys:true,prettyErrors:false});
+  if (document.errors.length || document.warnings.length || document.directives?.yaml.version !== '1.2') {
+    return reject('FEEDBACK_YAML_INVALID','Feedback YAML requires one plain YAML 1.2 document.');
+  }
+  visit(document,(_key,node,path) => {
+    if (path.length > 4 || isAlias(node) || (isNode(node) && (('anchor' in node && node.anchor) || node.tag))) {
+      reject('FEEDBACK_YAML_INVALID','Feedback YAML does not accept aliases, anchors, tags or nested fields.');
+    }
+  });
+  return {
+    configuration:readDraftEdit(document.toJS({maxAliasCount:0})),
+    source:{yaml,yamlDigest:byteDigest(yaml)},
+  };
+}
+
 function summarizeDraft(configuration: DraftConfiguration) {
   return {
     status:'DRAFT' as const,
@@ -206,7 +236,13 @@ export function readSavedFeedbackProjectDraft(store: RuntimeStore, actor: Princi
   if (!value || digest(value) !== revision) reject('CORRUPT_FEEDBACK_DRAFT','Saved draft does not match its pointer.',503);
   const configuration = readDraftEdit(value);
   requireDraftScope(configuration,store.workspaceId,projectId);
-  const summary = {revision:store.revision(projectId),draft:summarizeDraft(configuration)};
+  const sourcePointer = store.object(projectId,'feedback-project-source-pointer','current') as {draftDigest:string;yamlDigest:string} | null;
+  const source = sourcePointer ? store.object(projectId,'feedback-project-yaml',sourcePointer.yamlDigest) as {yaml:string;yamlDigest:string} | null : null;
+  if (sourcePointer && (!source || sourcePointer.draftDigest !== revision ||
+      sourcePointer.yamlDigest !== source.yamlDigest || byteDigest(source.yaml) !== source.yamlDigest)) {
+    return reject('CORRUPT_FEEDBACK_DRAFT','The retained YAML does not match its draft pointer.',503);
+  }
+  const summary = {revision:store.revision(projectId),draft:{...summarizeDraft(configuration),...(source ?? {})}};
   const activationId = store.object(projectId,'feedback-activation-pointer','current');
   if (activationId === null) return summary;
   const activation = record(store.object(projectId,'feedback-activation',string(activationId,71)));
@@ -226,17 +262,19 @@ export function saveFeedbackProjectDraft(
   requestId: string, expectedRevision: number, reauthorize: () => Principal,
 ) {
   authorize(actor,projectId,'draft.write');
-  const draft = readDraftEdit(input);
+  const {configuration:draft,source} = draftInput(input);
   requireDraftScope(draft,store.workspaceId,projectId);
   const summary = summarizeDraft(draft);
   return store.mutate(actor,{
     projectId,operation:FEEDBACK_PROJECT_SAVE,requestId,expectedRevision,input,permission:'draft.write',
   },() => ({
-    value:summary,
+    value:{...summary,...(source ?? {})},
     objects:[
       {kind:'feedback-project-draft',id:summary.draftDigest,value:draft},
       {kind:'feedback-project-draft-pointer',id:'current',value:summary.draftDigest},
+      ...(source ? [{kind:'feedback-project-yaml',id:source.yamlDigest,value:source}] : []),
+      {kind:'feedback-project-source-pointer',id:'current',value:source ? {draftDigest:summary.draftDigest,yamlDigest:source.yamlDigest} : null},
     ],
-    event:{type:'feedback-project-draft-saved',data:{draftDigest:summary.draftDigest}},
+    event:{type:'feedback-project-draft-saved',data:{draftDigest:summary.draftDigest,yamlDigest:source?.yamlDigest ?? null}},
   }),reauthorize);
 }
