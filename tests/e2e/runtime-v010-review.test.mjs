@@ -90,3 +90,185 @@ test('veto and merge share durable state; stale notification, duplicate delivery
     rmSync(root,{recursive:true,force:true});
   }
 });
+
+const githubRepoPath = '/repos/preview/demo-feedback';
+const githubOperationId = '630b9d5e-3f2a-4f7e-8b0c-2d5f9a8c1e42';
+const githubLandedSha = '9'.repeat(40);
+const githubTreeSha = '1'.repeat(40);
+const githubBinding = {
+  repository:'preview/demo-feedback', repositoryId:'21', baseBranch:'main', installationId:'104',
+  installationCredentialRef:'vault:preview-merge-installation', actorId:'399', actorLogin:'preview-runtime[bot]',
+};
+const githubRequest = {candidate,requestId:'feedback-merge:reserved-fixture'};
+
+function githubCompare(base, tip, tree) {
+  return {
+    status:'ahead', behind_by:0, ahead_by:1, total_commits:1,
+    base_commit:{sha:base}, merge_base_commit:{sha:base},
+    commits:[{sha:tip,parents:[{sha:base}],commit:{tree:{sha:tree}}}],
+  };
+}
+
+async function githubFixture() {
+  const { createFeedbackGitHubAdapter } = await import('../../dist/feedback-loop/github.js');
+  const repo = {id:21,full_name:'preview/demo-feedback',archived:false,disabled:false,allow_rebase_merge:true};
+  const pending = {status:'pending',details:{uuid:githubOperationId,expected_head_sha:candidate.head,
+    merge_method:'rebase',merge_action:'direct_merge'}};
+  const target = {
+    repo, pending, dispatchStatus:202, fault:false, rules:[],
+    operation:{...pending,details:{...pending.details,bypass_rules:false}}, branchProtected:true, strictChecks:true,
+    installationRepositories:[repo], bypass:{apps:[],users:[],teams:[]}, landedTree:githubTreeSha,
+    branchHead:candidate.base, verifiedBase:candidate.base, graphBase:candidate.base,
+    pull:{number:5,state:'open',merged:false,draft:false,auto_merge:null,mergeable:true,rebaseable:true,mergeable_state:'clean',
+      base:{ref:'main',repo,sha:candidate.base},head:{ref:'fix/feedback',repo,sha:candidate.head}},
+    requests:[],
+  };
+  function finish(actor = {type:'Bot',id:399,login:'preview-runtime[bot]'}) {
+    target.branchHead = githubLandedSha;
+    target.pull = {...target.pull, state:'closed', merged:true, merge_commit_sha:githubLandedSha, merged_by:actor};
+    target.operation = {status:'merged',details:{sha:githubLandedSha}};
+  }
+  const token = 'fixture-token';
+  function adapter(binding = githubBinding) {
+    return createFeedbackGitHubAdapter(binding, async (registered, signal) => {
+      assert.deepEqual(registered,binding);
+      assert(signal instanceof AbortSignal);
+      return token;
+    }, async (input, init) => {
+      const url = new URL(input);
+      assert.equal(url.origin,'https://api.github.com');
+      assert.equal(init.redirect,'error');
+      assert.equal(init.headers.get('authorization'),`Bearer ${token}`);
+      assert.equal(init.headers.get('x-github-api-version'),'2026-03-10');
+      const path = url.pathname + url.search;
+      target.requests.push({path,method:init.method});
+      const send = (body,status=200) => Response.json(body,{status,headers:{'x-github-request-id':'AD12:EF01:9DC3'}});
+      if (init.method === 'PUT') {
+        assert.equal(path,`${githubRepoPath}/pulls/5/merge-async`);
+        assert.deepEqual(JSON.parse(init.body),{sha:candidate.head,merge_method:'rebase',merge_action:'direct_merge',bypass_rules:false});
+        if (target.fault) {
+          finish();
+          throw new Error('fixture connection lost after provider accepted the request');
+        }
+        return send(target.pending,target.dispatchStatus);
+      }
+      assert.equal(init.method,'GET');
+      if (path === '/installation/repositories?per_page=2') return send({total_count:target.installationRepositories.length,repositories:target.installationRepositories});
+      if (path === githubRepoPath) return send(target.repo);
+      switch (path.slice(githubRepoPath.length)) {
+        case '/branches/main/protection': return send({
+          enforce_admins:{enabled:true}, allow_force_pushes:{enabled:false}, allow_deletions:{enabled:false},
+          required_pull_request_reviews:{bypass_pull_request_allowances:target.bypass},
+        });
+        case '/branches/main/protection/required_status_checks': return send({strict:target.strictChecks,contexts:['require-ci']});
+        case '/rules/branches/main?per_page=100': return send(target.rules);
+        case '/branches/main': return send({name:'main',protected:target.branchProtected,commit:{sha:target.branchHead}});
+        case '/pulls/5': return send({...target.pull,base:{...target.pull.base,sha:target.verifiedBase}});
+        case `/pulls/5/merge-async/${githubOperationId}`: return send(target.operation, target.operation === null ? 404 : 200);
+        case `/compare/${candidate.base}...${candidate.head}`: return send(githubCompare(candidate.base,candidate.head,githubTreeSha));
+        case `/compare/${candidate.base}...${githubLandedSha}`: return send(githubCompare(target.graphBase,githubLandedSha,target.landedTree));
+        default: throw new Error(`unexpected fixture route ${path}`);
+      }
+    });
+  }
+  return {target,adapter,finish,signal:new AbortController().signal};
+}
+
+test('GitHub dispatch uses the exact protected expected head and reconciles via the retained operation after restart', async () => {
+  const {target,adapter,finish,signal} = await githubFixture();
+  const observed = await adapter().inspect(candidate,signal);
+  assert.deepEqual(observed,{candidate,bindingDigest:observed.bindingDigest,githubChecksPassed:true,baseProtected:true});
+  const accepted = await adapter().dispatch(githubRequest,signal);
+  assert.equal(accepted.source,'FIXTURE');
+  assert.equal(accepted.status,'PENDING');
+  assert.equal(accepted.operationId,githubOperationId);
+  assert.equal(accepted.githubRequestId,'AD12:EF01:9DC3');
+  assert.equal(accepted.mergeSha,null);
+  assert.deepEqual(await adapter().reconcile(githubRequest,JSON.parse(JSON.stringify(accepted)),signal),accepted);
+  finish();
+  const merged = await adapter().reconcile(githubRequest,accepted,signal);
+  assert.equal(merged.status,'MERGED');
+  assert.equal(merged.mergeSha,githubLandedSha);
+  assert.equal(merged.operationId,githubOperationId);
+  assert.equal(target.requests.filter(request => request.method === 'PUT').length,1);
+  await assert.rejects(adapter().reconcile({...githubRequest,requestId:'feedback-merge:another-claim'},accepted,signal),{code:'FEEDBACK_GITHUB_RECEIPT'});
+  await assert.rejects(adapter({...githubBinding,installationId:'105'}).reconcile(githubRequest,accepted,signal),{code:'FEEDBACK_GITHUB_RECEIPT'});
+});
+
+test('GitHub changed refs, unrelated repositories and insufficient protection prevent a mutation', async () => {
+  for (const change of [
+    target => { target.pull.head = {...target.pull.head,sha:'e'.repeat(40)}; },
+    target => { target.verifiedBase = 'f'.repeat(40); },
+    target => { target.branchHead = 'f'.repeat(40); },
+    target => { target.branchProtected = false; },
+    target => { target.strictChecks = false; },
+    target => { target.pull.mergeable_state = 'blocked'; },
+    target => { target.bypass.apps.push({id:212}); },
+    target => { target.installationRepositories.push({id:22,full_name:'preview/other'}); },
+    target => { target.rules = [{type:'merge_queue'}]; },
+    target => { target.pull.stack = {number:1}; },
+  ]) {
+    const {target,adapter,signal} = await githubFixture();
+    change(target);
+    await assert.rejects(adapter().dispatch(githubRequest,signal),{code:'FEEDBACK_GITHUB_BLOCKED'});
+    assert(target.requests.every(request => request.method === 'GET'));
+  }
+});
+
+test('GitHub denial, already-merged state and competing request do not prove the original operation', async () => {
+  for (const [response,status] of [[403,'DENIED'],[200,'UNKNOWN'],[409,'UNKNOWN'],[503,'UNKNOWN']]) {
+    const {target,adapter,signal} = await githubFixture();
+    target.dispatchStatus = response;
+    const result = await adapter().dispatch(githubRequest,signal);
+    assert.equal(result.status,status);
+    assert.equal(result.dispatchHttpStatus,response);
+    assert.equal(result.mergeSha,null);
+    assert.equal(result.operationId,null);
+  }
+  const {target,adapter,signal} = await githubFixture();
+  const accepted = await adapter().dispatch(githubRequest,signal);
+  target.operation = {status:'failed',details:{message:'Candidate no longer satisfies branch protection'}};
+  target.pull.head = {...target.pull.head,sha:'e'.repeat(40)};
+  assert.equal((await adapter().reconcile(githubRequest,accepted,signal)).status,'DENIED');
+  assert.equal(target.requests.filter(request => request.method === 'PUT').length,1);
+  const conflict = await githubFixture();
+  conflict.target.pending.details.bypass_rules = true;
+  const uncorrelated = await conflict.adapter().dispatch(githubRequest,conflict.signal);
+  assert.equal(uncorrelated.status,'UNKNOWN');
+  assert.equal(uncorrelated.operationId,null);
+});
+
+test('GitHub lost response, expired receipt, another merger and changed rebase contents remain unresolved', async () => {
+  const lost = await githubFixture();
+  lost.target.fault = true;
+  const uncertain = await lost.adapter().dispatch(githubRequest,lost.signal);
+  assert.equal(uncertain.status,'UNKNOWN');
+  assert.equal(uncertain.operationId,null);
+  assert.equal(uncertain.dispatchHttpStatus,null);
+  for (const saved of [uncertain,null]) {
+    const readback = await lost.adapter().reconcile(githubRequest,saved,lost.signal);
+    assert.equal(readback.status,'UNKNOWN');
+    assert.equal(readback.observedPullRequestMergeSha,githubLandedSha);
+    assert.equal(readback.mergeSha,null);
+  }
+  assert.equal(lost.target.requests.filter(request => request.method === 'PUT').length,1);
+  assert(!lost.target.requests.some(request => request.path.endsWith(githubOperationId)));
+
+  for (const change of [
+    fixture => { fixture.target.operation = null; },
+    fixture => { fixture.finish({type:'User',id:402,login:'another-merger'}); },
+    fixture => { fixture.target.landedTree = '2'.repeat(40); },
+    fixture => { fixture.target.graphBase = 'f'.repeat(40); },
+  ]) {
+    const fixture = await githubFixture();
+    const accepted = await fixture.adapter().dispatch(githubRequest,fixture.signal);
+    fixture.finish();
+    change(fixture);
+    const readback = await fixture.adapter().reconcile(githubRequest,accepted,fixture.signal);
+    assert.equal(readback.status,'UNKNOWN');
+    assert.equal(readback.operationId,githubOperationId);
+    assert.equal(readback.observedPullRequestMergeSha,githubLandedSha);
+    assert.equal(readback.mergeSha,null);
+    assert.equal(fixture.target.requests.filter(request => request.method === 'PUT').length,1);
+  }
+});
