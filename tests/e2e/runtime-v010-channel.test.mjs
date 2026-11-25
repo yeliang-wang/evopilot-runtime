@@ -233,3 +233,71 @@ test('Slack Socket Mode supplements require a trusted binding to the original th
     action: { kind: 'supplement', caseId: 'case:original', text },
   }, scope));
 });
+
+test('signed reference callbacks retain feedback and veto through actual loopback HTTP', async () => {
+  const {createHmac,randomBytes} = await import('node:crypto');
+  const {mkdtempSync,realpathSync,rmSync} = await import('node:fs');
+  const {tmpdir} = await import('node:os');
+  const {join} = await import('node:path');
+  const {RuntimeStore} = await import('../../dist/server/store.js');
+  const {startReferenceChannel} = await import('../../dist/feedback-loop/callback-channel.js');
+  const {reserveFeedbackReviewNotification,retainFeedbackReview,reserveFeedbackMerge} = await import('../../dist/feedback-loop/service.js');
+  const root = mkdtempSync(join(realpathSync(tmpdir()),'runtime-v010-reference-'));
+  const projectRoute = {workspaceId:'workspace',projectId:'project'};
+  const feedbackScope = {...scope,provider:'callback'};
+  const reviewScope = {...feedbackScope,channelId:'C-review'};
+  const signer = randomBytes(32);
+  const reviewerSigner = randomBytes(32);
+  const principal = {
+    id:'callback-receiver',projects:['project'],permissions:['read','execution.request'],revision:1,expiresAt:'2099-01-01T00:00:00Z',
+  };
+  const feedback = {key:signer,route:{...projectRoute,scope:feedbackScope}};
+  const review = {key:reviewerSigner,route:{...projectRoute,channel:reviewScope,allowedActorIds:['reviewer']}};
+  let store = new RuntimeStore(root,'workspace');
+  let listener;
+  const start = () => startReferenceChannel({feedback,review,store,receiverPrincipal:()=>principal});
+  const send = async (path, key, payload) => {
+    const body = JSON.stringify(payload);
+    const timestamp = String(Date.now());
+    const signature = 'sha256='+createHmac('sha256',key).update(timestamp+'.').update(body).digest('hex');
+    const response = await fetch(listener.url+path,{
+      method:'POST',body,headers:{
+        'content-type':'application/json','x-runtime-callback-timestamp':timestamp,'x-runtime-callback-signature':signature,
+      },
+    });
+    return {status:response.status,body:await response.json()};
+  };
+  try {
+    listener = await start();
+    const first = {...event,scope:feedbackScope};
+    const retained = await send('/feedback',signer,first);
+    assert.equal(retained.status,201);
+    const foreign = await send('/feedback',signer,{...first,scope:{...feedbackScope,tenantId:'foreign'}});
+    assert.deepEqual(foreign,{status:403,body:{error:'CHANNEL_SCOPE_MISMATCH'}});
+    await listener.close();
+    listener = undefined;
+    store.close();
+    store = new RuntimeStore(root,'workspace');
+    listener = await start();
+    const replay = await send('/feedback',signer,first);
+    assert.deepEqual(replay,{status:200,body:{...retained.body,status:'REUSED'}});
+    assert.equal(store.revision('project'),1);
+
+    const candidate = {
+      ...projectRoute,repositoryId:'repo',pullRequestId:'1',head:'a'.repeat(40),base:'b'.repeat(40),
+      evidenceDigest:'c'.repeat(64),policyDigest:'d'.repeat(64),
+    };
+    const intent = reserveFeedbackReviewNotification(store,principal,review.route,candidate).intent;
+    const window = retainFeedbackReview(store,principal,review.route,candidate,intent.intentRef,'notice-1',Date.now());
+    const veto = {...event,scope:reviewScope,eventId:'veto-1',messageId:'notice-1',actorId:'reviewer',action:{kind:'veto',reviewId:window.id}};
+    assert.deepEqual(await send('/review',signer,veto),{status:401,body:{error:'CALLBACK_UNAUTHENTICATED'}});
+    assert.deepEqual(await send('/review',reviewerSigner,veto),{status:200,body:{status:'VETO_RETAINED',windowId:window.id}});
+    assert.throws(() => reserveFeedbackMerge(store,principal,window.id,{
+      candidate,policyCurrent:true,receiptCoverage:'COMPLETE',githubChecksPassed:true,baseProtected:true,
+    },()=>window.deadline),{code:'FEEDBACK_REVIEW_VETO'});
+  } finally {
+    await listener?.close();
+    store.close();
+    rmSync(root,{recursive:true,force:true});
+  }
+});
