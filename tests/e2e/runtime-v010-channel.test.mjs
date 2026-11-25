@@ -312,3 +312,214 @@ test('signed reference callbacks retain feedback and veto through actual loopbac
     rmSync(root,{recursive:true,force:true});
   }
 });
+
+const linearScope = {
+  teamId: '42bdea2e-2fad-4a86-969a-9e9b9d12f1d0',
+  projectId: '3ab1f6ae-79fd-4d7b-963e-2d213830b709',
+  openStateId: '6cb465d2-9cc5-4993-8b6c-c85a6f7aea9f',
+  needsInfoStateId: '694f0b0d-3f00-4498-a37c-bda169ba873b',
+  closedStateId: 'b06a9637-950c-4152-9d11-9f086e8eaa0b',
+};
+const linearCreate = {
+  kind: 'create', caseId: 'case:original', requestId: 'request:original', title: 'Save feedback', body: 'Exact report 🧪\n\nSteps to reproduce.',
+};
+
+function linearFixture() {
+  const fixture = {calls: [], issue: undefined, loseMutationResponse: false, loseReadback: false, closeStateType: 'completed'};
+  fixture.request = async (query, variables) => {
+    const operation = query.match(/(?:query|mutation) (\w+)/)[1];
+    fixture.calls.push({operation, variables: structuredClone(variables)});
+    if (operation === 'RuntimeLinearRead') {
+      if (fixture.loseReadback) throw Error('response was lost');
+      if (fixture.partialRead) return {data: {issue: fixture.issue}, errors: [{message: 'incomplete response'}]};
+      return {data: {issue: fixture.issue ?? null}};
+    }
+    if (operation === 'RuntimeLinearState') {
+      return {data: {workflowState: {id: linearScope.closedStateId, type: fixture.closeStateType, team: {id: linearScope.teamId}}}};
+    }
+    const {input} = variables;
+    const state = {id: input.stateId, type: input.stateId === linearScope.closedStateId ? 'completed' : 'unstarted'};
+    if (operation === 'RuntimeLinearCreate') {
+      assert.equal(fixture.issue, undefined);
+      fixture.issue = {
+        id: input.id, title: input.title, description: input.description, archivedAt: null,
+        team: {id: input.teamId}, project: {id: input.projectId}, state,
+      };
+    } else {
+      assert.equal(operation, 'RuntimeLinearUpdate');
+      assert.equal(variables.id, fixture.issue.id);
+      fixture.issue = {...fixture.issue, description: input.description, state};
+    }
+    if (fixture.losePostMutationReadback) fixture.loseReadback = true;
+    if (fixture.loseMutationResponse) throw Error('response was lost');
+    const field = operation === 'RuntimeLinearCreate' ? 'issueCreate' : 'issueUpdate';
+    return {data: {[field]: {success: true, issue: {id: fixture.issue.id}}}};
+  };
+  return fixture;
+}
+
+test('Linear create reconciles the exact reserved UUID after restart without another mutation', async () => {
+  const {createLinearIssueAdapter, prepareLinearIssueIntent} = await import('../../dist/feedback-loop/linear.js');
+  const linear = linearFixture();
+  linear.source = 'LINEAR_PROVIDER';
+  const original = prepareLinearIssueIntent(linearScope, linearCreate);
+  const retained = JSON.parse(JSON.stringify(original));
+  await assert.rejects(createLinearIssueAdapter(linearScope, linear).reconcile({...retained, body: 'changed'}), {
+    code: 'LINEAR_INTENT_MISMATCH',
+  });
+  await assert.rejects(createLinearIssueAdapter({
+    ...linearScope, projectId: '4a968200-9976-4b6a-9c26-62c9a216b946',
+  }, linear).dispatch(retained, 'RESERVED'), {code: 'LINEAR_INTENT_MISMATCH'});
+  assert.equal(linear.calls.length, 0);
+  linear.loseMutationResponse = true;
+  linear.loseReadback = true;
+  const first = await createLinearIssueAdapter(linearScope, linear).dispatch(retained, 'RESERVED');
+  assert.deepEqual(first, {status: 'UNKNOWN', issueId: retained.issueId, intentId: retained.intentId});
+  assert.match(retained.issueId, /^[a-f0-9-]{14}4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
+  assert.deepEqual(linear.calls[0], {
+    operation: 'RuntimeLinearCreate',
+    variables: {input: {
+      id: retained.issueId, teamId: linearScope.teamId, projectId: linearScope.projectId, useDefaultTemplate: false,
+      title: linearCreate.title, description: 'EvoPilot issue: ' + retained.intentId + '\n\n' + linearCreate.body,
+      stateId: linearScope.openStateId,
+    }},
+  });
+  linear.loseReadback = false;
+  linear.partialRead = true;
+  const restarted = createLinearIssueAdapter(linearScope, linear);
+  assert.deepEqual(await restarted.reconcile(retained), first);
+  linear.partialRead = false;
+  await assert.rejects(restarted.dispatch(retained, 'REUSED'), {code: 'LINEAR_RECONCILE_ORIGINAL'});
+  const confirmed = await restarted.reconcile(retained);
+  assert.equal(confirmed.status, 'CONFIRMED');
+  assert.equal(confirmed.receipt.source, 'FIXTURE');
+  assert.equal(confirmed.receipt.originalIntentId, retained.intentId);
+  assert.equal(confirmed.receipt.issueId, retained.issueId);
+  assert.deepEqual(linear.calls.slice(1), Array(3).fill({operation: 'RuntimeLinearRead', variables: {id: retained.issueId}}));
+});
+
+test('retained feedback reserves one Linear issue and confirms it once after a restart and concurrent readbacks', async () => {
+  const {mkdtempSync, realpathSync, rmSync} = await import('node:fs');
+  const {tmpdir} = await import('node:os');
+  const {join} = await import('node:path');
+  const {RuntimeStore} = await import('../../dist/server/store.js');
+  const {bindFeedbackCaseIssue, retainFeedbackChannelEvent} = await import('../../dist/feedback-loop/ingress.js');
+  const {createLinearIssueAdapter} = await import('../../dist/feedback-loop/linear.js');
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'runtime-v010-linear-case-'));
+  const route = {workspaceId: 'workspace', projectId: 'project', scope};
+  const actor = {id: 'receiver-one', projects: ['project'], permissions: ['read', 'execution.request'], revision: 1, expiresAt: '2099-01-01T00:00:00Z'};
+  const fixture = linearFixture();
+  fixture.loseMutationResponse = true;
+  fixture.loseReadback = true;
+  let store = new RuntimeStore(root, route.workspaceId);
+  try {
+    const original = retainFeedbackChannelEvent(store, route, actor, event);
+    let reservationAtDispatch;
+    const request = async (query, variables) => {
+      if (query.includes('mutation RuntimeLinearCreate')) {
+        reservationAtDispatch = store.object(route.projectId, 'feedback-case-issue-intent', original.caseId);
+      }
+      return fixture.request(query, variables);
+    };
+    const binding = {scope: linearScope, adapter: createLinearIssueAdapter(linearScope, {request})};
+    const first = await bindFeedbackCaseIssue(store, route, actor, original.caseId, binding);
+    assert.equal(first.status, 'UNKNOWN');
+    assert.equal(first.issueId, reservationAtDispatch.issueId);
+    assert.equal(reservationAtDispatch.body, event.action.text);
+    assert.equal(reservationAtDispatch.title, '复现步骤 🧪');
+    assert.equal(store.revision(route.projectId), 2);
+    store.close();
+    store = new RuntimeStore(root, route.workspaceId);
+    fixture.loseReadback = false;
+    const [found, concurrent] = await Promise.all([
+      bindFeedbackCaseIssue(store, route, actor, original.caseId, binding),
+      bindFeedbackCaseIssue(store, route, {...actor, id: 'receiver-two'}, original.caseId, binding),
+    ]);
+    assert.deepEqual(found, concurrent);
+    assert.equal(found.status, 'CONFIRMED');
+    assert.equal(found.receipt.source, 'FIXTURE');
+    assert.equal(found.receipt.issueId, first.issueId);
+    assert.deepEqual(store.object(route.projectId, 'feedback-case-issue', original.caseId), found.receipt);
+    assert.deepEqual(await bindFeedbackCaseIssue(store, route, actor, original.caseId, binding), found);
+    const changed = {...linearScope, projectId: linearScope.teamId};
+    await assert.rejects(bindFeedbackCaseIssue(store, route, actor, original.caseId, {
+      scope: changed, adapter: createLinearIssueAdapter(changed, fixture),
+    }), {code: 'LINEAR_SCOPE_CHANGED'});
+    assert.equal(store.revision(route.projectId), 3);
+    assert.deepEqual(fixture.calls.map(call => call.operation), [
+      'RuntimeLinearCreate', 'RuntimeLinearRead', 'RuntimeLinearRead', 'RuntimeLinearRead',
+    ]);
+  } finally {
+    store.close();
+    rmSync(root, {recursive: true, force: true});
+  }
+});
+
+test('Linear changes verify the original issue and correlate the exact body and state', async () => {
+  const {createLinearIssueAdapter, prepareLinearIssueIntent} = await import('../../dist/feedback-loop/linear.js');
+  const linear = linearFixture();
+  const adapter = createLinearIssueAdapter(linearScope, linear);
+  const original = prepareLinearIssueIntent(linearScope, linearCreate);
+  const {receipt: created} = await adapter.dispatch(original, 'RESERVED');
+  const needsInfoRequest = {
+    kind: 'needs-info', original, prior: created, requestId: 'request:needs-info', body: 'Which browser?',
+  };
+  const blockedNeedsInfo = prepareLinearIssueIntent(linearScope, {...needsInfoRequest, requestId: 'request:blocked-needs-info'});
+  const originalBody = linear.issue.description;
+  linear.issue.description += ' Manual edit';
+  const callsBeforeEdit = linear.calls.length;
+  assert.equal((await adapter.dispatch(blockedNeedsInfo, 'RESERVED')).reason, 'ORIGINAL_CHANGED');
+  assert.deepEqual(linear.calls.slice(callsBeforeEdit), [{operation: 'RuntimeLinearRead', variables: {id: original.issueId}}]);
+  linear.issue.description = originalBody;
+  const needsInfo = prepareLinearIssueIntent(linearScope, needsInfoRequest);
+  const {receipt: waiting} = await adapter.dispatch(needsInfo, 'RESERVED');
+  assert.equal(waiting.stateId, linearScope.needsInfoStateId);
+  assert.equal(linear.issue.description, 'EvoPilot issue: ' + original.intentId + '\n\nEvoPilot change: ' + needsInfo.intentId + '\n\nWhich browser?');
+
+  const resume = prepareLinearIssueIntent(linearScope, {
+    kind: 'resume', original, prior: waiting, requestId: 'request:resume', body: 'Reproduces in Chromium.',
+  });
+  const {receipt: resumed} = await adapter.dispatch(resume, 'RESERVED');
+  assert.equal(resumed.originalIntentId, original.intentId);
+  assert.equal(resumed.stateId, linearScope.openStateId);
+  assert.equal((await adapter.reconcile(needsInfo)).status, 'UNKNOWN');
+  assert.throws(() => prepareLinearIssueIntent(linearScope, {
+    kind: 'close', original, prior: {...resumed, issueId: linearScope.projectId}, requestId: 'request:close', body: 'Merged.',
+  }), {code: 'LINEAR_ORIGINAL_REQUIRED'});
+
+  const closeRequest = {
+    kind: 'close', original, prior: resumed, requestId: 'request:close', body: 'Merged.',
+  };
+  const blockedClose = prepareLinearIssueIntent(linearScope, {...closeRequest, requestId: 'request:blocked-close'});
+  linear.closeStateType = 'canceled';
+  const callsBeforeClose = linear.calls.length;
+  assert.equal((await adapter.dispatch(blockedClose, 'RESERVED')).reason, 'CLOSE_STATE_UNVERIFIED');
+  assert.deepEqual(linear.calls.slice(callsBeforeClose).map(call => call.operation), ['RuntimeLinearRead', 'RuntimeLinearState']);
+  linear.closeStateType = 'completed';
+  const close = prepareLinearIssueIntent(linearScope, closeRequest);
+  linear.loseMutationResponse = true;
+  linear.losePostMutationReadback = true;
+  assert.equal((await adapter.dispatch(close, 'RESERVED')).status, 'UNKNOWN');
+  linear.loseReadback = false;
+  const {receipt: closed} = await createLinearIssueAdapter(linearScope, linear).reconcile(close);
+  assert.equal(closed.issueId, original.issueId);
+  assert.equal(closed.stateId, linearScope.closedStateId);
+  assert.equal(closed.originalIntentId, original.intentId);
+  assert.equal((await adapter.reconcile(close)).status, 'CONFIRMED');
+  const snapshot = structuredClone(linear.issue);
+  for (const change of [
+    {id: linearScope.teamId},
+    {team: {id: linearScope.projectId}},
+    {project: null},
+    {state: {...snapshot.state, type: 'canceled'}},
+    {state: {...snapshot.state, id: linearScope.openStateId}},
+    {description: snapshot.description + ' Manual edit'},
+  ]) {
+    linear.issue = {...snapshot, ...change};
+    assert.equal((await adapter.reconcile(close)).status, 'UNKNOWN');
+  }
+  assert.deepEqual(
+    linear.calls.filter(call => call.operation === 'RuntimeLinearUpdate').map(call => call.variables.id),
+    Array(3).fill(original.issueId),
+  );
+});
