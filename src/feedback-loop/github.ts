@@ -1,5 +1,6 @@
 import { digest, exact, record, reject, string } from '../server/errors.js';
 import type { ReviewCandidate } from './review.js';
+import type { FeedbackVerificationCandidate } from './verification.js';
 
 const api = 'https://api.github.com';
 const version = '2026-03-10';
@@ -230,6 +231,19 @@ export function createFeedbackGitHubAdapter(configured: FeedbackGitHubBinding, r
   }
 
   return Object.freeze({
+    async readCandidate(pullRequestId: string, signal: AbortSignal): Promise<FeedbackVerificationCandidate> {
+      if (!numberId.test(string(pullRequestId,16))) return blocked();
+      const access = await installation(signal);
+      const pull = record(await access.get('/pulls/'+pullRequestId));
+      const head = record(pull.head), base = record(pull.base);
+      const branch = string(head.ref,200);
+      if (pull.number !== Number(pullRequestId) || pull.state !== 'open' || pull.merged !== false ||
+          base.ref !== binding.baseBranch || branch === binding.baseBranch || !matchesRepository(base.repo) ||
+          !matchesRepository(head.repo) || !providerSha(head.sha) || !providerSha(base.sha) || head.sha === base.sha ||
+          (await protectedBranch(access)) !== base.sha) return blocked();
+      return {source,repositoryId:binding.repositoryId,number:Number(pullRequestId),branch,head:head.sha,base:base.sha};
+    },
+
     async inspect(input: ReviewCandidate, signal: AbortSignal) {
       const candidate = exactCandidate(input);
       await preflight(await installation(signal), candidate);

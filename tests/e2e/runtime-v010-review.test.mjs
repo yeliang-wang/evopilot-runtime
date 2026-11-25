@@ -195,6 +195,19 @@ test('GitHub dispatch uses the exact protected expected head and reconciles via 
   await assert.rejects(adapter({...githubBinding,installationId:'105'}).reconcile(githubRequest,accepted,signal),{code:'FEEDBACK_GITHUB_RECEIPT'});
 });
 
+test('independent verifier reads the exact protected PR head even while CI has not passed', async () => {
+  const {target,adapter,signal} = await githubFixture();
+  target.pull.mergeable_state = 'blocked';
+  const binding = adapter();
+  assert.deepEqual(await binding.readCandidate('5',signal),{
+    source:'FIXTURE',repositoryId:'21',number:5,branch:'fix/feedback',head:candidate.head,base:candidate.base,
+  });
+  await assert.rejects(binding.inspect(candidate,signal),{code:'FEEDBACK_GITHUB_BLOCKED'});
+  target.branchHead = '7'.repeat(40);
+  await assert.rejects(binding.readCandidate('5',signal),{code:'FEEDBACK_GITHUB_BLOCKED'});
+  assert.equal(target.requests.some(request=>request.method==='PUT'),false);
+});
+
 test('Runtime commits the merge claim, retains the original GitHub operation and reads it back after restart', async () => {
   const {mkdtempSync,realpathSync,rmSync} = await import('node:fs');
   const {tmpdir} = await import('node:os');
