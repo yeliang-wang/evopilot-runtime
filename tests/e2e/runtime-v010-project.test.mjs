@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { inspectFeedbackChannelReadiness, parseFeedbackProjectDraft } from '../../dist/feedback-loop/project.js';
+import { inspectFeedbackActivationBindings, inspectFeedbackChannelReadiness, parseFeedbackProjectDraft } from '../../dist/feedback-loop/project.js';
 
 const now = 1_800_000_000_000;
 const input = {
@@ -44,6 +44,39 @@ test('one registered connection may fill both roles with the correct capability 
   const both = observe(input.feedbackBindingRef, ['receive-feedback','reply','notify','review-action']);
   assert.equal(inspectFeedbackChannelReadiness(draft, [both], now).channelsReady, true);
   assert.equal(inspectFeedbackChannelReadiness(draft, [inbound], now).channelsReady, false);
+});
+
+test('feedback activation evidence binds every provider role to the selected draft and earliest expiry', () => {
+  const draft = parseFeedbackProjectDraft(input);
+  const observations = [
+    {...inbound, role: 'feedbackBindingRef'},
+    {...review, role: 'reviewBindingRef'},
+    ...['linearTeamRef','githubRepositoryRef','cursorAgentRef','harnessRuleRef','mergePolicyRef']
+      .map(role => ({...observe(input[role], []), role})),
+  ].map((binding, index) => ({
+    ...binding, factsDigest: 'sha256:' + String(index).repeat(64),
+    evidenceRef: 'evidence:providers/' + index, validUntil: now + index + 10,
+  }));
+  const valid = inspectFeedbackActivationBindings(draft, observations, now);
+  assert.match(valid.bindingStamp, /^[a-f0-9]{64}$/);
+  assert.equal(valid.validUntil, now + 10);
+  assert.deepEqual(inspectFeedbackActivationBindings(draft, [...observations].reverse(), now), valid);
+  for (const broken of [
+    observations.slice(0,-1),
+    [...observations,observations[0]],
+    observations.map(row => row.role === 'cursorAgentRef' ? {...row, reference: input.githubRepositoryRef} : row),
+    observations.map(row => row.role === 'linearTeamRef' ? {...row, projectId: 'different'} : row),
+    observations.map(row => row.role === 'githubRepositoryRef' ? {...row, factsDigest: 'unverified'} : row),
+    observations.map(row => row.role === 'reviewBindingRef' ? {...row, capabilities: ['notify']} : row),
+  ]) {
+    const invalid = inspectFeedbackActivationBindings(draft, broken, now);
+    assert.equal(invalid.bindingStamp, null);
+    assert.equal(invalid.validUntil, null);
+    assert(invalid.bindings.some(binding => binding.status === 'UNVERIFIED'));
+  }
+  assert.equal(inspectFeedbackActivationBindings(draft, observations, now + 10).bindingStamp, null);
+  const updated = observations.map(row => row.role === 'harnessRuleRef' ? {...row, revision: 2} : row);
+  assert.notEqual(inspectFeedbackActivationBindings(draft, updated, now).bindingStamp, valid.bindingStamp);
 });
 
 test('actual HTTP and MCP share validation and persist incomplete drafts without activation', async () => {

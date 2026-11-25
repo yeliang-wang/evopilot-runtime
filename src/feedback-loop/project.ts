@@ -39,6 +39,15 @@ type DraftConfiguration = Pick<FeedbackProjectDraft, typeof draftScope[number]> 
   Partial<Pick<FeedbackProjectDraft, typeof configFields[number]>>;
 
 type BindingRequirement = { reference: string; capabilities: readonly FeedbackCapability[] };
+type FeedbackBindingRole = typeof bindingFields[number];
+
+/** Readbacks obtained from the server's registered provider bindings. */
+export interface FeedbackBindingObservation extends FeedbackConnectionObservation {
+  role: FeedbackBindingRole;
+  evidenceRef: string;
+  factsDigest: string;
+}
+
 const reference = (value: unknown) => {
   const ref = string(value, 200);
   if (!/^binding:[a-z][a-z0-9-]*(\/[a-z0-9][a-z0-9._-]*){1,5}$/.test(ref)) {
@@ -67,6 +76,14 @@ export function parseFeedbackProjectDraft(value: unknown): FeedbackProjectDraft 
   };
 }
 
+function currentObservation<T extends FeedbackConnectionObservation>(draft: FeedbackProjectDraft, matches: readonly T[], now: number) {
+  if (matches.length !== 1) return null;
+  const [observation] = matches;
+  return observation.workspaceId === draft.workspaceId && observation.projectId === draft.projectId &&
+    observation.status === 'READY' && Number.isSafeInteger(observation.revision) && observation.revision > 0 &&
+    Number.isSafeInteger(observation.validUntil) && observation.validUntil > now ? observation : null;
+}
+
 /** Consumes trusted connection observations from the service, never request-provided proof. */
 export function inspectFeedbackChannelReadiness(
   draft: FeedbackProjectDraft,
@@ -81,18 +98,13 @@ export function inspectFeedbackChannelReadiness(
     { reference: draft.reviewBindingRef, capabilities: reviewCapabilities },
   ];
   const results = requirements.map(({ reference, capabilities }) => {
-    const matches = observations.filter(item => item.reference === reference);
-    const observation = matches[0];
-    const valid = matches.length === 1 && observation.workspaceId === draft.workspaceId &&
-      observation.projectId === draft.projectId && observation.status === 'READY' &&
-      Number.isSafeInteger(observation.revision) && observation.revision > 0 &&
-      Number.isSafeInteger(observation.validUntil) && observation.validUntil > now;
-    const missing = capabilities.filter(capability => !valid || !observation.capabilities.includes(capability));
+    const observation = currentObservation(draft,observations.filter(item => item.reference === reference),now);
+    const missing = capabilities.filter(capability => !observation?.capabilities.includes(capability));
     return {
       reference,
       missing,
-      revision: valid ? observation.revision : null,
-      ready: valid && missing.length === 0,
+      revision: observation?.revision ?? null,
+      ready: observation !== null && missing.length === 0,
     };
   });
   return {
@@ -100,6 +112,36 @@ export function inspectFeedbackChannelReadiness(
     channelsReady: results.every(result => result.ready),
     feedback: results[0],
     review: results[1],
+  };
+}
+
+export function inspectFeedbackActivationBindings(
+  draft: FeedbackProjectDraft, observations: readonly FeedbackBindingObservation[], now: number,
+) {
+  if (!Number.isSafeInteger(now) || now <= 0) return reject('FEEDBACK_CLOCK','A current authoritative timestamp is required.');
+  const bindings = bindingFields.map(role => {
+    const matches = observations.filter(item => item.role === role);
+    const observation = currentObservation(draft,matches,now);
+    const capabilities = role === 'feedbackBindingRef' ? feedbackCapabilities : role === 'reviewBindingRef' ? reviewCapabilities : [];
+    const missing = capabilities.filter(capability => !observation?.capabilities.includes(capability));
+    if (!observation || observation.reference !== draft[role] || missing.length ||
+        !/^sha256:[a-f0-9]{64}$/.test(observation.factsDigest) ||
+        !/^[a-z][a-z0-9._:/-]{0,255}$/.test(observation.evidenceRef)) {
+      return {role,reference:draft[role],status:'UNVERIFIED' as const,missing};
+    }
+    return {
+      role,reference:draft[role],status:'VERIFIED' as const,
+      revision:observation.revision,validUntil:observation.validUntil,
+      evidenceRef:observation.evidenceRef,factsDigest:observation.factsDigest,
+    };
+  });
+  const verified = bindings.filter(binding => binding.status === 'VERIFIED');
+  const complete = verified.length === bindings.length;
+  const draftDigest = digest(draft);
+  return {
+    draftDigest,bindings,
+    bindingStamp:complete ? digest({draftDigest,bindings}) : null,
+    validUntil:complete ? Math.min(...verified.map(binding => binding.validUntil)) : null,
   };
 }
 
