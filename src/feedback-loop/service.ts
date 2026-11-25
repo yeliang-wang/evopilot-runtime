@@ -2,7 +2,7 @@ import { digest, reject } from '../server/errors.js';
 import { authorize, type Principal } from '../server/security.js';
 import type { RuntimeStore } from '../server/store.js';
 import { normalizeChannelEvent, type ChannelScope } from './channel.js';
-import { claimFeedbackMerge, openFeedbackReview, recordFeedbackVeto, type MergeObservation, type ReviewCandidate } from './review.js';
+import { claimFeedbackMerge, feedbackReviewId, openFeedbackReview, recordFeedbackVeto, type MergeObservation, type ReviewCandidate } from './review.js';
 
 type Window = ReturnType<typeof openFeedbackReview>;
 type ReviewScope = {workspaceId:string; projectId:string; channel:ChannelScope; allowedActorIds:readonly string[]};
@@ -31,12 +31,56 @@ function activeWindow(store: RuntimeStore, window: Window) {
   if (current !== window.id) reject('FEEDBACK_REVIEW_CLOSED', 'The review window was superseded.', 409);
 }
 
-/** Internal entry for a verified provider notification, with evidence bound by the caller. */
-export function retainFeedbackReview(store: RuntimeStore, principal: Principal, scope: ReviewScope, candidate: ReviewCandidate, notificationIntentRef: string, notificationRef: string, observedAt: number): Window {
+interface ReviewNotificationIntent {
+  intentRef: string;
+  windowId: string;
+  candidateDigest: string;
+  audienceDigest: string;
+}
+
+function requireReviewAudience(store: RuntimeStore, principal: Principal, scope: ReviewScope, candidate: ReviewCandidate) {
   requireScope(store, scope.workspaceId, scope.projectId, principal);
   if (scope.workspaceId !== candidate.workspaceId || scope.projectId !== candidate.projectId || !scope.allowedActorIds.length) {
     reject('FEEDBACK_REVIEW_FORBIDDEN', 'A verified project reviewer audience is required.', 403);
   }
+}
+
+function ensureReviewCanOpen(store: RuntimeStore, candidate: ReviewCandidate) {
+  const projectId = candidate.projectId;
+  if (store.object(projectId, 'feedback-vetoed-head', vetoIndexId(candidate))) {
+    reject('FEEDBACK_REVIEW_VETO', 'A vetoed PR requires a new revision before review.', 409);
+  }
+  const currentId = store.object(projectId, 'feedback-review-current', pointerId(candidate)) as string | null;
+  if (currentId && readWindow(store, projectId, currentId).claim) {
+    reject('FEEDBACK_RECONCILE_ORIGINAL', 'Inspect the original merge claim.', 409);
+  }
+}
+
+/** Only a new durable reservation is available for dispatch. On replay inspect
+ * that exact provider attempt; a reused reservation must not create a new notice. */
+export function reserveFeedbackReviewNotification(store: RuntimeStore, principal: Principal, scope: ReviewScope, candidate: ReviewCandidate) {
+  requireReviewAudience(store, principal, scope, candidate);
+  ensureReviewCanOpen(store, candidate);
+  const projectId = candidate.projectId;
+  const material = {candidateDigest:digest(candidate), audienceDigest:audienceDigest(scope)};
+  const intentRef = 'feedback-notify:' + digest(material);
+  const prior = store.object(projectId, 'feedback-review-intent', intentRef) as ReviewNotificationIntent | null;
+  if (prior) return {status:'REUSED' as const,intent:prior};
+  const intent = {intentRef,windowId:feedbackReviewId(candidate,intentRef),...material};
+  store.mutate(principal, {
+    projectId,operation:'feedback.review.notify.reserve',requestId:intentRef,
+    expectedRevision:store.revision(projectId),permission:'execution.request',input:material,
+  }, () => ({
+    value:intent,
+    objects:[{kind:'feedback-review-intent',id:intentRef,value:intent}],
+    event:{type:'feedback-review-notification-reserved',data:{windowId:intent.windowId}},
+  }));
+  return {status:'RESERVED' as const,intent};
+}
+
+/** Internal entry for a verified provider notification, with evidence bound by the caller. */
+export function retainFeedbackReview(store: RuntimeStore, principal: Principal, scope: ReviewScope, candidate: ReviewCandidate, notificationIntentRef: string, notificationRef: string, observedAt: number): Window {
+  requireReviewAudience(store, principal, scope, candidate);
   const window = {...openFeedbackReview(candidate, notificationIntentRef, notificationRef, observedAt), audienceDigest:audienceDigest(scope)};
   const projectId = candidate.projectId;
   const pointer = pointerId(candidate);
@@ -50,14 +94,11 @@ export function retainFeedbackReview(store: RuntimeStore, principal: Principal, 
     if (prior.audienceDigest !== window.audienceDigest || prior.notificationRef !== notificationRef) reject('FEEDBACK_REVIEW_AUDIENCE_CHANGED', 'The original notification binds a different audience.', 409);
     return prior;
   }
-  if (store.object(projectId, 'feedback-vetoed-head', vetoIndexId(candidate))) {
-    reject('FEEDBACK_REVIEW_VETO', 'A vetoed PR requires a new revision before review.', 409);
-  }
-  const currentId = store.object(projectId, 'feedback-review-current', pointer) as string | null;
-  if (currentId) {
-    const current = readWindow(store, projectId, currentId);
-    if (current.claim) reject('FEEDBACK_RECONCILE_ORIGINAL', 'Inspect the original merge claim.', 409);
-
+  ensureReviewCanOpen(store, candidate);
+  const intent = store.object(projectId, 'feedback-review-intent', notificationIntentRef) as ReviewNotificationIntent | null;
+  if (!intent || intent.windowId !== window.id || intent.candidateDigest !== window.candidateDigest ||
+      intent.audienceDigest !== window.audienceDigest) {
+    reject('FEEDBACK_REVIEW_NOTIFICATION_UNRESERVED', 'Verified delivery must match the original durable notification intent.', 409);
   }
   store.mutate(principal, {
     projectId, operation:'feedback.review.open', requestId:window.id,

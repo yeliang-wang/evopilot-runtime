@@ -175,7 +175,7 @@ export class RuntimeStore {
       }
       // Loop accounting needs a reader that enforces its finite window. Never
       // downgrade it when a later ordinary correction record is retained.
-      const retainsFeedbackIngress = result.objects?.some(item => item.kind === 'feedback-channel-event' || item.kind === 'feedback-review-window');
+      const retainsFeedbackIngress = result.objects?.some(item => item.kind === 'feedback-channel-event' || item.kind === 'feedback-review-window' || item.kind === 'feedback-review-intent');
       const featureVersion = retainsFeedbackIngress ? 4 :
         result.objects?.some(item=>item.kind==='lifecycle-loop-budget') ? 3 :
         result.objects?.some(item=>CORRECTION_STATE_KINDS.has(item.kind)) ? 2 : 1;

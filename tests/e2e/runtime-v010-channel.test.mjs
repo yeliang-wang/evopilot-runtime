@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { normalizeChannelEvent } from '../../dist/feedback-loop/channel.js';
+import { normalizeSlackSocketModeEvent } from '../../dist/feedback-loop/slack.js';
 
 const scope = { provider: 'slack', installationId: 'A00', tenantId: 'T00', channelId: 'C00' };
 const event = {
@@ -120,4 +121,115 @@ test('callback adapter authenticates original bytes before normalization', async
   assert.throws(() => authenticateReferenceCallback(body,timestamp,signature,key,Number(timestamp)+300001),{code:'CALLBACK_UNAUTHENTICATED'});
   assert.throws(() => authenticateReferenceCallback(Buffer.concat([body,Buffer.from(' ')]),timestamp,signature,key,Number(timestamp)),{code:'CALLBACK_UNAUTHENTICATED'});
   assert.throws(() => authenticateReferenceCallback(Buffer.alloc(65537),timestamp,signature,key,Number(timestamp)),{code:'INPUT_LIMIT'});
+});
+
+const slackDelivery = {
+  type: 'events_api',
+  envelope_id: 'delivery-first',
+  accepts_response_payload: false,
+  payload: {
+    type: 'event_callback',
+    api_app_id: scope.installationId,
+    team_id: scope.tenantId,
+    event_id: event.eventId,
+    event_time: 1732471200,
+    event: {
+      type: 'message',
+      channel: scope.channelId,
+      user: event.actorId,
+      ts: event.messageId,
+      event_ts: event.messageId,
+      text: event.action.text,
+      channel_type: 'channel',
+    },
+  },
+};
+
+function slackMessage(message, callback = {}) {
+  return {
+    ...slackDelivery,
+    payload: { ...slackDelivery.payload, ...callback, event: { ...slackDelivery.payload.event, ...message } },
+  };
+}
+
+test('Slack Socket Mode retains provider identities and exact text across delivery retries', () => {
+  const normalized = normalizeSlackSocketModeEvent(slackDelivery, scope);
+  assert.deepEqual(normalized, normalizeChannelEvent(event, scope));
+  assert.deepEqual(normalizeSlackSocketModeEvent({
+    ...slackDelivery,
+    envelope_id: 'delivery-retry',
+    retry_attempt: 1,
+    payload: { ...slackDelivery.payload, event_time: 1732471201 },
+  }, scope), normalized);
+  const changed = normalizeSlackSocketModeEvent(slackMessage({ text: 'Changed feedback' }), scope);
+  assert.equal(changed.eventKey, normalized.eventKey);
+  assert.notEqual(changed.payloadDigest, normalized.payloadDigest);
+  assert.throws(() => normalizeSlackSocketModeEvent(slackMessage({}, { event_id: undefined }), scope), { code: 'INVALID_INPUT' });
+});
+
+test('Slack Socket Mode rejects scope mismatches before resolving a thread', () => {
+  const thread_ts = '1732471199.000100';
+  for (const delivery of [
+    slackMessage({ thread_ts }, { api_app_id: 'A01' }),
+    slackMessage({ thread_ts }, { team_id: 'T01' }),
+    slackMessage({ thread_ts, channel: 'C01' }),
+  ]) {
+    assert.throws(() => normalizeSlackSocketModeEvent(delivery, scope, () => assert.fail('Unexpected thread lookup')), {
+      code: 'CHANNEL_SCOPE_MISMATCH',
+      status: 403,
+    });
+  }
+  assert.throws(() => normalizeSlackSocketModeEvent(slackDelivery, { ...scope, provider: 'callback' }), {
+    code: 'CHANNEL_SCOPE_MISMATCH',
+    status: 403,
+  });
+});
+
+test('Slack Socket Mode ignores bot, system, update, and non-message deliveries', () => {
+  for (const message of [
+    { subtype: 'bot_message' },
+    { bot_id: 'B00' },
+    { bot_profile: { id: 'B00' } },
+    { app_id: 'A00' },
+    { subtype: 'channel_join' },
+    { subtype: 'message_changed' },
+    { subtype: 'message_deleted' },
+    { subtype: 'message_replied' },
+    { subtype: 'thread_broadcast' },
+    { hidden: true, message: { ts: event.messageId, thread_ts: event.messageId } },
+    { edited: { user: event.actorId, ts: event.messageId } },
+    { type: 'reaction_added' },
+  ]) {
+    assert.equal(normalizeSlackSocketModeEvent(slackMessage(message), scope), undefined);
+  }
+  assert.equal(normalizeSlackSocketModeEvent({ type: 'hello' }, scope), undefined);
+  assert.equal(normalizeSlackSocketModeEvent({ type: 'interactive' }, scope), undefined);
+});
+
+test('Slack Socket Mode supplements require a trusted binding to the original thread', () => {
+  const threadId = event.messageId;
+  assert.deepEqual(normalizeSlackSocketModeEvent(slackMessage({ thread_ts: threadId }), scope, () => {
+    assert.fail('Root messages do not need a thread lookup');
+  }), normalizeChannelEvent(event, scope));
+
+  const messageId = '1732471201.003000';
+  const text = '补充：保存后出现问题';
+  const reply = slackMessage({
+    thread_ts: threadId, ts: messageId, user: 'U01', text, caseId: 'case:untrusted',
+  }, { event_id: 'Ev002', event_time: 1732471201 });
+
+  assert.equal(normalizeSlackSocketModeEvent(reply, scope), undefined);
+  assert.equal(normalizeSlackSocketModeEvent(reply, scope, () => undefined), undefined);
+  const resolved = normalizeSlackSocketModeEvent(reply, scope, (boundScope, originalMessageId) => {
+    assert.deepEqual(boundScope, scope);
+    assert.equal(originalMessageId, threadId);
+    return 'case:original';
+  });
+  assert.deepEqual(resolved, normalizeChannelEvent({
+    ...event,
+    eventId: 'Ev002',
+    messageId,
+    actorId: 'U01',
+    action: { kind: 'supplement', caseId: 'case:original', text },
+  }, scope));
 });

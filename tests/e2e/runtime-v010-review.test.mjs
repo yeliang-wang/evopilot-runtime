@@ -44,7 +44,7 @@ test('veto and merge share durable state; stale notification, duplicate delivery
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
   const { RuntimeStore } = await import('../../dist/server/store.js');
-  const { retainFeedbackReview, retainFeedbackVeto, reserveFeedbackMerge } = await import('../../dist/feedback-loop/service.js');
+  const { retainFeedbackReview, retainFeedbackVeto, reserveFeedbackMerge, reserveFeedbackReviewNotification } = await import('../../dist/feedback-loop/service.js');
   const root = mkdtempSync(join(realpathSync(tmpdir()),'runtime-v010-review-'));
   const actor = {id:'operator',projects:['tasks'],permissions:['execution.request'],revision:1,expiresAt:'2099-01-01T00:00:00Z'};
   const scope = {
@@ -53,9 +53,16 @@ test('veto and merge share durable state; stale notification, duplicate delivery
   };
   let store = new RuntimeStore(root, 'demo');
   try {
-    const window = retainFeedbackReview(store, actor, scope, candidate, 'intent-5', 'notice-5', start);
-    assert.equal(window.id, feedbackReviewId(candidate, 'intent-5'));
-    assert.deepEqual(retainFeedbackReview(store, actor, scope, candidate, 'intent-5', 'notice-5', start + 2000), window);
+    assert.throws(() => retainFeedbackReview(store, actor, scope, candidate, 'unreserved', 'notice-5', start), {code:'FEEDBACK_REVIEW_NOTIFICATION_UNRESERVED'});
+    const reservation = reserveFeedbackReviewNotification(store,actor,scope,candidate);
+    assert.equal(reservation.status,'RESERVED');
+    const {intentRef} = reservation.intent;
+    store.close();
+    store = new RuntimeStore(root, 'demo');
+    assert.deepEqual(reserveFeedbackReviewNotification(store,actor,scope,candidate),{...reservation,status:'REUSED'});
+    const window = retainFeedbackReview(store, actor, scope, candidate, intentRef, 'notice-5', start);
+    assert.equal(window.id, feedbackReviewId(candidate, intentRef));
+    assert.deepEqual(retainFeedbackReview(store, actor, scope, candidate, intentRef, 'notice-5', start + 2000), window);
     assert.throws(() => retainFeedbackReview(store, actor, scope, candidate, 'other-intent', 'notice-5', start + 2000), {code:'FEEDBACK_REVIEW_NOTIFICATION_CONFLICT'});
     const original = {
       schema:'runtime-feedback-channel-event/v1',scope:scope.channel,eventId:'veto-1',messageId:'notice-5',
@@ -70,13 +77,14 @@ test('veto and merge share durable state; stale notification, duplicate delivery
     assert.throws(() => reserveFeedbackMerge(store, actor, window.id, observed(window), () => window.deadline), {code:'FEEDBACK_REVIEW_VETO'});
     assert.throws(() => retainFeedbackReview(store, actor, scope, candidate, 'intent-retry', 'notice-retry', start+9), {code:'FEEDBACK_REVIEW_VETO'});
     const newCandidate = {...candidate,head:'e'.repeat(40)};
-    const next = retainFeedbackReview(store, actor, scope, newCandidate,'intent-6','notice-6',start+10);
+    const nextIntent = reserveFeedbackReviewNotification(store,actor,scope,newCandidate).intent;
+    const next = retainFeedbackReview(store, actor, scope, newCandidate,nextIntent.intentRef,'notice-6',start+10);
     assert.throws(() => retainFeedbackVeto(store, actor, scope, {...original,eventId:'veto-2'},() => start+12), {code:'FEEDBACK_REVIEW_CLOSED'});
     assert.throws(() => retainFeedbackReview(store, actor, scope, candidate,'intent-reopened','notice-reopened',start+11), {code:'FEEDBACK_REVIEW_VETO'});
     const admission = {...observed(next),candidate:newCandidate};
     assert(reserveFeedbackMerge(store, actor, next.id, admission, () => next.deadline).claim);
     assert.throws(() => reserveFeedbackMerge(store, actor, next.id, admission, () => next.deadline), {code:'FEEDBACK_RECONCILE_ORIGINAL'});
-    assert.equal(store.revision('tasks'),4);
+    assert.equal(store.revision('tasks'),6);
   } finally {
     store.close();
     rmSync(root,{recursive:true,force:true});
