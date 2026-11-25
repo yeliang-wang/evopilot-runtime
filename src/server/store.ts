@@ -44,7 +44,7 @@ export class RuntimeStore {
       for (const suffix of ['-wal','-shm','-journal']) if (existsSync(path + suffix)) privateFile(path + suffix);
       database = new DatabaseSync(path); this.db = database;
       const version = Number(database.prepare('PRAGMA user_version').get()!.user_version);
-      if (![0, 1, 2, 3].includes(version)) reject('INCOMPATIBLE_STATE', 'Unsupported service state schema', 409);
+      if (![0, 1, 2, 3, 4].includes(version)) reject('INCOMPATIBLE_STATE', 'Unsupported service state schema', 409);
       if (version === 0 && Number(database.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table'").get()!.n) !== 0) reject('INCOMPATIBLE_STATE', 'Existing unrecognized database will not be adopted', 409);
       if (version !== 0) {
         const tables=database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(r=>String(r.name));
@@ -175,7 +175,10 @@ export class RuntimeStore {
       }
       // Loop accounting needs a reader that enforces its finite window. Never
       // downgrade it when a later ordinary correction record is retained.
-      const featureVersion=result.objects?.some(item=>item.kind==='lifecycle-loop-budget')?3:result.objects?.some(item=>CORRECTION_STATE_KINDS.has(item.kind))?2:1;
+      const retainsFeedbackIngress = result.objects?.some(item => item.kind === 'feedback-channel-event' || item.kind === 'feedback-review-window');
+      const featureVersion = retainsFeedbackIngress ? 4 :
+        result.objects?.some(item=>item.kind==='lifecycle-loop-budget') ? 3 :
+        result.objects?.some(item=>CORRECTION_STATE_KINDS.has(item.kind)) ? 2 : 1;
       if(Number(this.db.prepare('PRAGMA user_version').get()!.user_version)<featureVersion)this.db.exec('PRAGMA user_version='+featureVersion+';');
       if (reauthorize) {
         const current = reauthorize(); authorize(current, request.projectId, request.permission);

@@ -1,0 +1,119 @@
+{
+  "schema": "evopilot-evolution-target/v1",
+  "id": "runtime-v010-feedback-loop",
+  "targetVersion": "0.10.0",
+  "sourceBaseline": "81777f07e856ba5a3615b373de5f6709dc3b3e9b",
+  "roadmapDigest": "17b33c79b5a99bbb260d16380992386f83e58ba9d0c07d0325663060a7fb2572",
+  "pins": {
+    "governance/roadmap-v010.json": "17b33c79b5a99bbb260d16380992386f83e58ba9d0c07d0325663060a7fb2572",
+    "governance/acceptance-v010.json": "7ca27ee2578216c80067b73400104c4b6e89719c8a3e76c20c4734a5ce0baf35",
+    "docs/architecture/runtime-v010-feedback-loop.md": "c439115a029a4de563915025405450c38eac0f6e4fab77d59b0476632ad75e70",
+    "docs/runtime-v010-preview-plan.md": "6ac7cc2f346550bd0aa6b3391fb3368569332781db59d689138e5584941599a1"
+  },
+  "workPackets": {
+    "M1": {
+      "paths": [
+        "src/feedback-loop/project.ts",
+        "src/feedback-loop/service.ts",
+        "src/server/http.ts",
+        "src/server/mcp.ts",
+        "src/server/security.ts",
+        "dashboard/src/Editor.tsx",
+        "dashboard/src/api.ts",
+        "plugins/codex/skills/evopilot-runtime-expert/SKILL.md",
+        "plugins/codex/skills/evopilot-runtime-expert/references/configuration.md",
+        "tests/e2e/runtime-v010-project.test.mjs"
+      ],
+      "acceptance": [
+        "EXPERT-REAL",
+        "DASH-01"
+      ]
+    },
+    "M2": {
+      "paths": [
+        "src/feedback-loop/channel.ts",
+        "src/feedback-loop/service.ts",
+        "src/feedback-loop/ingress.ts",
+        "src/feedback-loop/linear.ts",
+        "src/feedback-loop/slack.ts",
+        "src/feedback-loop/callback-channel.ts",
+        "src/server/store.ts",
+        "tests/e2e/runtime-v010-channel.test.mjs"
+      ],
+      "acceptance": [
+        "CHANNEL-REAL",
+        "CHANNEL-REFERENCE",
+        "NEEDS-INFO"
+      ]
+    },
+    "M3": {
+      "paths": [
+        "src/feedback-loop/service.ts",
+        "src/feedback-loop/cursor.ts",
+        "src/feedback-loop/verification.ts",
+        "src/feedback-loop/worker.ts",
+        "tests/e2e/runtime-v010-agent.test.mjs"
+      ],
+      "acceptance": [
+        "AGENT-ACTUAL",
+        "VERIFY-REPAIR"
+      ]
+    },
+    "M4": {
+      "paths": [
+        "src/feedback-loop/service.ts",
+        "src/feedback-loop/review.ts",
+        "src/feedback-loop/github.ts",
+        "src/server/store.ts",
+        "tests/e2e/runtime-v010-review.test.mjs"
+      ],
+      "acceptance": [
+        "TIMED-MERGE",
+        "VETO-RACE"
+      ]
+    },
+    "M5": {
+      "paths": [
+        "src/feedback-loop/service.ts",
+        "src/feedback-loop/worker.ts",
+        "src/server/http.ts",
+        "dashboard/src/Monitor.tsx",
+        "dashboard/src/model.ts",
+        "dashboard/src/api.ts",
+        "dashboard/src/Graph.tsx",
+        "tests/acceptance/v010/real-journey.mjs",
+        "tests/e2e/runtime-v010-recovery.test.mjs"
+      ],
+      "acceptance": [
+        "UNKNOWN-RECOVERY",
+        "LOOP-INTEGRATED",
+        "DASH-02"
+      ]
+    },
+    "M6": {
+      "paths": [
+        "package.json",
+        "package-lock.json",
+        ".github/workflows/ci.yml",
+        "scripts/package-distribution.mjs",
+        "scripts/release-gate-v010.mjs",
+        "src/server/preview.ts",
+        "src/installation/installer.ts",
+        "README.md",
+        "README_CN.md",
+        "CHANGELOG.md",
+        "docs/README.md",
+        "docs/zh-CN/README.md",
+        "docs/runtime-v010-preview.md",
+        "docs/zh-CN/runtime-v010-preview.md",
+        "docs/images/runtime-v010-workflow-reference.png",
+        "tests/acceptance/v010/release-readback.mjs"
+      ],
+      "acceptance": [
+        "DOCS-CI",
+        "PUBLIC-READBACK",
+        "FRESH-REPLAY"
+      ]
+    }
+  }
+}

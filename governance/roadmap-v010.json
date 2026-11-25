@@ -1,0 +1,48 @@
+{
+  "schema": "runtime-roadmap/v2",
+  "owner": "runtime",
+  "targetVersion": "0.10.0",
+  "baseline": "81777f07e856ba5a3615b373de5f6709dc3b3e9b",
+  "legacyRoadmap": "governance/roadmap.json",
+  "scope": [
+    "existing-codex-expert-http-mcp",
+    "slack-socket-mode",
+    "callback-reference-channel",
+    "linear",
+    "cursor-cloud",
+    "independent-functional-verification",
+    "candidate-bound-60-minute-review",
+    "github-rebase-merge",
+    "two-dashboard-pages",
+    "isolated-prerelease"
+  ],
+  "exclusions": [
+    "daily-installation-cutover",
+    "production-deployment",
+    "software-release-via-merge-approval",
+    "feishu-wecom-qualified-production-bindings",
+    "ontology-harness-upgrades",
+    "provider-bypass",
+    "history-rewrite"
+  ],
+  "milestones": [
+    "M1",
+    "M2",
+    "M3",
+    "M4",
+    "M5",
+    "M6"
+  ],
+  "acceptanceBoundary": {
+    "deferred": [
+      "CHANNEL-REAL"
+    ],
+    "reason": "Slack live test channel unavailable; user deferred live Slack E2E. Slack adapter remains in implementation scope.",
+    "representativeChannel": "callback-reference",
+    "integratedProviders": [
+      "Linear",
+      "Cursor Cloud Agents",
+      "GitHub"
+    ]
+  }
+}

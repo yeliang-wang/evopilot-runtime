@@ -1,0 +1,100 @@
+{
+  "schema": "runtime-feedback-e2e/v1",
+  "scope": "0.10.0",
+  "design": {
+    "DASH-01": "6fcedee140b400e79d49529f3519ece57b9c7f37850743c8ade6d44cd8a3ad52",
+    "DASH-02": "e692b3dc2d94ee140e41c59164ca710feea152d46187d095e48adaa398365a79"
+  },
+  "cases": [
+    {
+      "id": "EXPERT-REAL",
+      "milestone": "M1",
+      "phase": "pre",
+      "observe": "Codex Desktop invokes installed Expert and HTTP MCP; invalid input fails, owner decides, exact activation is read back."
+    },
+    {
+      "id": "DASH-01",
+      "milestone": "M1",
+      "phase": "pre",
+      "observe": "Graph above YAML, allowed input edits, validation, saved draft and real browser byte readback; save grants no activation."
+    },
+    {
+      "id": "CHANNEL-REAL",
+      "milestone": "M2",
+      "phase": "deferred",
+      "observe": "Original live Slack E2E is explicitly deferred for this Preview. Report it as deferred, with no pass credit."
+    },
+    {
+      "id": "CHANNEL-REFERENCE",
+      "milestone": "M2",
+      "phase": "pre",
+      "observe": "Run Slack protocol fixtures and the independently authenticated callback reference through intake, notification, and veto. With the reference adapter exercise duplicate events, restart, distinct feedback/review bindings and cross-tenant rejection."
+    },
+    {
+      "id": "NEEDS-INFO",
+      "milestone": "M2",
+      "phase": "pre",
+      "observe": "Incomplete defect explicitly waits; reply resumes original Linear issue and instance."
+    },
+    {
+      "id": "AGENT-ACTUAL",
+      "milestone": "M3",
+      "phase": "pre",
+      "observe": "Original Cursor Run reproduces, opens PR, and runtime continues while Codex is closed."
+    },
+    {
+      "id": "VERIFY-REPAIR",
+      "milestone": "M3",
+      "phase": "pre",
+      "observe": "Independent actual verifier rejects first head, same PR is repaired, and prior head evidence cannot admit new head."
+    },
+    {
+      "id": "TIMED-MERGE",
+      "milestone": "M4",
+      "phase": "pre",
+      "observe": "Actual sixty-minute no-veto window through the reference channel, eligible protected GitHub rebase merge and exact readback."
+    },
+    {
+      "id": "VETO-RACE",
+      "milestone": "M4",
+      "phase": "pre",
+      "observe": "Review veto, stale action, changed head/base, lost channel, revoked policy, GitHub denial and concurrent deadline do not admit a forbidden merge."
+    },
+    {
+      "id": "UNKNOWN-RECOVERY",
+      "milestone": "M5",
+      "phase": "pre",
+      "observe": "Lost responses for issue, Agent and merge are reconciled after restart without duplicate side effects."
+    },
+    {
+      "id": "LOOP-INTEGRATED",
+      "milestone": "M5",
+      "phase": "pre",
+      "observe": "Authenticated reference callback traces original actual Linear issue, Cursor Run, validated GitHub head, review, GitHub merge and closure readbacks; Codex Expert reads the same run. Record the reference channel identity."
+    },
+    {
+      "id": "DASH-02",
+      "milestone": "M5",
+      "phase": "pre",
+      "observe": "Real browser read-only instance graph, visited path, needs-info/return edges and reasons, event detail, deadline, disconnection and checked recovery; retain screenshots and original receipts."
+    },
+    {
+      "id": "DOCS-CI",
+      "milestone": "M6",
+      "phase": "pre",
+      "observe": "Exact candidate source CI, bilingual documentation, README external workflow image attribution and both design references verified."
+    },
+    {
+      "id": "PUBLIC-READBACK",
+      "milestone": "M6",
+      "phase": "post",
+      "observe": "Read exact GitHub prerelease/tag and verify all anonymously downloaded attachment digests."
+    },
+    {
+      "id": "FRESH-REPLAY",
+      "milestone": "M6",
+      "phase": "post",
+      "observe": "Reinstall downloaded package into fresh root and repeat a representative integrated reference-channel journey including both Dashboard pages and Expert readback."
+    }
+  ]
+}

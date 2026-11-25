@@ -1,3 +1,15 @@
 import { fileURLToPath } from 'node:url';
-import { governanceMain } from '../dist/governance.js';
-governanceMain(fileURLToPath(new URL('../', import.meta.url)), process.argv.slice(2));
+import { mainV010 } from './roadmap-v010.mjs';
+
+const root = fileURLToPath(new URL('../', import.meta.url));
+const args = process.argv.slice(2);
+const intent = args[args.indexOf('--intent') + 1];
+const version = args.includes('--version') ? args[args.indexOf('--version') + 1] : null;
+if (version === '0.10.0' || intent?.startsWith('runtime-v0.10/')) mainV010(root, args);
+else if (version !== null) {
+  process.stdout.write(JSON.stringify({status:'UNKNOWN', reasons:['Unsupported governance version'], productAcceptance:'NOT_EVALUATED', releaseAuthorized:false}) + '\n');
+  process.exitCode = 1;
+} else {
+  const {governanceMain} = await import('../dist/governance.js');
+  governanceMain(root, args);
+}
