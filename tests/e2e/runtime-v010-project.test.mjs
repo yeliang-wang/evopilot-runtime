@@ -175,14 +175,17 @@ test('Expert transport enables only the exact current draft with independently v
   const bindings = syntheticBindings();
   const roles = ['feedbackBindingRef','reviewBindingRef','linearTeamRef','githubRepositoryRef','cursorAgentRef','harnessRuleRef','mergePolicyRef'];
   let approval = null, policyRevision = 1, providerReads = 0;
+  let onObservation;
   const registry = {
     async observe() {
       providerReads++;
-      return roles.map((role,index) => ({
+      const observations = roles.map((role,index) => ({
         ...observe(input[role],index === 0 ? inbound.capabilities : index === 1 ? review.capabilities : []),
         role,validUntil:Date.now()+60_000,evidenceRef:`evidence:fixture/${providerReads}-${index}`,
         factsDigest:'sha256:' + String(index).repeat(64),
       }));
+      onObservation?.();
+      return observations;
     },
     policy:() => ({revision:policyRevision,digest:'sha256:'+'a'.repeat(64),ownerId:owner,ownerRevision:1,validUntil:Date.now()+60_000}),
     // The fixture models a protected reviewer record independently of the request.
@@ -250,6 +253,11 @@ test('Expert transport enables only the exact current draft with independently v
     const previewOp = 'feedback.project.activation.preview', activateOp = 'feedback.project.activate';
     assert.equal((await browser(previewOp)).status,403);
     assert.equal((await request(previewOp,{},{},otherToken)).error.code,'FEEDBACK_ACTIVATION_OWNER');
+    onObservation = () => { policyRevision++; };
+    const mixed = await request(previewOp);
+    assert.equal(mixed.error?.code,'FEEDBACK_ACTIVATION_STALE');
+    assert.equal((await request('feedback.project.inspect')).result.active,undefined);
+    onObservation = undefined;
     const preview = await request(previewOp);
     assert.equal(preview.status,200,JSON.stringify(preview));
     assert.equal(preview.result.subject.definitionRevision,active.result.result.activeRevisionId);

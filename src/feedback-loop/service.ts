@@ -75,7 +75,7 @@ export function createFeedbackActivationService(
       return reject('FEEDBACK_DRAFT_INCOMPLETE','Save all required fields before requesting activation review.',409);
     }
     const draft = Object.freeze(parseFeedbackProjectDraft(saved.draft.configuration));
-    verifyPolicy(draft,actor);
+    const observedPolicy = { ...verifyPolicy(draft,actor) };
     const definitionPointer = digest(lifecyclePointer(projectId));
     const priorActivation = activePointer(projectId);
     const signal = AbortSignal.timeout(5000);
@@ -90,6 +90,10 @@ export function createFeedbackActivationService(
     ]);
     const now = Date.now();
     const policy = verifyPolicy(draft,actor);
+    if (policy.revision !== observedPolicy.revision || policy.digest !== observedPolicy.digest ||
+        observedPolicy.validUntil <= now) {
+      return reject('FEEDBACK_ACTIVATION_STALE','The activation policy changed while checking bindings. Review the current candidate.',409);
+    }
     const evidence = inspectFeedbackActivationBindings(draft,observations,now);
     if (!evidence.bindingStamp || !evidence.validUntil) {
       return reject('FEEDBACK_BINDINGS_UNVERIFIED','All seven project bindings require current verified evidence.',409);
@@ -109,7 +113,7 @@ export function createFeedbackActivationService(
     return {
       draft,candidate:{
         subject,candidateDigest:'sha256:'+digest(subject),
-        validUntil:Math.min(definition.validUntil,evidence.validUntil,policy.validUntil,Date.parse(actor.expiresAt)),
+        validUntil:Math.min(definition.validUntil,evidence.validUntil,observedPolicy.validUntil,policy.validUntil,Date.parse(actor.expiresAt)),
       },
     };
   }
