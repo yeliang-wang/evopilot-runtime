@@ -44,7 +44,7 @@ test('veto and merge share durable state; stale notification, duplicate delivery
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
   const { RuntimeStore } = await import('../../dist/server/store.js');
-  const { retainFeedbackReview, retainFeedbackVeto, reserveFeedbackMerge, reserveFeedbackReviewNotification } = await import('../../dist/feedback-loop/service.js');
+  const { readRetainedFeedbackReview, retainFeedbackReview, retainFeedbackVeto, reserveFeedbackMerge, reserveFeedbackReviewNotification } = await import('../../dist/feedback-loop/service.js');
   const root = mkdtempSync(join(realpathSync(tmpdir()),'runtime-v010-review-'));
   const actor = {id:'operator',projects:['tasks'],permissions:['execution.request'],revision:1,expiresAt:'2099-01-01T00:00:00Z'};
   const scope = {
@@ -59,6 +59,7 @@ test('veto and merge share durable state; stale notification, duplicate delivery
     const {intentRef} = reservation.intent;
     store.close();
     store = new RuntimeStore(root, 'demo');
+    assert.equal(readRetainedFeedbackReview(store,actor,scope,candidate),null);
     assert.deepEqual(reserveFeedbackReviewNotification(store,actor,scope,candidate),{...reservation,status:'REUSED'});
     const window = retainFeedbackReview(store, actor, scope, candidate, intentRef, 'notice-5', start);
     assert.equal(window.id, feedbackReviewId(candidate, intentRef));
@@ -73,6 +74,8 @@ test('veto and merge share durable state; stale notification, duplicate delivery
     assert.equal(vetoed.veto.actorRef,'reviewer');
     store.close();
     store = new RuntimeStore(root, 'demo');
+    assert.deepEqual(readRetainedFeedbackReview(store,actor,scope,candidate),vetoed);
+    assert.throws(() => reserveFeedbackReviewNotification(store,actor,scope,candidate),{code:'FEEDBACK_REVIEW_VETO'});
     assert.equal(retainFeedbackVeto(store, actor, scope, original, () => start+2).veto.eventKey,vetoed.veto.eventKey);
     assert.throws(() => reserveFeedbackMerge(store, actor, window.id, observed(window), () => window.deadline), {code:'FEEDBACK_REVIEW_VETO'});
     assert.throws(() => retainFeedbackReview(store, actor, scope, candidate, 'intent-retry', 'notice-retry', start+9), {code:'FEEDBACK_REVIEW_VETO'});

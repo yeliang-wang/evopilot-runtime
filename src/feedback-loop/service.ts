@@ -227,17 +227,43 @@ function ensureReviewCanOpen(store: RuntimeStore, candidate: ReviewCandidate) {
   }
 }
 
+function reviewNotificationIdentity(scope: ReviewScope, candidate: ReviewCandidate): ReviewNotificationIntent {
+  const material = {candidateDigest:digest(candidate), audienceDigest:audienceDigest(scope)};
+  const intentRef = 'feedback-notify:' + digest(material);
+  return {intentRef,windowId:feedbackReviewId(candidate,intentRef),...material};
+}
+
+/** Resume an already-open window before attempting another notification. */
+export function readRetainedFeedbackReview(
+  store: RuntimeStore, principal: Principal, scope: ReviewScope, candidate: ReviewCandidate,
+) {
+  requireReviewAudience(store,principal,scope,candidate);
+  const expected = reviewNotificationIdentity(scope,candidate);
+  const window = store.object(candidate.projectId,windowKind,expected.windowId) as StoredWindow | null;
+  if (!window) return null;
+  const intent = store.object(candidate.projectId,'feedback-review-intent',expected.intentRef);
+  const noticeKey = digest({channel:scope.channel,notificationRef:window.notificationRef});
+  if (digest(intent) !== digest(expected) || window.id !== expected.windowId ||
+      window.notificationIntentRef !== expected.intentRef || window.audienceDigest !== expected.audienceDigest ||
+      window.candidateDigest !== expected.candidateDigest || digest(window.candidate) !== expected.candidateDigest ||
+      store.object(candidate.projectId,'feedback-review-notification',noticeKey) !== window.id) {
+    return reject('FEEDBACK_REVIEW_NOTIFICATION_CONFLICT','The retained review does not match the original notification.',409);
+  }
+  activeWindow(store,window);
+  return window;
+}
+
 /** Only a new durable reservation is available for dispatch. On replay inspect
  * that exact provider attempt; a reused reservation must not create a new notice. */
 export function reserveFeedbackReviewNotification(store: RuntimeStore, principal: Principal, scope: ReviewScope, candidate: ReviewCandidate) {
   requireReviewAudience(store, principal, scope, candidate);
   ensureReviewCanOpen(store, candidate);
   const projectId = candidate.projectId;
-  const material = {candidateDigest:digest(candidate), audienceDigest:audienceDigest(scope)};
-  const intentRef = 'feedback-notify:' + digest(material);
+  const intent = reviewNotificationIdentity(scope,candidate);
+  const {intentRef,candidateDigest,audienceDigest} = intent;
+  const material = {candidateDigest,audienceDigest};
   const prior = store.object(projectId, 'feedback-review-intent', intentRef) as ReviewNotificationIntent | null;
   if (prior) return {status:'REUSED' as const,intent:prior};
-  const intent = {intentRef,windowId:feedbackReviewId(candidate,intentRef),...material};
   store.mutate(principal, {
     projectId,operation:'feedback.review.notify.reserve',requestId:intentRef,
     expectedRevision:store.revision(projectId),permission:'execution.request',input:material,

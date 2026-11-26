@@ -257,6 +257,8 @@ export function createFeedbackGitHubAdapter(configured: FeedbackGitHubBinding, r
   }
 
   return Object.freeze({
+    source,
+    bindingDigest,
     async readCandidate(pullRequestId: string, signal: AbortSignal): Promise<FeedbackVerificationCandidate> {
       if (!numberId.test(string(pullRequestId,16))) return blocked();
       const access = await installation(signal);

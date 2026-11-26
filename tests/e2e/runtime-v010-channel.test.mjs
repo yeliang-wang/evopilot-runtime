@@ -505,6 +505,28 @@ function linearFixture() {
   return fixture;
 }
 
+test('Linear rechecks authorization after its last read before dispatching an update', async () => {
+  const {createLinearIssueAdapter,prepareLinearIssueIntent} = await import('../../dist/feedback-loop/linear.js');
+  const fixture = linearFixture();
+  const adapter = createLinearIssueAdapter(linearScope,fixture);
+  const original = prepareLinearIssueIntent(linearScope,linearCreate);
+  const {receipt} = await adapter.dispatch(original,'RESERVED');
+  const update = prepareLinearIssueIntent(linearScope,{kind:'needs-info',original,prior:receipt,
+    requestId:'request:perimeter-test',body:'What version is affected?'});
+  const upstream = fixture.request;
+  let authorized = true;
+  fixture.request = async (query,variables) => {
+    const result = await upstream(query,variables);
+    if (query.includes('query RuntimeLinearRead')) authorized = false;
+    return result;
+  };
+  await assert.rejects(adapter.dispatch(update,'RESERVED',() => {
+    if (!authorized) throw new Error('owner authorization changed');
+  }),/owner authorization changed/);
+  assert.equal(fixture.calls.filter(call=>call.operation === 'RuntimeLinearUpdate').length,0);
+  assert.equal(fixture.issue.state.id,linearScope.openStateId);
+});
+
 test('Linear create reconciles the exact reserved UUID after restart without another mutation', async () => {
   const {createLinearIssueAdapter, prepareLinearIssueIntent} = await import('../../dist/feedback-loop/linear.js');
   const linear = linearFixture();

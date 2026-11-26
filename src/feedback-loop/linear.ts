@@ -255,13 +255,14 @@ export function createLinearIssueAdapter(scope: LinearIssueScope, transport: Lin
 
   /** The owner must serialize issue operations and pass RESERVED only once
    * from its committed reservation. Every reuse goes through reconcile. */
-  async function dispatch(retained: LinearIssueIntent, reservation: 'RESERVED'): Promise<LinearIssueResult> {
+  async function dispatch(retained: LinearIssueIntent, reservation: 'RESERVED', permit?: () => void): Promise<LinearIssueResult> {
     if (reservation !== 'RESERVED') reject('LINEAR_RECONCILE_ORIGINAL', 'Read back the original Linear intent.', 409);
     const intent = structuredClone(retained);
     checkIntent(intent, fixed);
     const input = {description: linearIssueDescription(intent), stateId: intent.stateId};
     if (intent.kind === 'create') {
       // A mutation reply can be lost after commit. Only the original UUID readback confirms the effect.
+      permit?.();
       await data(createIssue, {input: {...input, id: intent.issueId, title: intent.title,
         teamId: fixed.teamId, projectId: fixed.projectId, useDefaultTemplate: false}});
       return reconcile(intent);
@@ -286,6 +287,7 @@ export function createLinearIssueAdapter(scope: LinearIssueScope, transport: Lin
         return {status: 'BLOCKED', ...identity, reason: 'CLOSE_STATE_UNVERIFIED'};
       }
     }
+    permit?.();
     await data(updateIssue, {id: intent.issueId, input});
     return reconcile(intent);
   }
