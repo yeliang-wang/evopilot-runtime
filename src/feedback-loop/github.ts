@@ -16,6 +16,7 @@ export interface FeedbackGitHubBinding {
   installationCredentialRef: string;
   actorId: string;
   actorLogin: string;
+  allowedPaths: readonly string[];
 }
 
 /** The protected broker supplies a GitHub App installation token scoped to this repository. */
@@ -105,8 +106,13 @@ function linearTrees(comparison: Record<string, unknown>, base: string, tip: str
 }
 
 export function createFeedbackGitHubAdapter(configured: FeedbackGitHubBinding, readInstallationToken: FeedbackGitHubTokenReader, fetcher: typeof fetch = fetch) {
-  const binding = Object.freeze({...configured});
-  exact(record(binding), ['repository', 'repositoryId', 'baseBranch', 'installationId', 'installationCredentialRef', 'actorId', 'actorLogin']);
+  exact(record(configured), ['repository', 'repositoryId', 'baseBranch', 'installationId', 'installationCredentialRef', 'actorId', 'actorLogin','allowedPaths']);
+  const paths = configured.allowedPaths;
+  if (!Array.isArray(paths) || !paths.length || paths.length>100 || new Set(paths).size!==paths.length ||
+      paths.some(path=>typeof path!=='string'||path.length>512||!path.split('/').every(part=>part!=='.'&&part!=='..'&&/^[a-zA-Z0-9_.-]+$/.test(part)))) {
+    return reject('FEEDBACK_GITHUB_BINDING','Register the exact allowed repository paths.');
+  }
+  const binding = Object.freeze({...configured,allowedPaths:Object.freeze([...paths])});
   if (!/^[a-z0-9][a-z0-9-]*\/[a-z0-9_][a-z0-9_.-]*$/i.test(string(binding.repository, 140)) ||
       !/^[a-z0-9_][a-z0-9_./-]*$/i.test(string(binding.baseBranch, 200)) ||
       binding.baseBranch.includes('..') || binding.baseBranch.includes('//') || binding.baseBranch.endsWith('/') ||
@@ -191,6 +197,23 @@ export function createFeedbackGitHubAdapter(configured: FeedbackGitHubBinding, r
     return head;
   }
 
+  async function requireAllowedChanges(access: Installation,pullRequestId: string,pull: Record<string,unknown>) {
+    if (!Number.isSafeInteger(pull.changed_files) || Number(pull.changed_files)<1 ||
+        Number(pull.changed_files)>binding.allowedPaths.length) return blocked();
+    const files=await access.get('/pulls/'+pullRequestId+'/files?per_page=100');
+    if (!Array.isArray(files) || files.length!==pull.changed_files) return blocked();
+    const touched=new Set<string>();
+    for (const value of files) {
+      const file=record(value);
+      if (typeof file.filename!=='string' || touched.has(file.filename) || !binding.allowedPaths.includes(file.filename) ||
+          (file.status==='renamed' && typeof file.previous_filename!=='string') ||
+          (file.previous_filename!==undefined && (typeof file.previous_filename!=='string' || !binding.allowedPaths.includes(file.previous_filename)))) {
+        return blocked();
+      }
+      touched.add(file.filename);
+    }
+  }
+
   async function preflight(access: Installation, candidate: ReviewCandidate): Promise<void> {
     const repo = record(await access.get(''));
     if (!matchesRepository(repo) || repo.archived !== false || repo.disabled !== false || repo.allow_rebase_merge !== true) return blocked();
@@ -209,10 +232,13 @@ export function createFeedbackGitHubAdapter(configured: FeedbackGitHubBinding, r
     if (!Array.isArray(rules) || rules.length >= 100 || rules.some(rule => record(rule).type === 'merge_queue')) return blocked();
 
     linearTrees(record(await access.get(`/compare/${candidate.base}...${candidate.head}`)), candidate.base, candidate.head);
+    const before = await pullRequest(access, candidate);
+    await requireAllowedChanges(access,candidate.pullRequestId,before.pull);
     const {pull, base} = await pullRequest(access, candidate);
     if (base.sha !== candidate.base || pull.state !== 'open' || pull.merged !== false || pull.draft !== false ||
         pull.auto_merge !== null || pull.stack != null || pull.mergeable !== true || pull.rebaseable !== true ||
-        pull.mergeable_state !== 'clean' || await protectedBranch(access) !== candidate.base) return blocked();
+        pull.changed_files !== before.pull.changed_files || pull.mergeable_state !== 'clean' ||
+        await protectedBranch(access) !== candidate.base) return blocked();
   }
 
   function initial(request: FeedbackGitHubMergeRequest): FeedbackGitHubMergeObservation {
@@ -241,6 +267,9 @@ export function createFeedbackGitHubAdapter(configured: FeedbackGitHubBinding, r
           base.ref !== binding.baseBranch || branch === binding.baseBranch || !matchesRepository(base.repo) ||
           !matchesRepository(head.repo) || !providerSha(head.sha) || !providerSha(base.sha) || head.sha === base.sha ||
           (await protectedBranch(access)) !== base.sha) return blocked();
+      await requireAllowedChanges(access,pullRequestId,pull);
+      const latest=record(await access.get('/pulls/'+pullRequestId));
+      if (record(latest.head).sha!==head.sha || record(latest.base).sha!==base.sha || latest.changed_files!==pull.changed_files) return blocked();
       return {source,repositoryId:binding.repositoryId,number:Number(pullRequestId),branch,head:head.sha,base:base.sha};
     },
 

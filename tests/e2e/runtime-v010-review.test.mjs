@@ -98,6 +98,7 @@ const githubTreeSha = '1'.repeat(40);
 const githubBinding = {
   repository:'preview/demo-feedback', repositoryId:'21', baseBranch:'main', installationId:'104',
   installationCredentialRef:'vault:preview-merge-installation', actorId:'399', actorLogin:'preview-runtime[bot]',
+  allowedPaths:['docs/feedback.md','docs/replies.md'],
 };
 const githubRequest = {candidate,requestId:'feedback-merge:reserved-fixture'};
 
@@ -118,8 +119,9 @@ async function githubFixture() {
     repo, pending, dispatchStatus:202, fault:false, rules:[],
     operation:{...pending,details:{...pending.details,bypass_rules:false}}, branchProtected:true, strictChecks:true,
     installationRepositories:[repo], bypass:{apps:[],users:[],teams:[]}, landedTree:githubTreeSha,
+    files:[{filename:'docs/feedback.md',status:'modified'}],
     branchHead:candidate.base, verifiedBase:candidate.base, graphBase:candidate.base,
-    pull:{number:5,state:'open',merged:false,draft:false,auto_merge:null,mergeable:true,rebaseable:true,mergeable_state:'clean',
+    pull:{number:5,state:'open',merged:false,draft:false,auto_merge:null,mergeable:true,rebaseable:true,mergeable_state:'clean',changed_files:1,
       base:{ref:'main',repo,sha:candidate.base},head:{ref:'fix/feedback',repo,sha:candidate.head}},
     requests:[],
   };
@@ -164,6 +166,7 @@ async function githubFixture() {
         case '/rules/branches/main?per_page=100': return send(target.rules);
         case '/branches/main': return send({name:'main',protected:target.branchProtected,commit:{sha:target.branchHead}});
         case '/pulls/5': return send({...target.pull,base:{...target.pull.base,sha:target.verifiedBase}});
+        case '/pulls/5/files?per_page=100': return send(target.files);
         case `/pulls/5/merge-async/${githubOperationId}`: return send(target.operation, target.operation === null ? 404 : 200);
         case `/compare/${candidate.base}...${candidate.head}`: return send(githubCompare(candidate.base,candidate.head,githubTreeSha));
         case `/compare/${candidate.base}...${githubLandedSha}`: return send(githubCompare(target.graphBase,githubLandedSha,target.landedTree));
@@ -275,6 +278,21 @@ test('GitHub changed refs, unrelated repositories and insufficient protection pr
     change(target);
     await assert.rejects(adapter().dispatch(githubRequest,signal),{code:'FEEDBACK_GITHUB_BLOCKED'});
     assert(target.requests.every(request => request.method === 'GET'));
+  }
+});
+
+test('GitHub denies merge for changes outside the registered paths or incomplete file evidence', async () => {
+  for (const files of [
+    [{filename:'src/unreviewed.ts',status:'modified'}],
+    [{filename:'docs/feedback.md',status:'renamed',previous_filename:'src/unreviewed.ts'}],
+    [{filename:'docs/feedback.md',status:'renamed'}],
+    [],
+  ]) {
+    const {target,adapter,signal} = await githubFixture();
+    target.files = files;
+    await assert.rejects(adapter().inspect(candidate,signal),{code:'FEEDBACK_GITHUB_BLOCKED'});
+    await assert.rejects(adapter().dispatch(githubRequest,signal),{code:'FEEDBACK_GITHUB_BLOCKED'});
+    assert(target.requests.every(request=>request.method==='GET'));
   }
 });
 
