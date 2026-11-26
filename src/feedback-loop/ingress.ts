@@ -106,7 +106,7 @@ export function retainFeedbackChannelEvent(store: RuntimeStore, route: Registere
  * Linear scope and transport. A retained intent is only eligible for readback. */
 export async function bindFeedbackCaseIssue(
   store: RuntimeStore, route: RegisteredRoute, receiver: Principal, caseId: string,
-  linear: LinearBinding,
+  linear: LinearBinding, assertCurrent?: () => void,
 ) {
   const original = requireFeedbackCase(store,route,receiver,caseId);
   const {projectId} = original;
@@ -144,6 +144,7 @@ export async function bindFeedbackCaseIssue(
     }));
   }
   const result = pinned ? await linear.adapter.reconcile(intent) : await linear.adapter.dispatch(intent,'RESERVED');
+  assertCurrent?.();
   if (result.status !== 'CONFIRMED') return result;
   const {receipt} = result;
   if (receipt.intentId !== intent.intentId || receipt.originalIntentId !== intent.intentId ||
@@ -183,7 +184,7 @@ type StoredIssueChange = {
  * Resumption uses the exact authenticated supplement already bound to this case. */
 export async function changeFeedbackCaseIssue(
   store: RuntimeStore, route: RegisteredRoute, receiver: Principal, caseId: string,
-  linear: LinearBinding, change: IssueChange,
+  linear: LinearBinding, change: IssueChange, assertCurrent?: () => void,
 ): Promise<LinearIssueResult> {
   const {projectId} = requireFeedbackCase(store,route,receiver,caseId);
   const original = store.object(projectId,'feedback-case-issue-intent',caseId) as LinearCreateIntent | null;
@@ -243,6 +244,7 @@ export async function changeFeedbackCaseIssue(
     }));
   }
   const result = saved ? await linear.adapter.reconcile(intent) : await linear.adapter.dispatch(intent,'RESERVED');
+  assertCurrent?.();
   if (result.status === 'UNKNOWN') return result;
   if (result.status === 'CONFIRMED' &&
       (result.receipt.intentId !== intent.intentId || result.receipt.originalIntentId !== original.intentId ||

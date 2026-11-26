@@ -1,5 +1,6 @@
 import { FEEDBACK_ACTIVATE, FEEDBACK_ACTIVATION_PREVIEW, FEEDBACK_PROJECT_INSPECT, FEEDBACK_PROJECT_SAVE, FEEDBACK_PROJECT_VALIDATE, inspectFeedbackProjectDraft, readSavedFeedbackProjectDraft, saveFeedbackProjectDraft } from '../feedback-loop/project.js';
 import { createFeedbackActivationService, feedbackMonitorSnapshot, type FeedbackActivationRegistry } from '../feedback-loop/service.js';
+import { createFeedbackWorkflowWorker, type FeedbackWorkflowRegistration } from '../feedback-loop/worker.js';
 import { createCorrectionService, CORRECTION_READS, CORRECTION_WRITES } from '../lifecycle/correction.js';
 import { QUALIFICATION_READS, QUALIFICATION_WRITES } from '../lifecycle/evidence-qualification.js';
 import type {RegisteredQualificationService} from '../adapters/bindings.js';
@@ -36,12 +37,17 @@ import {acquireUpgradeSourceLease,loadServiceUpgradeContext,verifyHistoricalReco
 
 const VERSION = String(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version);
 export interface ServerOptions { stateRoot: string; workspaceId: string; port?: number; legacyBindingRef?:string; }
-export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver, trustedPolicy?:AuthorityPolicyProvider, trustedExecutor?:StageAdapter|((store:RuntimeStore,services:StageServices)=>StageAdapter), trustedPreparation?:PreparationValidator, trustedImplementationReview?:ImplementationReviewBindings, trustedExtensionReview?:((store:RuntimeStore)=>ExtensionReviewBindings), trustedLegacyProviders?:LegacyProviders|LegacyProviderFactory, trustedQualification?:((store:RuntimeStore,principals:PrincipalLookup)=>RegisteredQualificationService), trustedFeedback?:FeedbackActivationRegistry) {
+export type FeedbackWorkflowFactory = (store: RuntimeStore, principals: PrincipalLookup) =>
+  readonly FeedbackWorkflowRegistration[];
+type FeedbackChannelHandle = {url:string;close():Promise<void>};
+export type FeedbackChannelFactory = (store: RuntimeStore, principals: PrincipalLookup) =>
+  Promise<readonly FeedbackChannelHandle[]>;
+export async function startRuntimeServer(options: ServerOptions, trustedBindings?:DefinitionBindingProvider, trustedAuthorities?:AuthorityResolver, trustedPolicy?:AuthorityPolicyProvider, trustedExecutor?:StageAdapter|((store:RuntimeStore,services:StageServices)=>StageAdapter), trustedPreparation?:PreparationValidator, trustedImplementationReview?:ImplementationReviewBindings, trustedExtensionReview?:((store:RuntimeStore)=>ExtensionReviewBindings), trustedLegacyProviders?:LegacyProviders|LegacyProviderFactory, trustedQualification?:((store:RuntimeStore,principals:PrincipalLookup)=>RegisteredQualificationService), trustedFeedback?:FeedbackActivationRegistry, trustedWorkflows?:FeedbackWorkflowFactory, trustedChannels?:FeedbackChannelFactory) {
   const config = record(options); exact(config,['stateRoot','workspaceId'],['port','legacyBindingRef']);
   string(options.stateRoot,4096); slug(options.workspaceId);
   if(options.legacyBindingRef!==undefined)string(options.legacyBindingRef,4096);
   if (options.port !== undefined && (!Number.isSafeInteger(options.port) || options.port < 0 || options.port > 65535)) reject('INVALID_PORT','Invalid loopback port');
-  if (limitedPreview && (options.legacyBindingRef || trustedBindings || trustedAuthorities || trustedPolicy || trustedExecutor || trustedPreparation || trustedImplementationReview || trustedExtensionReview || trustedLegacyProviders || trustedQualification || trustedFeedback)) previewUnavailable();
+  if (limitedPreview && (options.legacyBindingRef || trustedBindings || trustedAuthorities || trustedPolicy || trustedExecutor || trustedPreparation || trustedImplementationReview || trustedExtensionReview || trustedLegacyProviders || trustedQualification || trustedFeedback || trustedWorkflows || trustedChannels)) previewUnavailable();
   previewState(options.stateRoot, options.workspaceId);
   assertCredentials(options.stateRoot,options.workspaceId);
   const sourceLease=limitedPreview?null:await acquireUpgradeSourceLease(options.stateRoot);
@@ -93,9 +99,17 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
   const agents=createAgentService(store,(actor,projectId,id)=>getExecution().authorizeOriginal(actor,projectId,id));
   const implementationReviews=createImplementationReviewService(store,trustedImplementationReview,id=>currentPrincipal(options.stateRoot,options.workspaceId,id));
   let legacy:ReturnType<typeof createLegacyGateway>|undefined;
+  const feedbackWorkers: ReturnType<ReturnType<typeof createFeedbackWorkflowWorker>['start']>[] = [];
+  let feedbackChannels: readonly FeedbackChannelHandle[] = [];
   // Each owner must be closed even if an earlier owner fails. Keep the original
   // failure as the cause instead of allowing a cleanup error to replace it.
   async function closeServices(errors:unknown[]=[]):Promise<void>{
+    for (const result of await Promise.allSettled(feedbackChannels.map(channel=>channel.close()))) {
+      if (result.status==='rejected') errors.push(result.reason);
+    }
+    for (const result of await Promise.allSettled(feedbackWorkers.map(worker=>worker.stop()))) {
+      if (result.status==='rejected') errors.push(result.reason);
+    }
     try{await legacy?.close();}catch(error){errors.push(error);}
     finally{
       try{await execution?.close();}catch(error){errors.push(error);}
@@ -306,8 +320,8 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
   }
   port=address.port;
   const legacyIntentSource=legacy?.intentSource(actor=>{const current=currentPrincipal(options.stateRoot,options.workspaceId,actor.id);if(!current)reject('UNAUTHENTICATED','Original principal is no longer available',401);return current;});
-  return Object.freeze({ url:'http://127.0.0.1:'+port,port,identity:status(),legacyIntentSource,qualification:qualifications?.native, async close(){
-    if(closing)return;closing=true;const errors:unknown[]=[];
+  async function close(errors:unknown[]=[]){
+    if(closing)return;closing=true;
     try{usageWorker?.close();}catch(error){errors.push(error);}
     finally{
       try{browserSessions.clear();for(const res of streams)res.end();streams.clear();}catch(error){errors.push(error);}
@@ -316,5 +330,24 @@ export async function startRuntimeServer(options: ServerOptions, trustedBindings
         finally{await closeServices(errors);}
       }
     }
-  }});
+  }
+  try {
+    const lookup = (id:string)=>currentPrincipal(options.stateRoot,options.workspaceId,id);
+    const registrations = trustedWorkflows?.(store,lookup) ?? [];
+    const projects = new Set<string>();
+    for (const registration of registrations) {
+      if (registration.workspaceId!==options.workspaceId || projects.has(registration.projectId)) {
+        reject('FEEDBACK_WORKER_REGISTRATION','Use one protected feedback worker registration per selected project.',409);
+      }
+      projects.add(registration.projectId);
+    }
+    feedbackChannels=await trustedChannels?.(store,lookup) ?? [];
+    for (const registration of registrations) {
+      const handle = createFeedbackWorkflowWorker(store,registration).start();
+      handle.done.catch(()=>{}); // closeServices observes the same terminal handle.
+      feedbackWorkers.push(handle);
+    }
+  } catch(error) { await close([error]); throw error; }
+  return Object.freeze({url:'http://127.0.0.1:'+port,port,identity:status(),legacyIntentSource,
+    qualification:qualifications?.native,feedbackChannels:feedbackChannels.map(channel=>channel.url),close:()=>close()});
 }
