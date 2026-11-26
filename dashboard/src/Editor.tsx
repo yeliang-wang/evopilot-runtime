@@ -117,7 +117,7 @@ type FeedbackStage = typeof feedbackStages[number];
 const feedbackReturns = [
  {label:'补充信息',path:'M380 80 V48 Q380 34 366 34 H96 Q82 34 82 48 V78',x:174,y:20},
  {label:'要求修改',path:'M835 80 V58 Q835 44 821 44 H550 Q536 44 536 58 V78',x:646,y:30},
- {label:'验证失败',path:'M683 134 V162 Q683 176 669 176 H394 Q380 176 380 162 V136',x:493,y:162},
+ {label:'验证失败',path:'M685 134 V162 Q685 176 671 176 H548 Q534 176 534 162 V136',x:565,y:163},
 ] as const;
 
 function FeedbackGraph({selected,onSelect,children}:{
