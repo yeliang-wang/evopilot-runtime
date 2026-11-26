@@ -173,7 +173,7 @@ export function createFeedbackCursorWorker(
     return attempt;
   }
 
-  async function advance(actor: Principal, selection: CursorSelection, verifyDispatch?: () => void) {
+  async function advance(actor: Principal, selection: CursorSelection, assertCurrent?: () => void) {
     const {projectId,round} = selection;
     const caseId = string(selection.caseId);
     if (!Number.isSafeInteger(round) || round < 0) return reject('FEEDBACK_CURSOR_ROUND','A bounded work round is required.');
@@ -196,7 +196,7 @@ export function createFeedbackCursorWorker(
       if (terminal(attempt.outcome)) return attempt.outcome!;
       const result = retained ? await adapter.reconcile(intent,attempt.runId ?? undefined) :
         await adapter.dispatch(intent,'RESERVED',() => {
-          verifyDispatch?.();
+          assertCurrent?.();
           verifyActor(projectId,actor);
           if (activation(projectId) !== subject.activationId ||
               originalIssue(projectId,caseId).issueEvidenceDigest !== subject.issueEvidenceDigest ||
@@ -205,6 +205,7 @@ export function createFeedbackCursorWorker(
             reject('FEEDBACK_CURSOR_ADMISSION','The original launch no longer has current admission.',409);
           }
         });
+      assertCurrent?.();
       const observation = result.status === 'OBSERVED' ? result.realization : result;
       if (observation.intentId !== intent.intentId || observation.agentId !== intent.agentId ||
           (attempt.runId && observation.runId !== attempt.runId) ||
@@ -241,7 +242,7 @@ export function createFeedbackCursorWorker(
    * Cursor Run. No claimed result text is eligible as verification evidence. */
   async function verify(
     actor: Principal, selection: CursorSelection, rule: FeedbackVerificationRule, verifier: Verifier,
-    readCandidate: () => Promise<FeedbackVerificationCandidate | null>, signal: AbortSignal,
+    readCandidate: () => Promise<FeedbackVerificationCandidate | null>, signal: AbortSignal, assertCurrent?: () => void,
   ): Promise<FeedbackVerificationResult> {
     const {projectId,caseId,round} = selection;
     verifyActor(projectId,actor);
@@ -268,6 +269,7 @@ export function createFeedbackCursorWorker(
     });
     const result = await verifier.inspect(actor,subject,{readCandidate,signal});
     signal.throwIfAborted();
+    assertCurrent?.();
     verifyActor(projectId,actor);
     if (activation(projectId) !== subject.activationId ||
         readAttempt(projectId,id)?.intent.intentId !== work.intent.intentId || result.subjectDigest !== subject.subjectDigest) {
@@ -820,7 +822,7 @@ export function createFeedbackWorkflowWorker(store: RuntimeStore, registration: 
           budget.throwIfAborted();
           assertCurrent();
           return verification.readCandidate({caseId,round,run:structuredClone(run)},budget);
-        },budget));
+        },budget,assertCurrent));
       if (result.status === 'HOLD') {
         progress('verify','WAITING','VERIFICATION_'+result.reason,run.runId);
         return state;

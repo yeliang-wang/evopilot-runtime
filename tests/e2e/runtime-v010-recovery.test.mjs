@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
-import {randomBytes} from 'node:crypto';
-import {mkdtempSync,realpathSync,rmSync} from 'node:fs';
+import {createHmac,randomBytes} from 'node:crypto';
+import {mkdirSync,mkdtempSync,realpathSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
+import {
+  createReferenceDeliveryAdapter, startReferenceChannel, startReferenceDeliveryInbox,
+} from '../../dist/feedback-loop/callback-channel.js';
 import {createCursorAgentAdapter} from '../../dist/feedback-loop/cursor.js';
 import {createFeedbackGitHubAdapter} from '../../dist/feedback-loop/github.js';
 import {retainFeedbackChannelEvent} from '../../dist/feedback-loop/ingress.js';
@@ -12,11 +15,15 @@ import {
   reserveFeedbackReviewNotification, retainFeedbackProgress, retainFeedbackReview, retainFeedbackVeto,
 } from '../../dist/feedback-loop/service.js';
 import {normalizeSlackSocketModeEvent} from '../../dist/feedback-loop/slack.js';
+import {
+  createFeedbackVerification, feedbackVerificationExecutionId, prepareFeedbackVerificationEvaluation,
+} from '../../dist/feedback-loop/verification.js';
 import {createFeedbackWorkflowWorker} from '../../dist/feedback-loop/worker.js';
 import {digest} from '../../dist/server/errors.js';
 import {startRuntimeServer} from '../../dist/server/http.js';
 import {initializeCredentials,tokenDigest} from '../../dist/server/security.js';
 import {RuntimeStore} from '../../dist/server/store.js';
+import {NATIVE_CONTRACT_DIGEST, nativeSha256} from '../../vendor/compatibility/v1/native.mjs';
 
 test('the feedback worker recovers the retained Linear issue after SQLite restart without redispatch', async () => {
   const root = mkdtempSync(join(realpathSync(tmpdir()),'runtime-v010-workflow-recovery-'));
@@ -309,6 +316,410 @@ test('authenticated feedback monitor reads persisted visited and return paths, r
   } finally {
     await server?.close();
     store?.close();
+    rmSync(root,{recursive:true,force:true});
+  }
+});
+
+
+const workspaceId = 'demo', projectId = 'tasks';
+const scope = {provider:'callback',installationId:'fixture-app',tenantId:'team',channelId:'feedback'};
+const route = {workspaceId,projectId,scope};
+const reviewScope = {workspaceId,projectId,channel:scope,allowedActorIds:['reviewer']};
+const repository = 'preview/demo-feedback';
+const cursorScope = {repository:'https://github.com/'+repository,branch:'main'};
+const base = 'b'.repeat(40), initialHead = 'a'.repeat(40), repairedHead = 'c'.repeat(40);
+const landedSha = 'd'.repeat(40), tree = 'e'.repeat(40);
+const pr = {url:cursorScope.repository+'/pull/5',number:5,branch:'fix/feedback'};
+const operationId = '630b9d5e-3f2a-4f7e-8b0c-2d5f9a8c1e42';
+const linearScope = {
+  teamId:'42bdea2e-2fad-4a86-969a-9e9b9d12f1d0',
+  projectId:'3ab1f6ae-79fd-4d7b-963e-2d213830b709',
+  openStateId:'6cb465d2-9cc5-4993-8b6c-c85a6f7aea9f',
+  needsInfoStateId:'694f0b0d-3f00-4498-a37c-bda169ba873b',
+  closedStateId:'b06a9637-950c-4152-9d11-9f086e8eaa0b',
+};
+
+function linearFixture() {
+  let issue;
+  const writes = [];
+  const adapter = createLinearIssueAdapter(linearScope,{async request(query,vars) {
+    if (query.includes('query RuntimeLinearRead')) return {data:{issue:vars.id === issue?.id ? issue : null}};
+    if (query.includes('query RuntimeLinearState')) {
+      return {data:{workflowState:{id:vars.id,type:'completed',team:{id:linearScope.teamId}}}};
+    }
+    const {input} = vars;
+    if (query.includes('mutation RuntimeLinearCreate')) {
+      writes.push({operation:'create',id:input.id});
+      issue = {id:input.id,title:input.title,description:input.description,archivedAt:null,
+        team:{id:input.teamId},project:{id:input.projectId},state:{id:input.stateId,type:'unstarted'}};
+      return {data:{issueCreate:{success:true,issue:{id:issue.id}}}};
+    }
+    assert(query.includes('mutation RuntimeLinearUpdate'));
+    assert.equal(vars.id,issue.id);
+    writes.push({operation:'update',id:vars.id,stateId:input.stateId});
+    issue = {...issue,description:input.description,state:{id:input.stateId,type:'completed'}};
+    return {data:{issueUpdate:{success:true,issue:{id:issue.id}}}};
+  }});
+  return {scope:linearScope,adapter,writes};
+}
+
+function githubFixture() {
+  const repoPath = '/repos/'+repository;
+  const repo = {id:21,full_name:repository,archived:false,disabled:false,allow_rebase_merge:true};
+  const pending = {status:'pending',details:{uuid:operationId,expected_head_sha:repairedHead,
+    merge_method:'rebase',merge_action:'direct_merge',bypass_rules:false}};
+  let head = initialHead, merged = false;
+  const writes = [], polls = [];
+  const compare = tip => ({status:'ahead',behind_by:0,ahead_by:1,total_commits:1,base_commit:{sha:base},
+    merge_base_commit:{sha:base},commits:[{sha:tip,parents:[{sha:base}],commit:{tree:{sha:tree}}}]});
+  const binding = {
+    repository,repositoryId:'21',baseBranch:'main',installationId:'104',installationCredentialRef:'vault:fixture-merge',
+    actorId:'399',actorLogin:'preview-runtime[bot]',allowedPaths:['docs/feedback.md'],
+  };
+  const adapter = createFeedbackGitHubAdapter(binding,async () => 'fixture-token',async (input,init) => {
+    const url = new URL(input);
+    assert.equal(url.origin,'https://api.github.com');
+    const path = url.pathname+url.search;
+    const send = (value,status=200) => Response.json(value,{status,headers:{'x-github-request-id':'FIXTURE:REQUEST'}});
+    if (init.method === 'PUT') {
+      writes.push({path,input:JSON.parse(init.body)});
+      return send(pending,202);
+    }
+    if (path === '/installation/repositories?per_page=2') return send({total_count:1,repositories:[repo]});
+    assert(path.startsWith(repoPath));
+    switch (path.slice(repoPath.length)) {
+      case '': return send(repo);
+      case '/branches/main': return send({name:'main',protected:true,commit:{sha:merged ? landedSha : base}});
+      case '/branches/main/protection': return send({
+        enforce_admins:{enabled:true},allow_force_pushes:{enabled:false},allow_deletions:{enabled:false},
+        required_pull_request_reviews:{bypass_pull_request_allowances:{apps:[],users:[],teams:[]}},
+      });
+      case '/branches/main/protection/required_status_checks': return send({strict:true,contexts:['require-ci']});
+      case '/rules/branches/main?per_page=100': return send([]);
+      case '/pulls/5/files?per_page=100': return send([{filename:'docs/feedback.md',status:'modified'}]);
+      case '/pulls/5': return send({
+        number:5,state:merged ? 'closed' : 'open',merged,draft:false,auto_merge:null,mergeable:true,rebaseable:true,
+        mergeable_state:'clean',changed_files:1,base:{ref:'main',repo,sha:base},head:{ref:pr.branch,repo,sha:head},
+        ...(merged ? {merge_commit_sha:landedSha,merged_by:{type:'Bot',id:399,login:binding.actorLogin}} : {}),
+      });
+      case '/pulls/5/merge-async/'+operationId:
+        polls.push(operationId);
+        return send(merged ? {status:'merged',details:{sha:landedSha}} : pending);
+      case '/compare/'+base+'...'+repairedHead: return send(compare(repairedHead));
+      case '/compare/'+base+'...'+landedSha: return send(compare(landedSha));
+      default: return assert.fail('Unexpected GitHub fixture route '+path);
+    }
+  });
+  return {adapter,writes,polls,repair() {head = repairedHead;},finish() {merged = true;}};
+}
+
+function cursorFixture(github,clock,readAttempt) {
+  const agents = new Map(), launches = [];
+  let readbackAvailable = false;
+  const adapter = createCursorAgentAdapter(cursorScope,{async request(operation) {
+    if (operation.kind === 'launch') {
+      const {prompt,agentId,...settings} = operation.body;
+      const round = launches.length;
+      const attempt = readAttempt(round);
+      assert.equal(attempt.intent.agentId,agentId);
+      assert(prompt.text);
+      const runId = 'run-00000000-0000-0000-0000-00000000000'+(round+1);
+      const agent = {id:agentId,...settings,latestRunId:runId,status:'IDLE'};
+      const time = new Date(clock()-4_000).toISOString();
+      const run = {id:runId,agentId,status:'FINISHED',createdAt:time,updatedAt:time,result:'Fixture repair output',
+        git:{branches:[{repoUrl:cursorScope.repository.slice(8),branch:pr.branch,...(!round ? {prUrl:pr.url} : {})}]}};
+      agents.set(agentId,{agent,run});
+      launches.push({attempt,body:operation.body,runId});
+      if (round) github.repair();
+      if (!round) throw Error('Fixture lost the original Cursor launch response');
+      return {agent,run};
+    }
+    if (!readbackAvailable) throw Error('Fixture Cursor readback unavailable');
+    const {agent,run} = agents.get(operation.agentId);
+    if (operation.kind === 'agent') return agent;
+    if (operation.kind === 'runs') return {items:[run]};
+    assert.equal(operation.runId,run.id);
+    return run;
+  }});
+  return {scope:cursorScope,adapter,launches,enableReadback() {readbackAvailable = true;}};
+}
+
+function verificationFixture(clock,expiresAt,onExecutionRead) {
+  const rule = {
+    bindingRef:'binding:harness/feedback-quality',ownerRegistrationDigest:nativeSha256('fixture-harness-registration'),
+    publicationRequestId:'fixture-publication',toolchainLockDigest:nativeSha256('fixture-toolchain'),
+    effectiveConfigDigest:nativeSha256('fixture-config'),executorRef:'binding:executor/functional-verifier',
+    executorBindingDigest:nativeSha256('fixture-verifier-registration'),validUntil:expiresAt,
+    scope:{projectId,visibility:'private'},reference:{product:'harness',id:'feedback-check',version:'1.0.0',specVersion:'v1',
+      visibility:'private',digest:nativeSha256('rule'),standardDigest:nativeSha256('standard'),standardLockDigest:nativeSha256('lock'),
+      producer:{product:'harness',version:'0.3.0'},contractDigest:NATIVE_CONTRACT_DIGEST},
+  };
+  const publishedPackage = {manifest:{entrypoints:{coverage:'coverage.json'}},
+    files:{'coverage.json':JSON.stringify({requirements:[{id:'H001',caseIds:['functional']}]})}};
+  const baseline = {reference:rule.reference,effectiveConfigDigest:rule.effectiveConfigDigest,
+    executionStatus:'SUCCEEDED',qualityStatus:'PASS'};
+  const receipts = new Map([[rule.publicationRequestId,{
+    operation:'native.package.publish',requestId:rule.publicationRequestId,status:'SUCCEEDED',scope:rule.scope,
+    result:{published:true,reference:rule.reference},
+  }]]);
+  const observations = [];
+  const owner = {
+    owner:'harness',workspaceId,capabilities:() => ({registrationDigest:rule.ownerRegistrationDigest}),
+    async readPackage() {
+      return {published:true,workspaceId,scope:rule.scope,reference:rule.reference,package:publishedPackage,
+        validation:{...baseline,reportDigest:nativeSha256(baseline)}};
+    },
+    async read(_actor,project,request) {
+      assert.equal(project,projectId);
+      assert.equal(request.operation,'native.receipt.inspect');
+      return structuredClone(receipts.get(request.input.requestId));
+    },
+  };
+  const verifier = createFeedbackVerification({source:'FIXTURE',owner,async readExecution(_actor,subject,requestId) {
+    assert.equal(requestId,feedbackVerificationExecutionId(subject));
+    const status = subject.pullRequest.head === initialHead ? 'FAIL' : 'PASS';
+    observations.push({status,subject});
+    const execution = {schema:'runtime-feedback-verification-execution/v1',source:'FIXTURE',subjectDigest:subject.subjectDigest,
+      requestId,executorRef:rule.executorRef,executorBindingDigest:rule.executorBindingDigest,executionId:'fixture-execution-'+requestId,
+      startedAt:clock()-2_000,completedAt:clock()-1_000,expiresAt,receiptRef:'fixture:execution/'+requestId,
+      receiptDigest:nativeSha256({requestId,status}),reportDigest:nativeSha256({requestId,result:status}),status};
+    const {request,action,pin} = prepareFeedbackVerificationEvaluation(subject,execution,publishedPackage);
+    const criteria = pin.criteria.map(criterion => ({...criterion,status,evidenceDigest:nativeSha256(criterion)}));
+    const report = {schema:'evopilot-native-validation/v1',owner:'harness',context:action.context,
+      toolchainLockDigest:rule.toolchainLockDigest,effectiveConfigDigest:rule.effectiveConfigDigest,reference:rule.reference,
+      qualityStatus:status,executionStatus:'SUCCEEDED',observationDigest:action.observationDigest,criteria,rawReports:[]};
+    receipts.set(request.requestId,{requestId:request.requestId,operation:request.operation,scope:request.scope,status:'SUCCEEDED',
+      requestDigest:nativeSha256({operation:request.operation,scope:request.scope,input:request.input}),
+      result:{...report,reportDigest:nativeSha256(report)}});
+    onExecutionRead?.();
+    return execution;
+  }});
+  return {rule,verifier,observations};
+}
+
+async function sendFeedback(listener,key,message) {
+  const body = JSON.stringify(message);
+  const timestamp = String(Date.now());
+  const signature = 'sha256='+createHmac('sha256',key).update(timestamp+'.').update(body).digest('hex');
+  const response = await fetch(listener.url+'/feedback',{
+    method:'POST',body,headers:{'content-type':'application/json',
+      'x-runtime-callback-timestamp':timestamp,'x-runtime-callback-signature':signature},
+  });
+  return {status:response.status,value:await response.json()};
+}
+
+test('the registered feedback worker repairs the original PR and closes the original issue and thread', async t => {
+  const root = mkdtempSync(join(realpathSync(tmpdir()),'runtime-v010-integrated-workflow-'));
+  const stateRoot = join(root,'runtime'), peerRoot = join(root,'channel-peer');
+  mkdirSync(stateRoot,{mode:0o700});
+  mkdirSync(peerRoot,{mode:0o700});
+  const actor = {id:'worker',projects:[projectId],permissions:['read','execution.request'],
+    revision:1,expiresAt:'2099-01-01T00:00:00Z'};
+  const principal = () => actor;
+  const feedbackKey = randomBytes(32), reviewKey = randomBytes(32), deliveryKey = randomBytes(32);
+  const original = {schema:'runtime-feedback-channel-event/v1',scope,eventId:'callback-event',messageId:'thread-root',
+    actorId:'reporter',action:{kind:'feedback',text:'The report loses its label when exported.'}};
+  let now = Date.now();
+  t.mock.method(Date,'now',() => now);
+  const expiresAt = now + 7_200_000;
+  let store, peer, listener, inbox, channel;
+  try {
+    store = new RuntimeStore(stateRoot,workspaceId);
+    peer = new RuntimeStore(peerRoot,'channel-peer');
+    inbox = await startReferenceDeliveryInbox({store:peer,projectId,scope,key:deliveryKey,principal});
+    const deliveryRequests = [];
+    channel = createReferenceDeliveryAdapter(inbox.url,scope,deliveryKey,async (url,init) => {
+      const intent = JSON.parse(init.body);
+      deliveryRequests.push({path:url.pathname,kind:intent.kind});
+      const response = await fetch(url,init);
+      if (url.pathname === '/deliver' && intent.kind === 'review') {
+        assert.equal(response.status,201);
+        await response.arrayBuffer();
+        throw Error('Fixture lost the signed review delivery response');
+      }
+      return response;
+    });
+    listener = await startReferenceChannel({store,receiverPrincipal:principal,
+      feedback:{key:feedbackKey,route},review:{key:reviewKey,route:reviewScope}});
+    assert.equal((await sendFeedback(listener,reviewKey,original)).status,401);
+    const retained = await sendFeedback(listener,feedbackKey,original);
+    assert.equal(retained.status,201);
+    const {caseId} = retained.value;
+    await listener.close();
+    listener = null;
+
+    const read = (kind,id) => store.object(projectId,kind,id);
+    const feedbackBindingStamp = digest('fixture callback and provider configuration');
+    const activation = {workspaceId,projectId,serviceId:store.serviceId,feedbackBindingStamp,
+      definitionPointer:digest(read('definition-pointer','active'))};
+    const activationId = 'sha256:'+digest(activation);
+    store.mutate(actor,{
+      projectId,operation:'fixture.feedback.activation',requestId:'fixture-activation',
+      expectedRevision:store.revision(projectId),permission:'execution.request',input:{},
+    },() => ({value:{},event:{type:'fixture-feedback-activation',data:{}},objects:[
+      {kind:'feedback-activation',id:activationId,value:{subject:activation,candidateDigest:activationId,validUntil:expiresAt}},
+      {kind:'feedback-activation-pointer',id:'current',value:activationId},
+    ]}));
+    const attemptId = round => 'feedback-cursor:'+digest({caseId,round});
+    const readAttempt = round => read('feedback-cursor-attempt',attemptId(round));
+    const linear = linearFixture();
+    const github = githubFixture();
+    const cursor = cursorFixture(github,Date.now,readAttempt);
+    let admitted = true, revokeDuringVerification = false;
+    const verification = verificationFixture(Date.now,expiresAt,() => {
+      if (revokeDuringVerification) admitted = false;
+    });
+    const grant = subject => ({subjectDigest:digest(subject),expiresAt});
+    const permits = [];
+    let receiptCoverage = 'COMPLETE';
+    const registration = {
+      workspaceId,projectId,activationId,feedbackBindingStamp,caseId,principalId:actor.id,principal,maxRepairs:1,
+      admit:subject => admitted ? grant(subject) : null,
+      triage:async subject => {
+        assert.equal(subject.originalEvent.messageId,original.messageId);
+        assert.deepEqual(subject.originalEvent.action,original.action);
+        assert.equal(subject.issueReceiptDigest,digest(read('feedback-case-issue',caseId)));
+        return {...grant(subject),status:'READY',evidenceRef:'fixture:triage/ready'};
+      },
+      linear,channel:{scope,adapter:channel},
+      cursor:{scope:cursor.scope,adapter:cursor.adapter,permits:(subject,trigger) => {
+        permits.push({subject,trigger});
+        return {...grant(subject),evidenceRef:'fixture:cursor/round-'+subject.round,maxRepairs:1,
+          prompt:subject.round ? 'Repair the original PR.' : 'Reproduce the export label defect.'};
+      }},
+      verification:{rule:verification.rule,verifier:verification.verifier,
+        readCandidate:(selection,signal) => github.adapter.readCandidate(String(selection.run.pullRequest.number),signal)},
+      review:{scope:reviewScope,adapter:github.adapter,currentPolicy:subject => ({
+        ...grant(subject),policyDigest:digest('fixture review policy'),receiptCoverage,
+      })},
+    };
+    let worker = createFeedbackWorkflowWorker(store,registration);
+    const restart = () => {
+      store.close();
+      store = new RuntimeStore(stateRoot,workspaceId);
+      worker = createFeedbackWorkflowWorker(store,registration);
+    };
+    const tick = async expected => {
+      const state = await worker.runOnce();
+      const progress = read('feedback-case-progress',caseId);
+      assert.equal(state.phase,expected,JSON.stringify(progress?.timeline.at(-1)));
+      assert.equal(state.caseId,caseId);
+      return state;
+    };
+
+    await tick('issue');
+    await tick('triage');
+    const issue = read('feedback-case-issue',caseId);
+    assert.equal(issue.source,'FIXTURE');
+    await tick('work');
+    await tick('work');
+    assert.equal(readAttempt(0).outcome.status,'UNKNOWN');
+    assert.equal(cursor.launches.length,1);
+    const originalRunId = cursor.launches[0].runId;
+    restart();
+    cursor.enableReadback();
+    const verify = await tick('verify');
+    assert.equal(readAttempt(0).runId,originalRunId);
+    assert.equal(cursor.launches.length,1);
+
+    revokeDuringVerification = true;
+    await assert.rejects(worker.runOnce(),{code:'FEEDBACK_WORKER_ADMISSION'});
+    assert.equal(read('feedback-verification-latest',attemptId(0)),null);
+    assert.deepEqual(read('feedback-workflow',activationId),verify);
+    assert.equal(cursor.launches.length,1);
+    admitted = true;
+    revokeDuringVerification = false;
+    const repair = await tick('work');
+    assert.equal(repair.round,1);
+    assert.equal(repair.trigger.kind,'verification');
+    await tick('verify');
+    const repairRunId = cursor.launches[1].runId;
+    assert.equal(readAttempt(1).intent.original.runId,originalRunId);
+    assert.equal(readAttempt(1).subject.previousRunId,originalRunId);
+    assert.equal(readAttempt(1).runId,repairRunId);
+    assert.notEqual(repairRunId,originalRunId);
+    assert.equal(readAttempt(1).intent.issueId,issue.issueId);
+    assert.equal(permits.at(-1).trigger.digest,repair.trigger.digest);
+    assert.deepEqual(cursor.launches[1].body.repos,[{url:cursorScope.repository,prUrl:pr.url}]);
+    const notify = await tick('notify');
+    assert.equal(verification.observations.length,3);
+    assert.deepEqual(verification.observations[0],verification.observations[1]);
+    assert.deepEqual(verification.observations.slice(1).map(({status,subject}) => ({
+      status,head:subject.pullRequest.head,number:subject.pullRequest.number,
+      original:subject.original.run.runId,run:subject.work.run.runId,issueId:subject.issueId,
+    })),[
+      {status:'FAIL',head:initialHead,number:5,original:originalRunId,run:originalRunId,issueId:issue.issueId},
+      {status:'PASS',head:repairedHead,number:5,original:originalRunId,run:repairRunId,issueId:issue.issueId},
+    ]);
+    assert.equal(notify.review.candidate.head,repairedHead);
+
+    await tick('notify');
+    assert.equal(peer.revision(projectId),1);
+    restart();
+    const reviewing = await tick('review');
+    const {windowId} = reviewing.review;
+    const window = read('feedback-review-window',windowId);
+    assert.equal(window.candidate.head,repairedHead);
+    assert.equal(window.deadline,window.openedAt+3_600_000);
+    now = window.deadline-1;
+    await tick('review');
+    assert.deepEqual(github.writes,[]);
+    assert.equal(read('feedback-review-window',windowId).claim,null);
+    now = window.deadline;
+    receiptCoverage = 'UNCERTAIN';
+    await tick('review');
+    assert.deepEqual(github.writes,[]);
+    assert.equal(read('feedback-review-window',windowId).claim,null);
+    receiptCoverage = 'COMPLETE';
+    await tick('review');
+    const {claim} = read('feedback-review-window',windowId);
+    const pending = read('feedback-merge-outcome',claim.requestId);
+    assert.equal(pending.status,'PENDING');
+    assert.equal(pending.operationId,operationId);
+    assert.equal(linear.writes.length,1);
+    assert.equal(peer.revision(projectId),1);
+
+    restart();
+    github.finish();
+    await tick('close-issue');
+    const merged = read('feedback-merge-outcome',claim.requestId);
+    assert.equal(merged.status,'MERGED');
+    assert.equal(merged.mergeSha,landedSha);
+    assert.equal(merged.operationId,pending.operationId);
+    assert.deepEqual(github.polls,[operationId]);
+    await tick('close-thread');
+    const changeId = read('feedback-case-issue-latest',caseId);
+    assert.equal(read('feedback-case-issue-change',changeId).result.receipt.issueId,issue.issueId);
+    const complete = await tick('complete');
+    const messages = peer.objectsPage(projectId,'feedback-reference-message').map(({value}) => value);
+    const notice = messages.find(message => message.kind === 'review');
+    assert.equal(notice.reviewId,windowId);
+    const closure = messages.find(message => message.kind === 'closed');
+    assert.equal(closure.requestId,complete.ref);
+    assert.equal(closure.caseId,caseId);
+    assert.equal(closure.originalMessageId,original.messageId);
+    assert.match(closure.text,new RegExp(landedSha+'\\.$'));
+    const progress = read('feedback-case-progress',caseId);
+    assert.deepEqual(progress.visited,['receive','issue','reproduce','repair','verify','review','close']);
+    assert(progress.timeline.some(entry => entry.stage === 'repair' && entry.returnFrom === 'verify'));
+    assert.equal(progress.status,'COMPLETE');
+
+    restart();
+    assert.deepEqual(await tick('complete'),complete);
+    assert.equal(peer.revision(projectId),2);
+    assert.equal(cursor.launches.length,2);
+    assert.deepEqual(linear.writes,[{operation:'create',id:issue.issueId},
+      {operation:'update',id:issue.issueId,stateId:linearScope.closedStateId}]);
+    assert.deepEqual(github.writes,[{path:'/repos/'+repository+'/pulls/5/merge-async',
+      input:{sha:repairedHead,merge_method:'rebase',merge_action:'direct_merge',bypass_rules:false}}]);
+    assert.deepEqual(deliveryRequests,[{path:'/deliver',kind:'review'},{path:'/inspect',kind:'review'},
+      {path:'/deliver',kind:'closed'}]);
+  } finally {
+    channel?.close();
+    await listener?.close();
+    await inbox?.close();
+    store?.close();
+    peer?.close();
     rmSync(root,{recursive:true,force:true});
   }
 });
