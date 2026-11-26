@@ -29,12 +29,12 @@ Slack Socket Mode 是首个平台适配器。本地契约检查覆盖已认证�
 ```sh
 shasum -a 256 -c SHA256SUMS
 cat source-revision.txt
-mkdir unpacked
-tar -xzf evopilot-runtime-0.10.0-darwin-arm64.tar.gz -C unpacked
+mkdir -m 700 unpacked
+tar -xzpf evopilot-runtime-0.10.0-darwin-arm64.tar.gz -C unpacked
 chmod 600 distribution-manifest.json
 ```
 
-独立归档包含运行依赖。制品通过 GitHub Releases 发行。准备受保护的隔离安装计划前，核对发布清单和获批的发行范围。反馈闭环的前置条件及制品、服务与 Host 证据的区别，见[使用指南](docs/zh-CN/runtime-v010-preview.md)。
+独立归档包含运行依赖。解包时保留归档内的文件权限，供安装器按发行清单核对。制品通过 GitHub Releases 发行。准备受保护的隔离安装计划前，核对发布清单和获批的发行范围。反馈闭环的前置条件及制品、服务与 Host 证据的说明，见[使用指南](docs/zh-CN/runtime-v010-preview.md)。
 
 ### 从源码开发
 

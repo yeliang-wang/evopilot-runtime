@@ -7,7 +7,7 @@ This entry describes the scoped development target. Consult the [v0.10.0 Release
 - Add project-scoped feedback configuration with protected provider references, exact owner approval and readback through the Runtime Expert in Codex. The Lifecycle page places the flow graph above YAML and saves a draft for separate activation.
 - Define the feedback-to-PR journey through an authenticated channel, Linear, Cursor Cloud, independent verification and GitHub. Needs-info replies resume the original case. An acknowledged review notification starts a 60-minute window bound to the exact candidate, policy and evidence.
 - Retain original mutation identities for recovery and expose a read-only monitor for the current node, visited path, return reasons and review deadline.
-- Defer live Slack end-to-end acceptance. The authenticated callback is the reference channel for the representative journey. Exact source CI, actual Host and provider journeys, browser acceptance, publication and downloaded-package replay each require their own evidence.
+- Use the authenticated callback as the reference channel for the local integrated test. The fixed release inventory requires an actual Codex Expert journey and local automated provider and Dashboard checks. Source CI, publication and replay of the downloaded package each require their own evidence.
 
 ## 0.9.0 Preview
 

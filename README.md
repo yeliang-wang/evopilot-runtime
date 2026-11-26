@@ -29,12 +29,12 @@ After publication, use **Node 24.14.0 on macOS arm64** and obtain all six assets
 ```sh
 shasum -a 256 -c SHA256SUMS
 cat source-revision.txt
-mkdir unpacked
-tar -xzf evopilot-runtime-0.10.0-darwin-arm64.tar.gz -C unpacked
+mkdir -m 700 unpacked
+tar -xzpf evopilot-runtime-0.10.0-darwin-arm64.tar.gz -C unpacked
 chmod 600 distribution-manifest.json
 ```
 
-The standalone archive contains its runtime dependencies. GitHub Releases is the distribution channel. Check the published manifest and approved profile before preparing an isolated protected installation plan. For the feedback-loop prerequisites and the distinction between package, service and Host evidence, see the [operator guide](docs/runtime-v010-preview.md).
+The standalone archive contains its runtime dependencies. Preserve the archived file modes so the installer can verify them against the distribution manifest. GitHub Releases is the distribution channel. Check the published manifest and approved profile before preparing an isolated protected installation plan. For the feedback-loop prerequisites and the distinction between package, service and Host evidence, see the [operator guide](docs/runtime-v010-preview.md).
 
 ### Develop from source
 
