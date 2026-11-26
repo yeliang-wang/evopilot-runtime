@@ -2,6 +2,130 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { inspectFeedbackActivationBindings, inspectFeedbackChannelReadiness, parseFeedbackProjectDraft } from '../../dist/feedback-loop/project.js';
 
+test('standard service loads scoped feedback policy and verifies pinned owner decisions', async () => {
+  const {spawn} = await import('node:child_process');
+  const {createHash,randomBytes} = await import('node:crypto');
+  const {once} = await import('node:events');
+  const {mkdirSync,mkdtempSync,realpathSync,rmSync,writeFileSync} = await import('node:fs');
+  const {tmpdir} = await import('node:os');
+  const {join} = await import('node:path');
+  const {createInterface} = await import('node:readline');
+  const {fileURLToPath,pathToFileURL} = await import('node:url');
+  const {registeredFeedbackActivation} = await import('../../dist/adapters/bindings.js');
+  const {initializeCredentials,tokenDigest} = await import('../../dist/server/security.js');
+  const {startRuntimeServer} = await import('../../dist/server/http.js');
+  const {lifecycle,syntheticBindings,yaml} = await import('../fixtures/lifecycle-v090.mjs');
+  const root = mkdtempSync(join(realpathSync(tmpdir()),'runtime-feedback-standard-'));
+  const decisions = join(root,'decisions'), state = join(root,'state');
+  const configPath = join(root,'integrations.json');
+  const expiry = Date.now()+60_000;
+  const actor = {id:'owner',projects:['tasks'],permissions:['read','draft.write','definition.activate','decision.record'],
+    revision:1,expiresAt:new Date(expiry).toISOString()};
+  const digest = bytes => 'sha256:'+createHash('sha256').update(bytes).digest('hex');
+  function put(path,value) {
+    const bytes = typeof value==='string' ? value : JSON.stringify(value);
+    writeFileSync(path,bytes,{mode:0o600});
+    return {path,digest:digest(bytes)};
+  }
+  const pinned = pin => pathToFileURL(pin.path).href+'#sha256='+pin.digest.slice(7);
+  let child,exited,qualifiedService;
+  try {
+    mkdirSync(decisions,{mode:0o700});
+    const roles = ['feedbackBindingRef','reviewBindingRef','linearTeamRef','githubRepositoryRef','cursorAgentRef','harnessRuleRef','mergePolicyRef'];
+    const observations = {
+      schema:'runtime-feedback-binding-observations/v1',workspaceId:'demo',projectId:'tasks',
+      observations:roles.map((role,index) => ({
+        ...observe(input[role],index===0 ? inbound.capabilities : index===1 ? review.capabilities : []),
+        role,validUntil:expiry,evidenceRef:'evidence:local/'+index,factsDigest:digest(role),
+      })),
+    };
+    const observationFile = put(join(root,'observations.json'),observations);
+    const policy = {ref:'binding:tasks/feedback-activation',role:'feedback-activation-policy',workspaceId:'demo',projectId:'tasks',
+      revision:1,expiresAt:actor.expiresAt,definition:{ownerId:actor.id,ownerRevision:actor.revision,observations:observationFile,decisionDirectory:decisions}};
+    put(configPath,{schema:'runtime-integrations/v1',workspaceId:'demo',revision:1,platforms:[],credentials:[],owners:[],resources:[policy]});
+    const registry = registeredFeedbackActivation(configPath,'demo');
+    const current = registry.policy(input);
+    assert.equal(current.ownerId,actor.id);
+    const verified = await registry.observe(input,actor,new AbortController().signal);
+    assert.equal(inspectFeedbackActivationBindings(input,verified,Date.now()).bindings.every(row=>row.status==='VERIFIED'),true);
+    assert.deepEqual(await registry.observe(input,{...actor,id:'another'},new AbortController().signal),[]);
+    const candidateDigest = digest('local test candidate');
+    const original = put(join(decisions,'source.txt'),'Local synthetic owner decision fixture only');
+    const decision = {schema:'evopilot-decision-evidence/v1',subject:{owner:'runtime',operation:'feedback.project.activate',
+      workspaceId:'demo',scope:{visibility:'private',projectId:'tasks'},reviewDigest:candidateDigest,decision:'APPROVE'},
+      source:{reference:pinned(original),description:'Local test fixture'}};
+    const selection = {workspaceId:'demo',projectId:'tasks',actorId:actor.id,actorRevision:1,
+      policyDigest:current.digest,candidateDigest,evidenceRef:pinned(put(join(decisions,'approved.json'),decision)),decision:'approve'};
+    assert.equal(registry.verifyDecision(selection),true);
+    assert.equal(registry.verifyDecision({...selection,candidateDigest:digest('unreviewed')}),false);
+    assert.equal(registry.verifyDecision({...selection,policyDigest:digest('old policy')}),false);
+    const outside = pinned(put(join(root,'outside.txt'),'Outside protected decision directory'));
+    assert.equal(registry.verifyDecision({...selection,evidenceRef:pinned(put(join(decisions,'outside.json'),
+      {...decision,source:{...decision.source,reference:outside}}))}),false);
+    put(original.path,'Changed source after review');
+    assert.equal(registry.verifyDecision(selection),false);
+    put(observationFile.path,{...observations,projectId:'other'});
+    await assert.rejects(registry.observe(input,actor,new AbortController().signal),{code:'RESOURCE_CHANGED'});
+    put(observationFile.path,observations);
+
+    const token = randomBytes(32).toString('hex');
+    const credentials = [{...actor,tokenDigest:tokenDigest(token)}];
+    const request = async (origin,operation,value,meta={}) => {
+      const response = await fetch(origin+'/api/v1/request',{
+        method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},
+        body:JSON.stringify({projectId:'tasks',operation,input:value,...meta}),signal:AbortSignal.timeout(5_000),
+      });
+      return response.json();
+    };
+    const qualifiedState = join(root,'qualified');
+    initializeCredentials(qualifiedState,'demo',credentials);
+    qualifiedService = await startRuntimeServer({stateRoot:qualifiedState,workspaceId:'demo'},syntheticBindings().provider,
+      undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,registry);
+    const qualified = (operation,value,meta) => request(qualifiedService.url,operation,value,meta);
+    const definition = yaml(lifecycle('github','tasks'));
+    const validation = (await qualified('lifecycle.definition.validate',{yaml:definition})).result;
+    const activeLifecycle = (await qualified('lifecycle.definition.save-and-activate',{
+      yaml:definition,validationDigest:validation.validationDigest,
+    },{requestId:'local-base-activate',expectedRevision:0})).result;
+    await qualified('feedback.project.draft.save',input,{requestId:'local-feedback-draft',expectedRevision:activeLifecycle.revision});
+    const preview = (await qualified('feedback.project.activation.preview',{})).result;
+    const approved = {...decision,subject:{...decision.subject,reviewDigest:preview.candidateDigest},
+      source:{...decision.source,reference:pinned(put(join(decisions,'fixture-source.txt'),'Synthetic operator approval for HTTP composition'))}};
+    const activation = (await qualified('feedback.project.activate',{
+      candidateDigest:preview.candidateDigest,decision:'approve',evidenceRef:pinned(put(join(decisions,'fixture-approved.json'),approved)),
+    },{requestId:'local-feedback-activate',expectedRevision:preview.subject.projectRevision})).result;
+    assert.deepEqual(activation.result,{status:'ACTIVE',activationId:preview.candidateDigest,executionAuthorized:false,releaseAuthorized:false});
+    assert.equal((await qualified('feedback.project.inspect',{})).result.active.activationId,preview.candidateDigest);
+    await qualifiedService.close();
+    qualifiedService = undefined;
+
+    initializeCredentials(state,'demo',credentials);
+    const cli = fileURLToPath(new URL('../../dist/server/cli.js',import.meta.url));
+    child = spawn(process.execPath,[cli,'serve','--state-root',state,'--workspace-id','demo','--integrations-ref',configPath],{
+      stdio:['ignore','pipe','ignore'],
+    });
+    exited = once(child,'exit');
+    const lines = createInterface({input:child.stdout});
+    const [line] = await once(lines,'line',{signal:AbortSignal.timeout(10_000)});
+    const started = JSON.parse(line);
+    assert.equal(started.ready,true);
+    const saved = await request(started.url,'feedback.project.draft.save',input,{requestId:'standard-cli-draft',expectedRevision:0});
+    assert.equal(saved.result.result.status,'DRAFT');
+    const denied = await request(started.url,'feedback.project.activation.preview',{});
+    assert.equal(denied.error.code,'FEEDBACK_LIFECYCLE_REQUIRED');
+    const currentState = (await request(started.url,'feedback.project.inspect',{})).result;
+    assert.equal(currentState.active,undefined);
+  } finally {
+    await qualifiedService?.close();
+    if (child) {
+      child.kill('SIGTERM');
+      const timer = setTimeout(()=>child.kill('SIGKILL'),2_000);
+      try {await exited;} finally {clearTimeout(timer);}
+    }
+    rmSync(root,{recursive:true,force:true});
+  }
+});
+
 const now = 1_800_000_000_000;
 const input = {
   workspaceId: 'demo', projectId: 'tasks',

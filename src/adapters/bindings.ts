@@ -1,6 +1,7 @@
 import {AsyncLocalStorage} from 'node:async_hooks';
-import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
-import { isAbsolute, resolve } from 'node:path';
+import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync } from 'node:fs';
+import { dirname, isAbsolute, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { canonical, exact, record, reject, slug, string, ServiceError } from '../server/errors.js';
 import { authorize, type Principal } from '../server/security.js';
 import { byteDigest, valueDigest } from '../lifecycle/base.js';
@@ -39,6 +40,9 @@ import type { PreparationValidator } from '../lifecycle/preparation.js';
 import { createPlanStageAdapter, createScopeStageAdapter, registeredPreparation } from './preparation-stages.js';
 import { registeredImplementationReview, type ImplementationReviewBindings } from '../lifecycle/implementation-review.js';
 import type { ReadinessIntentRecord } from '../../vendor/compatibility/usability/v2/contract.mjs';
+import { verifyDecisionEvidence } from '../../vendor/compatibility/v1/decision-evidence.mjs';
+import { FEEDBACK_ACTIVATE, type FeedbackBindingObservation } from '../feedback-loop/project.js';
+import type { FeedbackActivationRegistry } from '../feedback-loop/service.js';
 
 export interface BindingConnections {
   /** Fixed product composition supplies these clients, never YAML or a request. */
@@ -62,6 +66,122 @@ export function verifyResourceFile(value:unknown,executable=false):{digest:strin
   try{const stat=fstatSync(fd);if(!stat.isFile()||stat.nlink!==1||(stat.mode&0o022)!==0||stat.size<1||stat.size>(executable?268435456:1048576)||executable&&(stat.mode&0o111)===0)reject('UNSAFE_RESOURCE','Registered file does not meet its type/size/permission boundary');
     const digest=byteDigest(readFileSync(fd));if(digest!==expected)reject('RESOURCE_CHANGED','Registered file bytes changed',409);return{digest,bytes:stat.size};
   }finally{closeSync(fd);}
+}
+
+/** Feedback accepts only current observations pinned by the protected
+ * operator configuration. The project YAML and HTTP caller cannot provide them. */
+export function registeredFeedbackActivation(configPath: string, workspaceId: string): FeedbackActivationRegistry {
+  function readEvidenceBytes(path: string, expected: string) {
+    if (!isAbsolute(path) || realpathSync(path) !== path) {
+      return reject('UNSAFE_RESOURCE','Feedback evidence must have a canonical path.');
+    }
+    const fd = openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+    try {
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.uid !== process.getuid?.() || stat.nlink !== 1 ||
+          (stat.mode & 0o777) !== 0o600 || stat.size < 1 || stat.size > 131072) {
+        return reject('UNSAFE_RESOURCE','Feedback evidence must be a bounded protected file.');
+      }
+      const buffer = Buffer.alloc(stat.size + 1);
+      let length = 0;
+      while (length < buffer.length) {
+        const count = readSync(fd,buffer,length,buffer.length-length,null);
+        if (count === 0) break;
+        length += count;
+      }
+      const bytes = buffer.subarray(0,length);
+      if (length !== stat.size || byteDigest(bytes) !== hash(expected)) {
+        return reject('RESOURCE_CHANGED','Feedback evidence differs from its registered digest.',409);
+      }
+      return bytes;
+    } finally {closeSync(fd);}
+  }
+
+  function policy(projectId: string) {
+    const config = readIntegrationConfiguration(configPath,workspaceId);
+    const choices = config.resources.filter(resource => resource.projectId === projectId &&
+      resource.role === 'feedback-activation-policy');
+    if (choices.length !== 1 || Date.parse(choices[0].expiresAt) <= Date.now()) return null;
+    const resource = choices[0];
+    const definition = record(resource.definition);
+    exact(definition,['ownerId','ownerRevision','observations','decisionDirectory']);
+    const ownerId = slug(definition.ownerId);
+    const ownerRevision = Number(definition.ownerRevision);
+    if (!Number.isSafeInteger(definition.ownerRevision) || ownerRevision < 1) {
+      return reject('INVALID_RESOURCE','Feedback policy requires an exact owner revision.');
+    }
+    return {resource,definition,ownerId,ownerRevision};
+  }
+
+  function readDecisionFile(reference: string, root: string) {
+    const url = new URL(reference);
+    if (url.protocol !== 'file:' || url.host || url.search || !/^#sha256=[a-f0-9]{64}$/.test(url.hash)) {
+      return reject('INVALID_RESOURCE','A pinned file in the registered decision directory is required.');
+    }
+    const path = fileURLToPath(url);
+    if (dirname(path) !== root) {
+      return reject('INVALID_RESOURCE','Decision reference is outside the registered directory.');
+    }
+    return readEvidenceBytes(path,'sha256:'+url.hash.slice(8));
+  }
+
+  function readObservations(definition: Record<string,unknown>) {
+    const pin = record(definition.observations);
+    exact(pin,['path','digest']);
+    return readEvidenceBytes(string(pin.path,4096),hash(pin.digest));
+  }
+
+  return {
+    policy(draft) {
+      if (draft.workspaceId !== workspaceId) return null;
+      const selected = policy(draft.projectId);
+      return selected && {
+        revision:selected.resource.revision,digest:valueDigest(selected.resource),
+        ownerId:selected.ownerId,ownerRevision:selected.ownerRevision,validUntil:Date.parse(selected.resource.expiresAt),
+      };
+    },
+    async observe(draft,actor,signal) {
+      signal.throwIfAborted();
+      authorize(actor,draft.projectId,'read');
+      const selected = policy(draft.projectId);
+      if (draft.workspaceId !== workspaceId || !selected ||
+          actor.id !== selected.ownerId || actor.revision !== selected.ownerRevision) return [];
+      const evidence = record(JSON.parse(readObservations(selected.definition).toString('utf8')));
+      exact(evidence,['schema','workspaceId','projectId','observations']);
+      if (evidence.schema !== 'runtime-feedback-binding-observations/v1' ||
+          evidence.workspaceId !== workspaceId || evidence.projectId !== draft.projectId) return [];
+      if (!Array.isArray(evidence.observations) || evidence.observations.length !== 7) return [];
+      return evidence.observations.map(entry => {
+        const row = record(entry);
+        exact(row,['role','workspaceId','projectId','reference','status','capabilities','revision','validUntil','evidenceRef','factsDigest']);
+        if (typeof row.evidenceRef !== 'string' || typeof row.factsDigest !== 'string' ||
+            !Array.isArray(row.capabilities) || row.capabilities.length > 4 ||
+            row.capabilities.some(capability => !['receive-feedback','reply','notify','review-action'].includes(capability))) {
+          return reject('INVALID_RESOURCE','Invalid feedback binding observation.');
+        }
+        return row as unknown as FeedbackBindingObservation;
+      });
+    },
+    verifyDecision(decision) {
+      try {
+        if (decision.workspaceId !== workspaceId) return false;
+        const selected = policy(decision.projectId);
+        if (!selected || selected.ownerId !== decision.actorId || selected.ownerRevision !== decision.actorRevision ||
+            valueDigest(selected.resource) !== decision.policyDigest) return false;
+        const root = directory(selected.definition.decisionDirectory);
+        const stat = lstatSync(root);
+        if (stat.uid !== process.getuid?.() || (stat.mode & 0o777) !== 0o700) return false;
+        readObservations(selected.definition);
+        const evidence = record(JSON.parse(readDecisionFile(decision.evidenceRef,root).toString('utf8')));
+        readDecisionFile(string(record(evidence.source).reference,4096),root);
+        verifyDecisionEvidence(decision.evidenceRef,{
+          owner:'runtime',operation:FEEDBACK_ACTIVATE,workspaceId,scope:{visibility:'private',projectId:decision.projectId},
+          reviewDigest:decision.candidateDigest,decision:'APPROVE',
+        });
+        return true;
+      } catch { return false; }
+    },
+  };
 }
 const roles:Record<string,string>={
   'runtime.qualification':'qualification',

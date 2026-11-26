@@ -10,6 +10,10 @@
 
 选择声明支持反馈项目操作的构建，并在服务中为所选项目登记受保护绑定。项目须有已启用的 Project Lifecycle，并登记反馈接收与回复、审阅通知与操作、Linear 团队、GitHub 仓库、Cursor Agent、已发布 Harness 规则和合并策略的引用。若同一连接具备四项渠道能力，两个渠道引用可指向同一连接。凭据由操作人员保存在受保护的配置中。具体操作见[反馈配置参考（英文）](../../plugins/codex/skills/evopilot-runtime-expert/references/configuration.md#feedback-driven-lifecycle-configuration)。
 
+在 `serve --integrations-ref` 指定的受保护集成配置中，为每个项目登记一项 `feedback-activation-policy` 资源。其定义包含 `ownerId`、`ownerRevision`、由规范绝对路径 `path` 和文件字节的 `sha256:` 摘要 `digest` 组成的 `observations`，以及私有 `decisionDirectory`。操作人员提供与当前工作区及项目绑定的 `runtime-feedback-binding-observations/v1` 记录，每种绑定角色各一项。记录真实负责人的决定时，将原生决定记录和原始来源都放在已登记目录内。启用请求通过带 SHA-256 的本地文件 URI 引用该决定。
+
+先登记策略和观测摘要，再启用 Project Lifecycle。集成配置文件变化后，在审阅反馈启用前重新核验生命周期绑定，并启用当前定义。受信操作人员将指定负责人作出的实际批准及其原始来源直接保存在已登记的决定目录中，文件仅对所有者开放。
+
 真实使用验收通过实际登录的 Codex Desktop 会话完成。在该会话中调用已安装的 Runtime Expert，并连接实际运行的 Runtime HTTP MCP。将登录身份、会话实际使用的模型、制品身份和原始 HTTP 请求回执记录在私有验收证据中。启用检查使用隔离环境中的受保护测试绑定及 Provider 测试数据，由指定项目负责人为准确的启用候选记录实际决定。
 
 Slack Socket Mode 是首个平台适配器。本地自动化测试覆盖 Slack 协议、经过身份验证的回调参考通道和 Provider 接口契约。真实 Slack 验收项 `CHANNEL-REAL` 已延期。本次发布的验收范围不包含真实 Linear、Cursor Cloud 和 GitHub App 操作。

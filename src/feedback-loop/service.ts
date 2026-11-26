@@ -35,6 +35,7 @@ export interface FeedbackActivationRegistry {
     projectId: string;
     actorId: string;
     actorRevision: number;
+    policyDigest: string;
     candidateDigest: string;
     evidenceRef: string;
     decision: 'approve';
@@ -156,7 +157,7 @@ export function createFeedbackActivationService(
       }
       if (registry?.verifyDecision({
         workspaceId:store.workspaceId,projectId,actorId:current.id,actorRevision:current.revision,
-        candidateDigest,evidenceRef,decision:'approve',
+        policyDigest:subject.policyDigest,candidateDigest,evidenceRef,decision:'approve',
       }) !== true) {
         return reject('FEEDBACK_ACTIVATION_DECISION','The original owner approval could not be verified.',409);
       }
